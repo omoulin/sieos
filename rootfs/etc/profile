@@ -1,0 +1,3 @@
+# /etc/profile - read by login shells
+ENV=/etc/shrc
+export ENV

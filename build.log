@@ -1,0 +1,73 @@
+make[1]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make  all-recursive
+make[2]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+Making all in src
+make[3]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12/src'
+  CC       builtins.def
+  GEN      token.h
+  GEN      token_vars.h
+  CC       mknodes
+  GEN      builtins.h
+  CC       mksyntax
+  GEN      syntax.h
+  GEN      nodes.h
+make  all-am
+make[4]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12/src'
+  CC       alias.o
+  CC       arith_yacc.o
+  CC       arith_yylex.o
+  CC       cd.o
+  CC       error.o
+  CC       eval.o
+  CC       exec.o
+  CC       expand.o
+  CC       histedit.o
+  CC       input.o
+  CC       jobs.o
+  CC       main.o
+  CC       miscbltin.o
+  CC       mail.o
+  CC       memalloc.o
+  CC       mystring.o
+  CC       options.o
+  CC       parser.o
+  CC       redir.o
+  CC       show.o
+  CC       trap.o
+  CC       output.o
+  CC       system.o
+  CC       var.o
+  CC       builtins.o
+  CC       nodes.o
+  CC       mkinit
+  CC       mksignames
+  CC       syntax.o
+  CC       bltin/printf.o
+  CC       bltin/test.o
+  CC       bltin/times.o
+  GEN      signames.c
+  CC       signames.o
+  GEN      init.c
+  CC       init.o
+  CCLD     dash
+make[4]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12/src'
+make[3]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12/src'
+make[3]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make[3]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make[2]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make[1]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make[1]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make  all-recursive
+make[2]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+Making all in src
+make[3]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12/src'
+make  all-am
+make[4]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12/src'
+  CC       signames.o
+  CCLD     dash
+make[4]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12/src'
+make[3]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12/src'
+make[3]: Entering directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make[3]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make[2]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'
+make[1]: Leaving directory '/home/omoulin/code/aieos/build/ports/dash-0.5.12'

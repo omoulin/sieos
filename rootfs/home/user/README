@@ -1,0 +1,9 @@
+This is your home directory on SIEOS.
+
+Try:
+  id ; ls -l /etc /dev
+  echo "hello world" > hello.txt ; cat hello.txt | grep hello
+  sleep 100 &          # background job
+  jobs ; fg %1         # then press ^Z to stop it, 'bg' to resume it
+  yes | head -n 3      # pipelines
+  su                   # become root (password: root)

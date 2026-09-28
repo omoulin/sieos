@@ -1,0 +1,707 @@
+/*
+ * sysfile2.c - ABI v2 file calls: the *at family, descriptors, fcntl with
+ * record locks, positioned and vector I/O, getdents with d_off cookies,
+ * statvfs, and the terminal/pseudo-terminal ioctls.  The work is done by
+ * fsys.c; this file translates the Solaris constants and structures.
+ */
+#include "proc.h"
+#include "mm.h"
+#include "fs.h"
+#include "tty.h"
+#include "poll.h"
+#include "abi2.h"
+#include "sieos/syscall.h"
+#include "sieos/errno.h"
+#include "sieos/fcntl.h"
+#include "sieos/stat.h"
+#include "sieos/sysinfo.h"
+#include "sieos/termios.h"
+#include "sieos/time.h"
+#include "sieos/socket.h"
+#include "sieos/mount.h"
+
+/* ---------------- translations ---------------- */
+
+static int dfd(long fd)
+{
+    return (int)fd == SIEOS_AT_FDCWD ? AT_FDCWD_K : (int)fd;
+}
+
+static int at_flags(long f, long allowed, bool *ok)
+{
+    *ok = !(f & ~allowed);
+    int k = 0;
+    if (f & SIEOS_AT_SYMLINK_NOFOLLOW) k |= AT_NOFOLLOW_K;
+    if (f & SIEOS_AT_SYMLINK_FOLLOW)   k |= AT_FOLLOW_K;
+    if (f & SIEOS_AT_REMOVEDIR)        k |= AT_REMOVEDIR_K;
+    if (f & SIEOS_AT_EACCESS)          k |= AT_EACCESS_K;
+    return k;
+}
+
+int sieos_oflags_to_k(long f, bool *ok)
+{
+    *ok = true;
+    int acc = f & 3;
+    if (acc == 3 || (f & (SIEOS_O_SEARCH | SIEOS_O_EXEC)))
+        acc = O_RDONLY;                              /* search/exec opens: read access suffices here */
+    int v = acc;
+    if (f & SIEOS_O_APPEND) v |= O_APPEND;
+    if (f & SIEOS_O_CREAT) v |= O_CREAT;
+    if (f & SIEOS_O_TRUNC) v |= O_TRUNC;
+    if (f & SIEOS_O_EXCL) v |= O_EXCL;
+    if (f & SIEOS_O_NOCTTY) v |= O_NOCTTY;
+    if (f & SIEOS_O_DIRECTORY) v |= O_DIRECTORY;
+    if (f & (SIEOS_O_NONBLOCK | SIEOS_O_NDELAY)) v |= O_NONBLOCK_K;
+    if (f & SIEOS_O_NOFOLLOW) v |= O_NOFOLLOW_K;
+    if (f & SIEOS_O_CLOEXEC) v |= O_CLOEXEC_K;
+    if (f & (SIEOS_O_SYNC | SIEOS_O_DSYNC | SIEOS_O_RSYNC)) v |= O_SYNC_K;
+    long known = 3 | SIEOS_O_SEARCH | SIEOS_O_EXEC | SIEOS_O_APPEND | SIEOS_O_CREAT | SIEOS_O_TRUNC |
+                 SIEOS_O_EXCL | SIEOS_O_NOCTTY | SIEOS_O_DIRECTORY | SIEOS_O_LARGEFILE | SIEOS_O_CLOEXEC |
+                 SIEOS_O_NONBLOCK | SIEOS_O_NDELAY | SIEOS_O_SYNC | SIEOS_O_DSYNC | SIEOS_O_RSYNC |
+                 SIEOS_O_NOFOLLOW;
+    if (f & ~known)
+        *ok = false;
+    return v;
+}
+
+static long k_oflags_to_sieos(int k)
+{
+    long v = k & O_ACCMODE;
+    if (k & O_APPEND) v |= SIEOS_O_APPEND;
+    if (k & O_NONBLOCK_K) v |= SIEOS_O_NONBLOCK;
+    if (k & O_SYNC_K) v |= SIEOS_O_SYNC;
+    if (k & O_NOCTTY) v |= SIEOS_O_NOCTTY;
+    return v | SIEOS_O_LARGEFILE;
+}
+
+static void to_sieos_stat(const struct kstat *k, struct sieos_stat *s)
+{
+    memset(s, 0, sizeof(*s));
+    s->st_dev = SIEOS_MAKEDEV(k->dev_major, k->dev_minor);
+    s->st_ino = k->ino;
+    s->st_mode = k->mode;
+    s->st_nlink = k->nlink;
+    s->st_uid = k->uid;
+    s->st_gid = k->gid;
+    s->st_rdev = k->rdev ? SIEOS_MAKEDEV(MAJOR(k->rdev), MINOR(k->rdev)) : 0;
+    s->st_size = k->size;
+    s->st_atim.tv_sec = k->atime;
+    s->st_atim.tv_nsec = k->atime_ns;
+    s->st_mtim.tv_sec = k->mtime;
+    s->st_mtim.tv_nsec = k->mtime_ns;
+    s->st_ctim.tv_sec = k->ctime;
+    s->st_ctim.tv_nsec = k->ctime_ns;
+    s->st_blksize = k->blksize ? k->blksize : 4096;
+    s->st_blocks = k->blocks;
+    strlcpy(s->st_fstype, k->fstype ? k->fstype : "", sizeof(s->st_fstype));
+}
+
+static long do_fstatat(long fd, const char *upath, struct sieos_stat *ust, long flag)
+{
+    bool ok;
+    int fl = at_flags(flag, SIEOS_AT_SYMLINK_NOFOLLOW, &ok);
+    if (!ok)
+        return -EINVAL;
+    if (!user_ok(ust, sizeof(*ust), true))
+        return -EFAULT;
+    struct kstat k;
+    long r = fsys_stat(upath ? dfd(fd) : (int)fd, upath, &k, fl);
+    if (r < 0)
+        return r;
+    struct sieos_stat s;
+    to_sieos_stat(&k, &s);
+    memcpy(ust, &s, sizeof(s));
+    return 0;
+}
+
+/* ---------------- getdents ---------------- */
+
+struct v2_dents {
+    uint8_t *buf;
+    size_t size, used;
+    bool small;
+};
+
+static int v2_fill(void *arg, const char *name, size_t len, uint64_t ino, int dtype, uint64_t next)
+{
+    UNUSED(dtype);
+    struct v2_dents *a = arg;
+    size_t reclen = (SIEOS_DIRENT_NAME_OFFSET + len + 1 + 7) & ~7UL;
+    if (a->used + reclen > a->size) {
+        a->small = a->used == 0;
+        return 1;
+    }
+    struct sieos_dirent *e = (struct sieos_dirent *)(a->buf + a->used);
+    memset(e, 0, reclen);
+    e->d_ino = ino;
+    e->d_off = next;
+    e->d_reclen = reclen;
+    memcpy(e->d_name, name, len);
+    a->used += reclen;
+    return 0;
+}
+
+static long do_getdents(long fd, uint8_t *ubuf, size_t n)
+{
+    struct file *f = fsys_file(fd);
+    if (!f)
+        return -EBADF;
+    if (f->type != FD_INODE || !S_ISDIR(inode_mode(f->ip)))
+        return -ENOTDIR;
+    if (!user_ok(ubuf, n, true))
+        return -EFAULT;
+    struct v2_dents a = { ubuf, n, 0, false };
+    int r = vfs_readdir(f->ip, &f->off, v2_fill, &a);
+    if (r < 0)
+        return r;
+    return a.small ? -EINVAL : (long)a.used;
+}
+
+/* ---------------- I/O ---------------- */
+
+static long do_rw(long fd, void *ubuf, size_t n, bool write, bool positioned, int64_t off)
+{
+    struct file *f = fsys_file(fd);
+    if (!f)
+        return -EBADF;
+    if (!user_ok(ubuf, n, !write))
+        return -EFAULT;
+    if (positioned) {
+        if (off < 0)
+            return -EINVAL;
+        return write ? file_pwrite(f, ubuf, n, off) : file_pread(f, ubuf, n, off);
+    }
+    return write ? file_write(f, ubuf, n) : file_read(f, ubuf, n);
+}
+
+static long do_rwv(long fd, const struct sieos_iovec *uiov, int cnt, bool write)
+{
+    if (cnt <= 0 || cnt > 1024)
+        return -EINVAL;
+    if (!user_ok(uiov, cnt * sizeof(*uiov), false))
+        return -EFAULT;
+    long total = 0;
+    for (int i = 0; i < cnt; i++) {
+        struct sieos_iovec v = uiov[i];
+        if ((long)v.iov_len < 0)
+            return -EINVAL;
+        if (!v.iov_len)
+            continue;
+        long r = do_rw(fd, v.iov_base, v.iov_len, write, false, 0);
+        if (r < 0)
+            return total ? total : r;
+        total += r;
+        if ((size_t)r < v.iov_len)
+            break;                                   /* short transfer: stop here */
+    }
+    return total;
+}
+
+/* ---------------- fcntl ---------------- */
+
+static long flock_range(struct file *f, const struct sieos_flock *u, struct kflock *k)
+{
+    int64_t base;
+    switch (u->l_whence) {
+    case SIEOS_SEEK_SET: base = 0; break;
+    case SIEOS_SEEK_CUR: base = f->off; break;
+    case SIEOS_SEEK_END: base = inode_size(f->ip); break;
+    default: return -EINVAL;
+    }
+    int64_t start = base + u->l_start, len = u->l_len;
+    if (len < 0) {
+        start += len;
+        len = -len;
+    }
+    if (start < 0)
+        return -EINVAL;
+    k->start = start;
+    k->end = len ? (uint64_t)(start + len - 1) : UINT64_MAX;
+    k->pid = current->pid;
+    return 0;
+}
+
+static long do_fcntl(long fd, long cmd, uint64_t arg)
+{
+    struct file *f = fsys_file(fd);
+    if (!f)
+        return -EBADF;
+    switch (cmd) {
+    case SIEOS_F_DUPFD:
+    case SIEOS_F_DUPFD_CLOEXEC:
+        return fsys_dup(fd, (int)arg, cmd == SIEOS_F_DUPFD_CLOEXEC);
+    case SIEOS_F_DUP2FD:
+    case SIEOS_F_DUP2FD_CLOEXEC:
+        return fsys_dup2(fd, (int)arg, cmd == SIEOS_F_DUP2FD_CLOEXEC);
+    case SIEOS_F_GETFD:
+        return (current->fdflags[fd] & FD_CLOEXEC) ? SIEOS_FD_CLOEXEC : 0;
+    case SIEOS_F_SETFD:
+        current->fdflags[fd] = (arg & SIEOS_FD_CLOEXEC) ? FD_CLOEXEC : 0;
+        return 0;
+    case SIEOS_F_GETFL:
+        return k_oflags_to_sieos(f->flags);
+    case SIEOS_F_SETFL: {
+        bool ok;
+        int k = sieos_oflags_to_k(arg & ~3L, &ok);
+        f->flags = (f->flags & ~O_SETFL_K) | (k & O_SETFL_K);
+        return 0;
+    }
+    case SIEOS_F_GETOWN:
+        return 0;
+    case SIEOS_F_SETOWN:
+        return 0;
+    case SIEOS_F_GETLK:
+    case SIEOS_F_SETLK:
+    case SIEOS_F_SETLKW:
+    case SIEOS_F_FREESP: {
+        struct sieos_flock *ul = (struct sieos_flock *)arg;
+        if (!user_ok(ul, sizeof(*ul), cmd == SIEOS_F_GETLK))
+            return -EFAULT;
+        if (f->type != FD_INODE || !f->ip || S_ISDIR(inode_mode(f->ip)))
+            return -EINVAL;
+        struct sieos_flock u = *ul;
+        struct kflock k;
+        long r = flock_range(f, &u, &k);
+        if (r < 0)
+            return r;
+        if (cmd == SIEOS_F_FREESP) {
+            if ((f->flags & O_ACCMODE) == O_RDONLY)
+                return -EBADF;
+            uint64_t size = inode_size(f->ip);
+            if (k.end == UINT64_MAX || k.end + 1 >= size)
+                return itruncate(f->ip, k.start);    /* the common case: truncate/extend to l_start */
+            static const char zero[512];
+            for (uint64_t o = k.start; o <= k.end;) {  /* a hole in the middle: zero-fill it */
+                size_t n = MIN(sizeof(zero), k.end + 1 - o);
+                long w = writei(f->ip, zero, o, n);
+                if (w <= 0)
+                    return w < 0 ? w : -EIO;
+                o += w;
+            }
+            return 0;
+        }
+        switch (u.l_type) {
+        case SIEOS_F_RDLCK: k.type = F_RDLCK_K; break;
+        case SIEOS_F_WRLCK: k.type = F_WRLCK_K; break;
+        case SIEOS_F_UNLCK: k.type = F_UNLCK_K; break;
+        default: return -EINVAL;
+        }
+        if (cmd == SIEOS_F_GETLK) {
+            if (k.type == F_UNLCK_K)
+                return -EINVAL;
+            flock_get(f->ip, &k);
+            u.l_type = k.type == F_RDLCK_K ? SIEOS_F_RDLCK : k.type == F_WRLCK_K ? SIEOS_F_WRLCK : SIEOS_F_UNLCK;
+            if (k.type != F_UNLCK_K) {
+                u.l_whence = SIEOS_SEEK_SET;
+                u.l_start = k.start;
+                u.l_len = k.end == UINT64_MAX ? 0 : (int64_t)(k.end - k.start + 1);
+                u.l_pid = k.pid;
+                u.l_sysid = 0;
+            }
+            memcpy(ul, &u, sizeof(u));
+            return 0;
+        }
+        int acc = f->flags & O_ACCMODE;
+        if ((k.type == F_RDLCK_K && acc == O_WRONLY) || (k.type == F_WRLCK_K && acc == O_RDONLY))
+            return -EBADF;
+        return flock_set(f->ip, &k, cmd == SIEOS_F_SETLKW);
+    }
+    }
+    return -EINVAL;
+}
+
+/* ---------------- ioctl ---------------- */
+
+static void termios_to_v2(const struct termios *k, struct sieos_termios *t)
+{
+    memset(t, 0, sizeof(*t));
+    t->c_iflag = k->c_iflag;                 /* the flag bits have the Solaris values */
+    t->c_oflag = k->c_oflag;
+    t->c_cflag = k->c_cflag;
+    t->c_lflag = k->c_lflag;
+    for (int i = 0; i < SIEOS_NCCS; i++)
+        t->c_cc[i] = i < NCCS ? k->c_cc[i] : 0;
+    bool canon = k->c_lflag & ICANON;
+    t->c_cc[SIEOS_VEOF] = canon ? k->c_cc[VEOF] : k->c_cc[VMIN];     /* VMIN shares VEOF's slot */
+    t->c_cc[SIEOS_VEOL] = canon ? 0 : k->c_cc[VTIME];                /* VTIME shares VEOL's */
+}
+
+static void termios_from_v2(const struct sieos_termios *t, struct termios *k)
+{
+    struct termios old = *k;
+    k->c_iflag = t->c_iflag;
+    k->c_oflag = t->c_oflag;
+    k->c_cflag = t->c_cflag;
+    k->c_lflag = t->c_lflag;
+    for (int i = 0; i < NCCS && i < SIEOS_NCCS; i++)
+        if (i != VEOF && i != VTIME && i != VMIN)
+            k->c_cc[i] = t->c_cc[i];
+    if (t->c_lflag & SIEOS_ICANON) {
+        k->c_cc[VEOF] = t->c_cc[SIEOS_VEOF];
+        k->c_cc[VMIN] = old.c_cc[VMIN];
+        k->c_cc[VTIME] = old.c_cc[VTIME];
+    } else {
+        k->c_cc[VMIN] = t->c_cc[SIEOS_VMIN];
+        k->c_cc[VTIME] = t->c_cc[SIEOS_VTIME];
+        k->c_cc[VEOF] = old.c_cc[VEOF];
+    }
+}
+
+static long tty_call(struct tty *t, unsigned long cmd, uint64_t arg)
+{
+    return tty_ioctl(t, cmd, arg);
+}
+
+/* ---------------- mount ---------------- */
+
+struct nonempty { bool any; };
+
+static int nonempty_cb(void *arg, const char *name, size_t len, uint64_t ino, int dtype, uint64_t next)
+{
+    UNUSED(ino);
+    UNUSED(dtype);
+    UNUSED(next);
+    if (!(len == 1 && name[0] == '.') && !(len == 2 && name[0] == '.' && name[1] == '.')) {
+        ((struct nonempty *)arg)->any = true;
+        return 1;
+    }
+    return 0;
+}
+
+/* mount(spec, dir, mflag, fstype, dataptr, datalen): tmpfs and proc. */
+static long do_mount(const char *uspec, const char *udir, long mflag, const char *utype)
+{
+    char spec[64], dir[MAXPATH], type[32], abs[64];
+    if (current->euid != 0)
+        return -EPERM;
+    if (mflag & ~(long)(SIEOS_MS_RDONLY | SIEOS_MS_FSS | SIEOS_MS_DATA | SIEOS_MS_REMOUNT | SIEOS_MS_NOSUID |
+                        SIEOS_MS_OVERLAY | SIEOS_MS_OPTIONSTR))
+        return -EINVAL;
+    if (user_fetch_str(udir, dir, sizeof(dir)) < 0 || user_fetch_str(utype, type, sizeof(type)) < 0)
+        return -EFAULT;
+    if (!uspec)
+        strlcpy(spec, type, sizeof(spec));
+    else if (user_fetch_str(uspec, spec, sizeof(spec)) < 0)
+        return -EFAULT;
+    int err;
+    struct inode *ip = namei(dir, &err);
+    if (!ip)
+        return err;
+    struct fs *on = vfs_mounted_on(ip);
+    if (mflag & SIEOS_MS_REMOUNT) {                   /* new flags for the mount on dir */
+        iput(ip);
+        if (!on || on == root_fs)
+            return on ? -EBUSY : -EINVAL;
+        on->rdonly = mflag & SIEOS_MS_RDONLY;
+        on->nosuid = mflag & SIEOS_MS_NOSUID;
+        return 0;
+    }
+    long r = 0;
+    struct nonempty ne = { false };
+    if (!S_ISDIR(inode_mode(ip)))
+        r = -ENOTDIR;
+    else if (on)
+        r = -EBUSY;                                    /* already a mount point */
+    else if (!(mflag & SIEOS_MS_OVERLAY) && ip->fs->ops->readdir) {
+        uint64_t off = 0;
+        ip->fs->ops->readdir(ip, &off, nonempty_cb, &ne);
+        if (ne.any)
+            r = -EBUSY;                                /* covering files needs MS_OVERLAY */
+    }
+    if (r == 0 && (err = vfs_dir_path(ip, abs, sizeof(abs))) < 0)
+        r = err;
+    iput(ip);
+    if (r < 0)
+        return r;
+    struct fs *fs;
+    if (!strcmp(type, "tmpfs"))
+        fs = tmpfs_create();
+    else if (!strcmp(type, "proc"))
+        fs = procfs_create();
+    else
+        return -ENODEV;
+    if (!fs)
+        return -ENOMEM;
+    fs->rdonly = mflag & SIEOS_MS_RDONLY;
+    fs->nosuid = mflag & SIEOS_MS_NOSUID;
+    strlcpy(fs->special, spec, sizeof(fs->special));
+    if ((r = vfs_mount(fs, abs)) < 0)
+        fs->ops->destroy(fs);
+    return r;
+}
+
+static long do_umount2(const char *udir, long mflag)
+{
+    char dir[MAXPATH];
+    if (current->euid != 0)
+        return -EPERM;
+    if (mflag & ~(long)SIEOS_MS_FORCE)
+        return -EINVAL;
+    if (user_fetch_str(udir, dir, sizeof(dir)) < 0)
+        return -EFAULT;
+    int err;
+    struct inode *ip = namei(dir, &err);
+    if (!ip)
+        return err;
+    struct fs *fs = vfs_mounted_on(ip);
+    iput(ip);
+    if (!fs)
+        return -EINVAL;                                /* not a mount point */
+    return vfs_umount(fs);
+}
+
+static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
+{
+    struct file *f = fsys_file(fd);
+    if (!f)
+        return -EBADF;
+    int *ip = (int *)arg;
+    switch (cmd) {
+    case SIEOS_FIOCLEX:
+        current->fdflags[fd] = FD_CLOEXEC;
+        return 0;
+    case SIEOS_FIONCLEX:
+        current->fdflags[fd] = 0;
+        return 0;
+    case SIEOS_FIONBIO:
+        if (!user_ok(ip, sizeof(int), false))
+            return -EFAULT;
+        f->flags = *ip ? (f->flags | O_NONBLOCK_K) : (f->flags & ~O_NONBLOCK_K);
+        return 0;
+    case SIEOS_FIONREAD: {
+        if (!user_ok(ip, sizeof(int), true))
+            return -EFAULT;
+        long n = 0;
+        if (f->type == FD_INODE && f->ip && S_ISREG(inode_mode(f->ip)))
+            n = inode_size(f->ip) > f->off ? (long)(inode_size(f->ip) - f->off) : 0;
+        else
+            n = (file_poll(f, POLLIN) & POLLIN) ? 1 : 0;
+        *ip = (int)MIN(n, 0x7FFFFFFF);
+        return 0;
+    }
+    case SIEOS_ISPTM:
+    case SIEOS_UNLKPT:
+    case SIEOS_PTSNAME:
+        if (f->type != FD_PTM)
+            return -ENOTTY;
+        return pty_master_ioctl(f->pty, cmd & 0xFF, (char *)arg);
+    case SIEOS_FBIOGET_INFO:
+        if (f->type != FD_FB)
+            return -ENOTTY;
+        if (!user_ok((void *)arg, sizeof(struct sieos_fb_info), true))
+            return -EFAULT;
+        return fb_ioctl(FBIOGET_INFO, arg);
+    case SIEOS_TIOCGWINSZ:
+    case SIEOS_TIOCSWINSZ: {
+        unsigned long kc = cmd == SIEOS_TIOCGWINSZ ? TIOCGWINSZ : TIOCSWINSZ;
+        if (f->type == FD_PTM)
+            return pty_winsize(f->pty, kc, arg);
+        return f->type == FD_TTY ? tty_call(f->tty, kc, arg) : -ENOTTY;
+    }
+    }
+    if (f->type != FD_TTY)
+        return -ENOTTY;
+    struct tty *t = f->tty;
+    switch (cmd) {
+    case SIEOS_TCGETS: {
+        struct sieos_termios *u = (struct sieos_termios *)arg;
+        if (!user_ok(u, sizeof(*u), true))
+            return -EFAULT;
+        struct sieos_termios v;
+        termios_to_v2(&t->t, &v);
+        memcpy(u, &v, sizeof(v));
+        return 0;
+    }
+    case SIEOS_TCSETS:
+    case SIEOS_TCSETSW:
+    case SIEOS_TCSETSF: {
+        const struct sieos_termios *u = (const struct sieos_termios *)arg;
+        if (!user_ok(u, sizeof(*u), false))
+            return -EFAULT;
+        static struct termios kt;                    /* under the big kernel lock */
+        kt = t->t;
+        termios_from_v2(u, &kt);
+        unsigned long kc = cmd == SIEOS_TCSETS ? TCSETS : cmd == SIEOS_TCSETSW ? TCSETSW : TCSETSF;
+        return tty_set_termios(t, &kt, kc);
+    }
+    case SIEOS_TCSBRK:
+    case SIEOS_TCXONC:
+        return 0;
+    case SIEOS_TCFLSH:
+        return tty_flush(t, (int)arg);
+    case SIEOS_TIOCGPGRP: return tty_call(t, TIOCGPGRP, arg);
+    case SIEOS_TIOCSPGRP: return tty_call(t, TIOCSPGRP, arg);
+    case SIEOS_TIOCSCTTY: return tty_call(t, TIOCSCTTY, arg);
+    case SIEOS_TIOCNOTTY: return tty_call(t, TIOCNOTTY, arg);
+    case SIEOS_TIOCGSID:
+        if (!user_ok(ip, sizeof(int), true))
+            return -EFAULT;
+        if (!t->session)
+            return -ENOTTY;
+        *ip = t->session;
+        return 0;
+    }
+    return -ENOTTY;
+}
+
+/* ---------------- statvfs ---------------- */
+
+static long do_statvfs(long fd, const char *upath, struct sieos_statvfs *u)
+{
+    if (!user_ok(u, sizeof(*u), true))
+        return -EFAULT;
+    struct kstatvfs k;
+    long r = fsys_statvfs(fd, upath, &k);
+    if (r < 0)
+        return r;
+    struct sieos_statvfs v;
+    memset(&v, 0, sizeof(v));
+    v.f_bsize = v.f_frsize = k.bsize;
+    v.f_blocks = k.blocks;
+    v.f_bfree = v.f_bavail = k.bfree;
+    v.f_files = k.files;
+    v.f_ffree = v.f_favail = k.ffree;
+    v.f_namemax = k.namemax;
+    v.f_flag = k.rdonly ? SIEOS_ST_RDONLY : 0;
+    /* identify the file system of the target */
+    struct kstat st;
+    if (fsys_stat(fd, upath, &st, 0) == 0) {
+        v.f_fsid = ((uint64_t)st.dev_major << 32) | st.dev_minor;
+        strlcpy(v.f_basetype, st.fstype ? st.fstype : "", sizeof(v.f_basetype));
+    }
+    memcpy(u, &v, sizeof(v));
+    return 0;
+}
+
+/* ---------------- dispatch ---------------- */
+
+long syscall_file_v2(struct trapframe *tf, bool *handled)
+{
+    uint64_t a1 = tf->rdi, a2 = tf->rsi, a3 = tf->rdx, a4 = tf->r10, a5 = tf->r8;
+    bool ok;
+    int fl, k;
+    *handled = true;
+    switch (tf->rax) {
+    case SIEOS_SYS_read:      return do_rw(a1, (void *)a2, a3, false, false, 0);
+    case SIEOS_SYS_write:     return do_rw(a1, (void *)a2, a3, true, false, 0);
+    case SIEOS_SYS_pread:     return do_rw(a1, (void *)a2, a3, false, true, (int64_t)a4);
+    case SIEOS_SYS_pwrite:    return do_rw(a1, (void *)a2, a3, true, true, (int64_t)a4);
+    case SIEOS_SYS_readv:     return do_rwv(a1, (const struct sieos_iovec *)a2, (int)a3, false);
+    case SIEOS_SYS_writev:    return do_rwv(a1, (const struct sieos_iovec *)a2, (int)a3, true);
+    case SIEOS_SYS_close:
+        if (!fsys_file(a1))
+            return -EBADF;
+        fd_close(current, a1);
+        return 0;
+    case SIEOS_SYS_lseek:     return fsys_lseek(a1, (int64_t)a2, (int)a3);
+    case SIEOS_SYS_openat:
+        k = sieos_oflags_to_k(a3, &ok);
+        if (!ok)
+            return -EINVAL;
+        return fsys_open(dfd(a1), (const char *)a2, k, a4);
+    case SIEOS_SYS_fcntl:     return do_fcntl(a1, a2, a3);
+    case SIEOS_SYS_ioctl:     return do_ioctl(a1, a2, a3);
+    case SIEOS_SYS_mount:     return do_mount((const char *)a1, (const char *)a2, a3, (const char *)a4);
+    case SIEOS_SYS_umount2:   return do_umount2((const char *)a1, a2);
+    case SIEOS_SYS_getdents:  return do_getdents(a1, (uint8_t *)a2, a3);
+    case SIEOS_SYS_fstatat:   return do_fstatat(a1, (const char *)a2, (struct sieos_stat *)a3, a4);
+    case SIEOS_SYS_fchmodat:
+        fl = at_flags(a4, SIEOS_AT_SYMLINK_NOFOLLOW, &ok);
+        if (!ok)
+            return -EINVAL;
+        return fsys_chmod(a2 ? dfd(a1) : (int)a1, (const char *)a2, a3, fl);
+    case SIEOS_SYS_fchownat:
+        fl = at_flags(a5, SIEOS_AT_SYMLINK_NOFOLLOW, &ok);
+        if (!ok)
+            return -EINVAL;
+        return fsys_chown(a2 ? dfd(a1) : (int)a1, (const char *)a2, (int)a3, (int)a4, fl);
+    case SIEOS_SYS_faccessat:
+        fl = at_flags(a4, SIEOS_AT_EACCESS | SIEOS_AT_SYMLINK_NOFOLLOW, &ok);
+        if (!ok)
+            return -EINVAL;
+        return fsys_access(dfd(a1), (const char *)a2, a3, fl);
+    case SIEOS_SYS_mkdirat:   return fsys_mkdir(dfd(a1), (const char *)a2, a3);
+    case SIEOS_SYS_mknodat: {
+        uint64_t dev = a4;
+        uint32_t ma = dev >> SIEOS_NBITSMAJOR, mi = dev & SIEOS_MAXMIN;
+        if (ma > 0xFFF || mi > 0xFF)
+            return -EINVAL;
+        return fsys_mknod(dfd(a1), (const char *)a2, a3, MKDEV(ma, mi));
+    }
+    case SIEOS_SYS_unlinkat:
+        fl = at_flags(a3, SIEOS_AT_REMOVEDIR, &ok);
+        if (!ok)
+            return -EINVAL;
+        return fsys_unlink(dfd(a1), (const char *)a2, fl);
+    case SIEOS_SYS_renameat:  return fsys_rename(dfd(a1), (const char *)a2, dfd(a3), (const char *)a4);
+    case SIEOS_SYS_linkat:
+        fl = at_flags(a5, SIEOS_AT_SYMLINK_FOLLOW, &ok);
+        if (!ok)
+            return -EINVAL;
+        return fsys_link(dfd(a1), (const char *)a2, dfd(a3), (const char *)a4, fl);
+    case SIEOS_SYS_symlinkat: return fsys_symlink((const char *)a1, dfd(a2), (const char *)a3);
+    case SIEOS_SYS_readlinkat: return fsys_readlink(dfd(a1), (const char *)a2, (char *)a3, a4);
+    case SIEOS_SYS_utimensat: {
+        fl = at_flags(a4, SIEOS_AT_SYMLINK_NOFOLLOW, &ok);
+        if (!ok)
+            return -EINVAL;
+        const struct sieos_timespec *uts = (const struct sieos_timespec *)a3;
+        int64_t ts[4];
+        if (uts) {
+            if (!user_ok(uts, 2 * sizeof(*uts), false))
+                return -EFAULT;
+            ts[0] = uts[0].tv_sec;
+            ts[1] = uts[0].tv_nsec == SIEOS_UTIME_NOW ? -1 : uts[0].tv_nsec == SIEOS_UTIME_OMIT ? -2 : uts[0].tv_nsec;
+            ts[2] = uts[1].tv_sec;
+            ts[3] = uts[1].tv_nsec == SIEOS_UTIME_NOW ? -1 : uts[1].tv_nsec == SIEOS_UTIME_OMIT ? -2 : uts[1].tv_nsec;
+            if ((uts[0].tv_nsec < 0 && ts[1] >= 0) || (uts[1].tv_nsec < 0 && ts[3] >= 0))
+                return -EINVAL;
+        }
+        return fsys_utimens(a2 ? dfd(a1) : (int)a1, (const char *)a2, uts ? ts : NULL, fl);
+    }
+    case SIEOS_SYS_ftruncate: return fsys_ftruncate(a1, (int64_t)a2);
+    case SIEOS_SYS_fdsync:
+        if (!fsys_file(a1))
+            return -EBADF;
+        vfs_sync();
+        return 0;
+    case SIEOS_SYS_chdir:     return fsys_chdir((const char *)a1);
+    case SIEOS_SYS_fchdir:    return fsys_fchdir(a1);
+    case SIEOS_SYS_chroot:    return fsys_chroot((const char *)a1);
+    case SIEOS_SYS_getcwd:    return fsys_getcwd((char *)a1, a2);
+    case SIEOS_SYS_statvfs:   return do_statvfs(AT_FDCWD_K, (const char *)a1, (struct sieos_statvfs *)a2);
+    case SIEOS_SYS_fstatvfs:  return do_statvfs(a1, NULL, (struct sieos_statvfs *)a2);
+    case SIEOS_SYS_sync:      vfs_sync(); return 0;
+    case SIEOS_SYS_pipe2: {
+        if (a2 & ~(uint64_t)(SIEOS_O_CLOEXEC | SIEOS_O_NONBLOCK))
+            return -EINVAL;
+        int *ufds = (int *)a1;
+        if (!user_ok(ufds, 2 * sizeof(int), true))
+            return -EFAULT;
+        struct file *rf, *wf;
+        long r = pipe_create(&rf, &wf);
+        if (r < 0)
+            return r;
+        int fd0 = fsys_fdalloc(rf, 0);
+        int fd1 = fd0 >= 0 ? fsys_fdalloc(wf, 0) : -EMFILE;
+        if (fd0 < 0 || fd1 < 0) {
+            if (fd0 >= 0)
+                current->ofile[fd0] = NULL;
+            file_close(rf);
+            file_close(wf);
+            return -EMFILE;
+        }
+        if (a2 & SIEOS_O_NONBLOCK) {
+            rf->flags |= O_NONBLOCK_K;
+            wf->flags |= O_NONBLOCK_K;
+        }
+        if (a2 & SIEOS_O_CLOEXEC)
+            current->fdflags[fd0] = current->fdflags[fd1] = FD_CLOEXEC;
+        ufds[0] = fd0;
+        ufds[1] = fd1;
+        return 0;
+    }
+    }
+    *handled = false;
+    return -ENOSYS;
+}

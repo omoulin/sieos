@@ -1,0 +1,7 @@
+root::0:root
+other::1:root
+bin::2:root,daemon
+sys::3:root,bin
+adm::4:root
+staff::10:user
+nobody::60001:

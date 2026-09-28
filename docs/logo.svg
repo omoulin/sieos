@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <title>SIEOS - Orbit Node</title>
+  <!-- A blue ring crossed by a light stratum; the amber node is the assistant. -->
+  <circle cx="100" cy="100" r="62" fill="none" stroke="#8fb4dc" stroke-width="18"/>
+  <circle cx="100" cy="100" r="62" fill="none" stroke="#4f7fb8" stroke-width="18" stroke-dasharray="97 292" stroke-dashoffset="-195"/>
+  <rect x="22" y="93" width="156" height="14" rx="7" fill="#e4e0d8"/>
+  <circle cx="146" cy="58" r="27" fill="none" stroke="#d9a15f" stroke-opacity=".3" stroke-width="4"/>
+  <circle cx="146" cy="58" r="17" fill="#d9a15f"/>
+</svg>

@@ -1,0 +1,3 @@
+# /etc/logindevperm - devices given to the user who logs in on the console
+# console-device  mode  devices
+/dev/console      0600  /dev/fb0 /dev/events

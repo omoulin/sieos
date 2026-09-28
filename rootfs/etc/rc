@@ -1,0 +1,2 @@
+# /etc/rc - system startup script, run by init as root before login.
+echo "SIEOS: file systems checked, starting multi-user mode."

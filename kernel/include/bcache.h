@@ -1,0 +1,28 @@
+#ifndef SIEOS_BCACHE_H
+#define SIEOS_BCACHE_H
+
+#include "kernel.h"
+#include "abi.h"
+
+struct buf {
+    int dev;
+    uint64_t blockno;
+    int ref;
+    bool valid;
+    bool hashed;                  /* on a hash chain (valid, or being read) */
+    struct buf *hnext;
+    struct buf *prev, *next;      /* LRU list */
+    uint8_t *data;
+};
+
+int  bcache_init(void);
+int  bcache_set_bsize(int dev, uint32_t block_size);   /* before the first bread of dev */
+struct buf *bread(int dev, uint64_t blk);              /* NULL on I/O error */
+struct buf *bzero_get(int dev, uint64_t blk);          /* zero-filled buffer, not read from disk */
+int  bwrite(struct buf *b);
+void brelse(struct buf *b);
+void bcache_forget(int dev);                           /* drop dev's unreferenced blocks */
+void bprefetch(int dev, uint64_t blk, int n);          /* read ahead [blk, blk + n) in one device read */
+size_t bcache_blocks(void);
+
+#endif

@@ -1,0 +1,23 @@
+# Ownership and permissions applied to the root file system image.
+# path                 mode     uid    gid     (everything else: root:root)
+/root                  0700     0      0
+/home/user             0755     100    10
+/home/user/README      0644     100    10
+/tmp                   1777     0      0
+/etc/shadow            0400     0      0
+/bin/su                4755     0      0
+/bin/passwd            4755     0      0
+# device nodes:  path  mode  uid  gid  type major minor
+/dev/console           0620     0      0      c 5 1
+/dev/tty               0666     0      0      c 5 0
+/dev/null              0666     0      0      c 1 3
+/dev/zero              0666     0      0      c 1 5
+/dev/random            0666     0      0      c 1 8
+/dev/urandom           0666     0      0      c 1 9
+/dev/fb0               0600     0      0      c 29 0
+/dev/events            0600     0      0      c 13 0
+/dev/ptmx              0666     0      0      c 5 2
+/proc                  0555     0      0
+/dev/pts               0755     0      0
+/dev/shm               1777     0      0
+/bin/ping              4755     0      0
