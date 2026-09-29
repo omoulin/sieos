@@ -8,6 +8,10 @@
 #include "random.h"
 #include "abi2.h"
 #include "vm.h"
+#include "jbd2.h"
+#include "net.h"
+#include "sieos/syscall.h"
+#include "sieos/time.h"
 
 struct idt_entry {
     uint16_t off_lo;
@@ -26,6 +30,11 @@ struct idt_ptr {
 
 static struct idt_entry idt[256];
 static irq_handler_t irq_handlers[16];
+#define IRQ_SHARE 4
+static struct {
+    irq_shared_t fn;
+    void *arg;
+} irq_shared[16][IRQ_SHARE];
 
 extern uint64_t isr_table[];
 extern void isr64(void), isr65(void), isr66(void), isr255(void);
@@ -80,10 +89,45 @@ static void pic_eoi(int irq)
     outb(0x20, 0x20);
 }
 
+static void irq_route(int irq)
+{
+    if (ioapic_ok)
+        ioapic_route(irq, cpus[0].apic_id);
+    else
+        pic_unmask(irq);
+}
+
+bool irq_register_shared(int irq, irq_shared_t h, void *arg)
+{
+    if (irq < 0 || irq >= 16)
+        return false;
+    for (int i = 0; i < IRQ_SHARE; i++)
+        if (!irq_shared[irq][i].fn) {
+            irq_shared[irq][i].arg = arg;
+            irq_shared[irq][i].fn = h;
+            irq_route(irq);
+            return true;
+        }
+    return false;
+}
+
 void irq_register(int irq, irq_handler_t h)
 {
     irq_handlers[irq] = h;
-    pic_unmask(irq);
+    if (ioapic_ok)
+        ioapic_route(irq, cpus[0].apic_id);   /* device interrupts: the boot CPU */
+    else
+        pic_unmask(irq);
+}
+
+/* Move the interrupts registered so far to the I/O APIC (at boot, once it is found). */
+void irq_use_ioapic(void)
+{
+    if (!ioapic_init())
+        return;
+    for (int irq = 0; irq < 16; irq++)
+        if (irq_handlers[irq] || irq_shared[irq][0].fn)
+            ioapic_route(irq, cpus[0].apic_id);
 }
 
 void idt_init(void)
@@ -132,6 +176,63 @@ static int fault_signal(struct trapframe *tf, int *code, uint64_t *addr)
     }
 }
 
+/*
+ * System calls that read only the caller's own state or the clocks run
+ * without the kernel lock: false for everything else.
+ */
+static bool fast_syscall(struct trapframe *tf)
+{
+    struct lwp *l = curlwp;
+    struct proc *p = l->proc;
+    long r;
+    switch (tf->rax) {
+    case SIEOS_SYS_getpid:
+        tf->rdx = p->parent ? p->parent->pid : 0;       /* (proc_table entries never go away) */
+        r = p->pid;
+        break;
+    case SIEOS_SYS_getuid:  tf->rdx = p->euid; r = p->uid; break;
+    case SIEOS_SYS_geteuid: r = p->euid; break;
+    case SIEOS_SYS_getgid:  tf->rdx = p->egid; r = p->gid; break;
+    case SIEOS_SYS_getegid: r = p->egid; break;
+    case SIEOS_SYS_lwp_self: r = l->lwpid; break;
+    case SIEOS_SYS_gethrtime: r = (long)hrtime(); break;
+    case SIEOS_SYS_gethrvtime: r = (long)(l->ticks * (1000000000UL / TIMER_HZ)); break;
+    case SIEOS_SYS_clock_gettime: {
+        struct sieos_timespec ts, *u = (struct sieos_timespec *)tf->rsi;
+        int64_t ns;
+        if (tf->rdi == SIEOS_CLOCK_REALTIME)
+            ns = realtime_ns();
+        else if (tf->rdi == SIEOS_CLOCK_MONOTONIC)
+            ns = (int64_t)hrtime();
+        else
+            return false;
+        if (!user_range_ok(p->pml4, (uint64_t)u, sizeof(*u), true))
+            return false;                               /* (the slow path says EFAULT) */
+        ts.tv_sec = ns / 1000000000L;
+        ts.tv_nsec = ns % 1000000000L;
+        memcpy(u, &ts, sizeof(ts));                     /* a fault here takes the kernel lock */
+        r = 0;
+        break;
+    }
+    default:
+        return false;
+    }
+    l->orig_rax = tf->rax;
+    l->restart_syscall = false;
+    tf->rax = r;
+    tf->rflags &= ~1UL;
+    return true;
+}
+
+/* Nothing to do on the way back to user mode but return? */
+static bool nothing_pending(void)
+{
+    struct lwp *l = curlwp;
+    struct proc *p = l->proc;
+    return !mycpu()->need_resched && !l->must_exit && !l->suspend_req && !p->stopped &&
+           !((l->sig_pending | p->sig_pending) & ~l->sig_blocked);
+}
+
 void trap_handler(struct trapframe *tf)
 {
     bool from_user = (tf->cs & 3) == 3;
@@ -143,6 +244,19 @@ void trap_handler(struct trapframe *tf)
         mycpu()->tlb_flush = 0;
         lapic_eoi();
         return;
+    }
+
+    /* A page fault from user mode needs only the address space's own lock
+     * (vm.c): demand-zero and copy-on-write faults of different LWPs and
+     * processes run in parallel; so do the system calls of fast_syscall.
+     * Anything else to do on the way back to
+     * user mode (rescheduling, signals, exit) takes the slow path. */
+    if (from_user && ((tf->int_no == 14 && vm_fault(read_cr2(), tf->err_code, true) && ++curlwp->minflt) ||
+                      (tf->int_no == T_SYSCALL2 && fast_syscall(tf)))) {
+        if (nothing_pending())
+            return;
+        bkl_lock();
+        goto to_user;
     }
 
     /* Kernel code runs under the big kernel lock.  A trap from user mode
@@ -173,12 +287,21 @@ void trap_handler(struct trapframe *tf)
             tf->rax = r;
             tf->rflags &= ~1UL;
         }
+        if (fs_commit_deadline && ticks >= fs_commit_deadline)
+            ext4_journal_tick(false);        /* an old ext4 transaction: commit it */
+        if (net_loop_pending)
+            net_loop_drain();                /* packets this call sent to ourselves */
     } else if (tf->int_no >= IRQ_BASE && tf->int_no < IRQ_BASE + 16) {
         int irq = tf->int_no - IRQ_BASE;
-        pic_eoi(irq);
+        if (!ioapic_ok)
+            pic_eoi(irq);
         random_add_entropy(tf->rip ^ ((uint64_t)irq << 48));
         if (irq_handlers[irq])
             irq_handlers[irq](tf);
+        for (int i = 0; i < IRQ_SHARE && irq_shared[irq][i].fn; i++)
+            irq_shared[irq][i].fn(tf, irq_shared[irq][i].arg);
+        if (ioapic_ok)
+            lapic_eoi();                      /* after the handler: level lines are quiet now */
     } else if (tf->int_no == 14 && vm_fault(read_cr2(), tf->err_code, from_user)) {
         curlwp->minflt++;
         /* resolved: demand paging or copy-on-write */
@@ -197,6 +320,9 @@ void trap_handler(struct trapframe *tf)
     }
 
     if (from_user) {
+to_user:
+        if (mycpu()->need_resched)
+            schedule();                  /* a higher-priority LWP became runnable */
         signal_deliver(tf);
         bkl_unlock();
     } else if (took) {

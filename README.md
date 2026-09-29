@@ -67,6 +67,9 @@ Networking uses QEMU's user-mode network. The guest gets 10.0.2.15 by DHCP, the 
 reachable as `10.0.2.2` (named `host` in `/etc/hosts`), and host port 8080 is forwarded
 to the guest's port 80. Try running `httpd` as root in SIEOS, then `curl http://localhost:8080/`
 on the host. Change the forwarding with `make run NET=user,model=e1000,hostfwd=...`.
+IPv6 works too: QEMU advertises the prefix `fec0::/64`, so the guest configures
+`fec0::5054:ff:fe12:3456` itself, and the host's `::1` is reachable as `fec0::2`
+(for example `wget http://[fec0::2]:8000/` against `python3 -m http.server --bind ::1`).
 
 The same ISO boots on legacy BIOS (El Torito, GRUB i386-pc) and on UEFI
 (EFI system partition with GRUB x86_64-efi). It also carries a GPT/MBR hybrid,
@@ -78,10 +81,11 @@ so it can be written to a USB stick.
 |-------------|----------------|
 | Boot        | GRUB multiboot2 → 32-bit stub builds page tables → long mode → higher-half kernel. Works on BIOS and UEFI. |
 | Console     | VGA text mode, or a GOP/VBE linear framebuffer with an 8x16 font. Both handle ANSI colours and are mirrored to COM1. PS/2 keyboard. |
+| Input       | PS/2 keyboard and mouse; USB keyboards, mice and tablets on every xHCI controller (the chipset's and Thunderbolt ones), directly or through USB 2 hubs, plugged in at any time; HID-over-I2C touchpads and keyboards on the Intel LPSS I2C controllers (Raptor Lake, Ice Lake, Tiger/Alder/Meteor/Arrow Lake), found through the ACPI tables. Boot options `nousb`, `noi2c`, `usbdebug`, `i2cdebug`. |
 | SMP         | CPUs found through the ACPI MADT and started with INIT-SIPI-SIPI via a real-mode trampoline. Per-CPU GDT/TSS/idle process reached through `%gs` (`swapgs`). Local APIC timers preempt on every CPU, and idle CPUs are woken by reschedule IPIs. A big kernel lock serialises kernel code while user processes run in parallel. |
-| Memory      | Bitmap frame allocator, 4-level paging with a per-process address space, direct map of physical memory, kernel heap. |
+| Memory      | Bitmap frame allocator over all RAM (up to 256 GiB), 4-level paging with a per-process address space, direct map of physical memory, kernel heap. |
 | System calls | ABI v2, Solaris-inspired (Solaris errno values, signal numbers, flags and structure layouts), entered with the `syscall` instruction; specified in [`docs/abi-v2.md`](docs/abi-v2.md) and `abi/include/sieos/`. |
-| Processes   | Processes with LWPs (threads), preemptive round-robin scheduling across CPUs, copy-on-write `fork`, demand paging, `mmap` (private and shared, anonymous and file), `execve` of static, PIE and dynamically linked ELF64 programs (the kernel loads `PT_INTERP`), set-user-ID/set-group-ID, `waitid`, rlimits (with `RLIMIT_VMEM`) and rusage, ELF core files (`RLIMIT_CORE`), System V IPC, `/proc` (Solaris layout), `mount`/`umount2` of tmpfs and proc, `nanosleep` to the microsecond. |
+| Processes   | Processes with LWPs (threads), preemptive priority scheduling across CPUs with the Solaris TS, FX and RT classes (`priocntl`), page faults and simple system calls without the big kernel lock, copy-on-write `fork`, demand paging, `mmap` (private and shared, anonymous and file), `execve` of static, PIE and dynamically linked ELF64 programs (the kernel loads `PT_INTERP`), set-user-ID/set-group-ID, `waitid`, rlimits (with `RLIMIT_VMEM`) and rusage, ELF core files (`RLIMIT_CORE`), System V IPC, `/proc` (Solaris layout), `mount`/`umount2` of tmpfs and proc, `nanosleep` to the microsecond. |
 | Signals     | Solaris numbering (1-41, real-time 42-73, queued). Default actions: terminate, core, stop, continue, ignore. `sigaction` handlers get a `ucontext`/`siginfo` frame, with `SA_RESTART`, `SA_RESETHAND`, `SA_NODEFER`, `SA_ONSTACK`; per-LWP masks, `sigtimedwait`, `sigqueue`, and system-call restart. |
 | C library   | musl 1.2.5 adapted to ABI v2 (`libc/`), shared (`/usr/lib/libc.so`, which is also the dynamic linker `/lib/ld-musl-sieos64.so.1`) and static, with POSIX threads and the Solaris extensions (`thr_*`, `_lwp_*`, `gethrtime`, `processor_bind`, `sig2str`, ...). libstdc++ and libgcc_s are shared too. |
 | Toolchain   | An `x86_64-pc-sieos` cross compiler (GCC 15.2 C/C++, binutils 2.45) built by `make`, and the same compiler hosted on SIEOS (`make native`): SIEOS can compile programs, including its own. |
@@ -89,10 +93,10 @@ so it can be written to a USB stick.
 | Terminal    | termios with canonical and raw modes, `ECHO` (used for password prompts), and editable control characters. |
 | Users       | Real, effective and saved uid/gid plus supplementary groups; `setuid`, `seteuid`, `setgid`, `setgroups`; `umask`; `access`. |
 | Permissions | Owner/group/other `rwx` checks on every open, exec and directory search. Creating or removing files needs write+search on the directory. Sticky directories (`/tmp`) restrict deletion. The superuser bypasses checks. `chown` is restricted to root, as in Solaris's `rstchown`, and a non-root `chown` clears the set-ID bits. |
-| Network     | PCI enumeration and an Intel e1000 driver with polled descriptor rings. Ethernet, ARP (with a queue for packets awaiting resolution), IPv4 routing through a gateway, loopback (127.0.0.0/8), ICMP echo, UDP, **TCP** and a **DHCP** client at boot. TCP covers the three-way handshake, MSS, flow control, retransmission with backoff, zero-window probes, FIN/RST, TIME_WAIT and listen/accept backlogs. The **BSD sockets** API integrates with `read`/`write`/`poll`. Ports below 1024 and raw sockets require root. |
+| Network     | PCI enumeration; interrupt-driven Intel e1000 and virtio-net drivers, with any number of cards as eth0, eth1, ... (each with its own addresses, DHCP and IPv6, and routes chosen per destination). Ethernet, ARP (with a queue for packets awaiting resolution), IPv4 routing through a gateway, loopback (127.0.0.0/8), ICMP echo, UDP, **TCP** and a **DHCP** client at boot. **IPv6**: neighbor discovery, stateless address autoconfiguration from router advertisements (with MTU and RDNSS), ICMPv6 echo, `::1`, and TCP and UDP over IPv6; `AF_INET6` sockets are dual-stack (IPv4-mapped peers) unless `IPV6_V6ONLY`. TCP covers the three-way handshake, MSS and window scaling, flow control, out-of-order reassembly, NewReno congestion control, RTT-based retransmission with backoff, zero-window probes, FIN/RST, TIME_WAIT and listen/accept backlogs. The **BSD sockets** API integrates with `read`/`write`/`poll`. Ports below 1024 and raw sockets require root. |
 | Files       | ext4 read/write (see below), tmpfs (`/tmp`, `/dev/shm`), pipes and named FIFOs, `AF_UNIX` sockets (with descriptor passing), pseudo-terminals, `poll()`, record locks, and device nodes `/dev/console`, `/dev/tty`, `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/fb0` and `/dev/events` stored as real ext4 character-special inodes. |
 | Random      | `/dev/random` and `/dev/urandom` never block. They output a ChaCha20 keystream that is rekeyed after every read, from a pool fed by interrupt timing, the RTC and RDSEED/RDRAND when the CPU has them. |
-| TLS         | A TLS 1.3 client in user space (`user/tls`): X25519 and P-256 key exchange, AES-128/256-GCM, RSA-PSS/PKCS #1 signatures, and X.509 chain and host-name validation against `/etc/ssl/certs.pem`, plus optional site roots in `/etc/ssl/local.pem`. |
+| TLS         | A TLS 1.3 client in user space (`user/tls`): X25519 and P-256 key exchange, AES-128/256-GCM, RSA-PSS/PKCS #1 and ECDSA (P-256, P-384) signatures, X.509 chain and host-name validation against `/etc/ssl/certs.pem` (the Mozilla roots), plus optional site roots in `/etc/ssl/local.pem`, and session resumption with tickets. |
 | ext4        | Extent trees, 64bit, flex_bg, and metadata_csum/gdt_csum checksums on every metadata structure. Supports create, write, truncate, mkdir, unlink, rmdir and `rename` (replacing targets, moving directories between parents with `..` and link-count updates). `getcwd` is computed from the directory tree, so it stays right after renames. |
 
 ### User space
@@ -100,14 +104,19 @@ so it can be written to a USB stick.
 The programs are C programs on the C library, linked dynamically; `libsieos`
 (`user/libsieos`, `user/include/sieos.h`) holds the SIEOS extensions they share:
 
-- **Shell and login:** `init`, `login`, `sh` (pipelines, `&&`, `||`, `;`, `&`, redirections including `2>&1`, `~`, variables `NAME=value`, `NAME=value cmd`, `$NAME`/`${NAME}`/`$?`, built-ins `cd [-] pwd exit umask export unset set jobs fg bg wait kill`).
+- **Shells:** `/bin/sh` is **ksh93** (ksh93u+m, the shell Solaris ships), built on SIEOS itself;
+  `dash` (the ISO's `/bin/sh`); and `sish`, the earlier SIEOS shell. `help` lists the programs.
+- **Login:** `init`, `login`, and `sish` (pipelines, `&&`, `||`, `;`, `&`, redirections including `2>&1`, `~`, variables `NAME=value`, `NAME=value cmd`, `$NAME`/`${NAME}`/`$?`, built-ins `cd [-] pwd exit umask export unset set jobs fg bg wait kill`).
 - **Environment:** `env`, `printenv`; login sets `HOME USER LOGNAME SHELL PATH TERM`, and programs are looked up through `$PATH`.
 - **Users and permissions:** `su` and `passwd` (both set-user-ID root), `useradd`, `id`, `whoami`, `groups`, `chmod` (octal and symbolic), `chown`, `chgrp`.
 - **Files and text:** `ls -lad`, `cat`, `cp`, `mv` (rename), `tail`, `rm -rf`, `mkdir -p`, `rmdir`, `touch`, `grep`, `head`, `wc`, `hexdump`, `stat`, `tty`, `yes`, `true`, `false`.
 - **Network:** `ifconfig`, `ping` (setuid root), `host`, `nc` (TCP/UDP client and server),
   `wget`, `httpd` (web server with directory listings), `netstat`. The resolver uses
   `/etc/hosts` and then DNS.
-- **System:** `ps` (with CPU column), `lscpu`, `nproc`, `kill`, `free`, `df`, `mount`, `umount`, `uname`, `date`, `uptime`, `sleep`, `sync`, `clear`, `sifetch`, `halt`, `reboot`.
+- **System:** `ps` (with CPU column), `lscpu`, `nproc`, `kill`, `free`, `df`, `mount`, `umount`,
+  `lofiadm`, `priocntl`, `getconf`, `uname`, `date`, `uptime`, `sleep`, `sync`, `clear`, `sifetch`, `halt`, `reboot`.
+- **GNU utilities** in `/usr/gnu/bin`, as on Solaris 11: coreutils, sed, grep, diffutils,
+  findutils, gawk, make (also `/usr/bin/make`), tar and gzip.
 - **Development** (with `make native`): `gcc`, `g++`, `cpp`, `as`, `ld`, `ar`, `nm`, `objdump`, `readelf`, `strip` and the other binutils.
 - **Self-tests:** `fstest`, `forktest`, `sigtest`, `abi2test`.
 
@@ -138,7 +147,20 @@ The desktop starts when you log in on the graphical login screen. From a text co
 run `facet` to start it, and use **Log Out** to return. Its look is called **Strata**: a
 dark, layered-stone desktop with graphite surfaces, warm light text and one amber accent.
 It borrows the calm surfaces of a modern dock and the working habits of a Solaris-era
-workstation. All artwork is original.
+workstation. All artwork is original. **Appearance** switches the whole desktop between Strata and two other skins, a
+BeOS-style one (yellow title tabs, Deskbar, blue desktop) and an IRIX-style one (4Dwm-like
+frames, Toolchest, indigo desktop, red pointer), with their own icons, while programs
+run. Text is set in DejaVu Sans and DejaVu Sans Mono,
+TrueType fonts rendered anti-aliased by libfacet at any size. The terminal zooms with
+Ctrl and + or -.
+
+Facet is a window manager and window server. Its applications (`facet-terminal`,
+`facet-files`, `facet-viewer`, `facet-monitor`, `facet-network`, `facet-clock`,
+`facet-about`, `facet-message`) are separate programs built on **libfacet**. Programs of
+your own can be too, and can ask the model through **libsia** without handling the
+connection. [docs/sdk.md](docs/sdk.md) explains both. The headers and libraries are
+installed for the cross compiler and for SIEOS's own `cc`, with examples in
+`/usr/src/examples`.
 
 - **Spine** (the dock down the left edge):
   - the **SIEOS gem**, which opens the main menu: applications, every open window with
@@ -260,19 +282,16 @@ user@sieos:~$ bg %2 ; kill %1 ; fg %2
 
 ## Limitations
 
-- No journaling: writes go straight to disk (write-through). A disk whose
-  journal needs recovery is mounted read-only.
-- Adding entries to hashed (htree) directories and allocating in
-  `BLOCK_UNINIT` groups are not supported. The small images built here don't use them.
-- No symlink following. The desktop renders in software, with an 8x16 bitmap font only.
-- Network: no IPv6, no IP fragment reassembly, no TCP congestion control or
-  out-of-order reassembly (out-of-order segments are dropped and retransmitted), and
-  the NIC is polled every 10 ms rather than interrupt-driven.
+- ext4 journaling covers metadata (data=ordered). Changes are committed within five
+  seconds and at `sync`, so a power cut loses at most those seconds, never consistency.
+- The desktop renders in software, with an 8x16 bitmap font only.
+- Network: no IPv6 privacy addresses or path MTU discovery, and no TCP SACK or timestamps.
 - TLS: server certificates must be RSA (ECDSA chains are rejected); there is no
   session resumption. sia sends one request per connection and doesn't stream.
-- SMP uses a big kernel lock: user code scales across CPUs, kernel code
-  does not. Device interrupts go to the boot CPU through the 8259 PIC; there
-  is no I/O APIC routing.
+- SMP uses a big kernel lock. User code, page faults and simple system calls run in
+  parallel across CPUs, and disk I/O releases the lock while it waits; the rest of the
+  kernel does not run in parallel. Device interrupts go to the
+  boot CPU through the I/O APIC.
 
 ## Layout
 
@@ -280,10 +299,14 @@ user@sieos:~$ bg %2 ; kill %1 ; fg %2
 kernel/          kernel sources and include/
 user/libsieos/   SIEOS extensions and helpers over the C library (user/include/sieos.h)
 user/bin/        user programs
-user/facet/      the Facet desktop (window manager, drawing library, applications)
-user/sdm/        the graphical login screen (/sbin/sdm), built on Facet's drawing code
+user/facet/      the Facet desktop: window manager, window server, launcher, desktop channel
+user/libfacet/   libfacet: drawing, widgets, the window protocol's client side (include/facet/)
+user/facet-apps/ the desktop's applications, separate programs on libfacet (/bin/facet-*)
+user/examples/   SDK examples (/usr/src/examples): Facet hello, sia ask, a chat window
+user/sdm/        the graphical login screen (/sbin/sdm), built on libfacet's drawing code
 user/tls/        libtls: TLS 1.3 client and cryptography (SHA-2, HKDF, AES-GCM, X25519, P-256, RSA, X.509)
-user/libsia/     libsia: the assistant library (JSON, HTTP, Azure AI Foundry client, engine, tools)
+user/libsia/     libsia: the assistant library (JSON, HTTP, Azure AI Foundry client, engine, tools;
+                 include/sia/sia.h is the interface for applications)
 user/sia/        sia (terminal) and sia-agent (headless, for the Facet strip) on libsia
 rootfs/          files copied into the root file system (/etc, /home, /root)
 tools/           ISO/FAT/shadow/permission build helpers, font converter

@@ -2,13 +2,18 @@
  * ext4.c - ext4 file system driver.
  *
  * Supported: 1K-4K block sizes, 32/64-bit group descriptors, flex_bg,
+ * uninitialised block and inode groups (initialised on first use),
  * extent trees (any depth for reading, depth <= 1 for allocation),
- * legacy indirect block maps (read-only), linear and htree directories
- * (htree directories are read-only), metadata_csum / gdt_csum checksums.
+ * legacy indirect block maps, linear and hashed (htree) directories
+ * (ext4_htree.inc), metadata_csum / gdt_csum checksums.
  *
- * Writes bypass the journal and go straight to disk (write-through), so
- * the file system stays consistent as long as the machine is not reset
- * in the middle of an operation.
+ * Metadata goes through the journal (jbd2.c) when the volume has one and is
+ * mounted read-write: changed metadata blocks join the running transaction,
+ * which commits when it is large or five seconds old (checked at the end of
+ * each operation and on system calls), at sync and at unmount.  File data
+ * is written in place before the metadata that points to it commits
+ * (data=ordered).  A journal left by a crash is replayed at mount.  Without
+ * a journal, writes go straight to disk.
  */
 #include "fs.h"
 #include "bcache.h"
@@ -16,21 +21,130 @@
 #include "blkdev.h"
 #include "mm.h"
 #include "abi2.h"
+#include "jbd2.h"
+#include "kmutex.h"
 
 #define NINODE 64
 
-static struct ext4_super sb;
-static uint32_t bs;                    /* block size */
-static uint32_t ngroups, ipg, bpg, inode_sz, desc_size, fdb;
-static uint64_t total_blocks;
-static struct ext4_gd *gds;
-static uint8_t *gd_dirty;
-static bool sb_dirty;
-static bool mounted, rw;
-static bool f_csum, f_gdt_csum, f_filetype, f_extents, f_64bit;
-static uint32_t csum_seed;
-static uint32_t generation_seed;
-static struct inode icache[NINODE];
+/*
+ * One mounted ext4 volume.  The code below works on the volume V points to:
+ * each entry point (the fs_ops, mount, unmount) sets it from the inode or
+ * file system it is given, and holds the volume's mutex: block I/O sleeps
+ * (the big kernel lock is free meanwhile, for other volumes and the rest of
+ * the kernel), so the block I/O wrappers restore V afterwards; a lofi
+ * device's I/O also goes through the volume holding its file.
+ */
+struct ext4_vol {
+    int dev;                            /* block device */
+    struct ext4_super sb;
+    uint32_t bs;                        /* block size */
+    uint32_t ngroups, ipg, bpg, inode_sz, desc_size, fdb;
+    uint64_t total_blocks;
+    struct ext4_gd *gds;
+    uint8_t *gd_dirty;
+    bool sb_dirty;
+    bool mounted, rw;
+    bool f_csum, f_gdt_csum, f_filetype, f_extents, f_64bit;
+    uint32_t csum_seed;
+    uint32_t generation_seed;
+    struct inode icache[NINODE];
+    struct fs fs;
+    bool needs_recovery;                /* INCOMPAT_RECOVER was set at mount */
+    bool journaled;                     /* metadata goes through jnl */
+    bool recover_on;                    /* INCOMPAT_RECOVER is set on disk */
+    struct jbd jnl;
+    struct kmutex lock;                 /* the volume: operations sleep in disk I/O holding it */
+};
+
+#define MAXVOL 16
+static struct ext4_vol *vols[MAXVOL];   /* mounted volumes, for ext4_journal_tick */
+volatile uint64_t fs_commit_deadline;
+
+static struct ext4_vol *V;
+#define sb              (V->sb)
+#define bs              (V->bs)
+#define ngroups         (V->ngroups)
+#define ipg             (V->ipg)
+#define bpg             (V->bpg)
+#define inode_sz        (V->inode_sz)
+#define desc_size       (V->desc_size)
+#define fdb             (V->fdb)
+#define total_blocks    (V->total_blocks)
+#define gds             (V->gds)
+#define gd_dirty        (V->gd_dirty)
+#define sb_dirty        (V->sb_dirty)
+#define mounted         (V->mounted)
+#define rw              (V->rw)
+#define f_csum          (V->f_csum)
+#define f_gdt_csum      (V->f_gdt_csum)
+#define f_filetype      (V->f_filetype)
+#define f_extents       (V->f_extents)
+#define f_64bit         (V->f_64bit)
+#define csum_seed       (V->csum_seed)
+#define generation_seed (V->generation_seed)
+#define icache          (V->icache)
+#define ext4_fs         (V->fs)
+#define VOL(fsp)        ((struct ext4_vol *)(fsp)->priv)
+
+/* Block I/O on the current volume's device; V survives a nested volume's use. */
+static struct buf *vbread(uint64_t blk)
+{
+    struct ext4_vol *v = V;
+    struct buf *b = bread(v->dev, blk);
+    V = v;
+    return b;
+}
+
+static struct buf *vbzero(uint64_t blk)
+{
+    return bzero_get(V->dev, blk);
+}
+
+static int ext4_commit(struct ext4_vol *v);
+
+/* A metadata block changed: into the running transaction, or to disk. */
+static int vbwrite(struct buf *b)
+{
+    struct ext4_vol *v = V;
+    if (v->journaled) {
+        bool first = v->jnl.n == 0;
+        if (jbd_add(&v->jnl, b) == 0) {
+            if (first) {
+                uint64_t due = ticks + JBD_COMMIT_TICKS;
+                if (!fs_commit_deadline || due < fs_commit_deadline)
+                    fs_commit_deadline = due;
+            }
+            if (v->jnl.n >= (v->jnl.maxlen - v->jnl.first) / 2) {
+                static bool said;
+                if (!said)
+                    kprintf("ext4: an operation outgrows the journal: committing part of it\n");
+                said = true;
+                ext4_commit(v);
+                V = v;
+            }
+            return 0;
+        }
+    }
+    int r = bwrite(b);
+    V = v;
+    return r;
+}
+
+/* File data: in place, at once (before the metadata that points to it commits). */
+static int vdwrite(struct buf *b)
+{
+    struct ext4_vol *v = V;
+    int r = bwrite(b);
+    V = v;
+    return r;
+}
+
+static void vbprefetch(uint64_t blk, int n)
+{
+    struct ext4_vol *v = V;
+    bprefetch(v->dev, blk, n);
+    V = v;
+}
 
 /* ------------------------------------------------------------------ */
 /* Checksums                                                           */
@@ -215,13 +329,29 @@ static int sb_write(void)
     sb.s_wtime = kernel_time();
     if (f_csum)
         sb.s_checksum = sb_checksum();
-    struct buf *b = bread(blk);
+    struct buf *b = vbread(blk);
     if (!b)
         return -EIO;
     memcpy(b->data + off, &sb, sizeof(sb));
-    int r = bwrite(b);
+    int r = vbwrite(b);
     brelse(b);
     sb_dirty = false;
+    return r;
+}
+
+/* The superblock straight to disk (the RECOVER flag, which is not journaled). */
+static int sb_write_direct(void)
+{
+    uint64_t blk = 1024 / bs;
+    uint32_t off = 1024 % bs;
+    if (f_csum)
+        sb.s_checksum = sb_checksum();
+    struct buf *b = vbread(blk);
+    if (!b)
+        return -EIO;
+    memcpy(b->data + off, &sb, sizeof(sb));
+    int r = vdwrite(b);
+    brelse(b);
     return r;
 }
 
@@ -231,17 +361,17 @@ static int gd_write(uint32_t g)
     uint64_t blk = fdb + 1 + byte / bs;
     if (f_csum || f_gdt_csum)
         gds[g].bg_checksum = gd_checksum(g);
-    struct buf *b = bread(blk);
+    struct buf *b = vbread(blk);
     if (!b)
         return -EIO;
     memcpy(b->data + byte % bs, &gds[g], desc_size);
-    int r = bwrite(b);
+    int r = vbwrite(b);
     brelse(b);
     gd_dirty[g] = 0;
     return r;
 }
 
-void ext4_sync(void)
+static void ext4_sync(void)
 {
     if (!mounted || !rw)
         return;
@@ -285,6 +415,85 @@ static uint32_t blocks_in_group(uint32_t g)
     return n < bpg ? n : bpg;
 }
 
+/* Does group g hold a superblock backup (and group descriptor copies)? */
+static bool group_has_super(uint32_t g)
+{
+    if (g <= 1 || !(sb.s_feature_ro_compat & RO_COMPAT_SPARSE_SUPER))
+        return true;
+    for (uint32_t base = 3; base <= 7; base += 2) {
+        uint64_t p = base;
+        while (p < g)
+            p *= base;
+        if (p == g)
+            return true;
+    }
+    return false;
+}
+
+static void mark_range(uint8_t *bm, uint64_t gstart, uint32_t n, uint64_t first, uint64_t count)
+{
+    for (uint64_t b = first; b < first + count; b++)
+        if (b >= gstart && b < gstart + n)
+            bm[(b - gstart) / 8] |= 1 << ((b - gstart) % 8);
+}
+
+/*
+ * A BLOCK_UNINIT group's bitmap (mkfs leaves it unwritten): its superblock
+ * backup and descriptor copies, and any group's bitmaps and inode table
+ * that lie in it are in use; the bits past the group's end are set.
+ */
+static int init_block_bitmap(uint32_t g)
+{
+    struct buf *b = vbzero(gd_block_bitmap(g));
+    if (!b)
+        return -EIO;
+    uint64_t start = fdb + (uint64_t)g * bpg;
+    uint32_t n = blocks_in_group(g);
+    memset(b->data, 0, bs);
+    if (group_has_super(g)) {
+        uint32_t gdt = (ngroups * desc_size + bs - 1) / bs;
+        mark_range(b->data, start, n, start, 1 + gdt + sb.s_reserved_gdt_blocks);
+    }
+    uint32_t itb = (ipg * inode_sz + bs - 1) / bs;
+    for (uint32_t h = 0; h < ngroups; h++) {
+        mark_range(b->data, start, n, gd_block_bitmap(h), 1);
+        mark_range(b->data, start, n, gd_inode_bitmap(h), 1);
+        mark_range(b->data, start, n, gd_inode_table(h), itb);
+    }
+    for (uint32_t bit = n; bit < bs * 8; bit++)
+        b->data[bit / 8] |= 1 << (bit % 8);
+    uint32_t used = 0;
+    for (uint32_t bit = 0; bit < n; bit++)
+        used += (b->data[bit / 8] >> (bit % 8)) & 1;
+    block_bitmap_csum(g, b->data);
+    vbwrite(b);
+    brelse(b);
+    uint32_t was = gd_free_blocks_count(g);
+    gds[g].bg_flags &= ~BG_BLOCK_UNINIT;
+    gd_set_free_blocks_count(g, n - used);
+    sb_set_free_blocks(sb_free_blocks() - was + (n - used));
+    return 0;
+}
+
+/* An INODE_UNINIT group's inode bitmap: all free (the bits past ipg set). */
+static int init_inode_bitmap(uint32_t g)
+{
+    struct buf *b = vbzero(gd_inode_bitmap(g));
+    if (!b)
+        return -EIO;
+    memset(b->data, 0, bs);
+    for (uint32_t bit = ipg; bit < bs * 8; bit++)
+        b->data[bit / 8] |= 1 << (bit % 8);
+    inode_bitmap_csum(g, b->data);
+    vbwrite(b);
+    brelse(b);
+    gds[g].bg_flags &= ~BG_INODE_UNINIT;
+    if (f_csum || f_gdt_csum)
+        gd_set_itable_unused(g, ipg);
+    gd_dirty[g] = 1;
+    return 0;
+}
+
 static uint64_t balloc(uint64_t goal)
 {
     if (goal < fdb || goal >= total_blocks)
@@ -292,9 +501,11 @@ static uint64_t balloc(uint64_t goal)
     uint32_t g0 = (goal - fdb) / bpg;
     for (uint32_t k = 0; k < ngroups; k++) {
         uint32_t g = (g0 + k) % ngroups;
-        if (gd_free_blocks_count(g) == 0 || (gds[g].bg_flags & BG_BLOCK_UNINIT))
+        if (gd_free_blocks_count(g) == 0)
             continue;
-        struct buf *b = bread(gd_block_bitmap(g));
+        if ((gds[g].bg_flags & BG_BLOCK_UNINIT) && init_block_bitmap(g) < 0)
+            continue;
+        struct buf *b = vbread(gd_block_bitmap(g));
         if (!b)
             return 0;
         uint32_t nbits = blocks_in_group(g);
@@ -303,9 +514,11 @@ static uint64_t balloc(uint64_t goal)
             uint32_t bit = (start + scan) % nbits;
             if (b->data[bit / 8] & (1 << (bit % 8)))
                 continue;
+            if (V->journaled && jbd_is_freed(&V->jnl, fdb + (uint64_t)g * bpg + bit))
+                continue;                       /* freed by the uncommitted transaction */
             b->data[bit / 8] |= 1 << (bit % 8);
             block_bitmap_csum(g, b->data);
-            bwrite(b);
+            vbwrite(b);
             brelse(b);
             gd_set_free_blocks_count(g, gd_free_blocks_count(g) - 1);
             sb_set_free_blocks(sb_free_blocks() - 1);
@@ -323,7 +536,7 @@ static void bfree(uint64_t blk)
         return;
     }
     uint32_t g = (blk - fdb) / bpg, bit = (blk - fdb) % bpg;
-    struct buf *b = bread(gd_block_bitmap(g));
+    struct buf *b = vbread(gd_block_bitmap(g));
     if (!b)
         return;
     if (!(b->data[bit / 8] & (1 << (bit % 8)))) {
@@ -333,8 +546,10 @@ static void bfree(uint64_t blk)
     }
     b->data[bit / 8] &= ~(1 << (bit % 8));
     block_bitmap_csum(g, b->data);
-    bwrite(b);
+    vbwrite(b);
     brelse(b);
+    if (V->journaled)
+        jbd_freed(&V->jnl, blk);
     gd_set_free_blocks_count(g, gd_free_blocks_count(g) + 1);
     sb_set_free_blocks(sb_free_blocks() + 1);
 }
@@ -342,9 +557,11 @@ static void bfree(uint64_t blk)
 static uint32_t ialloc(bool is_dir)
 {
     for (uint32_t g = 0; g < ngroups; g++) {
-        if (gd_free_inodes_count(g) == 0 || (gds[g].bg_flags & BG_INODE_UNINIT))
+        if (gd_free_inodes_count(g) == 0)
             continue;
-        struct buf *b = bread(gd_inode_bitmap(g));
+        if ((gds[g].bg_flags & BG_INODE_UNINIT) && init_inode_bitmap(g) < 0)
+            continue;
+        struct buf *b = vbread(gd_inode_bitmap(g));
         if (!b)
             return 0;
         for (uint32_t bit = 0; bit < ipg; bit++) {
@@ -353,7 +570,7 @@ static uint32_t ialloc(bool is_dir)
                 continue;
             b->data[bit / 8] |= 1 << (bit % 8);
             inode_bitmap_csum(g, b->data);
-            bwrite(b);
+            vbwrite(b);
             brelse(b);
             gd_set_free_inodes_count(g, gd_free_inodes_count(g) - 1);
             if (is_dir)
@@ -375,12 +592,12 @@ static uint32_t ialloc(bool is_dir)
 static void ifree(uint32_t ino, bool is_dir)
 {
     uint32_t g = (ino - 1) / ipg, bit = (ino - 1) % ipg;
-    struct buf *b = bread(gd_inode_bitmap(g));
+    struct buf *b = vbread(gd_inode_bitmap(g));
     if (!b)
         return;
     b->data[bit / 8] &= ~(1 << (bit % 8));
     inode_bitmap_csum(g, b->data);
-    bwrite(b);
+    vbwrite(b);
     brelse(b);
     gd_set_free_inodes_count(g, gd_free_inodes_count(g) + 1);
     if (is_dir)
@@ -410,7 +627,7 @@ static int read_inode(uint32_t ino, uint8_t *raw)
     uint32_t off;
     if (inode_loc(ino, &blk, &off) < 0)
         return -EINVAL;
-    struct buf *b = bread(blk);
+    struct buf *b = vbread(blk);
     if (!b)
         return -EIO;
     memcpy(raw, b->data + off, inode_sz);
@@ -429,17 +646,16 @@ static int write_inode(uint32_t ino, uint8_t *raw)
     if (inode_loc(ino, &blk, &off) < 0)
         return -EINVAL;
     inode_csum_set(ino, raw);
-    struct buf *b = bread(blk);
+    struct buf *b = vbread(blk);
     if (!b)
         return -EIO;
     memcpy(b->data + off, raw, inode_sz);
-    int r = bwrite(b);
+    int r = vbwrite(b);
     brelse(b);
     return r;
 }
 
 static const struct fs_ops ext4_ops;
-static struct fs ext4_fs;
 static int ext4_mount_sb(void);
 
 static int ext4_update(struct inode *ip)
@@ -456,7 +672,8 @@ static struct inode *ext4_iget(uint32_t ino)
             ip->ref++;
             return ip;
         }
-        if (ip->ref == 0 && (!slot || (slot->valid && !ip->valid)))
+        /* (not one whose last iput waits for the volume to delete it: links 0) */
+        if (ip->ref == 0 && !(ip->valid && DI(ip)->i_links_count == 0) && (!slot || (slot->valid && !ip->valid)))
             slot = ip;
     }
     if (!slot) {
@@ -485,6 +702,8 @@ static int ext4_truncate(struct inode *ip, uint64_t len);
 static void ext4_release(struct inode *ip)
 {
     struct ext4_inode *di = DI(ip);
+    if (ip->ref || !ip->valid)
+        return;                              /* taken again while this release waited for the volume */
     if (rw && di->i_links_count == 0 && di->i_mode != 0) {
         bool is_dir = S_ISDIR(di->i_mode);
         ext4_truncate(ip, 0);
@@ -594,7 +813,7 @@ static int bmap(struct inode *ip, uint64_t lblk, uint64_t *out)
                     brelse(b);
                 return 0;
             }
-            struct buf *nb = bread(idx_leaf(&ix[found]));
+            struct buf *nb = vbread(idx_leaf(&ix[found]));
             if (b)
                 brelse(b);
             if (!nb)
@@ -631,7 +850,7 @@ static int bmap(struct inode *ip, uint64_t lblk, uint64_t *out)
         if (!blk)
             return 0;
         uint64_t div = levels == 2 ? apb * apb : levels == 1 ? apb : 1;
-        struct buf *b = bread(blk);
+        struct buf *b = vbread(blk);
         if (!b)
             return -EIO;
         blk = ((uint32_t *)b->data)[(lblk / div) % apb];
@@ -700,8 +919,8 @@ static uint64_t balloc_zero(struct inode *ip, uint64_t goal)
     if (!nb)
         return 0;
     inode_add_blocks(ip, 1);
-    struct buf *zb = bzero_get(nb);
-    bwrite(zb);
+    struct buf *zb = vbzero(nb);
+    vbwrite(zb);
     brelse(zb);
     return nb;
 }
@@ -744,7 +963,7 @@ static int bmap_alloc_ind(struct inode *ip, uint64_t lblk, uint64_t *out)
     }
     uint64_t blk = di->i_block[slot];
     for (int k = 0; k < level; k++) {
-        struct buf *b = bread(blk);
+        struct buf *b = vbread(blk);
         if (!b)
             return -EIO;
         uint32_t *p = (uint32_t *)b->data;
@@ -755,7 +974,7 @@ static int bmap_alloc_ind(struct inode *ip, uint64_t lblk, uint64_t *out)
                 return -ENOSPC;
             }
             p[idx[k]] = nb;
-            bwrite(b);
+            vbwrite(b);
         }
         blk = p[idx[k]];
         brelse(b);
@@ -788,14 +1007,14 @@ static int bmap_alloc(struct inode *ip, uint64_t lblk, uint64_t *out)
                 bfree(newb);
                 return -ENOSPC;
             }
-            struct buf *lb = bzero_get(leafb);
+            struct buf *lb = vbzero(leafb);
             struct ext4_extent_header *leh = (struct ext4_extent_header *)lb->data;
             init_leaf_block(leh);
             leh->eh_entries = root->eh_entries;
             memcpy(leh + 1, root + 1, root->eh_entries * sizeof(struct ext4_extent));
             leaf_insert(leh, lblk, newb);
             extent_block_csum(ip, leh);
-            bwrite(lb);
+            vbwrite(lb);
             uint32_t first = ((struct ext4_extent *)(leh + 1))[0].ee_block;
             brelse(lb);
 
@@ -813,7 +1032,7 @@ static int bmap_alloc(struct inode *ip, uint64_t lblk, uint64_t *out)
         int i = 0;
         while (i + 1 < root->eh_entries && ix[i + 1].ei_block <= lblk)
             i++;
-        struct buf *lb = bread(idx_leaf(&ix[i]));
+        struct buf *lb = vbread(idx_leaf(&ix[i]));
         if (!lb)
             return -EIO;
         struct ext4_extent_header *leh = (struct ext4_extent_header *)lb->data;
@@ -824,7 +1043,7 @@ static int bmap_alloc(struct inode *ip, uint64_t lblk, uint64_t *out)
         }
         if (leaf_insert(leh, lblk, newb)) {
             extent_block_csum(ip, leh);
-            bwrite(lb);
+            vbwrite(lb);
             if (lblk < ix[i].ei_block)
                 ix[i].ei_block = lblk;
             brelse(lb);
@@ -841,12 +1060,12 @@ static int bmap_alloc(struct inode *ip, uint64_t lblk, uint64_t *out)
                 bfree(newb);
                 return -ENOSPC;
             }
-            struct buf *nb = bzero_get(leafb);
+            struct buf *nb = vbzero(leafb);
             struct ext4_extent_header *neh = (struct ext4_extent_header *)nb->data;
             init_leaf_block(neh);
             leaf_insert(neh, lblk, newb);
             extent_block_csum(ip, neh);
-            bwrite(nb);
+            vbwrite(nb);
             brelse(nb);
             int n = root->eh_entries++;
             ix[n].ei_block = lblk;
@@ -860,7 +1079,7 @@ static int bmap_alloc(struct inode *ip, uint64_t lblk, uint64_t *out)
     }
 
     inode_add_blocks(ip, 1);
-    struct buf *zb = bzero_get(newb);    /* fresh block reads back as zeros */
+    struct buf *zb = vbzero(newb);    /* fresh block reads back as zeros */
     brelse(zb);
     *out = newb;
     return 0;
@@ -880,7 +1099,7 @@ static void free_extent_tree(struct ext4_extent_header *eh, int guard)
     struct ext4_extent_idx *ix = (struct ext4_extent_idx *)(eh + 1);
     for (int i = 0; i < eh->eh_entries; i++) {
         uint64_t leaf = idx_leaf(&ix[i]);
-        struct buf *b = bread(leaf);
+        struct buf *b = vbread(leaf);
         if (b) {
             free_extent_tree((struct ext4_extent_header *)b->data, guard + 1);
             brelse(b);
@@ -896,7 +1115,7 @@ static long free_indirect(uint64_t blk, int level)
         return 0;
     long n = 1;
     if (level > 0) {
-        struct buf *b = bread(blk);
+        struct buf *b = vbread(blk);
         if (b) {
             uint32_t *p = (uint32_t *)b->data;
             for (uint32_t i = 0; i < bs / 4; i++)
@@ -928,7 +1147,7 @@ static long trim_indirect(uint32_t *slot, int level, uint64_t base, uint64_t kee
     }
     if (base + span * per <= keep)
         return 0;                                /* entirely kept */
-    struct buf *b = bread(*slot);
+    struct buf *b = vbread(*slot);
     if (!b)
         return -EIO;
     uint32_t *p = (uint32_t *)b->data;
@@ -952,7 +1171,7 @@ static long trim_indirect(uint32_t *slot, int level, uint64_t base, uint64_t kee
         }
         any |= p[j] != 0;
     }
-    bwrite(b);
+    vbwrite(b);
     brelse(b);
     if (!any) {
         bfree(*slot);
@@ -992,7 +1211,7 @@ static long trim_extents(struct inode *ip, struct ext4_extent_header *eh, uint64
     struct ext4_extent_idx *ix = (struct ext4_extent_idx *)(eh + 1);
     for (int i = 0; i < eh->eh_entries; i++) {
         uint64_t leaf = idx_leaf(&ix[i]);
-        struct buf *b = bread(leaf);
+        struct buf *b = vbread(leaf);
         if (!b)
             return -EIO;
         struct ext4_extent_header *ceh = (struct ext4_extent_header *)b->data;
@@ -1010,7 +1229,7 @@ static long trim_extents(struct inode *ip, struct ext4_extent_header *eh, uint64
         }
         if (r) {
             extent_block_csum(ip, ceh);
-            bwrite(b);
+            vbwrite(b);
         }
         brelse(b);
         ix[n++] = ix[i];
@@ -1067,10 +1286,10 @@ static int ext4_truncate(struct inode *ip, uint64_t len)
         if (len % bs) {                          /* bytes past the end must read back as zeros */
             uint64_t pblk;
             if (bmap(ip, len / bs, &pblk) == 0 && pblk) {
-                struct buf *b = bread(pblk);
+                struct buf *b = vbread(pblk);
                 if (b) {
                     memset(b->data + len % bs, 0, bs - len % bs);
-                    bwrite(b);
+                    vbwrite(b);
                     brelse(b);
                 }
             }
@@ -1142,9 +1361,9 @@ static long ext4_read(struct inode *ip, void *dst, uint64_t off, size_t n)
                 while (k < want && bmap(ip, lblk + k, &next) == 0 && next == pblk + k)
                     k++;
                 if (k > 1)
-                    bprefetch(pblk, k);
+                    vbprefetch(pblk, k);
             }
-            struct buf *b = bread(pblk);
+            struct buf *b = vbread(pblk);
             if (!b)
                 return done ? (long)done : -EIO;
             memcpy((uint8_t *)dst + done, b->data + boff, chunk);
@@ -1173,13 +1392,13 @@ static long ext4_write(struct inode *ip, const void *src, uint64_t off, size_t n
             err = r;
             break;
         }
-        struct buf *b = bread(pblk);
+        struct buf *b = vbread(pblk);
         if (!b) {
             err = -EIO;
             break;
         }
         memcpy(b->data + boff, (const uint8_t *)src + done, chunk);
-        r = bwrite(b);
+        r = jbd_has(&V->jnl, b) ? vbwrite(b) : vdwrite(b);   /* (a journaled block stays so) */
         brelse(b);
         if (r < 0) {
             err = r;
@@ -1262,7 +1481,7 @@ static int dir_iterate(struct inode *dir, dirent_cb cb, void *arg)
             return r;
         if (!pblk)
             continue;
-        struct buf *b = bread(pblk);
+        struct buf *b = vbread(pblk);
         if (!b)
             return -EIO;
         struct ext4_dirent *prev = NULL;
@@ -1280,7 +1499,7 @@ static int dir_iterate(struct inode *dir, dirent_cb cb, void *arg)
         }
         if (dirty) {
             dirblock_csum(dir, b->data);
-            bwrite(b);
+            vbwrite(b);
         }
         brelse(b);
         if (stop)
@@ -1384,13 +1603,20 @@ static int add_cb(struct ext4_dirent *de, struct ext4_dirent *prev, void *arg, b
     return 1;
 }
 
+#include "ext4_htree.inc"
+
 static int dir_add(struct inode *dir, const char *name, size_t len, uint32_t ino, uint8_t ftype)
 {
-    if (DI(dir)->i_flags & EXT4_INDEX_FL) {
-        kprintf("ext4: adding entries to hashed (htree) directories is not supported\n");
-        return -EPERM;
-    }
     struct add_arg a = { name, len, ino, ftype, dir_block_limit(), NULL };
+    if (DI(dir)->i_flags & EXT4_INDEX_FL) {
+        int r = dx_add(dir, &a);                     /* 0: the directory is linear now */
+        if (r != 0) {
+            if (r < 0)
+                return r;
+            inode_touch(dir, true, true);
+            return ext4_update(dir);
+        }
+    }
     int r = dir_iterate(dir, add_cb, &a);
     if (r < 0)
         return r;
@@ -1400,7 +1626,7 @@ static int dir_add(struct inode *dir, const char *name, size_t len, uint32_t ino
         r = bmap_alloc(dir, lblk, &pblk);
         if (r < 0)
             return r;
-        struct buf *b = bread(pblk);
+        struct buf *b = vbread(pblk);
         if (!b)
             return -EIO;
         struct ext4_dirent *de = (struct ext4_dirent *)b->data;
@@ -1408,7 +1634,7 @@ static int dir_add(struct inode *dir, const char *name, size_t len, uint32_t ino
         fill_dirent(de, &a);
         dirblock_init_tail(b->data);
         dirblock_csum(dir, b->data);
-        bwrite(b);
+        vbwrite(b);
         brelse(b);
         inode_set_size(dir, (lblk + 1) * bs);
     }
@@ -1431,7 +1657,7 @@ static int ext4_readdir(struct inode *dir, uint64_t *offp, filldir_t fill, void 
         if (r < 0)
             return r;
         if (pblk) {
-            struct buf *b = bread(pblk);
+            struct buf *b = vbread(pblk);
             if (!b)
                 return -EIO;
             for (uint32_t o = 0; o + 8 <= bs;) {
@@ -1638,7 +1864,7 @@ static int ext4_mkdir(struct inode *dir, const char *name, uint16_t mode, int ui
     r = bmap_alloc(ip, 0, &pblk);
     if (r < 0)
         goto fail;
-    struct buf *b = bread(pblk);
+    struct buf *b = vbread(pblk);
     if (!b) {
         r = -EIO;
         goto fail;
@@ -1658,7 +1884,7 @@ static int ext4_mkdir(struct inode *dir, const char *name, uint16_t mode, int ui
     dotdot->name[1] = '.';
     dirblock_init_tail(b->data);
     dirblock_csum(ip, b->data);
-    bwrite(b);
+    vbwrite(b);
     brelse(b);
     inode_set_size(ip, bs);
     ext4_update(ip);
@@ -1686,8 +1912,6 @@ static int ext4_unlink(struct inode *dir, const char *name, bool is_dir)
     size_t len = strlen(name);
     if ((len == 1 && name[0] == '.') || (len == 2 && name[0] == '.' && name[1] == '.'))
         return is_dir ? -EINVAL : -EISDIR;
-    if (DI(dir)->i_flags & EXT4_INDEX_FL)
-        return -EPERM;
     uint32_t ino;
     int r = ext4_dir_lookup(dir, name, len, &ino);
     if (r < 0)
@@ -1803,8 +2027,6 @@ static int ext4_rename(struct inode *olddir, const char *oldname, struct inode *
     if ((olen == 1 && oldname[0] == '.') || (olen == 2 && !memcmp(oldname, "..", 2)) ||
         (nlen == 1 && newname[0] == '.') || (nlen == 2 && !memcmp(newname, "..", 2)))
         return -EINVAL;
-    if ((DI(olddir)->i_flags | DI(newdir)->i_flags) & EXT4_INDEX_FL)
-        return -EPERM;
 
     uint32_t ino, tino = 0;
     int r = ext4_dir_lookup(olddir, oldname, olen, &ino);
@@ -1901,14 +2123,9 @@ out:
 /* Mount                                                               */
 /* ------------------------------------------------------------------ */
 
-bool ext4_writable(void)
-{
-    return rw;
-}
-
 static void ext4_statvfs(struct fs *fs, struct kstatvfs *sv)
 {
-    UNUSED(fs);
+    V = VOL(fs);                             /* (a snapshot: no I/O, no lock) */
     sv->bsize = bs;
     sv->blocks = total_blocks;
     sv->bfree = sb_free_blocks();
@@ -1918,51 +2135,390 @@ static void ext4_statvfs(struct fs *fs, struct kstatvfs *sv)
     sv->rdonly = !rw;
 }
 
+/* Commit the running transaction (group descriptors and superblock included). */
+static int ext4_commit(struct ext4_vol *v)
+{
+    V = v;
+    if (!v->journaled)
+        return 0;
+    ext4_sync();
+    if (!v->jnl.n) {
+        v->jnl.nfreed = 0;
+        return 0;
+    }
+    if (!v->recover_on) {                    /* the journal may hold something from now on */
+        sb.s_feature_incompat |= INCOMPAT_RECOVER;
+        sb_write_direct();
+        v->recover_on = true;
+    }
+    int r = jbd_commit(&v->jnl);
+    V = v;
+    return r;
+}
+
+static void recompute_deadline(void)
+{
+    uint64_t d = 0;
+    for (int i = 0; i < MAXVOL; i++)
+        if (vols[i] && vols[i]->journaled && vols[i]->jnl.n) {
+            uint64_t due = vols[i]->jnl.started + JBD_COMMIT_TICKS;
+            if (!d || due < d)
+                d = due;
+        }
+    fs_commit_deadline = d;
+}
+
+/* Commit due transactions (all with force), e.g. from the system-call path. */
+void ext4_journal_tick(bool force)
+{
+    struct ext4_vol *saved = V;
+    for (int i = 0; i < MAXVOL; i++)
+        if (vols[i] && vols[i]->journaled && (force || jbd_due(&vols[i]->jnl))) {
+            struct ext4_vol *v = vols[i];
+            if (v->lock.depth && !kmutex_held(&v->lock))
+                continue;                    /* busy: it commits at the end of that operation */
+            kmutex_lock(&v->lock);
+            ext4_commit(v);
+            kmutex_unlock(&v->lock);
+        }
+    recompute_deadline();
+    V = saved;
+}
+
+/* The end of an operation on V: commit if the transaction is large or old. */
+static void op_done(void)
+{
+    struct ext4_vol *v = V;
+    if (v && v->journaled && jbd_due(&v->jnl)) {
+        ext4_commit(v);
+        recompute_deadline();
+    }
+    V = v;
+}
+
+static void ext4_fs_sync_locked(struct fs *fs);
+
 static void ext4_fs_sync(struct fs *fs)
 {
-    UNUSED(fs);
-    ext4_sync();
+    struct ext4_vol *v = VOL(fs);
+    kmutex_lock(&v->lock);
+    ext4_fs_sync_locked(fs);
+    V = v;
+    kmutex_unlock(&v->lock);
 }
+
+static void ext4_fs_sync_locked(struct fs *fs)
+{
+    struct ext4_vol *v = VOL(fs);
+    V = v;
+    if (!v->journaled) {
+        ext4_sync();
+        return;
+    }
+    ext4_commit(v);
+    V = v;
+    if (v->recover_on && !v->jnl.n) {        /* clean: nothing to recover */
+        sb.s_feature_incompat &= ~INCOMPAT_RECOVER;
+        sb_write_direct();
+        v->recover_on = false;
+    }
+    recompute_deadline();
+}
+
+/*
+ * The fs_ops entry points: select the inode's volume and hold its mutex
+ * while doing the work (enter, leave); changes may commit at the end.
+ */
+static struct ext4_vol *enter(struct fs *fs)
+{
+    struct ext4_vol *v = VOL(fs);
+    kmutex_lock(&v->lock);
+    V = v;
+    return v;
+}
+
+static void leave(struct ext4_vol *v, bool changed)
+{
+    V = v;
+    if (changed)
+        op_done();
+    V = v;
+    kmutex_unlock(&v->lock);
+}
+
+static long op_read(struct inode *ip, void *dst, uint64_t off, size_t n)
+{
+    struct ext4_vol *v = enter(ip->fs);
+    long r = ext4_read(ip, dst, off, n);
+    leave(v, false);
+    return r;
+}
+static long op_write(struct inode *ip, const void *src, uint64_t off, size_t n)
+{
+    struct ext4_vol *v = enter(ip->fs);
+    long r = ext4_write(ip, src, off, n);
+    leave(v, true);
+    return r;
+}
+static int op_truncate(struct inode *ip, uint64_t len)
+{
+    struct ext4_vol *v = enter(ip->fs);
+    int r = ext4_truncate(ip, len);
+    leave(v, true);
+    return r;
+}
+static int op_lookup(struct inode *dir, const char *name, size_t len, struct inode **out)
+{
+    struct ext4_vol *v = enter(dir->fs);
+    int r = ext4_lookup(dir, name, len, out);
+    leave(v, false);
+    return r;
+}
+static int op_readdir(struct inode *dir, uint64_t *off, filldir_t fill, void *arg)
+{
+    struct ext4_vol *v = enter(dir->fs);
+    int r = ext4_readdir(dir, off, fill, arg);
+    leave(v, false);
+    return r;
+}
+static int op_create(struct inode *dir, const char *name, uint16_t mode, uint32_t rdev, int uid, int gid,
+                     struct inode **out)
+{
+    struct ext4_vol *v = enter(dir->fs);
+    int r = ext4_create(dir, name, mode, rdev, uid, gid, out);
+    leave(v, true);
+    return r;
+}
+static int op_mkdir(struct inode *dir, const char *name, uint16_t mode, int uid, int gid)
+{
+    struct ext4_vol *v = enter(dir->fs);
+    int r = ext4_mkdir(dir, name, mode, uid, gid);
+    leave(v, true);
+    return r;
+}
+static int op_unlink(struct inode *dir, const char *name, bool is_dir)
+{
+    struct ext4_vol *v = enter(dir->fs);
+    int r = ext4_unlink(dir, name, is_dir);
+    leave(v, true);
+    return r;
+}
+static int op_rename(struct inode *od, const char *on, struct inode *nd, const char *nn)
+{
+    struct ext4_vol *v = enter(od->fs);
+    int r = ext4_rename(od, on, nd, nn);
+    leave(v, true);
+    return r;
+}
+static int op_link(struct inode *dir, const char *name, struct inode *ip)
+{
+    struct ext4_vol *v = enter(dir->fs);
+    int r = ext4_link(dir, name, ip);
+    leave(v, true);
+    return r;
+}
+static int op_symlink(struct inode *dir, const char *name, const char *target, int uid, int gid)
+{
+    struct ext4_vol *v = enter(dir->fs);
+    int r = ext4_symlink(dir, name, target, uid, gid);
+    leave(v, true);
+    return r;
+}
+static int op_update(struct inode *ip)
+{
+    struct ext4_vol *v = enter(ip->fs);
+    int r = ext4_update(ip);
+    leave(v, true);
+    return r;
+}
+static void op_release(struct inode *ip)
+{
+    struct ext4_vol *v = enter(ip->fs);
+    ext4_release(ip);
+    leave(v, true);
+}
+
+static void ext4_destroy(struct fs *fs);
 
 static const struct fs_ops ext4_ops = {
     .name = "ext4",
-    .read = ext4_read,
-    .write = ext4_write,
-    .truncate = ext4_truncate,
-    .lookup = ext4_lookup,
-    .readdir = ext4_readdir,
-    .create = ext4_create,
-    .mkdir = ext4_mkdir,
-    .unlink = ext4_unlink,
-    .rename = ext4_rename,
-    .link = ext4_link,
-    .symlink = ext4_symlink,
-    .update = ext4_update,
-    .release = ext4_release,
+    .read = op_read,
+    .write = op_write,
+    .truncate = op_truncate,
+    .lookup = op_lookup,
+    .readdir = op_readdir,
+    .create = op_create,
+    .mkdir = op_mkdir,
+    .unlink = op_unlink,
+    .rename = op_rename,
+    .link = op_link,
+    .symlink = op_symlink,
+    .update = op_update,
+    .release = op_release,
     .statvfs = ext4_statvfs,
     .sync = ext4_fs_sync,
+    .destroy = ext4_destroy,
 };
 
-
-struct fs *ext4_mount(void)
+/* Forget cached inodes nobody holds (after a journal replay rewrote the disk). */
+static void icache_forget_all(void)
 {
-    ext4_fs.ops = &ext4_ops;
-    int err = ext4_mount_sb();
-    if (err < 0)
+    for (int i = 0; i < NINODE; i++)
+        if (icache[i].valid && !icache[i].ref)
+            icache[i].valid = false;
+}
+
+/*
+ * The journal (inode s_journal_inum): load it, replay it if it holds
+ * committed transactions, and journal from now on if the volume is
+ * writable.  0, or -errno if the volume cannot be written safely.
+ */
+static int journal_setup(struct ext4_vol *v)
+{
+    V = v;
+    if (!(sb.s_feature_compat & COMPAT_HAS_JOURNAL) || !sb.s_journal_inum) {
+        if (v->needs_recovery) {
+            kprintf("ext4: needs recovery without an internal journal, mounting read-only\n");
+            rw = false;
+        }
+        return 0;
+    }
+    struct inode *ji = ext4_iget(sb.s_journal_inum);
+    if (!ji)
+        return -EIO;
+    uint32_t n = inode_size(ji) / bs;
+    uint64_t *map = n ? kmalloc(n * sizeof(uint64_t)) : NULL;
+    int err = map ? 0 : -ENOMEM;
+    for (uint32_t i = 0; i < n && !err; i++)
+        if (bmap(ji, i, &map[i]) < 0 || !map[i])
+            err = -EIO;
+    iput(ji);
+    V = v;
+    icache_forget(sb.s_journal_inum);
+    if (!err)
+        err = jbd_load(&v->jnl, v->dev, bs, map, n, crc32c);
+    else
+        kfree(map);
+    V = v;
+    if (err) {
+        kprintf("ext4: cannot use the journal (%d), mounting read-only\n", err);
+        rw = false;
+        return 0;
+    }
+    if (!rw)
+        return 0;                            /* (a read-only mount leaves the log alone) */
+    int r = jbd_recover(&v->jnl);
+    V = v;
+    if (r < 0) {
+        kprintf("ext4: journal recovery failed, mounting read-only\n");
+        rw = false;
+        return 0;
+    }
+    if (r > 0) {                             /* the disk changed under us: read it again */
+        icache_forget_all();
+        bcache_forget(v->dev);
+        kfree(gds);
+        kfree(gd_dirty);
+        gds = NULL;
+        gd_dirty = NULL;
+        bool keep_rw = rw;
+        int e = ext4_mount_sb();
+        V = v;
+        if (e < 0)
+            return e;
+        rw = rw && keep_rw;
+    }
+    v->journaled = rw;
+    v->recover_on = sb.s_feature_incompat & INCOMPAT_RECOVER;
+    return 0;
+}
+
+/* Mount the ext4 file system on block device dev (read-only if ro). */
+struct fs *ext4_mount(int dev, bool ro)
+{
+    struct ext4_vol *v = kzalloc(sizeof(*v));
+    if (!v)
         return NULL;
-    ext4_fs.dev_major = 8;
-    ext4_fs.dev_minor = 0;
-    ext4_fs.bsize = bs;
-    ext4_fs.rdonly = !rw;
-    ext4_fs.root = ext4_iget(EXT4_ROOT_INO);
-    strcpy(ext4_fs.mntpoint, "/");
-    return ext4_fs.root ? &ext4_fs : NULL;
+    V = v;
+    v->dev = dev;
+    v->fs.ops = &ext4_ops;
+    v->fs.priv = v;
+    if (ext4_mount_sb() < 0) {
+        kfree(gds);
+        kfree(gd_dirty);
+        kfree(v);
+        return NULL;
+    }
+    if (ro || blk_readonly(dev))
+        rw = false;
+    if (v->needs_recovery && !rw)
+        kprintf("ext4: the journal needs recovery; mounted read-only, it stays as it is\n");
+    if (journal_setup(v) < 0) {
+        kfree(gds);
+        kfree(gd_dirty);
+        jbd_close(&v->jnl);
+        kfree(v);
+        return NULL;
+    }
+    V = v;
+    v->fs.dev_major = 8;
+    v->fs.dev_minor = dev;
+    v->fs.bsize = bs;
+    v->fs.rdonly = !rw;
+    v->fs.root = ext4_iget(EXT4_ROOT_INO);
+    strcpy(v->fs.mntpoint, "/");
+    if (!v->fs.root) {
+        kfree(gds);
+        kfree(gd_dirty);
+        kfree(v);
+        return NULL;
+    }
+    blk_use(dev, 1);
+    for (int i = 0; i < MAXVOL; i++)
+        if (!vols[i]) {
+            vols[i] = v;
+            break;
+        }
+    if (v->journaled)
+        kprintf("ext4: journal %u blocks, transactions up to %u blocks\n", v->jnl.maxlen, v->jnl.limit);
+    return &v->fs;
+}
+
+/* Unmounted (nothing uses it any more): write back, forget its blocks, free it. */
+static void ext4_destroy(struct fs *fs)
+{
+    struct ext4_vol *v = VOL(fs);
+    V = v;
+    iput(fs->root);
+    V = v;
+    ext4_fs_sync(fs);                        /* commit, and mark the volume clean */
+    V = v;
+    for (int i = 0; i < MAXVOL; i++)
+        if (vols[i] == v)
+            vols[i] = NULL;
+    for (int i = 0; i < NINODE; i++)
+        if (icache[i].valid && icache[i].ref)
+            kprintf("ext4: device %d unmounted with inode %u in use\n", v->dev, icache[i].ino);
+    bcache_forget(v->dev);
+    blk_use(v->dev, -1);
+    kfree(gds);
+    kfree(gd_dirty);
+    jbd_close(&v->jnl);
+    kfree(v);
+    V = NULL;
 }
 
 static int ext4_mount_sb(void)
 {
-    crc_init();
-    if (blk_read(2, 2, &sb) < 0)
+    static bool crc_ready;
+    if (!crc_ready) {
+        crc_init();
+        crc_ready = true;
+    }
+    struct ext4_vol *v = V;
+    int rr = blk_read(v->dev, 2, 2, &sb);        /* a lofi device reads through another volume */
+    V = v;
+    if (rr < 0)
         return -EIO;
     if (sb.s_magic != EXT4_SUPER_MAGIC) {
         kprintf("ext4: bad superblock magic %x\n", sb.s_magic);
@@ -1988,10 +2544,7 @@ static int ext4_mount_sb(void)
                 sb.s_feature_ro_compat & ~ro_ok);
         rw = false;
     }
-    if (sb.s_feature_incompat & INCOMPAT_RECOVER) {
-        kprintf("ext4: journal needs recovery, mounting read-only\n");
-        rw = false;
-    }
+    V->needs_recovery = sb.s_feature_incompat & INCOMPAT_RECOVER;   /* (ext4_mount decides) */
 
     f_csum = sb.s_feature_ro_compat & RO_COMPAT_METADATA_CSUM;
     f_gdt_csum = !f_csum && (sb.s_feature_ro_compat & RO_COMPAT_GDT_CSUM);
@@ -2017,7 +2570,7 @@ static int ext4_mount_sb(void)
     total_blocks = sb.s_blocks_count_lo | (f_64bit ? (uint64_t)sb.s_blocks_count_hi << 32 : 0);
     ngroups = (total_blocks - fdb + bpg - 1) / bpg;
 
-    if (bcache_init(bs) < 0)
+    if (bcache_init() < 0 || bcache_set_bsize(V->dev, bs) < 0)
         return -ENOMEM;
 
     gds = kzalloc(ngroups * sizeof(struct ext4_gd));
@@ -2027,7 +2580,7 @@ static int ext4_mount_sb(void)
     int bad_gd = 0;
     for (uint32_t g = 0; g < ngroups; g++) {
         uint64_t byte = (uint64_t)g * desc_size;
-        struct buf *b = bread(fdb + 1 + byte / bs);
+        struct buf *b = vbread(fdb + 1 + byte / bs);
         if (!b)
             return -EIO;
         memcpy(&gds[g], b->data + byte % bs, desc_size);

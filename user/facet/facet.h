@@ -4,45 +4,23 @@
 #ifndef FACET_H
 #define FACET_H
 
-#include "gfx.h"
-
-/* ---------------- theme: Strata ----------------------------------------
- * A dark, layered-stone desktop: graphite surfaces, warm light text, one
- * amber accent, a Mineral-style dock on the left (the spine), workstation
- * window controls, and the sia command strip along the bottom.
- * (Original SIEOS artwork.)
- */
-#define C_FACE        RGB(0x28, 0x2B, 0x30)   /* raised surfaces, buttons */
-#define C_FACE_LIGHT  RGB(0x3A, 0x3E, 0x45)   /* top highlights, separators */
-#define C_FACE_SHADOW RGB(0x8D, 0x88, 0x80)   /* secondary text, subtle marks */
-#define C_FACE_DARK   RGB(0x0E, 0x0F, 0x11)   /* outlines */
-#define C_TEXT        RGB(0xE4, 0xE0, 0xD8)
-#define C_DIM         RGB(0x8D, 0x88, 0x80)
-#define C_ACCENT      RGB(0xD9, 0xA1, 0x5F)   /* amber: focus, sia, workspace 1 */
-#define C_BLUE        RGB(0x8F, 0xB4, 0xDC)
-#define C_TITLE_A1    RGB(0x8F, 0xB4, 0xDC)   /* blue used by icons and graphs */
-#define C_TITLE_A2    RGB(0x5F, 0x84, 0xAD)
-#define C_DESK_TOP    RGB(0x1D, 0x20, 0x24)
-#define C_DESK_BOT    RGB(0x10, 0x11, 0x13)
-#define C_CONTENT     RGB(0x1B, 0x1D, 0x21)   /* window content */
-#define C_CONTENT_ALT RGB(0x21, 0x24, 0x28)   /* alternate rows */
-#define C_LINE        RGB(0x33, 0x37, 0x3D)
-#define C_SELECT      RGB(0x3A, 0x44, 0x52)   /* list selection */
-#define C_MENU        RGB(0x26, 0x28, 0x2E)
-#define C_MENU_HOT    RGB(0x3A, 0x44, 0x52)
-#define C_TITLEBAR    RGB(0x27, 0x2A, 0x2F)
-#define C_TITLEBAR_I  RGB(0x21, 0x23, 0x27)
-#define C_SPINE       RGB(0x28, 0x2B, 0x30)
-#define C_STRIP       RGB(0x0C, 0x0D, 0x0F)
-#define C_GOOD        RGB(0x7F, 0xD3, 0x9A)
-#define C_BAD         RGB(0xC9, 0x6A, 0x5A)
+#include "sieos.h"
+#include "facet/gfx.h"
+#include "facet/theme.h"
+#include "facet/ui.h"
+#include "facet/settings.h"
 
 /* Workspace colours: the band down a window's left edge. */
 #define NWORKSPACES 4
 extern const color_t ws_color[NWORKSPACES];
 
-#define TITLE_H 28        /* window title bar */
-#define BAND_W  4         /* workspace band */
+/* The current skin's window frame: the content's insets from the frame's
+ * outer edge (the title bar is in top). */
+struct frame_insets {
+    int top, left, right, bottom;
+};
+struct frame_insets wm_frame(void);
+bool wm_set_skin(const char *name, char *err, size_t n);
 
 /* ---------------- windows ---------------- */
 enum { MOUSE_DOWN, MOUSE_UP, MOUSE_MOVE, MOUSE_DOUBLE };
@@ -81,24 +59,26 @@ int  wm_cpu_percent(int cpu);
 int  wm_ncpus(void);
 extern char desktop_user[32];
 
-/* ---------------- widgets (drawn in content coordinates) ---------------- */
-void ui_button(struct surface *s, struct rect r, const char *label, bool pressed);
-void ui_panel(struct surface *s, struct rect r, bool sunken);
-void ui_meter(struct surface *s, struct rect r, int percent, color_t fill);
-
-/* ---------------- icons ---------------- */
-enum { ICON_TERMINAL, ICON_FOLDER, ICON_FILE, ICON_PROGRAM, ICON_MONITOR, ICON_CLOCK,
-       ICON_INFO, ICON_LOGOUT, ICON_HOME, ICON_NETWORK, ICON_DISK };
-void icon_draw(struct surface *s, int kind, int x, int y, int size);
-
-/* The SIEOS logo (Orbit Node), centred on (cx, cy), size pixels across. */
-void logo_draw(struct surface *s, int cx, int cy, int size);
-void logo_pixels(struct surface *s, int x, int y, int scale);   /* 16x16 bitmap version */
-
-/* ---------------- applications ---------------- */
+/* ---------------- applications (launch.c: separate programs, /bin/facet-*) ---------------- */
+pid_t app_launch(const char *app, const char *arg);   /* terminal, shell, files, viewer, monitor,
+                                                         network, clock, about: the pid, or -1 */
+void app_reaped(pid_t pid);       /* a child exited */
 void app_terminal(void);          /* the sia assistant (or the shell) */
 void app_shell_terminal(void);    /* always the plain shell */
-struct window *term_open(bool plain);
+struct window *term_open(bool plain);   /* started, and its window up (or NULL) */
+
+/* ---------------- server.c: windows of other programs (libfacet clients) ---------------- */
+struct pollfd;
+int  server_start(void);          /* listen; sets FACET_DISPLAY */
+void server_stop(void);
+void server_broadcast_skin(const char *name);
+int  server_poll_fds(struct pollfd *p, int max, int *ids);
+void server_ready(int id, short revents);
+bool server_window(struct window *w);
+pid_t server_window_pid(struct window *w);
+bool server_is_assistant(struct window *w);
+void server_type_line(struct window *w, const char *text);
+struct window *server_wait_window(pid_t pid, int timeout_ms);
 
 /* desktop.c: the control channel of programs Facet starts (libsia desktop tools) */
 int  desktop_channel_new(void);             /* -1 if none left */
@@ -114,6 +94,8 @@ int  wm_window_list(struct window **out, int max);
 struct window *wm_find_window(int id);
 int  wm_workspace(void);
 void wm_switch_workspace(int n);
+bool wm_set_resolution(int w, int h, char *err, size_t n);
+int  wm_display_modes(char *buf, size_t n);          /* the modes as text lines; their number, -1 */
 void wm_move_to_workspace(struct window *w, int n);
 void wm_show_window(struct window *w);
 bool term_is_assistant(struct window *w);
@@ -125,5 +107,6 @@ void app_clock(void);
 void app_about(void);
 void app_message(const char *title, const char *line1, const char *line2);
 void app_network(void);
+void app_settings(void);
 
 #endif

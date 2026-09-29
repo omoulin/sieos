@@ -7,6 +7,7 @@
  */
 #include "mm.h"
 #include "vm.h"
+#include "cpu.h"
 
 extern uint64_t boot_pml4[];
 extern uint64_t boot_pdpt_low[];
@@ -42,6 +43,55 @@ void vmm_set_uncached(uint64_t pa)
     uint64_t *l2 = table(l3[PDPT_IDX(va)]);
     l2[PD_IDX(va)] |= 0x18;                   /* PCD | PWT */
     invlpg(va);
+}
+
+void vmm_direct_map(uint64_t start, uint64_t end, uint64_t (*alloc)(void))
+{
+    uint64_t *l3 = P2V((uint64_t)boot_pdpt_low);  /* PML4[256]: the direct map (PML4[0] while APs start) */
+    for (uint64_t a = start & ~((2UL << 20) - 1); a < end && a < DIRECT_MAP_MAX; a += 2UL << 20) {
+        if (!(l3[PDPT_IDX(a)] & PTE_P))
+            l3[PDPT_IDX(a)] = alloc() | PTE_P | PTE_W;
+        table(l3[PDPT_IDX(a)])[PD_IDX(a)] = a | PTE_P | PTE_W | PTE_PS;
+    }
+    write_cr3(read_cr3());
+}
+
+#define MMIO_BASE (PHYS_OFFSET + (256UL << 30))   /* in the direct map's PML4 slot: every space shares it */
+#define MMIO_SIZE (64UL << 30)
+static uint64_t mmio_next = MMIO_BASE;
+
+static uint64_t *walk(uint64_t pml4, uint64_t va, bool create);
+
+static void *window_map(uint64_t pa, size_t size, uint64_t cache)
+{
+    uint64_t start = PAGE_ALIGN_DOWN(pa), end = PAGE_ALIGN_UP(pa + size);
+    if (mmio_next + (end - start) > MMIO_BASE + MMIO_SIZE)
+        return NULL;
+    uint64_t va = mmio_next;
+    for (uint64_t a = start; a < end; a += PAGE_SIZE) {
+        uint64_t *pte = walk(kernel_pml4_phys, va + (a - start), true);
+        if (!pte)
+            return NULL;
+        *pte = a | PTE_P | PTE_W | cache | pte_nx;
+    }
+    mmio_next += end - start + PAGE_SIZE;               /* (a guard page between mappings) */
+    return (void *)(va + (pa - start));
+}
+
+void *mmio_map(uint64_t pa, size_t size)
+{
+    uint64_t start = PAGE_ALIGN_DOWN(pa), end = PAGE_ALIGN_UP(pa + size);
+    if (end <= DIRECT_MAP_SIZE) {
+        for (uint64_t a = start & ~((2UL << 20) - 1); a < end; a += 2UL << 20)
+            vmm_set_uncached(a);
+        return P2V(pa);
+    }
+    return window_map(pa, size, 0x18);                  /* PCD | PWT: uncached */
+}
+
+void *mmio_map_wc(uint64_t pa, size_t size)
+{
+    return window_map(pa, size, pat_wc ? PTE_WC : 0x18);
 }
 
 /* Return a pointer to the PTE for va, allocating intermediate tables if asked. */

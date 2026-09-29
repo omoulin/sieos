@@ -7,11 +7,13 @@
  *   - /etc/default/init sets CONSOLE=text,
  *   - there is no usable framebuffer, or sdm keeps failing,
  *   - the user chose "Console Login" on the graphical login screen.
+ * The session's exit status can ask for a restart or a halt (the desktop's
+ * "Exit..." menu: SESSION_EXIT_REBOOT, SESSION_EXIT_HALT in sieos.h).
  * Also adopts and reaps orphaned processes.
  */
 #include "sieos.h"
 
-#define SDM_CONSOLE_REQUEST 3       /* sdm exit status: run a text login once */
+#define SDM_CONSOLE_REQUEST SESSION_EXIT_CONSOLE   /* sdm exit status: run a text login once */
 
 static pid_t spawn(char *const argv[])
 {
@@ -98,6 +100,11 @@ int main(int argc, char **argv)
             if (WIFEXITED(status) && WEXITSTATUS(status) == SDM_CONSOLE_REQUEST) {
                 text_login();
                 continue;
+            }
+            if (WIFEXITED(status) && (WEXITSTATUS(status) == SESSION_EXIT_REBOOT ||
+                                      WEXITSTATUS(status) == SESSION_EXIT_HALT)) {   /* the desktop's Exit menu */
+                printf("init: %s\n", WEXITSTATUS(status) == SESSION_EXIT_REBOOT ? "restarting" : "shutting down");
+                sieos_reboot(WEXITSTATUS(status) == SESSION_EXIT_REBOOT ? REBOOT_RESTART : REBOOT_HALT);
             }
             /* A display manager that dies immediately is broken: count it. */
             if (uptime_ms() - t0 < 3000 && !(WIFEXITED(status) && WEXITSTATUS(status) == 0))

@@ -1,7 +1,8 @@
 /*
  * sock2.c - ABI v2 sockets: Solaris constants (SOCK_DGRAM = 1,
  * SOCK_STREAM = 2, SOL_SOCKET = 0xffff, MSG_DONTWAIT = 0x80, ...) over the
- * kernel's IPv4 sockets.  sockaddr_in has the same layout in both ABIs.
+ * kernel's IPv4 and IPv6 sockets.  sockaddr_in has the same layout in both
+ * ABIs; AF_INET6 and sockaddr_in6 are the Solaris ones.
  * AF_UNIX sockets are in unix.c.
  */
 #include "proc.h"
@@ -11,6 +12,7 @@
 #include "sieos/syscall.h"
 #include "sieos/socket.h"
 #include "sieos/errno.h"
+#include "sieos/sysinfo.h"
 
 static long net(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
 {
@@ -50,7 +52,7 @@ static long msg_flags(long f, bool *ok)
 
 static long do_socket(long domain, long type, long proto)
 {
-    if (domain != SIEOS_AF_INET && domain != SIEOS_AF_UNIX)
+    if (domain != SIEOS_AF_INET && domain != SIEOS_AF_INET6 && domain != SIEOS_AF_UNIX)
         return -EAFNOSUPPORT;
     if (type & ~(long)(SIEOS_SOCK_TYPE_MASK | SIEOS_SOCK_CLOEXEC | SIEOS_SOCK_NONBLOCK | SIEOS_SOCK_NDELAY))
         return -EINVAL;
@@ -139,6 +141,25 @@ static long do_setsockopt(long fd, long level, long name, const void *val, long 
         return -ENOTSOCK;
     if (level == SIEOS_IPPROTO_TCP)
         return name == SIEOS_TCP_NODELAY ? 0 : -ENOPROTOOPT_K;
+    if (level == SIEOS_IPPROTO_IPV6) {
+        int fam = 0;
+        socket_kopt(fd, 5, false, &fam);
+        if (fam != SIEOS_AF_INET6)
+            return -ENOPROTOOPT_K;
+        if (len < (long)sizeof(int) || !user_ok(val, sizeof(int), false))
+            return -EINVAL;
+        int v = *(const int *)val;
+        switch (name) {
+        case SIEOS_IPV6_V6ONLY:
+            return socket_kopt(fd, 4, true, &v);
+        case SIEOS_IPV6_UNICAST_HOPS:
+        case SIEOS_IPV6_MULTICAST_HOPS:
+        case SIEOS_IPV6_MULTICAST_LOOP:
+        case SIEOS_IPV6_MULTICAST_IF:
+            return 0;                                /* accepted; hop limits are the router's */
+        }
+        return -ENOPROTOOPT_K;
+    }
     if (level != SIEOS_SOL_SOCKET)
         return -ENOPROTOOPT_K;
     switch (name) {
@@ -181,6 +202,19 @@ static long do_getsockopt(long fd, long level, long name, void *val, unsigned in
     int iv = 0, t;
     if (level == SIEOS_IPPROTO_TCP && name == SIEOS_TCP_NODELAY) {
         iv = 1;
+    } else if (level == SIEOS_IPPROTO_IPV6) {
+        int fam = 0;
+        socket_kopt(fd, 5, false, &fam);
+        if (fam != SIEOS_AF_INET6)
+            return -ENOPROTOOPT_K;
+        if (name == SIEOS_IPV6_V6ONLY)
+            socket_kopt(fd, 4, false, &iv);
+        else if (name == SIEOS_IPV6_UNICAST_HOPS)
+            iv = 64;
+        else if (name == SIEOS_IPV6_MULTICAST_HOPS || name == SIEOS_IPV6_MULTICAST_LOOP)
+            iv = 1;
+        else
+            return -ENOPROTOOPT_K;
     } else if (level != SIEOS_SOL_SOCKET) {
         return -ENOPROTOOPT_K;
     } else {
@@ -274,7 +308,7 @@ long syscall_sock_v2(struct trapframe *tf, bool *handled)
     case SIEOS_SYS_getsockopt:  return do_getsockopt(a1, a2, a3, (void *)a4, (unsigned int *)a5);
     case SIEOS_SYS_so_socketpair: {                  /* (domain, type, protocol, int sv[2]) */
         if (a1 != SIEOS_AF_UNIX)
-            return a1 == SIEOS_AF_INET ? -EOPNOTSUPP : -EAFNOSUPPORT;
+            return a1 == SIEOS_AF_INET || a1 == SIEOS_AF_INET6 ? -EOPNOTSUPP : -EAFNOSUPPORT;
         if (a3 != 0)
             return -EPROTONOSUPPORT;
         if (a2 & ~(uint64_t)(SIEOS_SOCK_TYPE_MASK | SIEOS_SOCK_CLOEXEC | SIEOS_SOCK_NONBLOCK | SIEOS_SOCK_NDELAY))
@@ -286,8 +320,10 @@ long syscall_sock_v2(struct trapframe *tf, bool *handled)
         }
         return r;
     }
-    case SIEOS_SYS_netinfo:     return net(SYS_netinfo, a1, 0, 0, 0, 0, 0);
+    case SIEOS_SYS_netinfo:     return net(SYS_netinfo, a1, a2, 0, 0, 0, 0);
     case SIEOS_SYS_netstat:     return net(SYS_netstat, a1, a2, 0, 0, 0, 0);
+    case SIEOS_SYS_netinfo6:    return socket_netinfo6((struct sieos_netinfo6 *)a1, (long)a2);
+    case SIEOS_SYS_netstat6:    return socket_netstat6((struct sieos_sockinfo6 *)a1, (int)a2);
     }
     *handled = false;
     return -ENOSYS;

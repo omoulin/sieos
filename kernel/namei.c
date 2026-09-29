@@ -10,7 +10,7 @@
 #include "proc.h"
 #include "mm.h"
 
-#define PBUF 1024
+#define PBUF (SYMLINK_MAX + 1 + MAXPATH)       /* a link's target and the rest of the path */
 
 static struct inode *proc_root(void)
 {
@@ -56,6 +56,7 @@ static struct inode *namex(struct inode *start, const char *path, int flags, boo
         const char *rest = p;
         while (*rest == '/')
             rest++;
+        bool trailing = *p == '/' && !*rest;     /* "name/": a directory, links followed */
         if (len > 255) {
             r = -ENAMETOOLONG;
             goto out;
@@ -99,7 +100,7 @@ static struct inode *namex(struct inode *start, const char *path, int flags, boo
             iput(next);
             next = m;
         }
-        if (S_ISLNK(inode_mode(next)) && (*rest || !(flags & NAMEI_NOFOLLOW))) {
+        if (S_ISLNK(inode_mode(next)) && (*rest || trailing || !(flags & NAMEI_NOFOLLOW))) {
             if (++links > MAXSYMLINKS) {
                 iput(next);
                 r = -ELOOP;
@@ -120,6 +121,9 @@ static struct inode *namex(struct inode *start, const char *path, int flags, boo
             if (rl) {
                 tmp[n] = '/';
                 memcpy(tmp + n + 1, rest, rl + 1);
+            } else if (trailing) {
+                tmp[n] = '/';                    /* the target must be a directory too */
+                tmp[n + 1] = 0;
             }
             strcpy(buf, tmp);
             p = buf;
@@ -128,6 +132,11 @@ static struct inode *namex(struct inode *start, const char *path, int flags, boo
                 ip = idup(root);
             }
             continue;                            /* relative targets resolve from ip */
+        }
+        if (trailing && !S_ISDIR(inode_mode(next))) {
+            iput(next);
+            r = -ENOTDIR;
+            goto out;
         }
         iput(ip);
         ip = next;

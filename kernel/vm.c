@@ -11,6 +11,14 @@
  * writable); the first write copies the frame, or just takes it back when
  * nobody else maps it any more.  MAP_SHARED pages (PTE_SHARED) stay shared.
  * Anonymous private memory is zero-filled on first touch.
+ *
+ * Locking: page faults from user mode run without the big kernel lock, under
+ * the process's vmlock only (vm_space_lock), so that the LWPs of a process, and
+ * different processes, fault in parallel.  The fault path reads the area list
+ * and changes page tables; everything else runs under the kernel lock and
+ * takes vmlock around its own page-table changes and area-list changes (never
+ * across anything that sleeps), and frees areas only after unlinking them
+ * under it.  Order: kernel lock, vmlock, the frame allocator's lock.
  */
 #include "proc.h"
 #include "mm.h"
@@ -96,6 +104,28 @@ static struct vm_area *area_split(struct vm_area *a, uint64_t at)
     return b;
 }
 
+void vm_space_lock(struct proc *p)
+{
+    if (!__atomic_exchange_n(&p->vmlock.locked, 1, __ATOMIC_ACQUIRE))
+        return;
+    /* While we spin, a TLB shootdown for this space must not wait for us
+     * (interrupts are off): catch up on it once we have the lock. */
+    struct cpu *c = mycpu();
+    c->bkl_waiting = 1;
+    spin_lock(&p->vmlock);
+    c->bkl_waiting = 0;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (c->tlb_flush) {
+        c->tlb_flush = 0;
+        write_cr3(read_cr3());
+    }
+}
+
+void vm_space_unlock(struct proc *p)
+{
+    spin_unlock(&p->vmlock);
+}
+
 static void flush_if_current(uint64_t pml4)
 {
     tlb_shootdown(pml4);                         /* this CPU and the others running this space */
@@ -108,6 +138,7 @@ uint64_t vm_space_copy(struct proc *child, struct proc *parent)
     uint64_t src = parent->pml4, dst = vmm_new_space();
     if (!dst)
         return 0;
+    vm_space_lock(parent);
     uint64_t *l4 = P2V(src & PTE_ADDR);
     for (uint64_t i = 0; i < 256; i++) {
         if (!(l4[i] & PTE_P))
@@ -135,8 +166,9 @@ uint64_t vm_space_copy(struct proc *child, struct proc *parent)
                         l1[m] = pa | fl;
                     }
                     if (vmm_map(dst, va, pa, fl & ~PTE_P) < 0) {
-                        vm_space_free(child, dst);
                         flush_if_current(src);
+                        vm_space_unlock(parent);
+                        vm_space_free(child, dst);
                         return 0;
                     }
                     if (!(e & PTE_DEVICE))
@@ -146,6 +178,7 @@ uint64_t vm_space_copy(struct proc *child, struct proc *parent)
         }
     }
     flush_if_current(src);
+    vm_space_unlock(parent);
     /* the child gets copies of the area descriptions */
     for (struct vm_area *a = parent->areas; a; a = a->next) {
         struct vm_area *n = kmalloc(sizeof(*n));
@@ -167,9 +200,13 @@ void vm_space_free(struct proc *p, uint64_t pml4)
 
 void vm_exec_reset(struct proc *p)
 {
-    while (p->areas) {
-        struct vm_area *a = p->areas;
-        p->areas = a->next;
+    vm_space_lock(p);
+    struct vm_area *list = p->areas;
+    p->areas = NULL;
+    vm_space_unlock(p);
+    while (list) {
+        struct vm_area *a = list;
+        list = a->next;
         area_writeback(a, a->start, a->end);
         area_free(a);
     }
@@ -199,9 +236,11 @@ static bool cow_break(uint64_t pml4, uint64_t va, uint64_t *pte)
     return true;
 }
 
-static bool zero_page(uint64_t pml4, uint64_t va, uint64_t flags)
+/* *frame: one allocated (and cleared) before the fault took vmlock, or 0 */
+static bool zero_page(uint64_t pml4, uint64_t va, uint64_t flags, uint64_t *frame)
 {
-    uint64_t pa = pmm_alloc();
+    uint64_t pa = *frame ? *frame : pmm_alloc();
+    *frame = 0;
     if (!pa)
         return false;
     if (vmm_map(pml4, va, pa, flags) < 0) {
@@ -211,6 +250,9 @@ static bool zero_page(uint64_t pml4, uint64_t va, uint64_t flags)
     return true;
 }
 
+static bool fault(struct proc *p, uint64_t addr, uint64_t err, uint64_t *frame);
+
+/* Also called without the kernel lock, for faults from user mode (see above). */
 bool vm_fault(uint64_t addr, uint64_t err, bool from_user)
 {
     (void)from_user;
@@ -218,6 +260,21 @@ bool vm_fault(uint64_t addr, uint64_t err, bool from_user)
     if (!l || l->is_idle || addr >= USER_LIMIT || addr < USER_BASE)
         return false;
     struct proc *p = l->proc;
+    /* A fault on a missing page usually needs a zeroed frame: clear it
+     * before taking the lock, so that the LWPs of a process overlap there. */
+    uint64_t frame = 0;
+    if (!(err & 1) && p->pml4)
+        frame = pmm_alloc();
+    vm_space_lock(p);
+    bool ok = fault(p, addr, err, &frame);
+    vm_space_unlock(p);
+    if (frame)
+        pmm_free(frame);                         /* not needed after all */
+    return ok;
+}
+
+static bool fault(struct proc *p, uint64_t addr, uint64_t err, uint64_t *frame)
+{
     uint64_t pml4 = p->pml4, va = PAGE_ALIGN_DOWN(addr);
     if (!pml4 || pml4 == kernel_pml4_phys)
         return false;
@@ -239,12 +296,12 @@ bool vm_fault(uint64_t addr, uint64_t err, bool from_user)
     /* the stack: 8 MiB (or RLIMIT_STACK), demand-paged */
     uint64_t limit = MIN(p->rlim_cur[3] ? p->rlim_cur[3] : USER_STACK_SIZE, USER_STACK_SIZE);
     if (va >= USER_STACK_TOP - limit && va < USER_STACK_TOP)
-        return zero_page(pml4, va, PTE_U | PTE_W | pte_nx);
+        return zero_page(pml4, va, PTE_U | PTE_W | pte_nx, frame);
     struct vm_area *a = find_area(p, va);
     if (a && a->prot != SIEOS_PROT_NONE && !(a->flags & SIEOS_MAP_SHARED)) {
         if ((err & 2) && !(a->prot & SIEOS_PROT_WRITE))
             return false;
-        return zero_page(pml4, va, prot_flags(a->prot));
+        return zero_page(pml4, va, prot_flags(a->prot), frame);
     }
     return false;
 }
@@ -281,8 +338,10 @@ static uint64_t next_mapped(uint64_t pml4, uint64_t va, uint64_t end)
     return end;
 }
 
-static void unmap_pages(uint64_t pml4, uint64_t start, uint64_t end)
+static void unmap_pages(struct proc *p, uint64_t start, uint64_t end)
 {
+    uint64_t pml4 = p->pml4;
+    vm_space_lock(p);
     for (uint64_t va = next_mapped(pml4, start, end); va < end; va = next_mapped(pml4, va + PAGE_SIZE, end)) {
         uint64_t *pte = vmm_pte(pml4, va, false);
         if (!pte || !(*pte & PTE_P))
@@ -292,11 +351,20 @@ static void unmap_pages(uint64_t pml4, uint64_t start, uint64_t end)
         *pte = 0;
     }
     flush_if_current(pml4);
+    vm_space_unlock(p);
 }
 
 /* Remove [start, end) (already unmapped) from the area list, splitting areas that straddle it. */
 static int cut_areas(struct proc *p, uint64_t start, uint64_t end)
 {
+    /* shared file pages go back first: that sleeps */
+    for (struct vm_area *a = p->areas; a; a = a->next)
+        if (a->end > start && a->start < end)
+            area_writeback(a, MAX(a->start, start), MIN(a->end, end));
+    struct vm_area *gone = NULL;
+    struct inode *trim[2] = { NULL, NULL };
+    int ntrim = 0, r = 0;
+    vm_space_lock(p);
     struct vm_area **pp = &p->areas;
     while (*pp) {
         struct vm_area *a = *pp;
@@ -304,33 +372,42 @@ static int cut_areas(struct proc *p, uint64_t start, uint64_t end)
             pp = &a->next;
             continue;
         }
-        area_writeback(a, MAX(a->start, start), MIN(a->end, end));
         if (a->start < start && a->end > end) {         /* hole in the middle: split */
-            struct vm_area *b = area_split(a, end);
-            if (!b)
-                return -ENOMEM;
+            if (!area_split(a, end)) {
+                r = -ENOMEM;
+                break;
+            }
             a->end = start;
-            if (a->ip)
-                vfs_pcache_trim(a->ip);
-            return 0;
+            if (a->ip && ntrim < 2)
+                trim[ntrim++] = a->ip;
+            break;
         }
         if (a->start < start) {
             a->end = start;
-            if (a->ip)
-                vfs_pcache_trim(a->ip);
+            if (a->ip && ntrim < 2)
+                trim[ntrim++] = a->ip;
             pp = &a->next;
         } else if (a->end > end) {
             a->off += end - a->start;
             a->start = end;
-            if (a->ip)
-                vfs_pcache_trim(a->ip);
+            if (a->ip && ntrim < 2)
+                trim[ntrim++] = a->ip;
             pp = &a->next;
         } else {
             *pp = a->next;
-            area_free(a);
+            a->next = gone;
+            gone = a;
         }
     }
-    return 0;
+    vm_space_unlock(p);
+    for (int i = 0; i < ntrim; i++)
+        vfs_pcache_trim(trim[i]);                    /* (the areas still hold the inodes) */
+    while (gone) {
+        struct vm_area *a = gone;
+        gone = a->next;
+        area_free(a);
+    }
+    return r;
 }
 
 static bool range_free(struct proc *p, uint64_t start, uint64_t end)
@@ -396,6 +473,14 @@ bool vm_brk_ok(struct proc *p, uint64_t old, uint64_t new)
     return true;
 }
 
+static int map_locked(struct proc *p, uint64_t va, uint64_t pa, uint64_t fl)
+{
+    vm_space_lock(p);
+    int r = vmm_map(p->pml4, va, pa, fl);
+    vm_space_unlock(p);
+    return r;
+}
+
 long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
 {
     struct proc *p = current;
@@ -427,7 +512,7 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
         if ((addr & (PAGE_SIZE - 1)) || addr < USER_BASE || addr + len > USER_MMAP_TOP || addr + len < addr)
             return -EINVAL;
         start = addr;
-        unmap_pages(p->pml4, start, start + len);
+        unmap_pages(p, start, start + len);
         if (cut_areas(p, start, start + len) < 0)
             return -ENOMEM;
     } else {
@@ -464,7 +549,9 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
     a->ip = f ? idup(f->ip) : NULL;
     a->off = off;
     a->shm = NULL;
+    vm_space_lock(p);
     insert_area(p, a);
+    vm_space_unlock(p);
 
     /*
      * Shared anonymous and all file mappings are filled now; private anonymous
@@ -489,22 +576,22 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
             if (a->ip) {                             /* the file's page */
                 if (vfs_getpage(a->ip, (off + (va - start)) / PAGE_SIZE, &pa) < 0)
                     pa = 0;
-                if (pa && vmm_map(p->pml4, va, pa, fl) < 0) {
+                if (pa && map_locked(p, va, pa, fl) < 0) {
                     pmm_unref(pa);
                     pa = 0;
                 }
                 if (!pa) {
-                    unmap_pages(p->pml4, start, start + len);
+                    unmap_pages(p, start, start + len);
                     cut_areas(p, start, start + len);
                     return -ENOMEM;
                 }
                 continue;
             }
             pa = pmm_alloc();
-            if (!pa || vmm_map(p->pml4, va, pa, fl) < 0) {
+            if (!pa || map_locked(p, va, pa, fl) < 0) {
                 if (pa)
                     pmm_free(pa);
-                unmap_pages(p->pml4, start, start + len);
+                unmap_pages(p, start, start + len);
                 cut_areas(p, start, start + len);
                 return -ENOMEM;
             }
@@ -512,7 +599,7 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
             if (f && fo < fsize) {
                 long n = readi(f->ip, P2V(pa), fo, MIN(PAGE_SIZE, fsize - fo));
                 if (n < 0) {
-                    unmap_pages(p->pml4, start, start + len);
+                    unmap_pages(p, start, start + len);
                     cut_areas(p, start, start + len);
                     return -EIO;
                 }
@@ -528,7 +615,7 @@ long vm_munmap(uint64_t addr, uint64_t len)
     if ((addr & (PAGE_SIZE - 1)) || !len || addr < USER_BASE || addr + len > USER_LIMIT || addr + len < addr)
         return -EINVAL;
     len = PAGE_ALIGN_UP(len);
-    unmap_pages(p->pml4, addr, addr + len);
+    unmap_pages(p, addr, addr + len);
     return cut_areas(p, addr, addr + len);
 }
 
@@ -561,16 +648,21 @@ long vm_mprotect(uint64_t addr, uint64_t len, int prot)
     if (!range_mapped(p, addr, end))
         return -ENOMEM;
     /* split the areas at the range edges, then set their protection */
+    vm_space_lock(p);
     for (struct vm_area *a = p->areas; a; a = a->next) {
         if (a->end <= addr || a->start >= end)
             continue;
         if (a->start < addr) {
-            if (!area_split(a, addr))
+            if (!area_split(a, addr)) {
+                vm_space_unlock(p);
                 return -ENOMEM;
+            }
             continue;                                /* the new area is visited next */
         }
-        if (a->end > end && !area_split(a, end))
+        if (a->end > end && !area_split(a, end)) {
+            vm_space_unlock(p);
             return -ENOMEM;
+        }
         a->prot = prot;
     }
     for (uint64_t va = next_mapped(p->pml4, addr, end); va < end; va = next_mapped(p->pml4, va + PAGE_SIZE, end)) {
@@ -590,6 +682,7 @@ long vm_mprotect(uint64_t addr, uint64_t len, int prot)
         *pte = e;
     }
     flush_if_current(p->pml4);
+    vm_space_unlock(p);
     return 0;
 }
 
@@ -633,7 +726,7 @@ long vm_memcntl(uint64_t addr, uint64_t len, int cmd, uint64_t arg)
             for (struct vm_area *a = p->areas; a; a = a->next)
                 if (a->end > addr && a->start < addr + len && (a->flags & SIEOS_MAP_ANON) &&
                     !(a->flags & SIEOS_MAP_SHARED))
-                    unmap_pages(p->pml4, MAX(a->start, addr), MIN(a->end, addr + len));
+                    unmap_pages(p, MAX(a->start, addr), MIN(a->end, addr + len));
             return 0;
         }
         return arg <= SIEOS_MADV_FREE ? 0 : -EINVAL;
@@ -664,6 +757,7 @@ long vm_map_shm(struct shmseg *seg, uint64_t addr, uint64_t len, int prot, bool 
     a->flags = SIEOS_MAP_SHARED;
     a->shm = seg;
     shm_attach_ref(seg, 1);
+    vm_space_lock(p);
     insert_area(p, a);
     uint64_t fl = prot_flags(prot) | PTE_SHARED | ((prot & SIEOS_PROT_WRITE) ? PTE_WANTW : 0);
     for (uint64_t va = start; va < start + len; va += PAGE_SIZE) {
@@ -671,11 +765,13 @@ long vm_map_shm(struct shmseg *seg, uint64_t addr, uint64_t len, int prot, bool 
         pmm_ref(pa);
         if (vmm_map(p->pml4, va, pa, fl) < 0) {
             pmm_unref(pa);
-            unmap_pages(p->pml4, start, start + len);
+            vm_space_unlock(p);
+            unmap_pages(p, start, start + len);
             cut_areas(p, start, start + len);
             return -ENOMEM;
         }
     }
+    vm_space_unlock(p);
     return start;
 }
 
@@ -690,7 +786,7 @@ long vm_unmap_shm(uint64_t addr)
     /* the whole attachment, including pieces split off by mprotect */
     for (struct vm_area *b = a->next; b && b->shm == seg && b->start == end; b = b->next)
         end = b->end;
-    unmap_pages(p->pml4, start, end);
+    unmap_pages(p, start, end);
     return cut_areas(p, start, end);
 }
 
@@ -704,5 +800,7 @@ void vm_add_area(struct proc *p, uint64_t start, uint64_t end, int prot, int fla
     a->end = end;
     a->prot = prot;
     a->flags = flags;
+    vm_space_lock(p);
     insert_area(p, a);
+    vm_space_unlock(p);
 }

@@ -10,6 +10,7 @@ struct buf {
     int ref;
     bool valid;
     bool hashed;                  /* on a hash chain (valid, or being read) */
+    bool reading;                 /* a read is in progress (others wait: sleep_on(buf)) */
     struct buf *hnext;
     struct buf *prev, *next;      /* LRU list */
     uint8_t *data;

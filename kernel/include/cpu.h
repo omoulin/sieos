@@ -12,6 +12,7 @@ struct fpu_state {
 
 extern struct fpu_state fpu_default;       /* after fninit, MXCSR = 0x1F80 */
 extern uint64_t pte_nx;                    /* PTE_NX if supported, else 0 */
+extern bool pat_wc;                        /* PWT alone selects write-combining (PAT entry 1) */
 
 void cpu_features_init(bool bsp);
 void fpu_save(struct fpu_state *f);

@@ -34,14 +34,39 @@ int procinfo(struct procinfo *buf, int max)
     return syscall(SIEOS_SYS_procinfo, buf, max);
 }
 
+int netinfo_if(struct netinfo *ni, int index)
+{
+    return syscall(SIEOS_SYS_netinfo, ni, index);
+}
+
+int devinfo(struct sieos_devinfo *d, int index)
+{
+    return syscall(SIEOS_SYS_devinfo, d, index);
+}
+
 int netinfo(struct netinfo *ni)
 {
-    return syscall(SIEOS_SYS_netinfo, ni);
+    return netinfo_if(ni, 0);
 }
 
 int netstat(struct sockinfo *buf, int max)
 {
     return syscall(SIEOS_SYS_netstat, buf, max);
+}
+
+int netinfo6_if(struct sieos_netinfo6 *ni, int index)
+{
+    return syscall(SIEOS_SYS_netinfo6, ni, index);
+}
+
+int netinfo6(struct sieos_netinfo6 *ni)
+{
+    return netinfo6_if(ni, 0);
+}
+
+int netstat6(struct sieos_sockinfo6 *buf, int max)
+{
+    return syscall(SIEOS_SYS_netstat6, buf, max);
 }
 
 void *fbmap(int fd)

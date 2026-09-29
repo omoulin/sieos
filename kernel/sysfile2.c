@@ -9,6 +9,7 @@
 #include "fs.h"
 #include "tty.h"
 #include "poll.h"
+#include "display.h"
 #include "abi2.h"
 #include "sieos/syscall.h"
 #include "sieos/errno.h"
@@ -19,6 +20,8 @@
 #include "sieos/time.h"
 #include "sieos/socket.h"
 #include "sieos/mount.h"
+#include "sieos/lofi.h"
+#include "blkdev.h"
 
 /* ---------------- translations ---------------- */
 
@@ -352,6 +355,51 @@ static long tty_call(struct tty *t, unsigned long cmd, uint64_t arg)
     return tty_ioctl(t, cmd, arg);
 }
 
+/* ---------------- lofi ---------------- */
+
+static long lofi_ioctl(unsigned long cmd, struct sieos_lofi_ioctl *uli)
+{
+    if (current->euid != 0)
+        return -EPERM;
+    if (!user_ok(uli, sizeof(*uli), true))
+        return -EFAULT;
+    struct sieos_lofi_ioctl *li = kmalloc(sizeof(*li));
+    if (!li)
+        return -ENOMEM;
+    memcpy(li, uli, sizeof(*li));
+    li->li_filename[sizeof(li->li_filename) - 1] = 0;
+    long r;
+    if (cmd == SIEOS_LOFI_MAP_FILE) {
+        int err;
+        struct inode *ip = namei(li->li_filename, &err);
+        if (!ip) {
+            r = err;
+        } else if (!S_ISREG(inode_mode(ip)) || inode_size(ip) < 1024) {
+            iput(ip);
+            r = -EINVAL;
+        } else {
+            char abs[SIEOS_LOFI_PATH_MAX];
+            strlcpy(abs, li->li_filename, sizeof(abs));
+            r = blk_lofi_attach(ip, abs, li->li_readonly || inode_readonly(ip));
+            iput(ip);
+            if (r >= 0) {
+                uli->li_minor = r - BLK_LOFI0 + 1;
+                r = 0;
+            }
+        }
+    } else if (li->li_minor < 1 || li->li_minor > NLOFI) {
+        r = -ENXIO;
+    } else if (cmd == SIEOS_LOFI_UNMAP_FILE_MINOR) {
+        r = blk_lofi_detach(BLK_LOFI0 + li->li_minor - 1);
+    } else {
+        r = blk_lofi_file(BLK_LOFI0 + li->li_minor - 1, li->li_filename, sizeof(li->li_filename));
+        if (r == 0)
+            memcpy(uli->li_filename, li->li_filename, sizeof(li->li_filename));
+    }
+    kfree(li);
+    return r;
+}
+
 /* ---------------- mount ---------------- */
 
 struct nonempty { bool any; };
@@ -414,7 +462,23 @@ static long do_mount(const char *uspec, const char *udir, long mflag, const char
     if (r < 0)
         return r;
     struct fs *fs;
-    if (!strcmp(type, "tmpfs"))
+    if (!strcmp(type, "ext4")) {                       /* spec: a block device node */
+        struct inode *dp = namei(spec, &err);
+        if (!dp)
+            return err;
+        uint16_t m = inode_mode(dp);
+        uint32_t rd = inode_rdev(dp);
+        iput(dp);
+        if (!S_ISBLK(m) || MAJOR(rd) != DEV_BLK_MAJOR)
+            return -ENOTBLK_K;
+        int dev = MINOR(rd);
+        if (!blk_present(dev))
+            return -ENXIO;
+        if (blk_in_use(dev))
+            return -EBUSY;
+        if (!(fs = ext4_mount(dev, mflag & SIEOS_MS_RDONLY)))
+            return -EINVAL;                            /* not an ext4 file system we can use */
+    } else if (!strcmp(type, "tmpfs"))
         fs = tmpfs_create();
     else if (!strcmp(type, "proc"))
         fs = procfs_create();
@@ -485,12 +549,17 @@ static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
         if (f->type != FD_PTM)
             return -ENOTTY;
         return pty_master_ioctl(f->pty, cmd & 0xFF, (char *)arg);
+    case SIEOS_LOFI_MAP_FILE:
+    case SIEOS_LOFI_UNMAP_FILE_MINOR:
+    case SIEOS_LOFI_GET_FILENAME:
+        return f->type == FD_LOFICTL ? lofi_ioctl(cmd, (struct sieos_lofi_ioctl *)arg) : -ENOTTY;
     case SIEOS_FBIOGET_INFO:
+    case SIEOS_FBIOGET_DISPLAY:
+    case SIEOS_FBIOGET_MODES:
+    case SIEOS_FBIOSET_MODE:
         if (f->type != FD_FB)
             return -ENOTTY;
-        if (!user_ok((void *)arg, sizeof(struct sieos_fb_info), true))
-            return -EFAULT;
-        return fb_ioctl(FBIOGET_INFO, arg);
+        return fb_ioctl(f, cmd, arg);
     case SIEOS_TIOCGWINSZ:
     case SIEOS_TIOCSWINSZ: {
         unsigned long kc = cmd == SIEOS_TIOCGWINSZ ? TIOCGWINSZ : TIOCSWINSZ;

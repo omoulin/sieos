@@ -1,0 +1,11 @@
+# GNU make, configured and built on SIEOS (a self-hosting check), then used to rebuild itself.
+# Upstream config.sub does not know SIEOS yet: teach it, as ports/build.py does when cross-building.
+set -e
+sed -i 's/| fuchsia\* /| fuchsia* | sieos* /' build-aux/config.sub
+./configure --build=x86_64-pc-sieos --prefix=/usr/gnu --disable-nls --without-guile CFLAGS='-O2 -std=gnu17'
+make -j4
+./make --version | head -n 1
+cp make /tmp/gmake                      # the native make rebuilds make
+/tmp/gmake clean >/dev/null
+/tmp/gmake -j4 >/dev/null
+./make --version | head -n 1

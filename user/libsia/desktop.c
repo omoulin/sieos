@@ -144,9 +144,10 @@ bool sia_add_desktop_tools(struct sia_session *s)
     add(s, "open_app", "open",
         "Open an application window on the Facet desktop. app: terminal (the sia assistant terminal), shell "
         "(a plain shell terminal), files (file browser, optional path), monitor (system monitor), network "
-        "(network status), clock, about. For terminal or shell, 'command' is typed into it once it opens.",
+        "(network status), clock, settings (the desktop's settings), display (settings, on the screen resolution), appearance (settings, on the skin), about. For terminal or shell, 'command' is typed into "
+        "it once it opens.",
         "{\"type\":\"object\",\"properties\":{\"app\":{\"type\":\"string\",\"enum\":[\"terminal\",\"shell\","
-        "\"files\",\"monitor\",\"network\",\"clock\",\"about\"]},\"path\":{\"type\":\"string\","
+        "\"files\",\"monitor\",\"network\",\"clock\",\"settings\",\"display\",\"appearance\",\"about\"]},\"path\":{\"type\":\"string\","
         "\"description\":\"folder for files\"},\"command\":{\"type\":\"string\","
         "\"description\":\"command line to run in the new terminal\"}},\"required\":[\"app\"]}",
         true);
@@ -160,6 +161,17 @@ bool sia_add_desktop_tools(struct sia_session *s)
     add(s, "switch_workspace", "workspace", "Show another of the four workspaces.",
         "{\"type\":\"object\",\"properties\":{\"workspace\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4}},"
         "\"required\":[\"workspace\"]}",
+        true);
+    add(s, "screen_resolution", "display",
+        "The screen resolution: without width and height, list the display and the modes it offers (current and "
+        "preferred marked); with them, change the resolution to that mode.",
+        "{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"integer\"},\"height\":{\"type\":\"integer\"}}}",
+        true);
+    add(s, "desktop_skin", "skin",
+        "The desktop's look (skin): without a name, list the skins and the current one; with one, switch to it: "
+        "strata (SIEOS's own, dark), beos (in the style of BeOS: yellow tabs, Deskbar), irix (in the style of IRIX: "
+        "4Dwm frames, Toolchest).",
+        "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"enum\":[\"strata\",\"beos\",\"irix\"]}}}",
         true);
     add(s, "move_window", "move", "Move a window to another workspace.",
         "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"workspace\":{\"type\":\"integer\","

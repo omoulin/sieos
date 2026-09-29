@@ -365,6 +365,22 @@ static void run_call(struct sia_session *s, const struct json *call, const char 
     sb_free(&desc);
 }
 
+struct streaming {
+    struct sia_session *s;
+    bool any;
+};
+
+static bool on_delta(void *ctx, const char *text)
+{
+    struct streaming *st = ctx;
+    if (!st->any) {
+        thinking(st->s, false);
+        st->any = true;
+    }
+    st->s->io.delta(st->s->io.ctx, text);
+    return !sia_interrupted;
+}
+
 bool sia_ask(struct sia_session *s, const char *request)
 {
     struct sbuf m;
@@ -384,9 +400,14 @@ bool sia_ask(struct sia_session *s, const char *request)
         messages_json(s, &msgs);
         thinking(s, true);
         char err[512];
-        struct json *reply = model_chat(&s->mdl, msgs.s, tools, err, sizeof(err));
+        struct streaming st = { s, false };
+        struct json *reply = s->io.delta ? model_chat_stream(&s->mdl, msgs.s, tools, on_delta, &st, err, sizeof(err))
+                                         : model_chat(&s->mdl, msgs.s, tools, err, sizeof(err));
         sb_free(&msgs);
-        thinking(s, false);
+        if (st.any)
+            s->io.delta(s->io.ctx, NULL);                /* the end of this reply */
+        else
+            thinking(s, false);
         if (!reply) {
             report_error(s, sia_interrupted ? "interrupted" : err);
             /* keep the history consistent: forget the unanswered request */
@@ -411,7 +432,7 @@ bool sia_ask(struct sia_session *s, const char *request)
         sb_puts(&a, "}");
         hist_add(s, a.s);
         sb_free(&a);
-        if (content && *content && s->io.text)
+        if (content && *content && s->io.text && !s->io.delta)
             s->io.text(s->io.ctx, content);
         if (!has_calls) {
             json_free(reply);

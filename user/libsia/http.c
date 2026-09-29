@@ -1,6 +1,7 @@
 /*
  * http.c - Minimal HTTP/1.1 client: one request per connection,
- * Content-Length or chunked response bodies, https via the TLS library.
+ * Content-Length or chunked response bodies (collected, or handed to a sink
+ * as they arrive, for server-sent events), https via the TLS library.
  */
 #include "http.h"
 #include "../tls/tls.h"
@@ -127,42 +128,74 @@ static const char *header(const char *hdrs, const char *name)
     return NULL;
 }
 
-static bool dechunk(const char *in, size_t len, struct sbuf *out)
+/* Incremental chunked-transfer decoder. */
+struct dechunk {
+    int state;                       /* 0 size line, 1 data, 2 CRLF after data, 3 trailer, 4 done */
+    size_t left;
+    bool digits;                     /* state 0: a size digit seen; state 3: this trailer line has text */
+};
+
+/* Feed n bytes; decoded data goes to out(ctx, ...).  False on a malformed stream. */
+static bool dechunk_feed(struct dechunk *d, const char *in, size_t n, http_sink out, void *ctx, bool *stop)
 {
     size_t i = 0;
-    for (;;) {
-        size_t sz = 0;
-        int digits = 0;
-        while (i < len) {
-            char c = in[i];
+    while (i < n && d->state != 4) {
+        char c = in[i];
+        if (d->state == 0) {
             int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
                     : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
-            if (v < 0)
-                break;
-            sz = sz * 16 + v;
-            digits++;
+            i++;
+            if (v >= 0 && d->left < ((size_t)1 << 40)) {
+                d->left = d->left * 16 + (size_t)v;
+                d->digits = true;
+            } else if (c == '\n') {
+                if (!d->digits)
+                    return false;
+                d->state = d->left ? 1 : 3;
+                d->digits = false;
+            }                                          /* extensions and CR are skipped */
+        } else if (d->state == 1) {
+            size_t k = n - i < d->left ? n - i : d->left;
+            if (!out(ctx, in + i, k)) {
+                *stop = true;
+                return true;
+            }
+            i += k;
+            d->left -= k;
+            if (!d->left)
+                d->state = 2;
+        } else if (d->state == 2) {
+            if (in[i++] == '\n')
+                d->state = 0;
+        } else {                                       /* trailer: ends at an empty line */
+            if (c == '\n') {
+                if (!d->digits)
+                    d->state = 4;
+                d->digits = false;
+            } else if (c != '\r') {
+                d->digits = true;
+            }
             i++;
         }
-        const char *eol = NULL;
-        for (size_t j = i; j + 1 < len; j++)
-            if (in[j] == '\r' && in[j + 1] == '\n') {
-                eol = in + j;
-                break;
-            }
-        if (!digits || !eol)
-            return false;
-        i = (eol - in) + 2;
-        if (sz == 0)
-            return true;
-        if (i + sz > len)
-            return false;
-        sb_putn(out, in + i, sz);
-        i += sz + 2;
     }
+    return true;
+}
+
+static bool collect(void *ctx, const char *data, size_t n)
+{
+    sb_putn(ctx, data, n);
+    return true;
 }
 
 int http_request(const char *method, const struct url *u, const char *extra_headers, const char *body,
                  size_t bodylen, struct sbuf *resp, char *err, size_t errlen, int timeout_ms)
+{
+    return http_request_stream(method, u, extra_headers, body, bodylen, NULL, NULL, resp, err, errlen, timeout_ms);
+}
+
+int http_request_stream(const char *method, const struct url *u, const char *extra_headers, const char *body,
+                        size_t bodylen, http_sink sink, void *ctx, struct sbuf *resp, char *err, size_t errlen,
+                        int timeout_ms)
 {
     struct conn c = { -1, NULL };
     c.fd = tcp_connect(u->host, u->port, timeout_ms, err, errlen);
@@ -182,7 +215,8 @@ int http_request(const char *method, const struct url *u, const char *extra_head
         sb_printf(&req, "Host: %s\r\n", u->host);
     else
         sb_printf(&req, "Host: %s:%d\r\n", u->host, u->port);
-    sb_puts(&req, "User-Agent: sia/1.0 (SIEOS)\r\nAccept: application/json\r\nConnection: close\r\n");
+    sb_printf(&req, "User-Agent: sia/1.0 (SIEOS)\r\nAccept: %s\r\nConnection: close\r\n",
+              sink ? "text/event-stream, application/json" : "application/json");
     if (body)
         sb_printf(&req, "Content-Type: application/json\r\nContent-Length: %lu\r\n", (unsigned long)bodylen);
     if (extra_headers)
@@ -196,18 +230,21 @@ int http_request(const char *method, const struct url *u, const char *extra_head
         goto fail;
     }
 
+    /* the header block */
     struct sbuf raw;
     sb_init(&raw);
     char buf[4096];
-    long n;
-    while ((n = conn_read(&c, buf, sizeof(buf))) > 0)
+    long n = 0;
+    char *hend = NULL;
+    while (!hend && (n = conn_read(&c, buf, sizeof(buf))) > 0) {
         sb_putn(&raw, buf, n);
-    if (n < 0 && raw.len == 0) {
+        hend = strstr(raw.s, "\r\n\r\n");
+    }
+    if (!hend && raw.len == 0) {
         snprintf(err, errlen, "%s", c.tls && tls_error(c.tls)[0] ? tls_error(c.tls) : "no response (timeout)");
         sb_free(&raw);
         goto fail;
     }
-    char *hend = strstr(raw.s, "\r\n\r\n");
     int status = 0;
     if (hend && !strncmp(raw.s, "HTTP/1.", 7) && raw.len > 12 && raw.s[8] == ' ')
         for (int i = 9; i < 12 && raw.s[i] >= '0' && raw.s[i] <= '9'; i++)
@@ -219,26 +256,52 @@ int http_request(const char *method, const struct url *u, const char *extra_head
     }
     *hend = 0;
     const char *te = header(raw.s, "Transfer-Encoding");
-    const char *bodyp = hend + 4;
-    size_t blen = raw.len - (bodyp - raw.s);
-    if (te && !sia_strncasecmp(te, "chunked", 7)) {
-        if (!dechunk(bodyp, blen, resp)) {
-            snprintf(err, errlen, "truncated chunked response");
-            sb_free(&raw);
-            goto fail;
+    bool chunked = te && !sia_strncasecmp(te, "chunked", 7);
+    size_t want = (size_t)-1;
+    const char *cl = header(raw.s, "Content-Length");
+    if (cl && !chunked) {
+        want = 0;
+        while (*cl >= '0' && *cl <= '9')
+            want = want * 10 + (size_t)(*cl++ - '0');
+    }
+    http_sink out = status == 200 && sink ? sink : collect;
+    void *octx = out == collect ? (void *)resp : ctx;
+
+    /* the body: what came with the headers, then the rest as it arrives */
+    struct dechunk dc = { 0, 0, false };
+    bool stop = false, bad = false;
+    const char *part = hend + 4;
+    size_t plen = raw.len - (size_t)(part - raw.s);
+    for (;;) {
+        if (chunked) {
+            bad = !dechunk_feed(&dc, part, plen, out, octx, &stop);
+            if (bad || stop || dc.state == 4)
+                break;
+        } else {
+            size_t k = plen < want ? plen : want;
+            if (k && !out(octx, part, k)) {
+                stop = true;
+                break;
+            }
+            want -= k;
+            if (!want)
+                break;
         }
-    } else {
-        const char *cl = header(raw.s, "Content-Length");
-        if (cl) {
-            size_t want = 0;
-            while (*cl >= '0' && *cl <= '9')
-                want = want * 10 + (size_t)(*cl++ - '0');
-            if (want < blen)
-                blen = want;
-        }
-        sb_putn(resp, bodyp, blen);
+        n = conn_read(&c, buf, sizeof(buf));
+        if (n <= 0)
+            break;
+        part = buf;
+        plen = (size_t)n;
     }
     sb_free(&raw);
+    if (stop) {
+        snprintf(err, errlen, "interrupted");
+        goto fail;
+    }
+    if (bad || (chunked && dc.state < 3)) {           /* (a missing trailer is tolerated) */
+        snprintf(err, errlen, bad ? "malformed chunked response" : "truncated chunked response");
+        goto fail;
+    }
     if (c.tls)
         tls_close(c.tls);
     close(c.fd);

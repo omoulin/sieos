@@ -2,7 +2,8 @@
  * crypto.h - Primitives used by the TLS 1.3 client.
  *
  * SHA-256/384/512, HMAC, HKDF (RFC 5869, TLS 1.3 labels), AES-GCM,
- * X25519 (RFC 7748), P-256 ECDH and RSA signature verification (PKCS #1 v1.5 and PSS).
+ * X25519 (RFC 7748), P-256 ECDH, and signature verification: RSA (PKCS #1 v1.5 and PSS)
+ * and ECDSA on P-256 and P-384.
  */
 #ifndef TLS_CRYPTO_H
 #define TLS_CRYPTO_H
@@ -68,6 +69,12 @@ void x25519_base(uint8_t out[32], const uint8_t scalar[32]);
 bool p256_valid_scalar(const uint8_t k[32]);
 bool p256_public(uint8_t out[65], const uint8_t k[32]);                       /* 04 || X || Y */
 bool p256_shared(uint8_t out[32], const uint8_t k[32], const uint8_t peer[65]); /* X coordinate */
+
+/* ---- ECDSA verification (P-256, P-384) ---- */
+enum { ECDSA_P256, ECDSA_P384 };
+/* pub: 04 || X || Y; sig: DER SEQUENCE { r, s }; digest: the message's hash */
+bool ecdsa_verify(int curve, const uint8_t *pub, size_t publen, const uint8_t *digest, size_t dlen,
+                  const uint8_t *sig, size_t siglen);
 
 /* ---- RSA ---- */
 struct rsa_pub {

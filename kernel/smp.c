@@ -67,6 +67,7 @@ void bkl_lock(void)
     c->bkl_waiting = 1;
     spin_lock(&bkl);
     c->bkl_waiting = 0;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);   /* against tlb_shootdown's tlb_flush/bkl_waiting */
     if (c->tlb_flush) {                 /* a shootdown arrived while we waited */
         c->tlb_flush = 0;
         write_cr3(read_cr3());
@@ -228,6 +229,12 @@ static void lapic_send_ipi(int apic_id, uint32_t low)
         __asm__ volatile("pause");
 }
 
+void smp_resched(struct cpu *c)
+{
+    if (lapic_ok && c->online)
+        lapic_send_ipi(c->apic_id, 0x4000 | T_IPI_RESCHED);
+}
+
 void smp_kick_idle(void)
 {
     if (!lapic_ok || ncpu < 2)
@@ -253,6 +260,7 @@ void tlb_shootdown(uint64_t pml4)
     if (!lapic_ok || ncpu < 2)
         return;
     struct cpu *me = mycpu();
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);   /* the page-table stores before the CPU scan */
     for (int i = 0; i < ncpu; i++) {
         struct cpu *c = &cpus[i];
         struct lwp *l = c->lwp;
@@ -260,6 +268,7 @@ void tlb_shootdown(uint64_t pml4)
             continue;
         c->tlb_flush = 1;
         lapic_send_ipi(c->apic_id, 0x4000 | T_IPI_TLB);
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
         while (c->tlb_flush && !c->bkl_waiting)
             __asm__ volatile("pause");
     }
@@ -288,6 +297,12 @@ struct acpi_rsdp {
     uint8_t xchecksum, reserved[3];
 } __attribute__((packed));
 
+/* I/O APICs and ISA interrupt overrides from the MADT (for ioapic.c) */
+struct madt_ioapic madt_ioapics[MADT_MAX_IOAPIC];
+int madt_nioapic;
+struct madt_iso madt_isos[MADT_MAX_ISO];
+int madt_niso;
+
 static void parse_madt(struct acpi_sdt *madt)
 {
     uint8_t *p = (uint8_t *)madt + sizeof(*madt);
@@ -301,9 +316,42 @@ static void parse_madt(struct acpi_sdt *madt)
                 apic_ids[napic++] = p[3];
         } else if (p[0] == 5) {                          /* 64-bit LAPIC override */
             lapic_phys = *(uint64_t *)(p + 4);
+        } else if (p[0] == 1 && madt_nioapic < MADT_MAX_IOAPIC) {   /* I/O APIC */
+            madt_ioapics[madt_nioapic].id = p[2];
+            madt_ioapics[madt_nioapic].addr = *(uint32_t *)(p + 4);
+            madt_ioapics[madt_nioapic++].gsi_base = *(uint32_t *)(p + 8);
+        } else if (p[0] == 2 && madt_niso < MADT_MAX_ISO) {          /* interrupt source override */
+            madt_isos[madt_niso].irq = p[3];
+            madt_isos[madt_niso].gsi = *(uint32_t *)(p + 4);
+            madt_isos[madt_niso++].flags = *(uint16_t *)(p + 8);
         }
         p += p[1];
     }
+}
+
+/* The tables of the RSDT/XSDT, and the DSDT (for acpi_table). */
+#define ACPI_MAX_TABLES 64
+static struct acpi_sdt *acpi_tables[ACPI_MAX_TABLES];
+static int acpi_ntables;
+
+static void acpi_add(uint64_t pa)
+{
+    if (!pa || pa >= DIRECT_MAP_SIZE || acpi_ntables == ACPI_MAX_TABLES)
+        return;
+    struct acpi_sdt *t = P2V(pa);
+    if (t->length < sizeof(*t) || pa + t->length > DIRECT_MAP_SIZE)
+        return;
+    acpi_tables[acpi_ntables++] = t;
+}
+
+const void *acpi_table(const char *sig, int n, uint32_t *len)
+{
+    for (int i = 0; i < acpi_ntables; i++)
+        if (!memcmp(acpi_tables[i]->sig, sig, 4) && n-- == 0) {
+            *len = acpi_tables[i]->length;
+            return acpi_tables[i];
+        }
+    return NULL;
 }
 
 void acpi_init(uint64_t mb_info_phys)
@@ -333,8 +381,14 @@ void acpi_init(uint64_t mb_info_phys)
         if (pa >= DIRECT_MAP_SIZE)
             continue;
         struct acpi_sdt *t = P2V(pa);
+        acpi_add(pa);
         if (memcmp(t->sig, "APIC", 4) == 0)
             parse_madt(t);
+        if (memcmp(t->sig, "FACP", 4) == 0 && t->length >= 44) {         /* the DSDT: X_DSDT, else DSDT */
+            uint8_t *f = (uint8_t *)t;
+            uint64_t dsdt = t->length >= 148 ? *(uint64_t *)(f + 140) : 0;
+            acpi_add(dsdt ? dsdt : *(uint32_t *)(f + 40));
+        }
     }
     if (napic > 0 && lapic_phys && lapic_phys < DIRECT_MAP_SIZE) {
         vmm_set_uncached(lapic_phys);

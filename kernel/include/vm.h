@@ -35,6 +35,8 @@ long     vm_mincore(uint64_t addr, uint64_t len, char *vec);
 long     vm_memcntl(uint64_t addr, uint64_t len, int cmd, uint64_t arg);
 /* Page fault at addr: true if resolved (demand-zero page, copy-on-write). */
 bool     vm_fault(uint64_t addr, uint64_t err, bool from_user);
+void     vm_space_lock(struct proc *p);             /* the address space (vm.c's comment) */
+void     vm_space_unlock(struct proc *p);
 long     vm_map_shm(struct shmseg *seg, uint64_t addr, uint64_t len, int prot, bool fixed);   /* shmat */
 long     vm_unmap_shm(uint64_t addr);                                                        /* shmdt */
 

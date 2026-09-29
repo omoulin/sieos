@@ -45,11 +45,12 @@ static void print_entry(const char *dir, const char *name, int dtype)
     char path[512];
     struct stat st;
     snprintf(path, sizeof(path), "%s/%s", dir, name);
-    bool have = stat(path, &st) == 0;
+    bool have = lstat(path, &st) == 0;
     bool is_dir = have ? S_ISDIR(st.st_mode) : dtype == DT_DIR;
+    bool is_link = have && S_ISLNK(st.st_mode);
     bool is_exec = have && S_ISREG(st.st_mode) && (st.st_mode & 0111);
-    const char *color = is_dir ? "\033[1;34m" : is_exec ? "\033[1;32m" : "";
-    const char *reset = (is_dir || is_exec) ? "\033[0m" : "";
+    const char *color = is_dir ? "\033[1;34m" : is_link ? "\033[1;36m" : is_exec ? "\033[1;32m" : "";
+    const char *reset = (is_dir || is_link || is_exec) ? "\033[0m" : "";
     if (opt_long) {
         char ms[11], date[32];
         if (!have) {
@@ -65,7 +66,15 @@ static void print_entry(const char *dir, const char *name, int dtype)
         else
             snprintf(size, sizeof(size), "%lu", st.st_size);
         printf("%s %2u %-8s ", ms, st.st_nlink, uname_of(st.st_uid));
-        printf("%-8s %8s %s %s%s%s\n", gname_of(st.st_gid), size, date, color, name, reset);
+        char target[512] = "";
+        if (is_link) {
+            ssize_t n = readlink(path, target + 4, sizeof(target) - 5);
+            if (n >= 0) {
+                memcpy(target, " -> ", 4);
+                target[4 + n] = 0;
+            }
+        }
+        printf("%-8s %8s %s %s%s%s%s\n", gname_of(st.st_gid), size, date, color, name, reset, target);
     } else {
         printf("%s%s%s  ", color, name, reset);
     }

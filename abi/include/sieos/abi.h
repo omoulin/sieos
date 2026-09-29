@@ -24,5 +24,7 @@
 #include "procfs.h"
 #include "ipc.h"
 #include "mount.h"
+#include "lofi.h"
+#include "priocntl.h"
 
 #endif

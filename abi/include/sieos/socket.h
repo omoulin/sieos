@@ -26,6 +26,17 @@
 #define SIEOS_IPPROTO_ICMP 1
 #define SIEOS_IPPROTO_TCP  6
 #define SIEOS_IPPROTO_UDP  17
+#define SIEOS_IPPROTO_IPV6   41
+#define SIEOS_IPPROTO_ICMPV6 58
+
+/* IPPROTO_IPV6 options (Solaris values) */
+#define SIEOS_IPV6_UNICAST_HOPS   0x05   /* int: hop limit of unicast packets, -1 default */
+#define SIEOS_IPV6_MULTICAST_IF   0x06
+#define SIEOS_IPV6_MULTICAST_HOPS 0x07
+#define SIEOS_IPV6_MULTICAST_LOOP 0x08
+#define SIEOS_IPV6_JOIN_GROUP     0x09
+#define SIEOS_IPV6_LEAVE_GROUP    0x0a
+#define SIEOS_IPV6_V6ONLY         0x27   /* int: an AF_INET6 socket takes no IPv4 traffic */
 
 #define SIEOS_SOL_SOCKET    0xffff
 #define SIEOS_SO_DEBUG      0x0001
@@ -82,6 +93,25 @@ struct sieos_sockaddr_in {
     char sin_zero[8];
 };
 
+/* AF_INET6.  An AF_INET6 socket also talks IPv4, with the peer's address
+ * mapped as ::ffff:a.b.c.d, unless IPV6_V6ONLY is set.  Addresses passed in
+ * need 28 bytes (without __sin6_src_id). */
+struct sieos_in6_addr {              /* as Solaris: s6_addr is _S6_un._S6_u8 */
+    union {
+        sieos_uint8_t _S6_u8[16];
+        sieos_uint32_t _S6_u32[4];
+    } _S6_un;
+};
+
+struct sieos_sockaddr_in6 {
+    sieos_sa_family_t sin6_family;
+    sieos_in_port_t   sin6_port;       /* network byte order */
+    sieos_uint32_t sin6_flowinfo;
+    struct sieos_in6_addr sin6_addr;
+    sieos_uint32_t sin6_scope_id;            /* interface of a link-local address (eth0 is 2) */
+    sieos_uint32_t __sin6_src_id;
+};
+
 struct sieos_linger {
     int l_onoff;
     int l_linger;
@@ -119,6 +149,7 @@ struct sieos_cmsghdr {
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_sockaddr_un) == 110, "sockaddr_un size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_cmsghdr) == 16, "cmsghdr size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_sockaddr_in) == 16, "sockaddr_in size");
+SIEOS_STATIC_ASSERT(sizeof(struct sieos_sockaddr_in6) == 32, "sockaddr_in6 size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_msghdr) == 48, "msghdr size");
 
 #endif

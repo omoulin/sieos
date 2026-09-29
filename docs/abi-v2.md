@@ -1,6 +1,6 @@
 # SIEOS kernel ABI v2 — specification
 
-Status: **milestones 2-13 implemented** (headers frozen by `make abi-check`; the kernel accepts the
+Status: **milestones 2-17 implemented, 18 in progress** (headers frozen by `make abi-check`; the kernel accepts the
 `syscall` instruction; `/bin/abi2test` checks the implemented part).
 Architecture: amd64 (x86-64), LP64.
 
@@ -241,9 +241,36 @@ Constants follow Solaris: `SOCK_DGRAM`=1, `SOCK_STREAM`=2, `SOCK_RAW`=4,
   system (`struct sockaddr_un`, 108-byte path; no abstract names). `so_socketpair(domain,
   type, protocol, int sv[2])`. `SCM_RIGHTS` (`0x1010`, level `SOL_SOCKET`) passes
   descriptors in 16-byte, 8-aligned `cmsghdr`s.
-- `AF_INET6` is not supported (`EAFNOSUPPORT`).
+- `AF_INET6` (26), as Solaris (milestone 19):
+  - `struct sockaddr_in6` is 32 bytes (`sin6_family`, `sin6_port`, `sin6_flowinfo`,
+    `sin6_addr`, `sin6_scope_id`, `__sin6_src_id`); addresses passed in need the first 28.
+    `sin6_scope_id` is 2 (eth0) for link-local addresses.
+  - `SOCK_STREAM`, `SOCK_DGRAM` and `SOCK_RAW` with `IPPROTO_ICMPV6` (58; the kernel
+    computes the checksum).
+  - The sockets are dual-stack: they also talk IPv4, with IPv4 addresses mapped as
+    `::ffff:a.b.c.d`, unless `IPV6_V6ONLY` (`0x27`, level `IPPROTO_IPV6` = 41) is set
+    before `bind`. A port bound by an `AF_INET6` socket on `::` is taken for `AF_INET`
+    too, unless that socket is `IPV6_V6ONLY`. `IPV6_UNICAST_HOPS` (5) and the multicast
+    options (6-8) are accepted and have no effect.
+  - `netinfo6` (206) reports the interface's IPv6 addresses, router, DNS server and
+    MTU. `netstat6` (207) lists IPv4 and IPv6 sockets (`struct sieos_sockinfo6`, 16-byte
+    addresses).
 
 ## 9. System information and administration
+
+- `devinfo` (208), a SIEOS extension, takes `(struct sieos_devinfo *, int index)` and fills
+  in the index'th PCI function found at boot:
+  - its location (`0000:bus:dev.fn`);
+  - vendor, device and subsystem IDs;
+  - class, subclass, programming interface and revision;
+  - IRQ (-1 if none);
+  - the driver that claimed it (drivers call `pci_claim`). The field is empty if no
+    driver did.
+  It returns `ENODEV` past the last function (libsieos: `devinfo`).
+- `lidev` lists the devices: location, `vendor:device` ID, class, driver and name. `-v`
+  adds the subsystem, revision, programming interface and IRQ; `-n` prints IDs only.
+  Names come from `/usr/share/misc/pci.ids`, which the build copies from the build host
+  when it has one, else from a small built-in list.
 
 - `sysinfo(SI_*)` supplies the data behind `uname` and `gethostname`, plus
   Solaris extras such as `SI_ISALIST`, `SI_ARCHITECTURE_64` and `SI_PLATFORM`.
@@ -550,6 +577,8 @@ Two tests do not build: `api/main`, whose `unistd.h` check names POSIX-2024 cons
 missing from musl 1.2.5, and `pthread_atfork-errno-clobber`, which uses the Linux-only
 `RLIMIT_NPROC`.
 
+(Milestone 28 resolved all of these. Every test builds and passes; see there.)
+
 Milestone 8 (done):
 - **The cross toolchain `x86_64-pc-sieos`:** binutils 2.45 and GCC 15.2.0 (C and C++ with
   libstdc++). `make toolchain` downloads the pinned tarballs; `toolchain/sieos-toolchain.py`
@@ -831,6 +860,1028 @@ Milestone 13 (done): disk DMA.
   suites are unchanged (344 of 362 in the static and toolchain run), and the disk passes
   `e2fsck` afterwards.
 
+Milestone 14 (done): the Solaris shell.
+- **ksh93** (ksh93u+m 1.0.10, the maintained ksh93, which Solaris 11 ships as `/bin/sh` and
+  `/usr/bin/ksh`) is `/bin/sh` on the hard disk, with `/bin/ksh`, `/usr/bin/ksh93` and
+  `/usr/bin/ksh`. `/etc/profile` and `/etc/shrc` (named by `ENV`, which `login`, `su` and
+  sdm set) give interactive shells the coloured `user@host:dir` prompt. The earlier SIEOS
+  shell remains as `/bin/sish`, and `help` became a command.
+- **Built on SIEOS**: ksh93's build (`bin/package`, iffe feature tests) compiles and runs
+  hundreds of test programs, so it cannot be cross-compiled. `tools/nativebuild.py`
+  builds a disk from the development root (the root file system, the native toolchain and
+  the GNU utilities), unpacks the source there, and boots SIEOS headless in QEMU with an
+  `/etc/rc` hook that runs the build script (`ports/ksh.build`), logs it and powers off.
+  It then copies the result out. `make ports` does it: about 5 minutes under KVM.
+  - The images are layered to avoid a cycle: the ISO's RAM-disk root keeps dash as
+    `/bin/sh`, and the hard disk is the development root plus ksh93.
+- **dash 0.5.12** is cross-built and is the ISO root's `/bin/sh`, and `/bin/dash` on the
+  disk. Its build-time signal table is generated from the target's `<signal.h>`
+  (`ports/signames.py`), as its own generator would record the build machine's numbers.
+- **Found and fixed on the way:**
+  - The C library passed three arguments to `fchmodat` and `faccessat`, whose SIEOS
+    versions take a flags argument, so `chmod` failed whenever that register was not 0.
+    `fchmodat2`/`faccessat2` now map to them.
+  - `AT_FDCWD` is `-3041965` (Solaris's `0xffd19553` as an int), so it can be used in `#if`.
+  - `confstr(_CS_PATH)` is `/usr/gnu/bin:/bin:/usr/bin`, like `/usr/xpg4/bin` first on
+    Solaris. There is a new `getconf` command, and `uname` got its Solaris options
+    (`-snrvmpi`, `-a`).
+  - `ARG_MAX` is 2096640 bytes, as on Solaris (it was 64 KiB and 64 arguments). The exec
+    stack is premapped to fit the arguments.
+  - The SIEOS `grep` looped forever on a `.*` that failed to match.
+  - The ext4 driver cannot add entries to htree directories, which `mkfs.ext4 -d` makes
+    for large directories, so the images are made without `dir_index`.
+- **Tests:** a POSIX script (loops, `case`, functions, `read`, `eval`, here-documents,
+  `trap`, `getopts`, subshells, `wait`, parameter expansion, Solaris signal names) passes
+  under dash and ksh93, and so does job control. libc-test's `popen` and `execle-env`
+  now pass. `wordexp` still fails on `WRDE_UNDEF`, which musl 1.2.5's `wordexp` does
+  not implement.
+
+Milestone 15 (done): GNU make and the core utilities.
+- **Cross-built** by `ports/build.py` (autoconf with `--host=x86_64-pc-sieos`, after
+  teaching each package's `config.sub` `sieos`, with `-std=gnu17` for the older bundled
+  gnulib code). They are installed in `/usr/gnu`, as Solaris 11 does: GNU coreutils 9.5,
+  sed 4.9, grep 3.11, diffutils 3.10, findutils 4.10.0, gawk 5.3.1, make 4.4.1, tar 1.35 and
+  gzip 1.13. `/usr/bin/gmake` and `/usr/bin/make` link to make. `/bin` keeps the smaller
+  SIEOS programs, and `/usr/gnu/bin` is in the default `PATH`.
+- **Built natively**: GNU make is also configured and built on SIEOS by
+  `tools/nativebuild.py` (`ports/make.build`), and the result rebuilds itself. This
+  checks that ordinary autoconf builds work on SIEOS: `configure` with ksh93 and the GNU
+  tools, then the native GCC.
+- The tarballs are pinned in `ports/SHA256SUMS`.
+
+Milestone 16 (done): more file systems for `mount`.
+- **Disks.** The ATA driver handles the four IDE positions (primary and secondary, master
+  and slave), each with DMA. Block devices are numbered (`blkdev.h`, `sieos/lofi.h`):
+  0-3 the disks, 4 the ISO's RAM disk, 8-15 the lofi devices. The kernel makes their nodes
+  at boot (block major 8): `/dev/dsk/c<bus>d<unit>p0` for the disks there are, as Solaris
+  names IDE disks, and `/dev/lofi/1`-`8`.
+- **lofi**, as Solaris lofi(4D): ioctls on `/dev/lofictl` (character 147,0; root only)
+  attach a regular file as a block device (`LOFI_MAP_FILE`, read-only on request), detach it
+  (`LOFI_UNMAP_FILE_MINOR`, `EBUSY` while mounted) and name it (`LOFI_GET_FILENAME`). The
+  device's I/O goes through the file system that holds the file. The new `lofiadm` command
+  attaches (`-a file [-r]`), detaches (`-d`) and lists, as on Solaris.
+- **`mount -F ext4 <block device> dir`.** The ext4 driver now serves several volumes: its
+  state (superblock, group descriptors, inode cache) is per volume, and each entry point
+  selects the volume of the inode or file system it is given. Block sizes of 1-4 KiB are
+  accepted per device. A device holds one mount (`EBUSY`, also for the root's device).
+  `MS_RDONLY` applies, and a read-only lofi device mounts read-only.
+  - Unmounting writes the volume back, forgets its cached blocks and frees it.
+- **The block cache** is keyed by (device, block) and learns each device's block size from
+  the file system on it.
+- **Tests:** a second disk (a block-mapped ext4 made without extents), mounted and written
+  to: append, copy and compare, `mkdir`, growing a file, a 10 MB file, `umount` refused
+  while it is the working directory. A 1 KiB-block ext4 image on the root disk, attached
+  with `lofiadm`, mounted, written and detached. `e2fsck` finds all three clean after a
+  halt.
+
+Milestone 17 (done): growing block-mapped ext4 files. Writes to files without extents (as
+ext2/ext3 tools make them) allocate data blocks and missing single, double and triple
+indirect blocks (zeroed), so such files grow like any other; together with milestone 12's
+truncation, block-mapped file systems are fully writable. It was tested on milestone 16's
+second disk, including a 10 MB file through the double-indirect range.
+
+Milestone 18 (done): scheduling classes and finer-grained locking.
+- **Scheduling classes** (`sieos/priocntl.h`, `kernel/sched.c`), as Solaris.
+  - The dispatcher runs the runnable LWP of highest global priority, round robin among
+    equals. A woken LWP that outranks the LWP on a CPU preempts it: the CPU gets a
+    reschedule IPI and switches before returning to user mode.
+  - **TS** (0-59): the dispatcher priority falls by 10 when a quantum is used up, rises
+    to at least 50 after a sleep, and to 50 after a second without running. The user
+    priority (-60..60, from `nice`) shifts it. The quantum is 200 ms at priority 0 down to
+    20 ms at 59.
+  - **FX** (0-60): a fixed user priority. **RT** (100-159): `rt_pri` 0-59, a quantum
+    (100 ms by default) or none; only root may enter it.
+  - New LWPs inherit their creator's class.
+- **`priocntl`**: `PC_GETCID`, `PC_GETCLINFO`, `PC_GETPRIRANGE`, `PC_SETPARMS`,
+  `PC_GETPARMS` and `PC_DONICE`, for a process (`P_PID`), an LWP (`P_LWPID`) or all
+  processes. Only root raises a priority or a limit. `/proc` reports each LWP's class,
+  priority and nice value. The new `priocntl` command does `-l`, `-d`, `-s` and `-e`.
+- **In the C library**: `nice`, `getpriority`/`setpriority` (`PC_DONICE`),
+  `sched_setscheduler`/`getscheduler`/`setparam`/`getparam`/`rr_get_interval` and
+  `sched_get_priority_min`/`max`. `SCHED_OTHER` is TS; `SCHED_FIFO` is RT with no
+  quantum and `SCHED_RR` RT with the default one, priorities 0-59. The same applies per
+  thread with `pthread_setschedparam` and `pthread_attr_setschedparam`.
+- **Tests** (`libc/tests/m18.c`): classes, `nice` (a user cannot lower it again),
+  policies and thread policies, `EPERM` for a user entering RT, an RT task waking every
+  5 ms while every CPU runs a TS busy loop (worst latency 1 ms), and two CPU-bound TS
+  processes sharing one CPU (0.93 of each other).
+- **Finer-grained locking.** The big kernel lock still covers most of the kernel, but the
+  commonest traps no longer take it:
+  - **Page faults from user mode** (demand-zero and copy-on-write, and retries after a
+    stale TLB entry) run under the process's own address-space lock (`vm_space_lock`,
+    `kernel/vm.c`). The fault path reads the area list and changes page tables. Code
+    under the kernel lock takes the address-space lock around its own page-table and
+    area-list changes (`mmap`, `munmap`, `mprotect`, `madvise`, `shmat`, `brk`, fork's
+    copy-on-write marking, framebuffer mapping), never across anything that sleeps. Areas
+    are freed only after being unlinked under the lock. A zeroed frame for a missing page
+    is allocated before the lock is taken.
+  - **The frame allocator** (`kernel/pmm.c`) has its own lock, the innermost one, and
+    clears frames outside it. The lock order is: kernel lock, address-space lock, frame
+    allocator.
+  - **TLB shootdowns** can now start without the kernel lock. A CPU that spins for either
+    lock with interrupts off reloads CR3 once it has the lock, so the sender does not
+    wait for it. Fences order the `tlb_flush` and `bkl_waiting` handshake.
+  - **System calls on the caller's own state or the clocks** (`getpid`, `getuid`,
+    `geteuid`, `getgid`, `getegid`, `lwp_self`, `gethrtime`, `gethrvtime`, and
+    `clock_gettime` for `CLOCK_REALTIME` and `CLOCK_MONOTONIC`) run without the kernel
+    lock.
+  - Both fast paths return straight to user mode unless a reschedule, signal, stop,
+    suspension or exit is pending; those take the kernel lock and the usual exit path.
+- **Tests** (`libc/tests/vmstress.c`):
+  - Four threads fault in, check and `MADV_DONTNEED` their 8 MB slices while a thread
+    forks (each child checks a copy-on-write snapshot and writes to it) and another maps,
+    protects and unmaps scratch areas.
+  - It then times faulting in 32 MB. Under KVM with 4 CPUs, 4 threads are 2.5 times as
+    fast as 1, and 4 processes 3.3 times.
+  - The native GNU make build (`make native-make-test`, with `make -j4`) takes 36 s,
+    down from 41 s.
+- **Results** (KVM, 4 CPUs):
+  - libc-test: 347 of 365 static (with the toolchain and SIEOS tests) and 330 of 340
+    dynamic, as before.
+  - `abi2test` passes 231 of 231 on 2 and 4 CPUs. Its processor test no longer assumes
+    two CPUs.
+  - `sigtest`, `forktest`, `fstest`, `m12` and `m18` pass, and the desktop runs.
+  - Under QEMU without KVM, `remquol` also fails, because TCG's `fprem1` does not set the
+    quotient bits C0, C1 and C3.
+
+Milestone 19 (done): IPv6.
+- **The layer** (`kernel/net6.c`), on eth0:
+  - A link-local address from the MAC (modified EUI-64), then router solicitation.
+  - A router advertisement with an autonomous /64 prefix gives a global address the
+    same way (RFC 4862), plus the default router, the link MTU and a DNS server (RDNSS,
+    RFC 8106).
+  - Neighbor discovery (RFC 4861): solicitations to the solicited-node group, a
+    neighbor cache, and a queue for packets awaiting resolution. The e1000 now takes all
+    multicast frames.
+  - ICMPv6 echo, `::1` over the loopback queue, and skipping of hop-by-hop, routing and
+    destination-option headers.
+  - Not implemented: fragments (dropped), duplicate address detection, MLD, path MTU
+    discovery, privacy addresses.
+- **Transports.** TCP and UDP endpoints are 16-byte addresses (`naddr_t`), with IPv4
+  ones mapped. `net_send`, `net_pseudo_sum`, `net_source` and `net_payload_max`
+  (`kernel/net.c`) pick the IP version, the checksum pseudo-header, the source address
+  and the MSS. UDP over IPv6 requires the checksum.
+- **Sockets** (section 8): `AF_INET6` sockets, dual-stack by default, with
+  `IPV6_V6ONLY`, and `sockaddr_in6` as Solaris. A socket bound to an address of one IP
+  version cannot send to the other (`ENETUNREACH`). An `AF_INET` socket refuses IPv6
+  addresses (`EAFNOSUPPORT`).
+- **The C library.** musl's `sockaddr_in6` gains `__sin6_src_id` (32 bytes), and the
+  `IPV6_*` option values are Solaris's. `/etc/rc` writes `/etc/resolv.conf` from the
+  interface (`ifconfig -r`), so `getaddrinfo` resolves names, AAAA records included.
+- **Commands.**
+  - `ifconfig` shows the IPv6 addresses and router. `netstat` lists `tcp6`/`udp6`
+    sockets.
+  - `ping -6` (and `ping6`), `nc -4`/`-6`, `wget http://[addr]:port/` and `host` (A and
+    AAAA) use `resolve_addrs` in libsieos: `getaddrinfo`, then the older IPv4 resolver.
+  - `nc -l` listens on both versions.
+- **Tests** (`libc/tests/ipv6.c`):
+  - Name functions and a 32-byte `sockaddr_in6`.
+  - Autoconfiguration: under QEMU, `fec0::5054:ff:fe12:3456/64` with router `fe80::2`.
+  - 100 kB over TCP on `::1`.
+  - Dual stack: an IPv4 client of an `AF_INET6` listener appears as `::ffff:127.0.0.1`,
+    and an `AF_INET6` socket reaches an IPv4 listener through a mapped address.
+  - Port sharing and refusal with `IPV6_V6ONLY`, and UDP both ways over `::1` and to a
+    mapped address.
+  - ICMPv6 echo to `::1`, to our link-local address and to the router.
+- **Results** (KVM):
+  - `ipv6` passes. `wget` fetches from a host HTTP server on `[::1]` through
+    `[fec0::2]`, `nc -6` delivers to a host socket, and a dual-stack `nc -l` accepts IPv4
+    and IPv6 clients.
+  - libc-test: 348 of 366 static (with the toolchain and SIEOS tests) and 330 of 340
+    dynamic, the same failures as before.
+  - `abi2test` passes 232 of 232 on 2 and 4 CPUs. Its `AF_INET6` check now binds a
+    socket.
+  - IPv4 `wget` and the desktop's model connection still work.
+
+Milestone 20 (done): ext4 journaling (`kernel/jbd2.c`), in the JBD2 on-disk format so that
+e2fsck and Linux read what SIEOS leaves.
+- **Writing.** On a read-write volume with a journal, metadata blocks join the running
+  transaction instead of going to disk, pinned in the block cache. File data is written in
+  place first (data=ordered).
+- **Committing.** A transaction commits at the end of an operation when it is large or five
+  seconds old, on the system-call path when it is due, at `sync` and at unmount. A commit:
+  1. marks the log in use,
+  2. writes descriptors, the blocks and a commit block, all with JBD2 v3 checksums and
+     64-bit tags,
+  3. checkpoints the blocks home in sorted runs,
+  4. marks the log empty.
+  Every ATA write is flushed.
+- **Freed blocks.** Blocks freed by an uncommitted transaction are not reused until it
+  commits. The log holds one transaction at a time, so revoke records are not needed to
+  write, though replay honours them.
+- **The superblock.** `INCOMPAT_RECOVER` is set while the log may hold a transaction and
+  cleared by a clean sync, so e2fsck finds a shut-down disk clean.
+- **Recovery.** At mount SIEOS replays any valid log: scan, revoke and replay passes, v2/v3
+  checksums, 32/64-bit tags. It then re-reads the superblock and group descriptors. A
+  read-only mount leaves the log alone.
+- **Testing.** `uadmin(SIEOS_A_JTEST)` powers the machine off right after the next commit
+  record, before the checkpoint.
+- **Results:**
+  - The crash test ran with 50 files created, one deleted and one renamed, then a commit
+    of 12 blocks. `e2fsck` replayed SIEOS's journal on a copy of the crashed disk, and
+    SIEOS replayed it at boot ("recovered 1 transaction, 12 blocks"). Both gave a
+    consistent file system with the 49 entries and their contents.
+  - QEMU killed at the end of a test run left a clean file system: only the last five
+    seconds' changes are lost.
+  - The native GNU make build takes 26 s instead of 36 s, because metadata written
+    repeatedly is committed once.
+  - libc-test (348/366 static, 330/340 dynamic) and `abi2test` (232/232) are unchanged.
+
+Milestone 21 (done): hashed directories and uninitialised groups (`kernel/ext4_htree.inc`).
+- **Adding a name to a hashed directory.**
+  - The name is hashed as the directory's root says: legacy, half-MD4 or TEA, signed or
+    unsigned as the superblock's flags say, with the superblock's seed.
+  - The hash selects a leaf through the root and at most one level of index nodes.
+  - A full leaf is split by hash into itself and a new block. Equal hashes stay together
+    where possible, and the collision bit marks a run that continues. The new leaf's
+    entry goes into the parent index with its checksum (`dx_tail`).
+  - When that index block is full as well, the directory becomes a plain linear one:
+    its index blocks are rewritten as empty directory blocks. ext4 and e2fsck accept
+    that. It happens after some hundred thousand entries.
+- **Other operations.** Lookup, readdir, unlink and rename walk directory blocks
+  linearly, which works on hashed directories too. The restrictions against changing
+  hashed directories are gone.
+- **Uninitialised groups.** `BLOCK_UNINIT` and `INODE_UNINIT` groups get their bitmaps on
+  first allocation:
+  - the superblock backup, descriptor copies and reserved GDT blocks;
+  - any group's bitmaps or inode table that lie in the group;
+  - the bits past the group's end.
+  The group's free count is corrected with it.
+- **The images** are now made with mkfs's defaults (no `-O ^dir_index`), and `e2fsck -D`
+  indexes their larger directories.
+- **Results:**
+  - A 1,500-entry htree directory made by mkfs and e2fsck gained 3,000 names, with every
+    seventh deleted and some renamed. The index grew from 8 to 58 leaves, all 4,071
+    entries read back, and e2fsck found nothing to fix, hash order and index checksums
+    included.
+  - On a 1K-block image, 150 MB of writes initialised 14 `BLOCK_UNINIT` groups and read
+    back correctly, and e2fsck is clean.
+  - libc-test is unchanged (348/366, 330/340). The native ksh93 build takes 3.5 minutes
+    and produces an identical binary.
+
+Milestone 22 (done): symbolic links.
+- Path lookup already followed links (20 at most: `ELOOP`), with `O_NOFOLLOW` and
+  `AT_SYMLINK_NOFOLLOW`. A new test (`libc/tests/symlink.c`, on tmpfs and ext4) found
+  what was missing:
+  - **A trailing slash** makes the name a directory: a link is followed even by the
+    no-follow calls, and anything else gives `ENOTDIR`.
+  - **`open(O_CREAT)` through a dangling link** creates the target where the link
+    points. `O_EXCL` still refuses any existing name.
+  - **Targets** may be 4,095 bytes (`SYMLINK_MAX`); path arguments stay at 1,023.
+  - **`#!` scripts** run from `execve` itself: `interpreter [argument] script args...`,
+    with a 255-byte first line, interpreters up to four deep, and the script's set-id
+    bits ignored. Before this only shells, and musl's `execvp`, ran scripts, by falling
+    back to `/bin/sh`.
+  - **The commands:** `rm` removes links instead of following them (a dangling hard
+    link to a link made `rm -rf` loop). `ls` shows links (`l`, ` -> target` with
+    `-l`). `stat` describes the link, and `-L` what it points to.
+- The test also covers:
+  - chains, relative and `..` targets, and physical `..` after a link;
+  - `lstat`/`readlink`, including truncation;
+  - `lchown` and `utimensat` on the link, and loops;
+  - `rename`, `unlink` and `link` of the link itself, and `linkat(AT_SYMLINK_FOLLOW)`;
+  - `mkdir` and create through a link, `chdir` through a link with the physical
+    `getcwd`, and `realpath`;
+  - `exec` through a link, and `/proc/self` and `/proc/self/fd/N`.
+- **Results:** `symlink` passes. libc-test (349/367 with it, 330/340) and `abi2test` are
+  unchanged.
+
+Milestone 23 (done): interrupts through the I/O APIC, and an interrupt-driven network card.
+- **The I/O APIC** (`kernel/ioapic.c`).
+  - The MADT's I/O APICs and interrupt source overrides are read.
+  - With an I/O APIC, the 8259 PICs are masked. Every registered line (ISA IRQs, and PCI
+    lines, which PC firmware routes to the same numbers) goes to the pin of its global
+    system interrupt, with polarity and trigger mode from the override: IRQ 0 goes to
+    pin 2, and QEMU's PCI lines are level-triggered, active high. Vectors are unchanged,
+    and delivery goes to the boot CPU.
+  - Lines are acknowledged at the local APIC after their handler, so a level-triggered
+    device is quiet by then.
+  - Without an I/O APIC (for example `-machine acpi=off`), the PICs work as before.
+- **The e1000** takes receive and link interrupts: receive timer, overrun, descriptors
+  low and link change. The handler takes frames at once instead of at the next 10 ms
+  poll; the timer still polls, in case an interrupt is lost.
+- **Loopback packets** are delivered at the end of the system call that sent them,
+  instead of at the next tick.
+- **`nc`** now handles half-closes: after the peer stops sending, it keeps sending its
+  input to the end, and the other way round. Before, a receiver whose stdin was
+  `/dev/null` cut transfers short.
+- **Results:**
+  - An ICMPv6 echo round trip to QEMU's router takes 0.2 ms (10 ms before), and to `::1`
+    7 µs (10 ms before).
+  - 20 MB over TCP from the host take 0.3 to 1.3 s, and 20 MB over loopback between two
+    `nc`s 0.12 s.
+  - libc-test (349/367, 330/340) and `abi2test` (2 and 4 CPUs) are unchanged, and the
+    desktop runs.
+
+Milestone 24 (done): TCP (`kernel/tcp.c`).
+- **Window scaling** (RFC 7323) is negotiated in the SYNs, with 128 KB buffers in each
+  direction (shift 2). The send window is updated only from newer segments (WL1/WL2).
+- **Out-of-order reassembly.** A segment beyond a hole goes straight into its place in
+  the receive buffer, which holds up to 8 ranges, and is answered with a duplicate ACK.
+  A FIN beyond a hole waits for the data before it.
+- **NewReno** (RFC 5681, 6582): slow start from IW10 (RFC 6928), congestion avoidance,
+  fast retransmit after three duplicate ACKs, fast recovery with partial ACKs, and one
+  segment after a timeout.
+- **Round-trip time** (RFC 6298): SRTT/RTTVAR from one timed segment at a time, with
+  Karn's rule. The minimum RTO is 200 ms; before, the RTO was halved on every ACK.
+- **Bugs fixed on the way:**
+  - After a timeout's go-back, the peer's ACK for data it already had was beyond
+    `snd_nxt` and ignored for ever, which stalled the connection. ACKs up to `snd_max`,
+    the highest sequence number sent, are now valid.
+  - The zero-window probe byte counts as sent.
+  - The loopback queue holds 256 packets (a whole window and its ACKs); at 32 it lost
+    them.
+  - UDP `connect` now chooses the local address, as Linux does, so musl's RFC 6724
+    sorting sees the source. `fec0::` then ranks below IPv4 for global destinations,
+    and example.com takes 49 ms instead of 62 s of IPv6 connect timeouts.
+- **Testing.** `uadmin(SIEOS_A_NETTEST, drop | reorder << 16)` drops and reorders
+  loopback packets at the given per-mille rates. `libc/tests/tcpstress.c` sends 8 MB (2
+  MB with loss) over IPv4 and IPv6 loopback at 0 to 5% loss and 0 to 10% reordering,
+  checked by length and checksum.
+- **Results:**
+  - Every stress case delivers the data. Loopback does about 100 to 270 MB/s without
+    loss, 3 to 5 MB/s at 2% loss with 5% reordering, and 0.3 to 0.6 MB/s at 5% with 10%.
+  - 20 MB from the host take 0.15 s.
+  - libc-test (350/368 with tcpstress, 330/340) and `abi2test` are unchanged.
+
+Milestone 25 (done): fragments, duplicate address detection, MLD.
+- **Fragments** (`kernel/ipfrag.c`).
+  - IPv4 and IPv6 datagrams are reassembled in 64 KB buffers, counted in 8-byte units,
+    16 at a time.
+  - An IPv6 datagram whose fragments overlap is dropped (RFC 5722). Incomplete
+    datagrams go after 30 s (IPv4) or 60 s (IPv6).
+  - Datagrams larger than the MTU (UDP up to 65,507 bytes over IPv4 and 65,527 over
+    IPv6, large pings) are sent in fragments, the loopback included. IPv6 uses the
+    Fragment header. TCP never needs to: its segments fit the MSS.
+  - The UDP receive queue holds 256 KB.
+- **Duplicate address detection** (RFC 4862).
+  - An address is tentative until one probe, a neighbor solicitation from `::` to its
+    solicited-node group, goes unanswered for a second. Until then it is neither local
+    nor a source.
+  - A probe from another node for it, or an advertisement for it, marks it duplicate,
+    and it is not configured.
+  - The link-local address waits for the link to come up. Frames that arrive before
+    link-up go unseen, and this hid the first node's answer.
+  - Deadlines use the current time, since `ticks` lags at boot.
+- **MLDv2** (RFC 3810). Reports of the solicited-node groups go to `ff02::16` with the
+  hop-by-hop Router Alert option and hop limit 1: when a group is joined (twice), and in
+  answer to queries after a random delay of up to a second.
+- **Tests** (`libc/tests/frag.c`):
+  - UDP datagrams of 1,473 to 65,527 bytes over IPv4 and IPv6 loopback, in order and
+    with 30% of the fragments reordered (`uadmin A_NETTEST`);
+  - an 8,000-byte ICMPv6 echo;
+  - 3 to 60 KB datagrams to a host UDP echo server and back, whose replies arrive
+    fragmented.
+- **Results:**
+  - `frag` passes.
+  - A capture of the boot shows the MLD join from `::`, the DAD probes, the router
+    solicitation after link-local DAD, and DAD for the autoconfigured address.
+  - Two machines with the same MAC on one segment: the second finds its link-local
+    address in use and does not configure it.
+  - libc-test (351/369, 330/340) and `abi2test` are unchanged.
+
+Milestone 26 (done): the kernel lock is no longer held during disk I/O.
+- **Disk I/O sleeps.** The ATA channels' interrupts (IRQ 14, 15) are enabled. A caller in
+  process context sleeps until a DMA transfer or a cache flush completes, and a lost
+  interrupt costs a 5 s timeout, then polling. The kernel lock is free while it sleeps,
+  so pipes, sockets, scheduling and other volumes carry on. At boot, and for PIO, I/O is
+  still polled. One sleeping mutex covers the driver (a single bounce buffer and PRD
+  table).
+- **ext4 volumes have their own sleeping, recursive mutex** (`kernel/include/kmutex.h`).
+  Every entry point takes it, and the journal commit takes it too; a commit due on the
+  system-call path skips a volume that is busy. The block I/O wrappers already restored
+  the current volume pointer after I/O, and now that matters for every read.
+- **The block cache** finds buffers that are being read. A second reader of the block
+  waits for the first (`bread`) instead of reading it into another buffer, and one
+  read-ahead runs at a time.
+- **Not done here:** pipes and sockets still run under the kernel lock. They no longer
+  wait behind disk I/O, which was the stall that mattered.
+- **Races that sleeping I/O exposed** (the native builds found them), all fixed:
+  - `file_close` freed the file entry before its last `iput`, which may now sleep; an
+    `open` meanwhile got the entry, and the closer then cleared it (`EBADF` in `cc1`).
+    The entry stays reserved until it is clean.
+  - An exiting LWP was marked a zombie before closing its files, and a wake-up during
+    that I/O made it runnable again (a kernel panic). It becomes a zombie only just
+    before it switches away.
+  - The inode cache could evict an inode whose deletion (link count 0) waited for the
+    volume mutex, and a release that waited could act on a reused slot.
+  - Disk I/O first spins for up to 100 µs, so short transfers do not sleep.
+- **Ports:** GNU grep's and gzip's wrapper scripts said `#!/bin/bash` (the build host's
+  shell). Since M22 honours `#!`, they failed; the port build now rewrites such lines to
+  `#!/bin/sh`.
+- **Results** (`iostall`: pipe round trips between two processes while a third streams
+  286 MB from a second disk, more than the block cache holds):
+  - Round trips keep 56% of their idle rate (31,756/s), against 1% (327/s) before.
+  - The streaming reader takes 4.4 s instead of 3.6 s, for the sleeps and wake-ups.
+  - libc-test (354/372 with the kernel tests, 330/340) and `abi2test` are unchanged, and
+    e2fsck finds the test disk clean.
+  - The native builds work: GNU make in 41 s (the same as on the M25 kernel) and ksh93
+    in about 6 minutes.
+
+Milestone 27 (done): the TLS client and sia's model connection.
+- **ECDSA** (`user/tls/ecdsa.c`): signature verification on P-256 and P-384. The field
+  and group arithmetic is generic Montgomery code, points are in Jacobian coordinates,
+  and u1·G + u2·Q is computed with Shamir's trick.
+  - X.509: `id-ecPublicKey` keys on either curve, and `ecdsa-with-SHA256/384/512`
+    certificate signatures. Chains may mix RSA and ECDSA.
+  - TLS 1.3: `ecdsa_secp256r1_sha256` and `ecdsa_secp384r1_sha384` are offered and
+    checked in CertificateVerify.
+  - Checked against OpenSSL: its signatures verify and tampered ones do not. An
+    `s_server` with a P-256 leaf under a P-384 CA verifies too, and a CA with the same
+    name but another key does not.
+- **Roots.**
+  - `/etc/ssl/certs.pem` is now the Mozilla bundle (121 roots, 39 of them ECDSA), in
+    place of three RSA roots. The loader keeps up to 256.
+  - A certificate the server sends that has a trusted root's subject and key counts as
+    that root. Google, Cloudflare and GitHub send cross-signed copies of their roots,
+    and these now verify.
+- **Session resumption** (RFC 8446 PSK with `psk_dhe_ke`).
+  - NewSessionTicket messages go into a small per-process cache: 8 tickets, keyed by
+    host name, kept for the lifetime the server gives (at most 7 days).
+  - The next connection to the host offers the newest ticket, and each ticket is used
+    once. The ticket's cipher suite goes first, and the binder covers the truncated
+    ClientHello.
+  - When the server accepts, the key schedule starts from the PSK and there is no
+    Certificate or CertificateVerify. The ECDHE exchange still happens, so forward
+    secrecy is kept.
+  - The ClientHello always carries `psk_key_exchange_modes`. Without it, servers send
+    no tickets (Google and Cloudflare sent none before).
+  - Resumed: Google, Cloudflare, Wikipedia, example.com, api.anthropic.com, and OpenSSL
+    with either suite. GitHub and letsencrypt.org do not resume for OpenSSL's client
+    either.
+  - `tls_resumed()` reports whether a ticket was used, and `tls_forget_sessions()`
+    drops the cache.
+- **Streamed answers** (`user/libsia`).
+  - `http_request_stream` passes a 200 response's body to a sink as it arrives, through
+    an incremental chunked decoder.
+  - `model_chat_stream` sends `"stream": true` and parses the server-sent events. It
+    returns the same assistant message as `model_chat`, with tool calls reassembled from
+    their fragments. Azure's events with an empty `choices` are skipped, and an endpoint
+    that ignores `stream` and returns one JSON reply still works.
+  - Text is passed on at UTF-8 character boundaries, never splitting a `**` marker.
+  - The session engine streams when `sia_io.delta` is set.
+    - `/bin/sia` writes the reply as it arrives.
+    - The Facet strip re-wraps the growing reply in its panel (new `delta` and
+      `delta_end` agent events).
+  - Applications:
+    - `sia_chat_send_stream()` takes a callback.
+    - For `sia_chat_send_async()`, `sia_chat_poll()` returns the text that arrived since
+      the last call. The child process now writes length-prefixed frames to the pipe.
+    - `sia_chat_result()` still returns the whole answer.
+    - The `sia-ask` and `facet-chat` examples show the answer as it is written.
+  - Tested:
+    - On the host, against a mock server whose chunks split UTF-8 characters, `data:`
+      lines and `**`. Tool-call arguments arrived in three fragments.
+    - On SIEOS, with the configured Azure model: `sia-ask` (one question and a
+      conversation), `/sia` with a tool call, and the desktop strip.
+
+Milestone 28 (done): libc-test passes in full. That is 689 tests: 347 static, 341 dynamic,
+and the `api` header check. Before, 18 static and 10 dynamic tests failed, and two did not
+build.
+- **Newer musl.** The libc-test snapshot is newer than musl 1.2.5, and some of its tests
+  cover fixes made since. `libc/backports/` holds musl 1.2.6's versions of the affected
+  files, copied over the tree after the port overlay:
+  - `mntent`: a line without options, and whole-option `hasmntopt`.
+  - `fma`: the sign of an exact zero.
+  - `fmaf`: rounding of subnormal results.
+  - `powl`: the sign of an overflow or underflow with a negative base.
+  - x86_64 `expl`: arguments up to 2^15.
+  - `strptime`: `%F`, `%s`, `%z`, `%Z`, `%V`, `%g`, `%G` and `%u`, plus
+    `__tzname_to_isdst` by a text patch.
+- **SIEOS changes on top of those:**
+  - `strptime`: `%z` also takes `+hh` and `+hh:mm`, and `%s` sets the time, as POSIX.1-2024
+    has it.
+  - `fmal`: an inexact subnormal result raises underflow in round-to-nearest too; the
+    final scaling could be exact.
+  - `powf(x, 1)` is x: the double-precision core overflowed rounding upward near
+    `FLT_MAX`, and was inexact for subnormal x.
+- **wordexp is new** (`libc/port/src/misc/sieos64/wordexp.c`). musl hands the string to
+  `/bin/sh`, so results depended on the shell and leaked positional parameters. The test
+  now expects POSIX.1-2024 behaviour with precise error classes. SIEOS's `wordexp` does
+  the expansions itself and runs only command substitutions with `sh -c`.
+  - Expansions: quoting including `$'...'`; parameters and every `${...}` form (the
+    pattern forms are unquoted even inside double quotes); `$((...))` with the C
+    operators and assignment; tilde; IFS field splitting; globbing.
+  - Assignments by `${X=...}` last for the call and are passed to its commands.
+  - The whole string is checked before anything runs.
+    - `WRDE_BADCHAR`: an unquoted `| & ; < >` or newline.
+    - `( )`: `WRDE_BADCHAR` with `WRDE_NOCMD`, otherwise a syntax error.
+    - `{ }`: `WRDE_BADCHAR` with `WRDE_NOCMD`, otherwise ordinary characters.
+    - `WRDE_CMDSUB`: `$(`, `` ` ``, or a `$((` that turns out to be `$( (`.
+  - `#` starts a comment at the start of a word.
+  - On the host, against glibc, every check passes. glibc's stdio makes the test misread
+    its captured standard error after the first `WRDE_SHOWERR` case; musl's does not.
+- **Static dlopen.** musl has no `dlopen` in static programs, and the `*_dso` sources are
+  libraries, not tests. The static set no longer builds them; the dynamic set runs them
+  and they pass.
+- **sigprocmask-internal** assumes Linux's signal layout.
+  `libc/tests/libc-test-sieos.patch` makes it skip SIGFREEZE through SIGINFO (34, 35 and
+  37 to 41), which are ordinary signals on SIEOS as on Solaris. It still checks 32, 33
+  and 36, the implementation's own.
+- **The two that did not build:**
+  - `_PC_TIMESTAMP_RESOLUTION` (1 ns on every SIEOS file system) and `_SC_XOPEN_UUCP`
+    (-1) are defined, for `api/main`.
+  - `RLIMIT_NPROC` (7) is a SIEOS extension: `fork` fails with `EAGAIN` once the real
+    user has that many processes. It is enforced for root too, because only a process
+    that lowered its own limit is affected. The default is unlimited.
+- **Also:** kernel objects now depend on the ABI headers; `sysmisc2.c` had kept the old
+  `RLIM_NLIMITS`. `head` takes `-N`, `-c` and several files.
+- **Results:** 689 of 689, and `abi2test` 232/232.
+
+Milestone 29 (done): scalable fonts for the desktop.
+- **TrueType in libfacet** (`user/libfacet/ttf.c`, `<facet/font.h>`).
+  - The engine reads:
+    - the cmap (formats 4 and 12), head, hhea, hmtx, maxp, loca and glyf tables;
+    - simple and composite glyphs (offsets, scales and 2×2 transforms);
+    - a format 0 kern table for kerning.
+  - Outlines are flattened to lines in pixel space and rasterized with exact area coverage
+    (the accumulation method of font-rs), without hinting.
+  - Each face (a font at a pixel size) caches its glyphs.
+  - Files are mapped (`MAP_PRIVATE`) where they can be, so processes share them through the
+    page cache.
+- **The desktop's text** is DejaVu Sans, DejaVu Sans Bold and DejaVu Sans Mono at 13 px,
+  from `/usr/share/fonts/dejavu` (with the Bitstream Vera license). At that size the metrics
+  fill the 8×16 cells of the old bitmap font, so layouts hold.
+  - `gfx_text`, `gfx_text_bold`, `text_width` and `gfx_text_bg` use Sans.
+  - `gfx_text_scaled` uses Sans Bold at scale times the size (the SIEOS headings).
+  - `gfx_char` draws a byte of ISO 8859-15 in Sans Mono. Control-range glyphs keep the
+    bitmap.
+  - New: `gfx_text_mono` (tables), `text_fit`, `text_width_bold`, `text_width_scaled`,
+    `gfx_cell_w`/`gfx_cell_h`.
+  - Text is UTF-8.
+  - Without the fonts, or with `FACET_FONT=bitmap`, the bitmap font is used.
+    `FACET_FONT_SIZE` sets the size.
+- **Layouts that counted characters** now measure.
+  - In Facet: the sia panel wraps at word boundaries across its width (lines of up to
+    255 bytes), the status text is cut to a width, the strip's input scrolls by width
+    with a thin caret, and the workspace digits are centred.
+  - The monitor's process table, the network sockets and the viewer's line numbers are
+    monospace.
+  - The terminal has its own face: its cells come from the font. Ctrl with + or - changes
+    the size from 8 to 32 px, Ctrl+0 restores 13 px, and the grid follows the window.
+- **Build:** the dev root no longer drops `/usr/share` when it adds the native toolchain
+  (only the toolchain's documentation went, but so did the fonts).
+- **Checked** on the login screen, the desktop, the strip and panel, the terminal (and its
+  zoom), Files, Monitor, Network, Clock and About, and against the host's rendering of the
+  same fonts.
+
+Milestone 30 (done): several network interfaces.
+- **The interface layer** (`kernel/net.c`, `struct netif`).
+  - A driver registers each card it finds (`netif_register`) as eth0, eth1, and so on,
+    with its own `struct nic_ops` and driver state.
+  - Each interface has its own addresses, counters, ARP cache and pending queue, DHCP
+    client (replies matched by transaction id and MAC), and IPv6 state: link-local and
+    autoconfigured addresses, DAD, MLD, router, neighbor cache.
+  - An address of any interface is local (the weak host model).
+- **IPv4 routes:** the interface whose subnet holds the destination. Otherwise the default
+  route: the interface of the source address the sender chose, if it has a gateway, else
+  the first interface with one. Broadcasts go out by the source's interface, and each
+  DHCP client sends on its own.
+- **IPv6 routes:**
+  - A destination on an interface's prefix leaves by that interface.
+  - A link-local or multicast destination leaves by the source address's interface, else
+    the first one (there are no scope ids yet).
+  - Otherwise, the first interface with a router.
+  - Echo replies to link-local senders go back the way they came.
+- **Drivers:**
+  - **e1000** is multi-instance: its state moved from file statics into a per-card
+    structure.
+  - **virtio-net** is new (`kernel/virtio_net.c`), the virtio 1.0 "modern" interface:
+    PCI vendor capabilities, VERSION_1 and MAC features, split virtqueues of 64 × 2 KB.
+    Legacy-only devices are skipped.
+  - Both take interrupts on shared INTx lines (`irq_register_shared`), with polling as a
+    fallback.
+- **Kernel services:**
+  - PCI keeps a device table, with capability walking and 64-bit BAR address and size
+    decoding.
+  - `mmio_map` maps device memory uncached: through the direct map below 4 GiB, else in
+    a window of the shared kernel half.
+- **ABI:** `netinfo` and `netinfo6` take an interface index and return `ENODEV` past the
+  last (libsieos: `netinfo_if`, `netinfo6_if`). `ifconfig` lists every interface, the
+  Network app cycles through them (Tab or a click), and the status bar shows the first
+  interface with an address.
+- **Tested in QEMU:**
+  - e1000 on 10.0.2.0/24 and fec0::/64, with virtio-net on 10.0.3.0/24 and fec1::/64.
+    Both get DHCP and SLAAC addresses, IPv4 and IPv6 pings reach each gateway through its
+    own interface (the counters show it), and downloads work.
+  - virtio-net alone as eth0 downloads 2.3 MB.
+  - The SIEOS network tests (ipv6, tcpstress, frag, unixsock), the functional and
+    regression suites (221 tests) and `abi2test` pass.
+
+Milestone 31 (done): the display layer (`kernel/display.c`, `kernel/include/display.h`).
+- **Displays** are registered by drivers, with `display_ops`: the modes a display can show
+  and how to set one, both optional. Each display has its mode, pixel layout, the memory
+  it can scan out and a kernel mapping of it.
+- **Display 0** is the framebuffer GRUB or the UEFI firmware set up, under the generic
+  `firmware` driver (one fixed mode), and the text console draws there. A native driver
+  for the same device takes it over (`display_takeover`), keeping index 0 and the console.
+  Other native displays are added as fb1, fb2 and so on.
+- **Write-combining:**
+  - PAT entry 1 (the PWT bit alone) is programmed as write-combining on every CPU.
+  - Framebuffers are mapped write-combining for the kernel (`mmio_map_wc`) and for the
+    process that maps them.
+  - The console no longer draws through the cached direct map.
+- **A framebuffer above 4 GiB** (UEFI, in a GPU aperture) no longer makes the console fall
+  back to VGA text. It is mapped once paging is up, and the console uses it from then on.
+- **`/dev/fb0` to `/dev/fb3`** (char 29, 0 to 3).
+  - `fbmap` maps a display's whole scan-out memory at 0x600000000000 + N × 16 GiB, so
+    the mapping survives mode changes. The process that maps a display owns it: the
+    console stops drawing there, and only the owner may change the mode.
+  - New ioctls:
+    - `FBIOGET_DISPLAY`: the driver, the device, flags (`SETMODE`, `CONSOLE`), the number
+      of modes, the owner and the scan-out memory size.
+    - `FBIOGET_MODES`: up to 32 modes, with the current and preferred ones marked.
+    - `FBIOSET_MODE`: `EINVAL` for a mode the display doesn't list, `ENOTSUP` for a fixed
+      display, `EBUSY` if another process owns it. The console follows a mode change of
+      its display.
+- **`fbset`** lists the displays, lists a display's modes (`-l`), and sets a mode
+  (`fbset [-d N] WxH`).
+- **Tested:** fb0 is reported at boot and by `fbset`, a mode change is refused on the
+  firmware display, and Facet runs on the write-combining mapping.
+
+Milestone 32 (done): the QEMU display driver and resolution changes.
+- **`kernel/bochs.c`** drives QEMU's standard VGA (`-vga std`) and `bochs-display`, both
+  PCI 1234:1111, one display per card.
+  - Modes are set with the VBE DISPI registers: MMIO in BAR2 at offset 0x500, or ports
+    0x1CE/0x1CF for one card without it.
+  - The modes offered are the usual sizes from 640×480 to 3840×2160 that the card takes
+    (DISPI "get caps") and that fit its memory.
+  - The preferred mode and its refresh rate come from the EDID QEMU puts at the start of
+    BAR2.
+  - The standard VGA GRUB set a mode on takes over display 0 and the console, keeping
+    that mode. Other cards become fb1 and up, in their preferred mode.
+- **Facet** runs on `FACET_FB` (default `/dev/fb0`) and changes its display's mode itself,
+  since it owns it: `wm_set_resolution` reallocates its buffers, repaints the background,
+  refits maximised windows and moves the others onto the screen.
+  - The desktop channel has a `display` operation (list the modes, or change to one).
+  - **Display Settings** (`facet-display`, from the main and desktop menus) lists the
+    modes, marking the current one and the monitor's own, and changes on a click.
+  - sia has a `screen_resolution` desktop tool.
+- **Tested in QEMU** with `-vga std` and a second `-device bochs-display`:
+  - fb0 and fb1 each list their modes.
+  - `fbset` changes each display. Screendumps are 1280×800 and 800×600, and the console
+    redraws at the new size.
+  - An unlisted mode is refused.
+  - Display Settings switches Facet from 1024×768 to 1280×800 while it runs.
+
+Milestone 33 (done, not tested on hardware): Intel integrated graphics
+(`kernel/intel_gen12.c`).
+- **Devices:** Arrow Lake-P (8086:7D51 Arc 130T/140T, 7DD1; display version 14) and
+  Raptor Lake-S UHD Graphics (8086:A780 to A78B; display version 12).
+- **What it does:** it takes over the mode the UEFI firmware (GOP) set, without
+  programming the display hardware. It reads:
+  - which pipes are running: `TRANSCONF`, and the primary plane's `PLANE_CTL`;
+  - each primary plane's size, stride, format, tiling and surface (`PLANE_SIZE`,
+    `PLANE_STRIDE`, `PLANE_SURF`);
+  - the output each transcoder drives (`TRANS_DDI_FUNC_CTL`: DDI A/B/C or TC1 and up,
+    HDMI, DVI, DP or DP MST).
+
+  A pipe whose plane is linear XRGB8888 scans out of the aperture (BAR2) at its GGTT
+  offset. If that is the firmware framebuffer, the driver takes the display over (named
+  "Intel ..., pipe A", write-combining), and each pipe it finds is logged at boot. A tiled
+  plane, another format, a surface outside the aperture, or a plane that is not the
+  firmware's leaves the firmware driver in charge.
+- **Not done**, because each needs the hardware to test:
+  - mode setting (PLLs, DP link training);
+  - the cursor plane: it needs a display-buffer (DDB) allocation and watermarks the
+    firmware did not set up, and enabling it without them causes FIFO underruns;
+  - page flips and EDID.
+- **Tested:**
+  - `make intel-test` runs the register scan against simulated registers: a laptop with
+    eDP on DDI A at 1920×1200 and a dock on TC1 (DP MST) at 3840×2160 is accepted;
+    tiled planes, other formats, surfaces outside the aperture and absent pipes are
+    refused.
+  - In QEMU, under UEFI (OVMF, TCG), the GOP framebuffer path works and the Bochs driver
+    takes over from it.
+  - On this host, OVMF with KVM hangs in GRUB before the kernel runs, with or without
+    `-cpu host`: a firmware/GRUB problem, not the kernel's.
+- **To try it on a machine:** write `build/sieos.iso` to a USB stick
+  (`dd if=build/sieos.iso of=/dev/sdX bs=4M`), turn Secure Boot off (GRUB is not signed)
+  and boot from USB.
+  - The root file system is the RAM disk from the ISO: NVMe and AHCI are not supported.
+  - Neither the I219/I225 Ethernet nor the Wi-Fi is supported.
+  - The keyboard works if it is on the i8042 (most laptops).
+  - `fbset` should show `intel-gen12`; the boot log shows what the driver found.
+
+Milestone 34 (done): Facet skins.
+- **libfacet** (`facet/skin.h`, `skin.c`, `skin_icons.c`):
+  - A skin is a palette plus a style. The `C_*` colour names of `facet/theme.h` are now
+    the current skin's, so applications follow a change.
+  - `ui_button`, `ui_panel` and `ui_meter` have bevelled versions for the light skins.
+  - `icon_draw` draws each skin's icon set.
+  - Antialiased polygons, strokes and ellipses (`gfx_poly`, `gfx_poly_vgradient`,
+    `gfx_stroke`, `gfx_ellipse_aa`) reuse the TrueType rasterizer.
+  - The skin is loaded when an application connects: `FACET_SKIN`, then `~/.facet/skin`,
+    then `/etc/facet/skin`, else Strata.
+  - A new protocol event, `FCT_EV_SKIN`, switches every running application, which
+    redraws all its views.
+- **The skins** (original artwork in the manner of those desktops, no logos):
+  - **Strata:** unchanged.
+  - **BeOS style:**
+    - yellow title tabs as wide as the title, with a close box and a zoom box;
+    - thin bevelled grey frames;
+    - light panels and menus, and a flat blue desktop;
+    - the Deskbar at the top right: the SIEOS menu, a tray with the processor load and
+      the clock, a row per application (bold when running), the workspaces;
+    - a black pointer with a white edge;
+    - icons in three-quarter view with bold outlines and saturated colours;
+    - double-clicking the tab minimises the window.
+  - **IRIX style:**
+    - thick steel-blue bevelled 4Dwm-like frames with corner pieces, the title bar inside
+      with the title centred, a window-menu button (double-click it to close, as in
+      Motif) and minimise and maximise buttons;
+    - the Toolchest at the top left: the menu, a row per application, the four desks,
+      the clock;
+    - an indigo desktop with a faint weave, and the red pointer;
+    - Indigo Magic-like pastel icons.
+- **Facet:**
+  - Frame insets, buttons, hit tests (the area beside a BeOS tab belongs to the window
+    below), the dock layout, the strip, the work area, menus, the sia panel, the
+    background and the pointer all follow the skin.
+  - `wm_set_skin` keeps every window's content where it was, refits the frame around it,
+    saves the choice and tells the applications.
+  - The desktop channel has a `skin` operation; **Appearance** (`facet-appearance`, from
+    the menus) shows a live preview of each skin; sia has a `desktop_skin` tool.
+  - The login screen stays Strata (until milestone 35).
+- **Tested in QEMU:**
+  - Appearance switches Strata → BeOS style → IRIX style while applications run, and
+    they redraw in the new palette.
+  - Minimise works in IRIX style, and the skin survives a reboot (`~/.facet/skin`).
+  - sia switched to BeOS style when asked in plain words.
+
+### Milestone 35: Settings, kept across sessions; BeOS style by default
+
+- **The settings store** (libfacet, `facet/settings.h`):
+  - Each user's settings are in `~/.facet/settings`, one `key=value` per line. The
+    system defaults, which the login screen also uses, are in `/etc/facet/settings`.
+  - `fct_setting_get` reads the user's value, else the system's.
+  - `fct_setting_set` rewrites the user's file through a temporary file and `rename`.
+  - Keys:
+    - `skin`: `strata`, `beos` or `irix`.
+    - `resolution`: `WIDTHxHEIGHT`.
+  - `fct_skin_load` reads `skin`. The older `~/.facet/skin` is still honoured.
+    `fct_skin_load_system` reads only the system's setting.
+- **BeOS style is the default skin:** it is the default in libfacet, and
+  `/etc/facet/settings` sets `skin=beos`.
+- **Facet:**
+  - A change of skin or of resolution, whether from Settings, sia or the desktop channel,
+    is saved in the user's settings.
+  - When a session starts, Facet applies the saved skin and the saved resolution. If the
+    display lacks that mode, it keeps its own and logs why.
+- **Settings** (`facet-settings`, "Settings" in the main and desktop menus):
+  - It replaces `facet-display` and `facet-appearance`.
+  - It has a sidebar of sections: Display (the modes, in two columns when there are
+    many) and Appearance (the skin previews). A new section is one entry in its table
+    of pages.
+  - `facet-settings SECTION` opens on that section. The app names `display` and
+    `appearance` (menus, desktop channel, sia's `open_app`) open Settings there.
+- **The login screen (sdm)** uses the system skin. In BeOS style it shows:
+  - a flat blue desktop and a bevelled top bar;
+  - a grey bevelled card with a yellow "Welcome to SIEOS" tab;
+  - sunken white fields and square buttons.
+  Strata keeps the earlier dark card.
+- **Tested in QEMU:**
+  - A new user gets BeOS style. The login screen is BeOS style.
+  - Settings changed to 1280x800 and to IRIX style.
+  - After logging out and in, the desktop was still IRIX style.
+  - After a reboot, the login screen came up in BeOS style at the boot mode (1024x768).
+    After login, the session came up at 1280x800 in IRIX style.
+  - `~/.facet/settings` then held `resolution=1280x800` and `skin=irix`.
+- **The "Exit..." submenu** (added after milestone 35): Facet's popup menus have one level
+  of submenus.
+  - "Exit..." in the main and desktop menus offers Log Out, Reboot and Shut Down.
+  - Only root may call `uadmin`, so Reboot and Shut Down end the session with exit status
+    `SESSION_EXIT_REBOOT` (4) or `SESSION_EXIT_HALT` (5) (`sieos.h`). init then restarts
+    or halts the system, as sdm's own buttons do before login.
+
+### Milestone 36: booting a real PC from a USB drive; the host's Intel GPU in QEMU
+
+- **`make usb`** builds `build/sieos-usb.img`. `build/` is ignored by git.
+  - It is a hybrid image laid out like the ISO: MBR and GPT, an EFI system partition
+    with GRUB `x86_64-efi`, and GRUB `i386-pc` for BIOS.
+  - It holds the kernel and the root file system, which is loaded as a RAM disk: the
+    kernel has no USB or NVMe storage driver. Changes are lost at power-off.
+  - Like the ISO, it carries sia's model connection from `ai.config` when that file
+    exists. `USB_SIA=0` leaves it out.
+  - Write it to the drive itself, not a partition (see `lsblk`):
+    `sudo dd if=build/sieos-usb.img of=/dev/sdX bs=4M conv=fsync status=progress`
+  - On the PC, Secure Boot must be off, because GRUB is not signed.
+  - The keyboard must be PS/2 or i8042-attached. Most laptop keyboards are; USB
+    keyboards work only through the firmware's legacy emulation.
+  - The display is the firmware framebuffer. On Arrow Lake-P and Raptor Lake-S the
+    Intel driver takes it over (milestone 33).
+- **`make run-usb`** boots the image in QEMU (UEFI, KVM when available) as a USB drive on
+  xHCI.
+- **`make run-uefi`** now attaches the ISO as a USB drive and uses KVM when it can.
+  Through OVMF's IDE CD-ROM, GRUB took about two minutes under KVM to read the root file
+  system module; this looked like a hang. It now boots in seconds.
+- **`make run-uefi GPU=intel`** passes the host's GPU (`GPU_PCI`, default `0000:00:02.0`,
+  the integrated GPU) to the guest with VFIO (`vfio-pci,x-igd-opregion=on`) instead of
+  QEMU's VGA.
+  - `tools/vfio-gpu.sh` detaches the GPU from the host and gives it back: `status`,
+    `bind` and `unbind` (as root). `run-uefi` runs QEMU through its `run` command, as the
+    calling user, with the memory-lock limit that VFIO needs.
+  - While the GPU is bound, the host cannot use it. On this laptop it drives the
+    built-in panel and the monitors, so bind from a text console or over ssh with the
+    graphical session stopped.
+  - `GPU_ROM` names an option ROM (the GOP driver) for a firmware picture. Without one,
+    OVMF sets up no framebuffer on the GPU.
+  - This path is not tested: binding would have taken the host's own display away.
+- **Tested in QEMU:**
+  - The USB image boots to the BeOS-style login in about 7 s, both through UEFI (KVM)
+    and through BIOS.
+  - After login, sia shows its model connection.
+  - `run-uefi` with the hard disk boots in about 6 s.
+  - `run-uefi GPU=intel` refuses to start while the GPU is still bound to i915.
+- **The order of the displays** (after milestone 36):
+  - The firmware framebuffer is registered first, then the drivers probe: the physical
+    cards' drivers (Intel) before QEMU's (Bochs). A driver for the firmware's device takes
+    that display over.
+  - The Intel driver now also registers a lit pipe that is not the firmware's
+    framebuffer, instead of leaving it alone.
+  - Then the displays are numbered by kind (`display_ops.kind`), keeping probe order
+    within a kind: physical cards, then virtual cards (QEMU), then a firmware framebuffer
+    that no driver took over. The text console moves to `fb0`, the display the login
+    screen and Facet use.
+  - The firmware framebuffer is `fb0` only when there is no card with a driver.
+  - Tested in QEMU (UEFI):
+    - standard VGA alone: `fb0` is bochs;
+    - a second Bochs card: `fb0` and `fb1` are bochs, in PCI order;
+    - virtio-vga (no driver, so a plain firmware framebuffer) with a Bochs card: `fb0` is
+      bochs, with the console and the login screen, and `fb1` is the firmware framebuffer;
+    - virtio-vga alone: `fb0` is the firmware framebuffer.
+
+### Milestone 37: mode setting in the Intel driver (within the running output)
+
+- **What changes a mode:** the Intel driver (display 12 to 14) can now change the mode of
+  the output the firmware lit.
+  - The transcoder keeps the native timings the firmware trained the link and the panel
+    for (`TRANS_HTOTAL`/`VTOTAL`).
+  - A mode is a pipe source (`PIPE_SRC`) and primary-plane size and stride.
+  - A mode smaller than native goes through the pipe's first scaler (`PS_CTRL`,
+    `PS_WIN_POS`, `PS_WIN_SZ`). The picture is centred with its aspect ratio kept; for
+    example, 1024x768 on a 1920x1200 panel shows at 1600x1200 with bars left and right.
+  - The native mode turns the scaler off.
+  - The registers are double-buffered and take effect at the next vertical blank, armed by
+    `PLANE_SURF`.
+  - The plane stays in the firmware's framebuffer memory.
+- **Modes offered:** the standard modes from 640x480 up to the native one (the preferred
+  one) that fit that memory. `fbset`, Settings and sia can choose them.
+- **A mode the firmware scaled** (the scaler already on) is recognised: the native size
+  comes from the transcoder, not the plane.
+- **Not done:**
+  - lighting an output that is off (the C10/C20 PHYs and PLLs, DP link training, panel
+    power sequencing, the backlight);
+  - modes above the native one.
+- **Tests:**
+  - `make intel-test` checks the register writes on simulated registers: the same aspect
+    ratio (full panel), 4:3 and 16:9 on 16:10 (the window and the bars), the stride
+    rounding, the return to native (scaler off), pipe B, and a scaled firmware mode.
+  - Not tested on the hardware.
+- **Passthrough:** `run-uefi GPU=intel` puts the GPU at guest address 00:02.0, where
+  firmware and drivers expect Intel graphics.
+- **The GPU's option ROM:** `sudo tools/vfio-gpu.sh rom` saves it from sysfs to
+  `build/igd.rom` and lists its images. `tools/vfio-gpu.sh romcheck FILE` checks any
+  file.
+  - `GPU_ROM` needs a UEFI image (the GOP driver).
+  - When the sysfs ROM has none, the GOP driver has to come from the PC's firmware: the
+    vendor's BIOS update, opened with UEFITool, and turned into an option ROM with EDK2's
+    `EfiRom`.
+
+### Milestone 38: all the memory (above 4 GiB)
+
+- **Before:** the frame allocator managed only the first 4 GiB, the part the boot page
+  tables map. A PC with 16 GiB used 4 GiB of it, and less when the firmware puts some
+  of the low range aside for devices.
+- **Now:** `pmm_init` manages every usable range of the memory map, up to
+  `DIRECT_MAP_MAX` (256 GiB, where the MMIO window starts).
+  - RAM above 4 GiB is added to the direct map (`vmm_direct_map`: 2 MiB pages, in page
+    directories under `PML4[256]`) before the allocator starts. Every address space
+    shares that PML4 entry, so the new mappings are everywhere.
+  - The bitmap and the copy-on-write reference counts are sized for the highest usable
+    address and placed in RAM. For 16 GiB they take 10 MiB (they were 2 MiB of BSS).
+  - Page-sized allocations come from above 4 GiB first. `pmm_alloc_contig` still takes
+    the lowest run, so the drivers that allocate DMA memory at boot (ATA's 32-bit PRD
+    table and bounce buffer) get memory below 4 GiB. ATA checks this.
+  - `DIRECT_MAP_SIZE` (4 GiB) still names the boot map, which has 2 MiB pages that
+    `vmm_set_uncached` and `mmio_map` rely on for device memory.
+- **Tested in QEMU:**
+  - With 8 GiB (BIOS) the boot reports 8191 MiB usable. With 12 GiB (UEFI, the USB image)
+    it reports 12281 MiB.
+  - 3.5 GB of random data written to tmpfs (so from above 4 GiB) reads back with the
+    same MD5 sums, checked after each file and again at the end.
+
+### Milestone 39: Ice Lake graphics (Iris Plus G4/G7, UHD G1)
+
+- **The Intel driver** (`kernel/intel_gen12.c`) now also takes the Ice Lake GPUs
+  (8086:8A50-8A71, display version 11), such as the Iris Plus Graphics G4 (8A5A, 8A5C).
+- **What display 11 shares with 12 to 14:** the pipes, the universal planes (`PLANE_CTL`
+  with XRGB8888 = 4 in 27:24), the pipe scalers and the transcoder timings are at the
+  same addresses with the same fields. So both taking over the firmware's mode and the
+  mode setting of milestone 37 work unchanged.
+- **The difference:** `TRANS_DDI_FUNC_CTL` selects the DDI in bits 30:28 and holds the
+  port itself (A = 0), not the port + 1 in 30:27. The ports are DDI A and B (combo PHYs)
+  and TC1 to TC4 (Type-C and Thunderbolt, ports C to F). The names in the log follow
+  this.
+- **Tests:** `make intel-test` adds an Ice Lake case: eDP on DDI A, and DP on TC2 (port
+  D). Not tested on the hardware.
+
+### Milestone 40: USB keyboards and mice (xHCI)
+
+- **The controllers** (`kernel/xhci.c`): every xHCI controller (PCI class 0C03, interface
+  30) is taken. This covers the chipset's controller (Raptor Lake, Ice Lake-LP 8086:34ED,
+  Arrow Lake 8086:777D, ...) and the Thunderbolt ones (Ice Lake 8086:8A13, ...).
+  - The firmware gives the controller up through the USB legacy support capability.
+    Its PS/2 emulation of USB keyboards ends there.
+  - The controller is reset and runs without interrupts. The event ring is polled from
+    the timer tick (100 Hz), which is enough for keyboards and mice.
+  - All the memory (rings, contexts, the scratchpad, a pool of 32 devices) is allocated
+    when the controller starts. The tick allocates none.
+- **Enumeration:**
+  - It covers the root ports and USB 2 hubs, at boot and when a device is plugged in or
+    unplugged later (unplugging a hub removes what hangs off it).
+  - Low and full-speed devices behind a high-speed hub use its transaction translator.
+  - USB 3 hubs are logged and not used. Keyboards and mice appear on their USB 2 half.
+  - Commands and control transfers wait for their completion events and handle the other
+    events meanwhile, so the tick runs enumeration synchronously.
+  - A halted endpoint is reset (Reset Endpoint, CLEAR_FEATURE, Set TR Dequeue) and
+    queued again, up to 20 times.
+- **HID** (`kernel/hid.c`, shared with I2C in milestone 41):
+  - Boot keyboards and mice are switched to the boot protocol (fixed reports).
+  - Other HID devices (tablets, keyboards and mice that are not boot devices) are read
+    through their report descriptor. The parser keeps the input fields of the keyboard,
+    mouse and pointer application collections: modifier and key bitmaps, key arrays,
+    buttons, relative X/Y, and absolute X/Y (scaled to 0..65535, `EV_MOUSE_ABS`). The
+    rest (touchpad collections, consumer keys, the wheel) is ignored.
+  - Keys become set 1 scancodes through `kbd_key` (split out of the PS/2 driver). So a
+    USB keyboard types on the console and in `/dev/events` exactly as the PS/2 one does.
+  - A held key repeats after 500 ms, 30 times a second, since USB keyboards do not
+    repeat keys themselves.
+- **Boot options:** `nousb` leaves the controllers alone (and the firmware's
+  emulation, if it has one). `usbdebug` logs every device and every report.
+- **Boot line:** `USB: 1 xHCI controller, 2 keyboards, 2 pointers`, with one line per
+  device before it (`usb 1-8.1: 0627:0001 keyboard (boot protocol)`).
+- **Tested in QEMU:**
+  - Controllers: `qemu-xhci` (BIOS) and `nec-usb-xhci` (UEFI, booting the USB image
+    through that same controller).
+  - Devices: a keyboard, a mouse, a tablet, and a hub with a keyboard behind it.
+  - Typing on the login screen works, with Shift, and a held key repeats.
+  - Mouse and tablet reports come through.
+  - A keyboard plugged into the hub at run time appears and is removed again. Removing
+    the hub removes its keyboard.
+  - `make hid-test` checks the parser on a touchpad's mouse collection with report IDs
+    (beside its touchpad collection), a key bitmap (NKRO) keyboard, an array keyboard
+    (arrows, repeat, Ctrl+C, rollover) and an absolute pointer.
+  - Not tested: high-speed hubs (QEMU's hub is full-speed), real hardware.
+
+### Milestone 41: HID over I2C (laptop touchpads)
+
+- **The controllers** (`kernel/i2c_hid.c`): the Intel LPSS I2C controllers, which are
+  Synopsys DesignWare cores.
+  - IDs: Raptor Lake-S PCH (8086:7A4C-7A4F, 7A7C, 7A7D), Alder Lake-S/P/N, Ice Lake-LP
+    (8086:34E8-34EB, 34C5, 34C6), Tiger Lake-LP/H, Comet Lake-LP, Meteor Lake-P, Arrow
+    Lake-H.
+  - Each is put in D0 and taken out of reset (the LPSS private registers at 0x200), then
+    run as a master at standard speed without interrupts.
+  - The input clock depends on the chipset (100 to 216 MHz). The SCL counts are set for
+    216 MHz, so a slower clock gives a slower bus (about 46 kHz at 100 MHz), never a
+    faster one.
+- **Finding the devices:**
+  - The DSDT and SSDTs (now kept by `acpi_init`, through `acpi_table`) are searched for
+    the HID-over-I2C marker (EisaId or string `PNP0C50`, `ACPI0C50`). The innermost
+    `Device ()` around it is searched for I2cSerialBus descriptors, which give the
+    addresses.
+  - The AML is read, not run. Firmware often patches the address in at run time, so the
+    usual touchpad addresses (0x15 ELAN, 0x2C Synaptics, 0x2A) are tried as well.
+  - Each address is first checked on every controller with a one-byte read, which is
+    harmless for any device.
+  - The HID descriptor register (from a `_DSM`) is found by trying 1, 0x20, 0 and 0x30
+    until a valid 30-byte descriptor (version 1.00) answers.
+- **Starting a device:** SET_POWER on, then RESET (waiting for the zero-length answer).
+  The report descriptor goes into `hid.c`, the same parser as USB.
+- **Input:**
+  - The interrupt line (a GPIO) is not used. The device is read from the timer tick
+    instead (100 Hz), and a device with nothing to report answers with length 0.
+  - A read is started in one tick and collected in the next (the FIFOs hold it), so the
+    tick never waits for the bus.
+  - Reads are at most the FIFO depth (64 bytes on these controllers). The mouse reports
+    are much shorter.
+  - A precision touchpad reports as a mouse (moving, clicking) until the host switches it
+    to touchpad mode, which is not done: no gestures and no two-finger scrolling.
+- **Boot options:** `noi2c` leaves the controllers alone. `i2cdebug` (or `usbdebug`)
+  logs the ACPI devices, the probes and every report.
+- **Boot line:** `I2C HID: 1 device (0 keyboards, 1 pointer)`.
+- **Tests:**
+  - `make hid-test` now also runs `tools/i2c-hid-test.c`. It uses the driver itself on a
+    simulated DesignWare controller (FIFOs, aborts, stop detection), with an ELAN-like
+    touchpad at 0x15, a device at 0x2A that is not HID, nobody at 0x2C, and a DSDT with
+    the touchpad's `Device (TPD0)` (`_HID ELAN0129`, `_CID PNP0C50`, `I2cSerialBusV2`
+    in `_CRS`).
+  - It checks the discovery, SET_POWER and RESET, a report descriptor longer than the
+    FIFOs, and the polled reads: nothing, a mouse report read once, and a touchpad-mode
+    report ignored.
+  - Not tested on the hardware. QEMU has no DesignWare I2C controller on x86.
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -848,12 +1899,34 @@ Milestone 13 (done): disk DMA.
 | 11 | native gcc/g++/binutils on SIEOS (done) |
 | 12 | deferred kernel features (below) (done) |
 | 13 | ATA bus-master DMA disk driver (done) |
-| 14 | a POSIX shell (`/bin/sh`: dash-class scripting, `read`, `test`, `eval`, `for`/`while`/`case`, functions) |
-| 15 | GNU make and core utilities built natively on SIEOS |
-| 16 | more file systems for `mount`: a second disk (ATA slave) and ext4 images through loop devices |
-| 17 | growing ext4 files without extents (block-mapped allocation) |
-| 18 | scheduler priority classes (priocntl) and finer-grained kernel locking |
-| 19 | IPv6 |
+| 14 | the Solaris shell: ksh93 as `/bin/sh` (done) |
+| 15 | GNU make and core utilities for SIEOS (done) |
+| 16 | more file systems for `mount`: more ATA disks, lofi devices, ext4 mounts (done) |
+| 17 | growing ext4 files without extents (block-mapped allocation) (done) |
+| 18 | scheduler priority classes (priocntl) and finer-grained kernel locking (done) |
+| 19 | IPv6 (done) |
+| 20 | ext4 journaling: jbd2 replay at mount, metadata written through the journal (done) |
+| 21 | htree (hashed) directories and `BLOCK_UNINIT` groups (done) |
+| 22 | symbolic links followed in every path lookup (done) |
+| 23 | interrupt-driven e1000 and I/O APIC interrupt routing (done) |
+| 24 | TCP: out-of-order reassembly, congestion control (NewReno), window scaling (done) |
+| 25 | IP fragment reassembly (IPv4, IPv6), IPv6 duplicate address detection and MLD (done) |
+| 26 | more of the kernel outside the big lock: file systems and block cache, pipes, sockets (done: disk I/O sleeps, per-volume locks) |
+| 27 | TLS: ECDSA certificates, session resumption; streamed answers in sia (done) |
+| 28 | the remaining libc-test failures (done: every test passes) |
+| 29 | scalable fonts for the desktop (TrueType rendering) (done) |
+| 30 | network interface layer: several cards, per-interface addresses and routes; virtio-net (done) |
+| 31 | display driver layer: display drivers, `/dev/fb0`..`N`, modes (done) |
+| 32 | the QEMU display driver (Bochs VBE): mode setting, several displays (done) |
+| 33 | Intel Gen12+ display driver: Arrow Lake-P (Arc 130T/140T), Raptor Lake-S UHD Graphics (done: takes over the firmware mode; not tested on hardware) |
+| 34 | Facet skins: Strata, a BeOS-style skin and an IRIX-style skin, chosen at run time (done) |
+| 35 | the Settings application; settings kept for the next session; BeOS style by default, also on the login screen (done) |
+| 36 | a USB drive image for real PCs; the host's Intel GPU passed to QEMU (VFIO) (done; the passthrough is not tested) |
+| 37 | Intel mode setting within the running output: pipe source, plane, the pipe scaler (done; not tested on the hardware) |
+| 38 | all the memory: RAM above 4 GiB in the direct map and the frame allocator (done) |
+| 39 | Ice Lake graphics (display 11) in the Intel driver (done; not tested on the hardware) |
+| 40 | USB keyboards and mice: xHCI, hubs, HID boot and report protocols (done) |
+| 41 | HID over I2C: touchpads on the Intel LPSS I2C controllers, found through ACPI (done; not tested on the hardware) |
 
 ### Milestone 12: deferred kernel features
 

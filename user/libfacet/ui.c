@@ -1,11 +1,37 @@
 /*
- * ui.c - Widgets and icons for the Facet desktop.
+ * ui.c - libfacet: widgets and icons in the Facet desktop's style.
  * Every icon is drawn from primitives; sizes scale from a 48px design.
  */
-#include "facet.h"
+#include "facet/theme.h"
+#include "facet/ui.h"
+
+void skin_icon_draw(int skin, struct surface *s, int kind, int x, int y, int size);   /* skin_icons.c */
+
+/* A bevelled surface: raised (light top-left) or sunken. */
+static void bevel(struct surface *s, struct rect r, bool raised, int depth)
+{
+    gfx_bevel(s, r.x, r.y, r.w, r.h, depth, raised, raised ? C_FACE_LIGHT : C_FACE_SHADOW,
+              raised ? C_FACE_SHADOW : C_FACE_LIGHT);
+}
 
 void ui_button(struct surface *s, struct rect r, const char *label, bool pressed)
 {
+    if (fct_skin->id == FCT_SKIN_BEOS) {           /* soft grey, a rounded dark outline */
+        gfx_round_rect_vgradient(s, r.x, r.y, r.w, r.h, 4, pressed ? RGB(0xB8, 0xB8, 0xB8) : RGB(0xFA, 0xFA, 0xFA),
+                                 pressed ? RGB(0xD0, 0xD0, 0xD0) : RGB(0xD4, 0xD4, 0xD4));
+        gfx_round_frame(s, r.x, r.y, r.w, r.h, 4, RGB(0x70, 0x70, 0x70));
+    } else if (fct_skin->id == FCT_SKIN_IRIX) {    /* square, a two-pixel bevel */
+        gfx_fill(s, r.x, r.y, r.w, r.h, pressed ? color_shade(C_FACE, -14) : C_FACE);
+        gfx_frame(s, r.x, r.y, r.w, r.h, C_FACE_DARK);
+        bevel(s, rect_make(r.x + 1, r.y + 1, r.w - 2, r.h - 2), !pressed, 2);
+    }
+    if (fct_skin->light) {
+        if (label) {
+            int o = pressed ? 1 : 0;
+            gfx_text(s, r.x + (r.w - text_width(label)) / 2 + o, r.y + (r.h - FONT_H) / 2 + o, label, C_TEXT);
+        }
+        return;
+    }
     /* Strata: rounded graphite button with a soft top highlight */
     gfx_round_rect_vgradient(s, r.x, r.y, r.w, r.h, 6, pressed ? RGB(0x23, 0x26, 0x2A) : RGB(0x3A, 0x3E, 0x45),
                              pressed ? RGB(0x2A, 0x2D, 0x32) : RGB(0x2E, 0x31, 0x37));
@@ -20,6 +46,11 @@ void ui_button(struct surface *s, struct rect r, const char *label, bool pressed
 
 void ui_panel(struct surface *s, struct rect r, bool sunken)
 {
+    if (fct_skin->light) {
+        gfx_fill(s, r.x, r.y, r.w, r.h, sunken ? C_CONTENT : C_FACE);
+        bevel(s, r, !sunken, fct_skin->id == FCT_SKIN_IRIX ? 2 : 1);
+        return;
+    }
     gfx_fill(s, r.x, r.y, r.w, r.h, sunken ? C_CONTENT : C_FACE);
     gfx_frame(s, r.x, r.y, r.w, r.h, sunken ? C_FACE_DARK : C_LINE);
 }
@@ -27,8 +58,13 @@ void ui_panel(struct surface *s, struct rect r, bool sunken)
 void ui_meter(struct surface *s, struct rect r, int percent, color_t fill)
 {
     percent = percent < 0 ? 0 : percent > 100 ? 100 : percent;
-    gfx_fill(s, r.x, r.y, r.w, r.h, RGB(0x24, 0x2A, 0x2E));
-    gfx_frame(s, r.x, r.y, r.w, r.h, C_FACE_DARK);
+    if (fct_skin->light) {
+        gfx_fill(s, r.x, r.y, r.w, r.h, C_CONTENT_ALT);
+        bevel(s, r, false, 1);
+    } else {
+        gfx_fill(s, r.x, r.y, r.w, r.h, RGB(0x24, 0x2A, 0x2E));
+        gfx_frame(s, r.x, r.y, r.w, r.h, C_FACE_DARK);
+    }
     int w = (r.w - 4) * percent / 100;
     if (w > 0)
         gfx_hgradient(s, r.x + 2, r.y + 2, w, r.h - 4, color_shade(fill, -40), fill);
@@ -154,6 +190,10 @@ static void icon_network(struct surface *s, int x, int y, int size)
 
 void icon_draw(struct surface *s, int kind, int x, int y, int size)
 {
+    if (fct_skin->id != FCT_SKIN_STRATA) {
+        skin_icon_draw(fct_skin->id, s, kind, x, y, size);
+        return;
+    }
     switch (kind) {
     case ICON_TERMINAL: icon_terminal(s, x, y, size); break;
     case ICON_FOLDER:   icon_folder(s, x, y, size, false); break;

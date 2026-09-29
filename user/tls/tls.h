@@ -1,9 +1,12 @@
 /*
  * tls.h - A small TLS 1.3 client (RFC 8446).
  *
- * X25519 key exchange, TLS_AES_128_GCM_SHA256 / TLS_AES_256_GCM_SHA384,
- * RSA server certificates (RSA-PSS handshake signatures) verified against
- * the roots in /etc/ssl/certs.pem, with host-name checking.
+ * X25519 and P-256 key exchange, TLS_AES_128_GCM_SHA256 /
+ * TLS_AES_256_GCM_SHA384, RSA and ECDSA (P-256, P-384) server certificates
+ * verified against the roots in /etc/ssl/certs.pem, with host-name checking.
+ * Session tickets from a server are kept in memory (per process, per host)
+ * and a later connection to the same host resumes with one (PSK with
+ * (EC)DHE, so forward secrecy is kept); no 0-RTT data.
  */
 #ifndef TLS_TLS_H
 #define TLS_TLS_H
@@ -22,5 +25,7 @@ long tls_write(struct tls *t, const void *buf, size_t n);   /* -1 = error */
 void tls_close(struct tls *t);                               /* sends close_notify, frees; fd stays open */
 const char *tls_error(struct tls *t);
 const char *tls_cipher_name(struct tls *t);
+bool tls_resumed(struct tls *t);                             /* the handshake used a session ticket */
+void tls_forget_sessions(void);                              /* drop every cached ticket */
 
 #endif

@@ -8,11 +8,14 @@
  * exec'd in the same process.  When the desktop exits, init starts sdm
  * again.
  *
+ * The screen is drawn in the system's skin (/etc/facet/settings, BeOS
+ * style unless changed there): the desktop's look before anyone logs in.
+ *
  * Exit status 3 asks init for a text console login instead.
  */
 #include "facet.h"
 
-#define CONSOLE_REQUEST 3
+#define CONSOLE_REQUEST SESSION_EXIT_CONSOLE
 #define MAXUSERS 6
 #define FIELD_MAX 63
 
@@ -99,8 +102,15 @@ static void draw_field(struct surface *s, int i)
 {
     struct rect r = field_rect(i);
     bool focused = focus_field == i;
-    gfx_round_rect(s, r.x, r.y, r.w, r.h, 6, C_STRIP);
-    gfx_round_frame(s, r.x, r.y, r.w, r.h, 6, focused ? C_ACCENT : C_LINE);
+    if (fct_skin->light) {                             /* a sunken white field */
+        gfx_fill(s, r.x, r.y, r.w, r.h, C_CONTENT);
+        gfx_bevel(s, r.x, r.y, r.w, r.h, 1, false, C_FACE_LIGHT, C_FACE_SHADOW);
+        if (focused)
+            gfx_frame(s, r.x + 1, r.y + 1, r.w - 2, r.h - 2, C_ACCENT);
+    } else {
+        gfx_round_rect(s, r.x, r.y, r.w, r.h, 6, C_STRIP);
+        gfx_round_frame(s, r.x, r.y, r.w, r.h, 6, focused ? C_ACCENT : C_LINE);
+    }
     char shown[FIELD_MAX + 1];
     if (i == 0) {
         strlcpy(shown, name_buf, sizeof(shown));
@@ -119,15 +129,24 @@ static void render_scene(void)
 {
     struct surface *s = &scene;
     gfx_set_clip(s, rect_make(0, 0, s->w, s->h));
+    bool light = fct_skin->light;
     gfx_vgradient(s, 0, 0, s->w, s->h, C_DESK_TOP, C_DESK_BOT);
-    for (int i = 0; i < 4; i += 2)                     /* strata bands, as on the desktop */
-        gfx_blend_fill(s, 0, i * s->h / 4, s->w, s->h / 4, RGB(0xFF, 0xFF, 0xFF), 5);
-    for (int y = 0; y < s->h; y += 4)
-        gfx_blend_fill(s, 0, y, s->w, 1, RGB(0, 0, 0), 10);
+    if (fct_skin->id == FCT_SKIN_STRATA) {
+        for (int i = 0; i < 4; i += 2)                 /* strata bands, as on the desktop */
+            gfx_blend_fill(s, 0, i * s->h / 4, s->w, s->h / 4, RGB(0xFF, 0xFF, 0xFF), 5);
+        for (int y = 0; y < s->h; y += 4)
+            gfx_blend_fill(s, 0, y, s->w, 1, RGB(0, 0, 0), 10);
+    }
 
     /* top bar: brand, host name, clock */
-    gfx_fill(s, 0, 0, s->w, 28, RGB(0x17, 0x19, 0x1C));
-    gfx_hline(s, 0, 28, s->w, C_LINE);
+    if (light) {                                       /* a bevelled bar, like the Deskbar */
+        gfx_fill(s, 0, 0, s->w, 28, C_SPINE);
+        gfx_bevel(s, 0, 0, s->w, 28, 1, true, C_FACE_LIGHT, C_FACE_SHADOW);
+        gfx_hline(s, 0, 28, s->w, C_FACE_DARK);
+    } else {
+        gfx_fill(s, 0, 0, s->w, 28, RGB(0x17, 0x19, 0x1C));
+        gfx_hline(s, 0, 28, s->w, C_LINE);
+    }
     logo_draw(s, 18, 14, 16);
     gfx_text_bold(s, 34, 6, "SIEOS", C_TEXT);
     gfx_text(s, 34 + text_width("SIEOS") + 12, 6, hostname, C_DIM);
@@ -142,11 +161,30 @@ static void render_scene(void)
 
     /* the login card */
     struct rect p = panel();
-    gfx_shadow(s, p, 14, 18, 8, 210);
-    gfx_round_rect_vgradient(s, p.x, p.y, p.w, p.h, 14, RGB(0x2C, 0x2F, 0x35), RGB(0x22, 0x24, 0x28));
-    gfx_round_frame(s, p.x, p.y, p.w, p.h, 14, RGB(0x3B, 0x3F, 0x46));
-    gfx_blend_fill(s, p.x + 14, p.y + 1, p.w - 28, 1, RGB(0xFF, 0xFF, 0xFF), 36);
-    gfx_fill(s, p.x + 24, p.y + 1, 60, 2, C_ACCENT);
+    if (fct_skin->id == FCT_SKIN_BEOS) {               /* a window: a yellow title tab, a bevelled grey body */
+        const char *title = "Welcome to SIEOS";
+        int tw = text_width_bold(title) + 36, th = 22;
+        color_t edge = RGB(0x40, 0x40, 0x40);
+        gfx_shadow(s, p, 0, 10, 6, 120);
+        gfx_fill(s, p.x, p.y - th, tw, th + 1, edge);
+        gfx_vgradient(s, p.x + 1, p.y - th + 1, tw - 2, th - 1, color_shade(C_TITLEBAR, 60), C_TITLEBAR);
+        gfx_hline(s, p.x + 1, p.y - th + 1, tw - 2, color_shade(C_TITLEBAR, 90));
+        gfx_text_bold(s, p.x + 18, p.y - th + (th - FONT_H) / 2 + 1, title, fct_skin->title_text);
+        gfx_fill(s, p.x, p.y, p.w, p.h, C_FACE);
+        gfx_frame(s, p.x, p.y, p.w, p.h, edge);
+        gfx_bevel(s, p.x + 1, p.y + 1, p.w - 2, p.h - 2, 1, true, C_FACE_LIGHT, C_FACE_SHADOW);
+    } else if (light) {                                /* a thick bevelled frame, a steel-blue title */
+        gfx_shadow(s, p, 0, 10, 6, 140);
+        gfx_fill(s, p.x, p.y, p.w, p.h, C_FACE);
+        gfx_bevel(s, p.x, p.y, p.w, p.h, 3, true, C_FACE_LIGHT, C_FACE_DARK);
+        gfx_fill(s, p.x + 4, p.y + 4, p.w - 8, 6, C_TITLEBAR);
+    } else {
+        gfx_shadow(s, p, 14, 18, 8, 210);
+        gfx_round_rect_vgradient(s, p.x, p.y, p.w, p.h, 14, RGB(0x2C, 0x2F, 0x35), RGB(0x22, 0x24, 0x28));
+        gfx_round_frame(s, p.x, p.y, p.w, p.h, 14, RGB(0x3B, 0x3F, 0x46));
+        gfx_blend_fill(s, p.x + 14, p.y + 1, p.w - 28, 1, RGB(0xFF, 0xFF, 0xFF), 36);
+        gfx_fill(s, p.x + 24, p.y + 1, 60, 2, C_ACCENT);
+    }
 
     /* logo */
     logo_draw(s, p.x + 58, p.y + 54, 76);
@@ -158,7 +196,10 @@ static void render_scene(void)
     for (int i = 0; i < nusers; i++) {
         struct rect r = user_rect(i);
         bool sel = !strcmp(name_buf, users[i].name);
-        if (sel) {
+        if (sel && light) {
+            gfx_fill(s, r.x, r.y, r.w, r.h, C_SELECT);
+            gfx_frame(s, r.x, r.y, r.w, r.h, C_BLUE);
+        } else if (sel) {
             gfx_round_rect(s, r.x, r.y, r.w, r.h, 10, C_SELECT);
             gfx_round_frame(s, r.x, r.y, r.w, r.h, 10, C_BLUE);
         }
@@ -177,20 +218,22 @@ static void render_scene(void)
     if (status_msg[0]) {
         int tw = text_width(status_msg);
         gfx_text(s, p.x + (p.w - tw) / 2, p.y + p.h - 72, status_msg,
-                 status_error ? RGB(0xF2, 0x8C, 0x7C) : C_BLUE);
+                 status_error ? (light ? C_BAD : RGB(0xF2, 0x8C, 0x7C)) : C_BLUE);
     }
 
     /* buttons */
     for (int b = 0; b < NBTN; b++) {
         struct rect r = button_rect(b);
         ui_button(s, r, btn_label[b], pressed == b && rect_contains(r, mouse_x, mouse_y));
-        if (b == BTN_LOGIN)
-            gfx_round_frame(s, r.x - 2, r.y - 2, r.w + 4, r.h + 4, 8, C_ACCENT);   /* default button */
+        if (b == BTN_LOGIN && light)                   /* the default button */
+            gfx_frame(s, r.x - 2, r.y - 2, r.w + 4, r.h + 4, C_FACE_DARK);
+        else if (b == BTN_LOGIN)
+            gfx_round_frame(s, r.x - 2, r.y - 2, r.w + 4, r.h + 4, 8, C_ACCENT);
     }
 
     char foot[96];
     snprintf(foot, sizeof(foot), "SIEOS 0.4.0 on %s - Tab switches fields, Enter logs in", hostname);
-    gfx_text(s, 14, s->h - 26, foot, C_DIM);
+    gfx_text(s, 14, s->h - 26, foot, light ? RGB(0xE8, 0xEC, 0xF2) : C_DIM);   /* (on the desktop's colour) */
     scene_dirty = false;
     screen_dirty = rect_make(0, 0, screen_w, screen_h);
 }
@@ -486,6 +529,7 @@ int main(void)
     signal(SIGQUIT, SIG_IGN);
     set_device_owner(0, 0);                      /* take devices back from the last user */
     chown("/dev/console", 0, 0);
+    fct_skin_load_system();                      /* the login screen's look (/etc/facet/settings) */
 
     int fb_fd = open("/dev/fb0", O_RDWR);
     if (fb_fd < 0 || ioctl(fb_fd, FBIOGET_INFO, &fbi) < 0) {

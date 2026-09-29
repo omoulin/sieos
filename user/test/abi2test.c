@@ -1483,12 +1483,15 @@ static void test_m6(void)
         sys2(SIEOS_SYS_p_online, 1, SIEOS_P_ONLINE);
         check("p_online(P_OFFLINE / P_ONLINE)", r.val == SIEOS_P_ONLINE && stat1 == SIEOS_P_OFFLINE &&
               onl == ncpu - 1 && b.err == SIEOS_EINVAL, stat1);
+        /* CPU 0 goes offline, then all but the last of the others; the last cannot */
         r = sys2(SIEOS_SYS_p_online, 0, SIEOS_P_OFFLINE);
-        struct sc r2 = sys2(SIEOS_SYS_p_online, 1, SIEOS_P_OFFLINE);
-        struct sc r3 = sys2(SIEOS_SYS_p_online, 0, SIEOS_P_OFFLINE);   /* would leave no CPU */
-        sys2(SIEOS_SYS_p_online, 0, SIEOS_P_ONLINE);
-        sys2(SIEOS_SYS_p_online, 1, SIEOS_P_ONLINE);
-        check("the last online processor cannot go offline", !r.err && r2.err == SIEOS_EBUSY && !r3.err, r2.err);
+        int bad = 0;
+        for (long c = 1; c < ncpu - 1; c++)
+            bad |= sys2(SIEOS_SYS_p_online, c, SIEOS_P_OFFLINE).err;
+        struct sc r2 = sys2(SIEOS_SYS_p_online, ncpu - 1, SIEOS_P_OFFLINE);   /* would leave no CPU */
+        for (long c = 0; c < ncpu; c++)
+            sys2(SIEOS_SYS_p_online, c, SIEOS_P_ONLINE);
+        check("the last online processor cannot go offline", !r.err && !bad && r2.err == SIEOS_EBUSY, r2.err);
     }
     int ob = 7, q = 7;
     long target = ncpu >= 2 ? 1 : 0;
@@ -1586,8 +1589,17 @@ static void test_m6(void)
               sp.err);
         sys1(SIEOS_SYS_close, sv[0]);
         sys1(SIEOS_SYS_close, sv[1]);
-        check("AF_INET6: EAFNOSUPPORT",
-              sys3(SIEOS_SYS_so_socket, SIEOS_AF_INET6, SIEOS_SOCK_STREAM, 0).err == SIEOS_EAFNOSUPPORT, 0);
+        /* AF_INET6 (milestone 19): a 32-byte sockaddr_in6; a socket bound to :: reports it */
+        struct sc s6 = sys3(SIEOS_SYS_so_socket, SIEOS_AF_INET6, SIEOS_SOCK_DGRAM, 0);
+        struct sieos_sockaddr_in6 a6 = { .sin6_family = SIEOS_AF_INET6, .sin6_port = 0x3930 }, g6;   /* :: port 12345 */
+        struct sc b6 = sys3(SIEOS_SYS_bind, s6.val, (long)&a6, sizeof(a6));
+        unsigned int gl = sizeof(g6);
+        struct sc n6 = sys3(SIEOS_SYS_getsockname, s6.val, (long)&g6, (long)&gl);
+        check("AF_INET6: socket, bind ::, getsockname", !s6.err && !b6.err && !n6.err && gl == 32 &&
+              g6.sin6_family == SIEOS_AF_INET6 && g6.sin6_port == 0x3930, b6.err);
+        sys1(SIEOS_SYS_close, s6.val);
+        check("AF_INET6: SOCK_RAW needs IPPROTO_ICMPV6",
+              sys3(SIEOS_SYS_so_socket, SIEOS_AF_INET6, SIEOS_SOCK_RAW, SIEOS_IPPROTO_ICMP).err == SIEOS_EPROTONOSUPPORT, 0);
     }
 }
 

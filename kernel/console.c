@@ -27,6 +27,7 @@ static uint16_t cells[MAX_COLS * MAX_ROWS];     /* char | attr << 8 */
 static int cols = 80, rows = 25;
 static bool suspended;             /* a graphical program owns the screen */
 static uint64_t fb_phys;
+static bool fb_deferred;           /* a framebuffer above the direct map: used once display_init maps it */
 static int cur_x, cur_y;
 static uint8_t color = 0x07;
 
@@ -226,10 +227,8 @@ static bool setup_framebuffer(struct mb2_fb_tag *t)
         scr = SCR_VGA;
         return true;
     }
-    if (t->fb_type != 1 || (t->bpp != 32 && t->bpp != 24) ||
-        t->addr + (uint64_t)t->pitch * t->height > DIRECT_MAP_SIZE)
+    if (t->fb_type != 1 || (t->bpp != 32 && t->bpp != 24))
         return false;
-    fb = P2V(t->addr);
     fb_phys = t->addr;
     fb_pitch = t->pitch;
     fb_width = t->width;
@@ -241,10 +240,47 @@ static bool setup_framebuffer(struct mb2_fb_tag *t)
     for (int i = 0; i < 16; i++)
         palette[i] = ((uint32_t)vga_rgb[i][0] << fb_rpos) | ((uint32_t)vga_rgb[i][1] << fb_gpos) |
                      ((uint32_t)vga_rgb[i][2] << fb_bpos);
+    if (t->addr + (uint64_t)t->pitch * t->height > DIRECT_MAP_SIZE) {
+        fb_deferred = true;                     /* (UEFI: in a GPU aperture above 4 GiB) */
+        return false;
+    }
+    fb = P2V(t->addr);
     cols = MIN((int)(fb_width / FONT_W), MAX_COLS);
     rows = MIN((int)(fb_height / FONT_H), MAX_ROWS);
     scr = SCR_FB;
     return true;
+}
+
+/* The display layer's mapping of the framebuffer (write-combining); a
+ * deferred framebuffer comes into use here. */
+void console_fb_remap(void *kva)
+{
+    if (!kva || (scr != SCR_FB && !fb_deferred))
+        return;
+    fb = kva;
+    if (fb_deferred) {
+        fb_deferred = false;
+        cols = MIN((int)(fb_width / FONT_W), MAX_COLS);
+        rows = MIN((int)(fb_height / FONT_H), MAX_ROWS);
+        scr = SCR_FB;
+        console_clear();
+    }
+}
+
+/* The display's mode changed: the console follows it (a clear screen). */
+void console_fb_mode(void *kva, uint32_t width, uint32_t height, uint32_t pitch)
+{
+    if (scr != SCR_FB)
+        return;
+    fb = kva;
+    fb_width = width;
+    fb_height = height;
+    fb_pitch = pitch;
+    fb_bpp = 32;
+    cols = MIN((int)(fb_width / FONT_W), MAX_COLS);
+    rows = MIN((int)(fb_height / FONT_H), MAX_ROWS);
+    if (!suspended)
+        console_clear();
 }
 
 void console_init(uint64_t mb_info_phys)
@@ -285,7 +321,7 @@ const char *console_mode(void)
 /* Describe the framebuffer for /dev/fb0 (32 bpp only). */
 bool console_fb_info(struct fb_info *fi, uint64_t *phys)
 {
-    if (scr != SCR_FB || fb_bpp != 32)
+    if ((scr != SCR_FB && !fb_deferred) || fb_bpp != 32)
         return false;
     fi->width = fb_width;
     fi->height = fb_height;

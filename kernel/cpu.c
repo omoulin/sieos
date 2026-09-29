@@ -65,7 +65,21 @@ void cpu_features_init(bool bsp)
     wrmsr(MSR_STAR, (uint64_t)KERNEL_CS << 32);
     wrmsr(MSR_LSTAR, (uint64_t)syscall_entry);
     wrmsr(MSR_FMASK, 0x47700);                     /* clear IF, TF, DF, AC, NT on entry */
+    /* PAT entry 1 (the PWT bit alone) becomes write-combining, for framebuffers */
+    uint32_t f[4];
+    cpuid(1, f);
+    if (f[3] & (1u << 16)) {
+        uint64_t pat = rdmsr(0x277);
+        pat = (pat & ~(0xFFULL << 8)) | (0x01ULL << 8);
+        __asm__ volatile("wbinvd" ::: "memory");
+        wrmsr(0x277, pat);
+        __asm__ volatile("wbinvd" ::: "memory");
+        if (bsp)
+            pat_wc = true;
+    }
 }
+
+bool pat_wc;
 
 void fpu_save(struct fpu_state *f)
 {

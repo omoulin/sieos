@@ -35,6 +35,11 @@ void tss_set_rsp0(uint64_t rsp0);
 void idt_init(void);
 void idt_load(void);
 void irq_register(int irq, irq_handler_t h);
+/* A handler on a line other devices may share (PCI INTx): every handler of
+ * the line runs, and each checks whether its device interrupted. */
+typedef void (*irq_shared_t)(struct trapframe *tf, void *arg);
+bool irq_register_shared(int irq, irq_shared_t h, void *arg);
+void irq_use_ioapic(void);              /* boot: switch from the PICs to the I/O APIC */
 void pic_unmask(int irq);
 
 /* isr.S */

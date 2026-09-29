@@ -69,6 +69,22 @@ static void io_text(void *ctx, const char *utf8)
     sb_free(&b);
 }
 
+/* The reply as it is written: "delta" events, then "delta_end". */
+static void io_delta(void *ctx, const char *utf8)
+{
+    (void)ctx;
+    if (!utf8) {
+        emit_str("delta_end", "");
+        return;
+    }
+    struct sbuf b;
+    sb_init(&b);
+    sia_plain_text(utf8, &b);
+    if (b.len)
+        emit("delta", "text", b.s, b.len);
+    sb_free(&b);
+}
+
 static void io_tool(void *ctx, const char *cmdline) { (void)ctx; emit_str("tool", cmdline); }
 
 static void io_output(void *ctx, const char *buf, size_t n)
@@ -110,7 +126,8 @@ static void io_thinking(void *ctx, bool on)
 
 static void io_error(void *ctx, const char *msg) { (void)ctx; emit_str("error", msg); }
 
-static const struct sia_io agent_io = { NULL, io_text, io_tool, io_output, io_confirm, io_thinking, io_error };
+static const struct sia_io agent_io = { NULL, io_text, io_tool, io_output, io_confirm, io_thinking, io_error,
+                                        io_delta };
 
 static void on_sigint(int sig)
 {

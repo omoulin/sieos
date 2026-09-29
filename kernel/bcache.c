@@ -11,6 +11,7 @@
 #include "ata.h"
 #include "blkdev.h"
 #include "mm.h"
+#include "proc.h"
 
 #define NHASH   4096
 #define BUFSIZE 4096
@@ -77,10 +78,11 @@ int bcache_set_bsize(int dev, uint32_t bs)
     return 0;
 }
 
+/* The buffer of (dev, blk): valid, or being read (disk I/O sleeps). */
 static struct buf *lookup(int dev, uint64_t blk)
 {
     for (struct buf *b = hash[hkey(dev, blk)]; b; b = b->hnext)
-        if (b->valid && b->dev == dev && b->blockno == blk)
+        if (b->hashed && b->dev == dev && b->blockno == blk)
             return b;
     return NULL;
 }
@@ -104,6 +106,7 @@ static struct buf *bget(int dev, uint64_t blk)
     victim->dev = dev;
     victim->blockno = blk;
     victim->valid = false;
+    victim->reading = false;
     victim->hashed = true;
     victim->ref = 1;
     victim->hnext = hash[hkey(dev, blk)];
@@ -118,13 +121,33 @@ static uint32_t spb(int dev)                /* sectors per block */
     return dev_bsize[dev] / SECTOR_SIZE;
 }
 
+/*
+ * The block, read if need be.  The read may sleep (the kernel lock is free
+ * meanwhile): another reader of the block then waits for it rather than
+ * reading it too.
+ */
 struct buf *bread(int dev, uint64_t blk)
 {
     if (dev < 0 || dev >= NBLKDEV || !dev_bsize[dev])
         return NULL;
-    struct buf *b = bget(dev, blk);
-    if (!b->valid) {
-        if (blk_read(dev, blk * spb(dev), spb(dev), b->data) < 0) {
+    for (;;) {
+        struct buf *b = bget(dev, blk);
+        if (b->valid)
+            return b;
+        if (b->reading) {                        /* someone is reading it: wait */
+            while (b->reading)
+                sleep_on(b);
+            bool ok = b->valid && b->dev == dev && b->blockno == blk;
+            if (ok)
+                return b;
+            b->ref--;                            /* their read failed: try ourselves */
+            continue;
+        }
+        b->reading = true;
+        int r = blk_read(dev, blk * spb(dev), spb(dev), b->data);
+        b->reading = false;
+        wakeup(b);
+        if (r < 0) {
             kprintf("bcache: read error on device %d block %lu\n", dev, blk);
             hash_remove(b);
             b->hashed = false;
@@ -132,8 +155,8 @@ struct buf *bread(int dev, uint64_t blk)
             return NULL;
         }
         b->valid = true;
+        return b;
     }
-    return b;
 }
 
 struct buf *bzero_get(int dev, uint64_t blk)
@@ -178,9 +201,12 @@ void bcache_forget(int dev)
  */
 #define PREFETCH_MAX 32
 static uint8_t *prefetch_buf;
+static bool prefetch_busy;                       /* (one read-ahead at a time: the buffer is shared) */
 
 void bprefetch(int dev, uint64_t blk, int n)
 {
+    if (prefetch_busy)
+        return;
     if (n > PREFETCH_MAX)
         n = PREFETCH_MAX;
     while (n > 0 && lookup(dev, blk)) {
@@ -199,16 +225,18 @@ void bprefetch(int dev, uint64_t blk, int n)
         prefetch_buf = P2V(pa);
     }
     uint32_t bs = dev_bsize[dev];
-    if (blk_read(dev, blk * spb(dev), run * spb(dev), prefetch_buf) < 0)
-        return;
-    for (int i = 0; i < run; i++) {
-        struct buf *b = bget(dev, blk + i);
-        if (!b->valid) {
-            memcpy(b->data, prefetch_buf + (size_t)i * bs, bs);
-            b->valid = true;
+    prefetch_busy = true;
+    int r = blk_read(dev, blk * spb(dev), run * spb(dev), prefetch_buf);
+    if (r == 0)
+        for (int i = 0; i < run; i++) {
+            struct buf *b = bget(dev, blk + i);
+            if (!b->valid && !b->reading) {      /* (unless someone read it meanwhile) */
+                memcpy(b->data, prefetch_buf + (size_t)i * bs, bs);
+                b->valid = true;
+            }
+            brelse(b);
         }
-        brelse(b);
-    }
+    prefetch_busy = false;
 }
 
 size_t bcache_blocks(void)

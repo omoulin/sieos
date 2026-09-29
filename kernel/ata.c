@@ -5,14 +5,20 @@
  * Up to four disks: the master and slave of the primary (0x1F0) and
  * secondary (0x170) buses, units 0-3.  DMA goes through a physically
  * contiguous bounce buffer (the callers' buffers may be anywhere in kernel
- * memory, stacks included) described by a PRD table; completion is polled.
- * The big kernel lock serialises the callers.
+ * memory, stacks included) described by a PRD table.  Once the channels'
+ * interrupts (IRQ 14, 15) are set up, a caller in process context sleeps
+ * until a DMA transfer or a cache flush completes: the big kernel lock is
+ * free meanwhile, so the rest of the kernel runs during disk I/O.  At boot,
+ * and for PIO, completion is polled.  A sleeping mutex serialises the
+ * callers (one bounce buffer, one PRD table).
  */
 #include "kernel.h"
 #include "abi.h"
 #include "ata.h"
 #include "pci.h"
 #include "mm.h"
+#include "arch.h"
+#include "kmutex.h"
 
 #define ATA_DATA     0
 #define ATA_ERROR    1
@@ -66,6 +72,52 @@ static struct ata_unit units[ATA_UNITS];
 static uint16_t bm_base;              /* the controller's (primary bus) registers, 0: none */
 static uint64_t bounce_pa, prdt_pa;
 static struct prd *prdt;
+
+static struct kmutex ata_lock;
+static bool irq_ok;                   /* IRQ 14/15 handled: callers may sleep */
+static volatile bool chan_done[2];    /* the channel interrupted since the command started */
+uint64_t ata_sleeps;                  /* transfers waited for by sleeping */
+
+static int chan_of(const struct ata_unit *u) { return u->io == 0x170; }
+
+/* Sleep rather than poll?  In process context, with the interrupts working. */
+static bool can_sleep(void)
+{
+    return irq_ok && kernel_running && curlwp && !curlwp->is_idle && curlwp->state == LWP_RUNNING;
+}
+
+static void ata_irq(struct trapframe *tf)
+{
+    int c = tf->int_no - IRQ_BASE - 14;          /* 0 primary, 1 secondary */
+    uint16_t io = c ? 0x170 : 0x1F0;
+    if (bm_base)
+        outb(bm_base + (c ? 8 : 0) + 2, 0x04);    /* clear the bus master's interrupt bit */
+    (void)inb(io + 7);                           /* reading the status acknowledges the device */
+    chan_done[c] = true;
+    wakeup((void *)&chan_done[c]);
+}
+
+/* Sleep until u's channel interrupts, or 5 s pass (then the caller polls).  Short
+ * transfers finish within a few tens of microseconds: spin for up to 100 us
+ * first, so that they do not pay for sleeping and waking. */
+static void wait_irq(struct ata_unit *u)
+{
+    int c = chan_of(u);
+    uint64_t spin_end = hrtime() + 100000;
+    while (!chan_done[c] && hrtime() < spin_end) {
+        uint8_t bst = u->bm ? inb(u->bm + BM_STATUS) : 0;
+        if (u->bm && !(bst & BMS_ACTIVE) && !(inb(u->io + ATA_STATUS) & ST_BSY))
+            return;                              /* done: the interrupt is handled when it comes */
+        __builtin_ia32_pause();
+    }
+    uint64_t deadline = ticks + 5 * TIMER_HZ;
+    while (!chan_done[c] && ticks < deadline) {
+        curlwp->wake_tick = deadline;
+        sleep_on((void *)&chan_done[c]);
+        curlwp->wake_tick = 0;
+    }
+    ata_sleeps++;
+}
 
 static inline void outl_(uint16_t port, uint32_t v) { __asm__ volatile("outl %0, %1" :: "a"(v), "Nd"(port)); }
 
@@ -144,6 +196,7 @@ static void dma_init(void)
         return;                                              /* the controller takes 32-bit addresses */
     prdt = P2V(prdt_pa);
     bm_base = pd.bar[4] & ~3u;
+    pci_claim(&pd, "ata");
 }
 
 static void setup(struct ata_unit *u, uint64_t lba, uint16_t count)
@@ -183,8 +236,12 @@ static int dma_xfer(struct ata_unit *u, uint64_t lba, uint16_t n, bool write)
     outb(u->bm + BM_STATUS, BMS_ERROR | BMS_IRQ);           /* write 1 to clear */
     outb(u->bm + BM_CMD, write ? 0 : BMC_READ);
     setup(u, lba, n);                                        /* LBA48: 16-bit count (0 would be 65536) */
+    bool sleep = can_sleep();
+    chan_done[chan_of(u)] = false;
     outb(u->io + ATA_COMMAND, write ? CMD_WRITE_DMA_EXT : CMD_READ_DMA_EXT);
     outb(u->bm + BM_CMD, (write ? 0 : BMC_READ) | BMC_START);
+    if (sleep)
+        wait_irq(u);                                         /* the kernel lock is free meanwhile */
     uint8_t bst = 0;
     int r = -EIO;
     for (long i = 0; i < 200000000L; i++) {
@@ -218,6 +275,14 @@ void ata_init(void)
         kprintf("ata: disk %d %s at %x/%d, %lu sectors (%lu MiB), %s\n", i, u->model, buses[i].io,
                 buses[i].sel, u->sectors, u->sectors / 2048, u->bm ? "bus-master DMA" : "PIO");
     }
+    /* completion interrupts: the channels with disks raise IRQ 14 and 15 */
+    bool chan[2] = { units[0].present || units[1].present, units[2].present || units[3].present };
+    for (int c = 0; c < 2; c++)
+        if (chan[c]) {
+            irq_register(14 + c, ata_irq);
+            outb(c ? 0x376 : 0x3F6, 0x00);       /* nIEN clear: interrupts on */
+        }
+    irq_ok = chan[0] || chan[1];
 }
 
 bool ata_present(int unit)
@@ -230,7 +295,26 @@ uint64_t ata_sectors(int unit)
     return ata_present(unit) ? units[unit].sectors : 0;
 }
 
+static int ata_read_locked(int unit, uint64_t lba, size_t count, void *buf);
+static int ata_write_locked(int unit, uint64_t lba, size_t count, const void *buf);
+
 int ata_read(int unit, uint64_t lba, size_t count, void *buf)
+{
+    kmutex_lock(&ata_lock);
+    int r = ata_read_locked(unit, lba, count, buf);
+    kmutex_unlock(&ata_lock);
+    return r;
+}
+
+int ata_write(int unit, uint64_t lba, size_t count, const void *buf)
+{
+    kmutex_lock(&ata_lock);
+    int r = ata_write_locked(unit, lba, count, buf);
+    kmutex_unlock(&ata_lock);
+    return r;
+}
+
+static int ata_read_locked(int unit, uint64_t lba, size_t count, void *buf)
 {
     uint16_t *p = buf;
     if (!ata_present(unit))
@@ -269,7 +353,7 @@ int ata_read(int unit, uint64_t lba, size_t count, void *buf)
     return 0;
 }
 
-int ata_write(int unit, uint64_t lba, size_t count, const void *buf)
+static int ata_write_locked(int unit, uint64_t lba, size_t count, const void *buf)
 {
     const uint16_t *p = buf;
     if (!ata_present(unit))
@@ -308,7 +392,11 @@ int ata_write(int unit, uint64_t lba, size_t count, const void *buf)
     ata_delay(u);
     if (ata_wait(u, false) < 0)
         return -EIO;
+    bool sleep = can_sleep();
+    chan_done[chan_of(u)] = false;
     outb(u->io + ATA_COMMAND, CMD_FLUSH_EXT);
     ata_delay(u);
+    if (sleep)
+        wait_irq(u);                                 /* the host may take a while to flush */
     return ata_wait(u, false);
 }

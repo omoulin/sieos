@@ -1,4 +1,5 @@
-/* rm - remove files (-r: recursive, -f: ignore missing) */
+/* rm - remove files (-r: recursive, -f: ignore missing).  Symbolic links
+ * are removed themselves, never followed. */
 #include "sieos.h"
 
 static bool opt_r, opt_f;
@@ -6,7 +7,7 @@ static bool opt_r, opt_f;
 static int rm(const char *path)
 {
     struct stat st;
-    if (stat(path, &st) < 0) {
+    if (lstat(path, &st) < 0) {
         if (opt_f && errno == ENOENT)
             return 0;
         dprintf(STDERR_FILENO, "rm: %s: %s\n", path, strerror(errno));

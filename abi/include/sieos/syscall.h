@@ -27,7 +27,7 @@
 #define SIEOS_SYS_uadmin           8   /* uadmin(cmd, fcn, mdep) */
 #define SIEOS_SYS_sysinfo          9   /* sysinfo(cmd, buf, count) */
 #define SIEOS_SYS_sysconfig       10   /* sysconfig(name) */
-#define SIEOS_SYS_priocntl        11   /* priocntl(idtype, id, cmd, arg)      (reserved) */
+#define SIEOS_SYS_priocntl        11   /* priocntl(idtype, id, cmd, arg), sieos/priocntl.h */
 #define SIEOS_SYS_yield           12   /* yield() */
 #define SIEOS_SYS_getrlimit       13   /* getrlimit(resource, struct sieos_rlimit *) */
 #define SIEOS_SYS_setrlimit       14   /* setrlimit(resource, const struct sieos_rlimit *) */
@@ -172,11 +172,14 @@
 
 /* ---- SIEOS extensions (200-) ------------------------------------------ */
 #define SIEOS_SYS_fbmap          200   /* fbmap(fd) - map /dev/fb0, returns address */
-#define SIEOS_SYS_netinfo        201   /* netinfo(sieos_netinfo *) */
+#define SIEOS_SYS_netinfo        201   /* netinfo(sieos_netinfo *, int index): ENODEV past the last */
 #define SIEOS_SYS_netstat        202   /* netstat(sieos_sockinfo *, max) */
 #define SIEOS_SYS_cpuinfo        203   /* cpuinfo(sieos_cpuinfo *, max) - processors filled */
 #define SIEOS_SYS_meminfo        204   /* meminfo(sieos_meminfo *) */
 #define SIEOS_SYS_procinfo       205   /* procinfo(sieos_procinfo *, max) - processes filled */
+#define SIEOS_SYS_netinfo6       206   /* netinfo6(sieos_netinfo6 *, int index) */
+#define SIEOS_SYS_netstat6       207   /* netstat6(sieos_sockinfo6 *, max) - IPv4 and IPv6 sockets */
+#define SIEOS_SYS_devinfo        208   /* devinfo(sieos_devinfo *, int index): ENODEV past the last */
 
 #define SIEOS_NSYSCALLS          256
 

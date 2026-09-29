@@ -29,6 +29,18 @@ bool model_init(struct model *m, const struct model_cfg *cfg, char *err, size_t 
  */
 struct json *model_chat(struct model *m, const char *messages, const char *tools, char *err, size_t errlen);
 
+/*
+ * The same with "stream": true: the reply's text is passed to delta as it
+ * arrives (server-sent events), in pieces that end on UTF-8 character
+ * boundaries and never split a Markdown "**" marker; delta returns false
+ * to abandon the request.  Returns the assembled assistant message, tool
+ * calls included, as model_chat does.  An endpoint that ignores "stream"
+ * and answers with one JSON reply is handled too (delta then gets it whole).
+ */
+typedef bool (*model_delta)(void *ctx, const char *text);
+struct json *model_chat_stream(struct model *m, const char *messages, const char *tools, model_delta delta,
+                               void *ctx, char *err, size_t errlen);
+
 /* Cheap request to check the endpoint, model name and key. */
 bool model_ping(struct model *m, char *err, size_t errlen);
 

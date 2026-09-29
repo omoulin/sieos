@@ -1,8 +1,10 @@
 /*
  * inet.c - libsieos: IPv4 helpers and host name resolution (/etc/hosts,
- * then an A query to the DNS server the interface was configured with).
+ * then an A query to the DNS server the interface was configured with), and
+ * resolve_addrs for IPv4 and IPv6 (getaddrinfo first).
  */
 #include "sieos.h"
+#include <netdb.h>
 
 const char *ip_to_str(unsigned int ip, char *buf)
 {
@@ -135,4 +137,47 @@ int resolve_host(const char *name, unsigned int *addr)
         return 0;
     errno = ENOENT;
     return -1;
+}
+
+int resolve_addrs(const char *name, int family, unsigned short port, struct sockaddr_storage *out,
+                  socklen_t *lens, int max)
+{
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = family;
+    hints.ai_socktype = SOCK_STREAM;
+    int n = 0;
+    if (getaddrinfo(name, NULL, &hints, &res) == 0) {
+        for (struct addrinfo *r = res; r && n < max; r = r->ai_next) {
+            if (r->ai_family != AF_INET && r->ai_family != AF_INET6)
+                continue;
+            memset(&out[n], 0, sizeof(out[n]));
+            memcpy(&out[n], r->ai_addr, r->ai_addrlen);
+            lens[n] = r->ai_addrlen;
+            if (r->ai_family == AF_INET)
+                ((struct sockaddr_in *)&out[n])->sin_port = htons(port);
+            else
+                ((struct sockaddr_in6 *)&out[n])->sin6_port = htons(port);
+            n++;
+        }
+        freeaddrinfo(res);
+    }
+    unsigned int a;
+    if (!n && max > 0 && family != AF_INET6 && resolve_host(name, &a) == 0) {
+        struct sockaddr_in sin = make_addr(a, port);  /* (no resolv.conf: the interface's server) */
+        memset(&out[0], 0, sizeof(out[0]));
+        memcpy(&out[0], &sin, sizeof(sin));
+        lens[0] = sizeof(sin);
+        n = 1;
+    }
+    return n;
+}
+
+const char *addr_to_str(const struct sockaddr *sa, char *buf, size_t n)
+{
+    const void *a = sa->sa_family == AF_INET6 ? (const void *)&((const struct sockaddr_in6 *)sa)->sin6_addr
+                                              : (const void *)&((const struct sockaddr_in *)sa)->sin_addr;
+    if (!inet_ntop(sa->sa_family, a, buf, n))
+        snprintf(buf, n, "?");
+    return buf;
 }

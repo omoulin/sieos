@@ -19,7 +19,7 @@ static bool match_star(char c, const char *re, const char *text)
     do {
         if (match_here(re, text))
             return true;
-    } while (*text && (c == '.' || ceq(*text++, c)));
+    } while (*text && (ceq(*text++, c) || c == '.'));   /* advance first: '.' matches any character */
     return false;
 }
 

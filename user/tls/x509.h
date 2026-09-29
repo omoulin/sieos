@@ -16,10 +16,15 @@ struct x509 {
     struct der tbs;              /* signed part */
     struct der issuer, subject;  /* raw Name encodings */
     int sig_hash;                /* enum hash_alg, -1 = unsupported algorithm */
+    bool sig_ecdsa;              /* ecdsa-with-SHA*, else sha*WithRSAEncryption */
     struct der sig;
     long not_before, not_after;
     bool is_rsa;
     struct rsa_pub key;
+    struct der spki_bits;        /* the subjectPublicKey BIT STRING contents */
+    bool is_ec;                  /* an EC key on P-256 or P-384 */
+    int ec_curve;                /* ECDSA_P256 / ECDSA_P384 */
+    struct der ec_point;         /* 04 || X || Y */
     bool is_ca;
     struct der san;              /* SubjectAltName extension value (GeneralNames) */
     char cn[128];                /* subject common name, for messages */

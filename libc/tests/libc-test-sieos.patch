@@ -1,0 +1,40 @@
+--- a/src/regression/sigprocmask-internal.c	2026-09-29 11:11:21.974809789 +0200
++++ b/src/regression/sigprocmask-internal.c	2026-09-29 11:11:22.000026085 +0200
+@@ -7,6 +7,20 @@
+ #include <errno.h>
+ #include "test.h"
+ 
++/* SIEOS (as Solaris) has ordinary signals up to SIGINFO (41), before
++ * SIGRTMIN: of 32..41 only SIGWAITING, SIGLWP and SIGCANCEL (32, 33, 36)
++ * are the implementation's own. */
++static int named(int i)
++{
++#if defined(SIGINFO) && defined(SIGFREEZE)
++	return i == SIGFREEZE || i == SIGTHAW || i == SIGLOST || i == SIGXRES ||
++	       i == SIGJVM1 || i == SIGJVM2 || i == SIGINFO;
++#else
++	(void)i;
++	return 0;
++#endif
++}
++
+ int main(void)
+ {
+ 	sigset_t s;
+@@ -14,6 +28,7 @@
+ 
+ 	sigemptyset(&s);
+ 	for (i = 32; i < SIGRTMIN; i++) {
++		if (named(i)) continue;
+ 		sigaddset(&s, i);
+ 		if (sigismember(&s, i) == 1)
+ 			t_error("sigaddset(&s, %d) set implementation internal rt signal\n", i);
+@@ -23,7 +38,7 @@
+ 	if (sigprocmask(SIG_BLOCK, 0, &s))
+ 		t_error("querying sigmask failed: %s\n", strerror(errno));
+ 	for (i = 32; i < SIGRTMIN; i++)
+-		if (sigismember(&s, i) == 1)
++		if (!named(i) && sigismember(&s, i) == 1)
+ 			t_error("implementation internal rt signal %d can be blocked\n", i);
+ 	return t_status;
+ }

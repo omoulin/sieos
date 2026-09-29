@@ -45,6 +45,10 @@
 #define SIEOS_A_REBOOT   1
 #define SIEOS_A_SHUTDOWN 2
 #define SIEOS_A_REMOUNT  4
+#define SIEOS_A_NETTEST  0x5e06   /* testing: loopback packets dropped and reordered, fcn =
+                                     drop per mille | reorder per mille << 16 (0: off) */
+#define SIEOS_A_JTEST    0x5e05   /* testing: power off right after the next journal commit record
+                                     (before the checkpoint), to exercise recovery */
 #define SIEOS_AD_HALT     0
 #define SIEOS_AD_BOOT     1
 #define SIEOS_AD_IBOOT    2
@@ -77,7 +81,47 @@ struct sieos_netinfo {
     char driver[24];
 };
 
-/* SIEOS extension: sockets (netstat) */
+/* SIEOS extension: IPv6 on the interface (netinfo6) */
+#define SIEOS_NET6_ADDRS 4
+struct sieos_netinfo6 {
+    int up;                         /* link-local address configured */
+    int naddr;                      /* entries used in addr[] */
+    struct {
+        sieos_uint8_t addr[16];
+        int prefixlen;
+        int flags;                  /* SIEOS_NET6_* */
+    } addr[SIEOS_NET6_ADDRS];
+    sieos_uint8_t router[16], dns[16];    /* from router advertisements (zero if none) */
+    unsigned int mtu;
+    int hoplimit;
+    unsigned long rx_packets, tx_packets;
+};
+#define SIEOS_NET6_LINKLOCAL 1
+#define SIEOS_NET6_AUTOCONF  2      /* stateless autoconfiguration (RFC 4862) */
+
+/* SIEOS extension: the devices (devinfo): the PCI functions found at boot */
+struct sieos_devinfo {
+    char bus[8];                    /* "pci" */
+    char location[16];              /* "0000:00:02.0" (domain:bus:device.function) */
+    sieos_uint16_t vendor, device, subvendor, subdevice;
+    sieos_uint8_t class_code, subclass, prog_if, revision;
+    int irq;                        /* -1 if none */
+    char driver[24];                /* the driver using it, "" if none */
+};
+
+/* SIEOS extension: IPv4 and IPv6 sockets (netstat6) */
+struct sieos_sockinfo6 {
+    int family;                     /* SIEOS_AF_INET or SIEOS_AF_INET6 */
+    int proto;                      /* SIEOS_IPPROTO_TCP / UDP / ICMP / ICMPV6 */
+    int state;                      /* SIEOS_TCPS_*, 0 for others */
+    unsigned short lport, rport;
+    sieos_uint8_t laddr[16], raddr[16];   /* IPv4 ones mapped (::ffff:a.b.c.d) */
+    unsigned int rxq, txq;
+    int uid;
+    int pad;
+};
+
+/* SIEOS extension: sockets (netstat; IPv4 endpoints only) */
 struct sieos_sockinfo {
     int proto;                      /* SIEOS_IPPROTO_TCP / UDP / ICMP */
     int state;                      /* SIEOS_TCPS_*, 0 for others */
@@ -136,7 +180,9 @@ struct sieos_procinfo {
     char name[32];
 };
 
-/* SIEOS extension: the framebuffer (/dev/fb0), mapped with fbmap() */
+/* SIEOS extension: displays (/dev/fb0, /dev/fb1, ...), mapped with fbmap().
+ * The mapping covers the whole memory the display can scan out (vram), so
+ * it stays valid when the mode changes; FBIOGET_INFO gives the new layout. */
 #define SIEOS_FBIOGET_INFO 0x4600   /* ioctl(fd, SIEOS_FBIOGET_INFO, struct sieos_fb_info *) */
 struct sieos_fb_info {
     unsigned int width, height;
@@ -145,6 +191,34 @@ struct sieos_fb_info {
     unsigned int red_pos, green_pos, blue_pos;
     unsigned int pad;
 };
+#define SIEOS_FBIOGET_DISPLAY 0x4601    /* struct sieos_fb_display * */
+struct sieos_fb_display {
+    char driver[24];                /* "firmware", "bochs-vbe", "intel-gen12" */
+    char desc[48];                  /* the device, e.g. "QEMU standard VGA, 16 MiB" */
+    unsigned int index;             /* N of /dev/fbN */
+    unsigned int flags;             /* SIEOS_FB_* */
+    unsigned int nmodes;
+    unsigned int owner;             /* the process that has it mapped, 0 none */
+    unsigned long vram;             /* bytes fbmap maps */
+};
+#define SIEOS_FB_SETMODE 1          /* the mode can be changed (FBIOSET_MODE) */
+#define SIEOS_FB_CONSOLE 2          /* the text console draws here */
+#define SIEOS_FB_MODES_MAX 32
+struct sieos_fb_mode {
+    unsigned short width, height;
+    unsigned short refresh;         /* Hz, 0 if unknown */
+    unsigned short flags;           /* SIEOS_FB_MODE_* */
+};
+#define SIEOS_FB_MODE_CURRENT   1
+#define SIEOS_FB_MODE_PREFERRED 2   /* the monitor's native mode */
+#define SIEOS_FBIOGET_MODES 0x4602  /* struct sieos_fb_modes * */
+struct sieos_fb_modes {
+    unsigned int n, pad;
+    struct sieos_fb_mode mode[SIEOS_FB_MODES_MAX];
+};
+/* width and height of struct sieos_fb_mode: EINVAL (not a mode of the
+ * display), ENOTSUP (fixed mode), EBUSY (another process has it mapped) */
+#define SIEOS_FBIOSET_MODE 0x4603
 
 /* SIEOS extension: keyboard and mouse events, read from /dev/events */
 #define SIEOS_EV_KEY       1
@@ -175,6 +249,9 @@ struct sieos_input_event {
 
 SIEOS_STATIC_ASSERT(sizeof(sieos_processor_info_t) == 56, "processor_info size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_sockinfo) == 36, "sockinfo size");
+SIEOS_STATIC_ASSERT(sizeof(struct sieos_sockinfo6) == 64, "sockinfo6 size");
+SIEOS_STATIC_ASSERT(sizeof(struct sieos_netinfo6) == 160, "netinfo6 size");
+SIEOS_STATIC_ASSERT(sizeof(struct sieos_devinfo) == 64, "devinfo size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_procinfo) == 88, "procinfo size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_input_event) == 28, "input_event size");
 

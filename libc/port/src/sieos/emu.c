@@ -640,6 +640,96 @@ static long emu_futex(volatile int *addr, int op, int val, const struct timespec
 	return -ENOSYS;
 }
 
+/* ---------------- scheduling (priocntl, sieos/priocntl.h) ---------------- */
+
+/* sched_* take a thread's LWP id (0: the caller), or a pid negated (process-level calls). */
+static void sched_target(long id, long *idtype, long *pid)
+{
+	if (id < 0) {
+		*idtype = SIEOS_P_PID;
+		*pid = -id;
+	} else {
+		*idtype = SIEOS_P_LWPID;
+		*pid = id ? id : SIEOS_P_MYID;
+	}
+}
+
+static long emu_getparms(long id, sieos_pcparms_t *pp)
+{
+	long idt, t;
+	sched_target(id, &idt, &t);
+	pp->pc_cid = SIEOS_PC_CLNULL;
+	return __syscall(S(priocntl), idt, t, SIEOS_PC_GETPARMS, pp);
+}
+
+static long emu_setscheduler(long id, int policy, const struct sched_param *param)
+{
+	sieos_pcparms_t pp;
+	long idt, t;
+	sched_target(id, &idt, &t);
+	memset(&pp, 0, sizeof(pp));
+	int prio = param ? param->sched_priority : 0;
+	switch (policy & ~0x40000000) {                   /* SCHED_RESET_ON_FORK is ignored */
+	case SCHED_OTHER:
+	case SCHED_BATCH:
+	case SCHED_IDLE: {
+		if (prio)
+			return -EINVAL;
+		sieos_tsparms_t *ts = (void *)pp.pc_clparms;
+		pp.pc_cid = SIEOS_CID_TS;
+		ts->ts_uprilim = ts->ts_upri = SIEOS_TS_NOCHANGE;
+		break;
+	}
+	case SCHED_FIFO:
+	case SCHED_RR: {
+		if (prio < 0 || prio > SIEOS_RT_MAXPRI)
+			return -EINVAL;
+		sieos_rtparms_t *rt = (void *)pp.pc_clparms;
+		pp.pc_cid = SIEOS_CID_RT;
+		rt->rt_pri = prio;
+		rt->rt_tqnsecs = (policy & ~0x40000000) == SCHED_FIFO ? SIEOS_RT_TQINF : SIEOS_RT_TQDEF;
+		break;
+	}
+	default:
+		return -EINVAL;
+	}
+	return __syscall(S(priocntl), idt, t, SIEOS_PC_SETPARMS, &pp);
+}
+
+static long emu_getscheduler(long id)
+{
+	sieos_pcparms_t pp;
+	long r = emu_getparms(id, &pp);
+	if (r < 0)
+		return r;
+	if (pp.pc_cid != SIEOS_CID_RT)
+		return SCHED_OTHER;
+	return ((sieos_rtparms_t *)pp.pc_clparms)->rt_tqnsecs == SIEOS_RT_TQINF ? SCHED_FIFO : SCHED_RR;
+}
+
+static long emu_getparam(long id, struct sched_param *param)
+{
+	sieos_pcparms_t pp;
+	long r = emu_getparms(id, &pp);
+	if (r < 0)
+		return r;
+	memset(param, 0, sizeof(*param));
+	if (pp.pc_cid == SIEOS_CID_RT)
+		param->sched_priority = ((sieos_rtparms_t *)pp.pc_clparms)->rt_pri;
+	return 0;
+}
+
+static long emu_nice(int which, long who, int op, int val)
+{
+	if (which != PRIO_PROCESS)
+		return -EINVAL;                               /* process groups and users are not supported */
+	sieos_pcnice_t n = { val, op };
+	long r = __syscall(S(priocntl), SIEOS_P_PID, who ? who : SIEOS_P_MYID, SIEOS_PC_DONICE, &n);
+	if (r < 0)
+		return r;
+	return op == SIEOS_PC_GETNICE ? 20 - n.pc_val : 0;   /* the kernel convention musl expects */
+}
+
 static long emu_sched_getaffinity(size_t size, unsigned char *mask)
 {
 	long n = __syscall(S(sysconfig), SIEOS_CONFIG_NPROC_CONF);
@@ -779,9 +869,36 @@ hidden long __sieos_emu(long n, long a, long b, long c, long d, long e, long f)
 		return emu_sched_setaffinity(b, (const unsigned char *)c);
 	case __EMU_sched_get_priority_max:
 	case __EMU_sched_get_priority_min:
+		if (a == SCHED_FIFO || a == SCHED_RR)
+			return n == __EMU_sched_get_priority_max ? SIEOS_RT_MAXPRI : 0;
 		return a == SCHED_OTHER || a == SCHED_BATCH || a == SCHED_IDLE ? 0 : -EINVAL;
 	case __EMU_sched_getscheduler:
-		return SCHED_OTHER;
+		return emu_getscheduler(a);
+	case __EMU_sched_setscheduler:
+		return emu_setscheduler(a, b, (const struct sched_param *)c);
+	case __EMU_sched_setparam: {
+		long pol = emu_getscheduler(a);
+		return pol < 0 ? pol : emu_setscheduler(a, pol, (const struct sched_param *)b);
+	}
+	case __EMU_sched_rr_get_interval: {
+		sieos_pcparms_t pp;
+		long r = emu_getparms(a, &pp);
+		if (r < 0)
+			return r;
+		struct timespec *ts = (void *)b;
+		ts->tv_sec = 0;
+		ts->tv_nsec = 100000000;                      /* RT's default quantum, and a TS middle one */
+		if (pp.pc_cid == SIEOS_CID_RT) {
+			sieos_rtparms_t *rt = (void *)pp.pc_clparms;
+			ts->tv_sec = rt->rt_tqnsecs == SIEOS_RT_TQINF ? 0 : rt->rt_tqsecs;
+			ts->tv_nsec = rt->rt_tqnsecs == SIEOS_RT_TQINF ? 0 : rt->rt_tqnsecs;
+		}
+		return 0;
+	}
+	case __EMU_getpriority:
+		return emu_nice(a, b, SIEOS_PC_GETNICE, 0);
+	case __EMU_setpriority:
+		return emu_nice(a, b, SIEOS_PC_SETNICE, c);
 	case __EMU_fchown:          return __syscall(S(fchownat), a, 0, b, c, 0);
 	case __EMU_fchmod:          return __syscall(S(fchmodat), a, 0, b, 0);
 	case __EMU_set_robust_list:
@@ -795,8 +912,7 @@ hidden long __sieos_emu(long n, long a, long b, long c, long d, long e, long f)
 		*(size_t *)c = sizeof(struct sieos_robust_list_head);
 		return 0;
 	case __EMU_sched_getparam:
-		((struct sched_param *)b)->sched_priority = 0;
-		return 0;
+		return emu_getparam(a, (struct sched_param *)b);
 	case __EMU_mount: {
 		/* Linux order and flags -> Solaris mount(spec, dir, mflag, fstype, data, len);
 		 * like Linux, a mount may cover a non-empty directory */

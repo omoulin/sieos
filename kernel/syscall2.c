@@ -19,6 +19,8 @@
 #include "sieos/signal.h"
 #include "sieos/time.h"
 #include "sieos/sysinfo.h"
+#include "pci.h"
+#include "sieos/sysinfo.h"
 #include "sieos/wait.h"
 #include "sieos/lwp.h"
 
@@ -97,6 +99,7 @@ long sieos_errno(long e)
     case EIDRM_K: return SIEOS_EIDRM;
     case ELIBBAD_K: return SIEOS_ELIBBAD;
     case EPROTOTYPE_K: return SIEOS_EPROTOTYPE;
+    case ENOTBLK_K: return SIEOS_ENOTBLK;
     default: return SIEOS_EIO;
     }
 }
@@ -144,6 +147,35 @@ static long do_nanosleep(const struct sieos_timespec *ureq, struct sieos_timespe
         memcpy(urem, &rem, sizeof(rem));
     }
     return r;
+}
+
+/* devinfo: the index'th PCI function, its ids and the driver using it. */
+static long sys_devinfo(struct sieos_devinfo *u, long idx)
+{
+    if (!user_range_ok(current->pml4, (uint64_t)u, sizeof(*u), true))
+        return -EFAULT;
+    const struct pci_dev *d = pci_at((int)idx);
+    if (!d)
+        return -ENODEV;
+    struct sieos_devinfo di;
+    memset(&di, 0, sizeof(di));
+    strlcpy(di.bus, "pci", sizeof(di.bus));
+    snprintf(di.location, sizeof(di.location), "0000:%02x:%02x.%x", d->bus, d->dev, d->func);
+    di.vendor = d->vendor;
+    di.device = d->device;
+    uint32_t sub = pci_read32(d->bus, d->dev, d->func, 0x2C);
+    di.subvendor = sub & 0xFFFF;
+    di.subdevice = sub >> 16;
+    di.class_code = d->class_code;
+    di.subclass = d->subclass;
+    di.prog_if = d->prog_if;
+    di.revision = d->revision;
+    di.irq = d->irq && d->irq != 0xFF ? d->irq : -1;
+    const char *drv = pci_driver((int)idx);
+    if (drv)
+        strlcpy(di.driver, drv, sizeof(di.driver));
+    memcpy(u, &di, sizeof(di));
+    return 0;
 }
 
 static long do_sysinfo(long cmd, char *ubuf, long count)
@@ -333,6 +365,7 @@ long syscall_dispatch_v2(struct trapframe *tf)
     case SIEOS_SYS_cpuinfo:   return v1(tf, SYS_cpuinfo, a1, a2, 0);
     case SIEOS_SYS_meminfo:   return v1(tf, SYS_meminfo, a1, 0, 0);
     case SIEOS_SYS_procinfo:  return v1(tf, SYS_procinfo, a1, a2, 0);
+    case SIEOS_SYS_devinfo:   return sys_devinfo((struct sieos_devinfo *)a1, (long)a2);
     }
     return -ENOSYS;
 }

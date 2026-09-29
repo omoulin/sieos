@@ -60,15 +60,30 @@ static const uint8_t OID_RSA[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x0
 static const uint8_t OID_SHA256RSA[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B };
 static const uint8_t OID_SHA384RSA[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C };
 static const uint8_t OID_SHA512RSA[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D };
+static const uint8_t OID_ECDSA256[] = { 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02 };
+static const uint8_t OID_ECDSA384[] = { 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03 };
+static const uint8_t OID_ECDSA512[] = { 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x04 };
+static const uint8_t OID_ECPUB[] = { 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01 };
+static const uint8_t OID_P256[] = { 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07 };
+static const uint8_t OID_P384[] = { 0x2B, 0x81, 0x04, 0x00, 0x22 };
 static const uint8_t OID_CN[] = { 0x55, 0x04, 0x03 };
 static const uint8_t OID_SAN[] = { 0x55, 0x1D, 0x11 };
 static const uint8_t OID_BASIC[] = { 0x55, 0x1D, 0x13 };
 
-static int sig_hash_of(struct der alg)
+static int sig_hash_of(struct der alg, bool *ecdsa)
 {
     struct der oid;
+    *ecdsa = false;
     if (!der_expect(&alg, 0x06, &oid, NULL))
         return -1;
+    *ecdsa = true;
+    if (oid_is(oid, OID_ECDSA256, sizeof(OID_ECDSA256)))
+        return HASH_SHA256;
+    if (oid_is(oid, OID_ECDSA384, sizeof(OID_ECDSA384)))
+        return HASH_SHA384;
+    if (oid_is(oid, OID_ECDSA512, sizeof(OID_ECDSA512)))
+        return HASH_SHA512;
+    *ecdsa = false;
     if (oid_is(oid, OID_SHA256RSA, sizeof(OID_SHA256RSA)))
         return HASH_SHA256;
     if (oid_is(oid, OID_SHA384RSA, sizeof(OID_SHA384RSA)))
@@ -159,7 +174,7 @@ bool x509_parse(struct x509 *c, const uint8_t *buf, size_t len)
         return false;
     c->sig.p++;
     c->sig.len--;
-    c->sig_hash = sig_hash_of(alg);
+    c->sig_hash = sig_hash_of(alg, &c->sig_ecdsa);
 
     der_expect(&tbs, 0xA0, &v, NULL);                 /* version (optional) */
     if (!der_expect(&tbs, 0x02, &v, NULL))           /* serial */
@@ -180,6 +195,7 @@ bool x509_parse(struct x509 *c, const uint8_t *buf, size_t len)
     if (!der_expect(&tbs, 0x30, &spki, NULL) || !der_expect(&spki, 0x30, &kalg, NULL) ||
         !der_expect(&kalg, 0x06, &koid, NULL) || !der_expect(&spki, 0x03, &kbits, NULL))
         return false;
+    c->spki_bits = kbits;
     if (oid_is(koid, OID_RSA, sizeof(OID_RSA)) && kbits.len > 1 && kbits.p[0] == 0) {
         struct der rk = { kbits.p + 1, kbits.len - 1 }, seq, n, e;
         if (der_expect(&rk, 0x30, &seq, NULL) && der_expect(&seq, 0x02, &n, NULL) &&
@@ -193,6 +209,18 @@ bool x509_parse(struct x509 *c, const uint8_t *buf, size_t len)
             c->key.nlen = n.len;
             c->key.e = e.p;
             c->key.elen = e.len;
+        }
+    } else if (oid_is(koid, OID_ECPUB, sizeof(OID_ECPUB)) && kbits.len > 1 && kbits.p[0] == 0) {
+        struct der curve;
+        if (der_expect(&kalg, 0x06, &curve, NULL)) {
+            bool p256 = oid_is(curve, OID_P256, sizeof(OID_P256)), p384 = oid_is(curve, OID_P384, sizeof(OID_P384));
+            size_t want = p256 ? 65 : 97;
+            if ((p256 || p384) && kbits.len - 1 == want && kbits.p[1] == 4) {
+                c->is_ec = true;
+                c->ec_curve = p256 ? ECDSA_P256 : ECDSA_P384;
+                c->ec_point.p = kbits.p + 1;
+                c->ec_point.len = want;
+            }
         }
     }
     /* optional issuerUniqueID [1], subjectUniqueID [2], extensions [3] */
@@ -263,7 +291,7 @@ bool x509_host_matches(const struct x509 *c, const char *host)
 
 /* ---------------- trusted roots ---------------- */
 
-#define MAXROOTS 32
+#define MAXROOTS 256
 static struct x509 roots[MAXROOTS];
 static uint8_t *root_der[MAXROOTS];
 static int nroots;
@@ -345,7 +373,7 @@ int x509_load_roots(const char *path)
         if (!copy)
             break;
         memcpy(copy, tmp, n);
-        if (x509_parse(&roots[nroots], copy, n) && roots[nroots].is_rsa)
+        if (x509_parse(&roots[nroots], copy, n) && (roots[nroots].is_rsa || roots[nroots].is_ec))
             root_der[nroots++] = copy;
         else
             free(copy);
@@ -367,10 +395,13 @@ static bool same_der(struct der a, struct der b)
 /* Is cert signed by issuer's key? */
 static bool signed_by(const struct x509 *cert, const struct x509 *issuer)
 {
-    if (cert->sig_hash < 0 || !issuer->is_rsa)
+    if (cert->sig_hash < 0 || (cert->sig_ecdsa ? !issuer->is_ec : !issuer->is_rsa))
         return false;
     uint8_t digest[HASH_MAX];
     hash_once((enum hash_alg)cert->sig_hash, cert->tbs.p, cert->tbs.len, digest);
+    if (cert->sig_ecdsa)
+        return ecdsa_verify(issuer->ec_curve, issuer->ec_point.p, issuer->ec_point.len, digest,
+                            hash_size((enum hash_alg)cert->sig_hash), cert->sig.p, cert->sig.len);
     return rsa_verify_pkcs1(&issuer->key, (enum hash_alg)cert->sig_hash, digest, cert->sig.p, cert->sig.len);
 }
 
@@ -402,8 +433,9 @@ bool x509_verify_chain(struct x509 *certs, int n, const char *host, long now, ch
         }
         /* issued by a trusted root? */
         for (int r = 0; r < nroots; r++) {
-            if (same_der(roots[r].raw, c->raw))
-                return true;                          /* the root itself was sent */
+            if (same_der(roots[r].raw, c->raw) ||
+                (same_der(roots[r].subject, c->subject) && same_der(roots[r].spki_bits, c->spki_bits)))
+                return true;                          /* the root itself was sent (or a cross-signed copy of it) */
             if (same_der(roots[r].subject, c->issuer) && signed_by(c, &roots[r])) {
                 if (now > roots[r].not_after) {
                     set_err(err, errlen, "root certificate expired", roots[r].cn);
@@ -421,8 +453,8 @@ bool x509_verify_chain(struct x509 *certs, int n, const char *host, long now, ch
             set_err(err, errlen, "certificate chain is out of order", c->cn);
             return false;
         }
-        if (!certs[i + 1].is_rsa || c->sig_hash < 0) {
-            set_err(err, errlen, "unsupported certificate algorithm (only RSA is supported)", c->cn);
+        if (c->sig_hash < 0 || (c->sig_ecdsa ? !certs[i + 1].is_ec : !certs[i + 1].is_rsa)) {
+            set_err(err, errlen, "unsupported certificate algorithm (RSA and ECDSA P-256/P-384 are)", c->cn);
             return false;
         }
         if (!signed_by(c, &certs[i + 1])) {

@@ -37,32 +37,29 @@ void file_close(struct file *f)
         panic("file_close: bad refcount");
     if (--f->ref > 0)
         return;
-    if (f->ip)
-        iput(f->ip);
-    if (f->pdir)
-        iput(f->pdir);
-    kfree(f->pname);
-    f->pdir = NULL;
-    f->pname = NULL;
-    if (f->type == FD_PIPE)
-        pipe_close(f->pipe, f->flags & O_ACCMODE);
-    else if (f->type == FD_TTY && f->tty)
-        pty_slave_close(f->tty);
-    else if (f->type == FD_PTM)
-        pty_master_close(f->pty);
-    else if (f->type == FD_EVENTS)
+    /* Closing may sleep (the last iput can do disk I/O): the entry stays
+     * reserved (ref -1) until it is clean, or file_alloc could hand it out
+     * meanwhile and we would clear someone else's file. */
+    struct file c = *f;
+    f->ref = -1;
+    if (c.ip)
+        iput(c.ip);
+    if (c.pdir)
+        iput(c.pdir);
+    kfree(c.pname);
+    if (c.type == FD_PIPE)
+        pipe_close(c.pipe, c.flags & O_ACCMODE);
+    else if (c.type == FD_TTY && c.tty)
+        pty_slave_close(c.tty);
+    else if (c.type == FD_PTM)
+        pty_master_close(c.pty);
+    else if (c.type == FD_EVENTS)
         input_close();
-    else if (f->type == FD_SOCKET && f->sock)
-        socket_close(f->sock);
-    else if (f->type == FD_UNIX && f->usock)
-        unix_close(f->usock);
-    f->type = FD_NONE;
-    f->ip = NULL;
-    f->pipe = NULL;
-    f->pty = NULL;
-    f->tty = NULL;
-    f->sock = NULL;
-    f->usock = NULL;
+    else if (c.type == FD_SOCKET && c.sock)
+        socket_close(c.sock);
+    else if (c.type == FD_UNIX && c.usock)
+        unix_close(c.usock);
+    memset(f, 0, sizeof(*f));                    /* free (ref 0), type FD_NONE */
 }
 
 /* Close descriptor fd of process p (its record locks on the file go too). */

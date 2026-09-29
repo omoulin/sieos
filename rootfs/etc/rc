@@ -1,2 +1,4 @@
 # /etc/rc - system startup script, run by init as root before login.
 echo "SIEOS: file systems checked, starting multi-user mode."
+# the DNS servers learnt from DHCP and router advertisements, for the C library's resolver
+ifconfig -r > /etc/resolv.conf 2>/dev/null

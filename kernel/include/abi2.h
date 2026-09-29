@@ -30,6 +30,7 @@ struct file;
 #define EIDRM_K    43
 #define ELIBBAD_K  80           /* a bad dynamic linker (SIEOS_ELIBBAD) */
 #define EPROTOTYPE_K 91
+#define ENOTBLK_K  15           /* SIEOS_ENOTBLK */
 
 long syscall_dispatch_v2(struct trapframe *tf);
 long syscall_file_v2(struct trapframe *tf, bool *handled);    /* sysfile2.c */

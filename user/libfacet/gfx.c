@@ -1,7 +1,10 @@
 /*
  * gfx.c - Software rendering primitives.
  */
-#include "gfx.h"
+#include <stdlib.h>
+#include <string.h>
+#include "facet/gfx.h"
+#include "facet/font.h"
 
 struct rect rect_make(int x, int y, int w, int h)
 {
@@ -209,8 +212,58 @@ void gfx_blit(struct surface *dst, int dx, int dy, const struct surface *src, st
     }
 }
 
+/* ---------------- text ----------------
+ *
+ * With the TrueType faces (facet/font.h) the text functions draw DejaVu
+ * Sans, and gfx_char DejaVu Sans Mono, in the rows of 16 pixels the bitmap
+ * font had; without them, the 8x16 bitmap font. */
+
+/* The baseline of a face in a row of h pixels whose top is at y. */
+static int baseline(const struct fct_face *f, int y, int h)
+{
+    return y + (h - fct_face_height(f)) / 2 + fct_face_ascent(f);
+}
+
+/* A byte of the bitmap font's encoding (ISO 8859-15) as Unicode. */
+static unsigned latin15(unsigned char c)
+{
+    switch (c) {
+    case 0xA4: return 0x20AC;
+    case 0xA6: return 0x160;
+    case 0xA8: return 0x161;
+    case 0xB4: return 0x17D;
+    case 0xB8: return 0x17E;
+    case 0xBC: return 0x152;
+    case 0xBD: return 0x153;
+    case 0xBE: return 0x178;
+    }
+    return c;
+}
+
+int gfx_cell_w(void)
+{
+    struct fct_face *m = fct_ui_face(FCT_FONT_MONO);
+    return m ? MAX(4, (int)(fct_face_advance(m, 'M') + 0.5f)) : FONT_W;
+}
+
+int gfx_cell_h(void)
+{
+    struct fct_face *m = fct_ui_face(FCT_FONT_MONO);
+    return m ? fct_face_height(m) + 1 : FONT_H;
+}
+
 void gfx_char(struct surface *s, int x, int y, unsigned char ch, color_t fg, color_t bg, bool opaque)
 {
+    struct fct_face *m = fct_ui_face(FCT_FONT_MONO);
+    if (m && ch >= 0x20 && ch != 0x7F && !(ch >= 0x80 && ch < 0xA0)) {
+        int cw = gfx_cell_w(), ch16 = gfx_cell_h();
+        if (opaque)
+            gfx_fill(s, x, y, cw, ch16, bg);
+        unsigned cp = latin15(ch);
+        int adv = (int)(fct_face_advance(m, cp) + 0.5f);
+        fct_face_draw_cp(s, m, x + (cw - adv) / 2, baseline(m, y, ch16), cp, fg);
+        return;
+    }
     struct rect r = rect_intersect(rect_make(x, y, FONT_W, FONT_H), s->clip);
     if (rect_empty(r))
         return;
@@ -226,24 +279,65 @@ void gfx_char(struct surface *s, int x, int y, unsigned char ch, color_t fg, col
     }
 }
 
-int gfx_text(struct surface *s, int x, int y, const char *str, color_t fg)
+/* The bitmap font, one cell per byte. */
+static int bitmap_text(struct surface *s, int x, int y, const char *str, color_t fg, color_t bg, bool opaque)
 {
     int x0 = x;
-    for (; *str; str++, x += FONT_W)
-        gfx_char(s, x, y, (unsigned char)*str, fg, 0, false);
+    for (; *str; str++, x += FONT_W) {
+        const uint8_t *g = font8x16[(unsigned char)*str];
+        struct rect r = rect_intersect(rect_make(x, y, FONT_W, FONT_H), s->clip);
+        for (int j = r.y - y; j < r.y - y + r.h; j++) {
+            uint32_t *p = s->px + (y + j) * s->stride;
+            for (int i = r.x - x; i < r.x - x + r.w; i++) {
+                if (g[j] & (0x80 >> i))
+                    p[x + i] = fg;
+                else if (opaque)
+                    p[x + i] = bg;
+            }
+        }
+    }
     return x - x0;
+}
+
+int gfx_text(struct surface *s, int x, int y, const char *str, color_t fg)
+{
+    struct fct_face *f = fct_ui_face(FCT_FONT_SANS);
+    if (f)
+        return fct_face_draw(s, f, x, baseline(f, y, FONT_H), str, fg);
+    return bitmap_text(s, x, y, str, fg, 0, false);
 }
 
 int gfx_text_bg(struct surface *s, int x, int y, const char *str, color_t fg, color_t bg)
 {
-    int x0 = x;
-    for (; *str; str++, x += FONT_W)
-        gfx_char(s, x, y, (unsigned char)*str, fg, bg, true);
+    if (fct_ui_face(FCT_FONT_SANS)) {
+        gfx_fill(s, x, y, text_width(str), FONT_H, bg);
+        return gfx_text(s, x, y, str, fg);
+    }
+    return bitmap_text(s, x, y, str, fg, bg, true);
+}
+
+/* Fixed-width text (tables): one cell per byte, in the monospace face. */
+int gfx_text_mono(struct surface *s, int x, int y, const char *str, color_t fg)
+{
+    int x0 = x, cw = gfx_cell_w();
+    for (; *str; str++, x += cw)
+        if (*str != ' ')
+            gfx_char(s, x, y, (unsigned char)*str, fg, 0, false);
     return x - x0;
+}
+
+int text_width_mono(const char *str)
+{
+    return (int)strlen(str) * gfx_cell_w();
 }
 
 void gfx_text_scaled(struct surface *s, int x, int y, const char *str, int scale, color_t fg)
 {
+    struct fct_face *f = fct_ui_face(FCT_FONT_BOLD);
+    if (f && (f = fct_ui_face_px(FCT_FONT_BOLD, fct_face_height(fct_ui_face(FCT_FONT_SANS)) * scale * 13 / 15))) {
+        fct_face_draw(s, f, x, baseline(f, y, FONT_H * scale), str, fg);
+        return;
+    }
     for (; *str; str++, x += FONT_W * scale) {
         const uint8_t *g = font8x16[(unsigned char)*str];
         for (int j = 0; j < FONT_H; j++)
@@ -255,7 +349,31 @@ void gfx_text_scaled(struct surface *s, int x, int y, const char *str, int scale
 
 int text_width(const char *str)
 {
-    return strlen(str) * FONT_W;
+    struct fct_face *f = fct_ui_face(FCT_FONT_SANS);
+    return f ? fct_face_width(f, str) : (int)strlen(str) * FONT_W;
+}
+
+int text_width_bold(const char *str)
+{
+    struct fct_face *f = fct_ui_face(FCT_FONT_BOLD);
+    return f ? fct_face_width(f, str) : (int)strlen(str) * FONT_W + 1;
+}
+
+int text_width_scaled(const char *str, int scale)
+{
+    struct fct_face *f = fct_ui_face(FCT_FONT_BOLD);
+    if (f && (f = fct_ui_face_px(FCT_FONT_BOLD, fct_face_height(fct_ui_face(FCT_FONT_SANS)) * scale * 13 / 15)))
+        return fct_face_width(f, str);
+    return (int)strlen(str) * FONT_W * scale;
+}
+
+size_t text_fit(const char *str, int maxw)
+{
+    struct fct_face *f = fct_ui_face(FCT_FONT_SANS);
+    if (f)
+        return fct_face_fit(f, str, maxw);
+    size_t n = strlen(str);
+    return MIN(n, (size_t)MAX(0, maxw / FONT_W));
 }
 
 /* ---------------- blending, rounded shapes, shadows ---------------- */
@@ -419,11 +537,14 @@ void gfx_shadow(struct surface *s, struct rect r, int rad, int size, int dy, int
     }
 }
 
-/* Text drawn twice, one pixel apart: the bitmap font's bold. */
+/* DejaVu Sans Bold; with the bitmap font, text drawn twice one pixel apart. */
 int gfx_text_bold(struct surface *s, int x, int y, const char *str, color_t fg)
 {
-    gfx_text(s, x + 1, y, str, fg);
-    return gfx_text(s, x, y, str, fg) + 1;
+    struct fct_face *f = fct_ui_face(FCT_FONT_BOLD);
+    if (f)
+        return fct_face_draw(s, f, x, baseline(f, y, FONT_H), str, fg);
+    bitmap_text(s, x + 1, y, str, fg, 0, false);
+    return bitmap_text(s, x, y, str, fg, 0, false) + 1;
 }
 
 /* Rounded rectangle filled with a vertical gradient. */

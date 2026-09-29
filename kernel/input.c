@@ -44,6 +44,26 @@ void input_key(uint16_t code, bool pressed, char ascii, unsigned mods)
     push(&e);
 }
 
+void input_mouse(int dx, int dy, unsigned buttons)
+{
+    struct input_event e = { 0 };
+    e.type = EV_MOUSE;
+    e.dx = dx;
+    e.dy = dy;
+    e.buttons = buttons;
+    push(&e);
+}
+
+void input_mouse_abs(int x, int y, unsigned buttons)
+{
+    struct input_event e = { 0 };
+    e.type = EV_MOUSE_ABS;
+    e.dx = x;
+    e.dy = y;
+    e.buttons = buttons;
+    push(&e);
+}
+
 bool input_readable(void)
 {
     return q_head != q_tail;

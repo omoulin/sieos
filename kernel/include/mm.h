@@ -46,6 +46,15 @@ extern uint64_t kernel_pml4_phys;
 void     vmm_init(void);
 void     vmm_identity_map(bool on);
 void     vmm_set_uncached(uint64_t pa);
+/* Boot: add RAM [start, end) above 4 GiB to the direct map (2 MiB pages; tables from alloc). */
+void     vmm_direct_map(uint64_t start, uint64_t end, uint64_t (*alloc)(void));
+/* Device memory (a PCI BAR) at pa, uncached, in the kernel's address space:
+ * through the direct map below 4 GiB, else in the MMIO window.  NULL if the
+ * window is full. */
+void    *mmio_map(uint64_t pa, size_t size);
+/* The same, write-combining (framebuffers); uncached without PAT. */
+void    *mmio_map_wc(uint64_t pa, size_t size);
+#define PTE_WC   0x008                     /* PWT: write-combining once pat_wc (PAT entry 1) */
 uint64_t vmm_new_space(void);
 int      vmm_map(uint64_t pml4, uint64_t va, uint64_t pa, uint64_t flags);
 uint64_t vmm_translate(uint64_t pml4, uint64_t va, uint64_t *flags);

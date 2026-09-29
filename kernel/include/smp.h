@@ -36,6 +36,7 @@ struct cpu {
     struct lwp *lwp;               /* LWP running on this CPU */
     struct lwp *idle;              /* this CPU's idle LWP */
     uint64_t slice_start;          /* tick at which the current slice began */
+    bool slice_expired;            /* the running LWP used up its quantum */
     int rr;                        /* round-robin scan position */
     uint64_t busy_ticks, idle_ticks;
     bool offline;               /* p_online(P_OFFLINE): runs only its idle LWP */
@@ -45,6 +46,7 @@ struct cpu {
     int64_t tsc_off;               /* added to this CPU's TSC to match the boot CPU's */
     uint64_t next_tick_ns;         /* hrtime of this CPU's next scheduling tick */
     uint64_t armed_ns;             /* hrtime the local timer is set to fire at */
+    volatile bool need_resched;    /* a higher-priority LWP is runnable: reschedule before user mode */
     uint64_t gdt[7];
     struct tss tss;
 };
@@ -88,9 +90,27 @@ void bkl_lock(void);
 void bkl_unlock(void);
 bool bkl_held(void);
 
+/* MADT: I/O APICs and interrupt source overrides (smp.c, used by ioapic.c) */
+#define MADT_MAX_IOAPIC 4
+#define MADT_MAX_ISO    16
+struct madt_ioapic { uint8_t id; uint32_t addr, gsi_base; };
+struct madt_iso { uint8_t irq; uint32_t gsi; uint16_t flags; };   /* flags: polarity bits 0-1, trigger 2-3 */
+extern struct madt_ioapic madt_ioapics[MADT_MAX_IOAPIC];
+extern int madt_nioapic;
+extern struct madt_iso madt_isos[MADT_MAX_ISO];
+extern int madt_niso;
+
+/* ioapic.c */
+bool ioapic_init(void);             /* route device interrupts through the I/O APIC (PIC masked) */
+extern bool ioapic_ok;
+void ioapic_route(int irq, int dest_apic);     /* ISA/PCI line irq -> vector IRQ_BASE + irq */
+void ioapic_mask(int irq);
+
 /* smp.c */
 void cpu_early_init(void);          /* BSP per-CPU data (before anything else) */
 void acpi_init(uint64_t mb_info_phys);
+/* The n-th ACPI table with this signature ("DSDT", "SSDT", ...), header included; NULL if none. */
+const void *acpi_table(const char *sig, int n, uint32_t *len);
 void lapic_init(void);
 void lapic_timer_start(void);
 struct trapframe;
@@ -99,7 +119,8 @@ void lapic_timer_hint(uint64_t when_ns);     /* fire no later than when_ns (an h
 bool hr_timers(void);                        /* the local timers wake sleepers at ns precision */
 void lapic_eoi(void);
 void smp_boot(void);
-void smp_kick_idle(void);           /* wake idle CPUs to look for work */
+void smp_kick_idle(void);
+void smp_resched(struct cpu *c);             /* have c reschedule */           /* wake idle CPUs to look for work */
 void tlb_shootdown(uint64_t pml4);   /* every CPU using pml4 drops its TLB entries */
 void ap_main(struct cpu *c) __attribute__((noreturn));
 

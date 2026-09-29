@@ -1,11 +1,17 @@
 /*
  * tls.c - TLS 1.3 client (RFC 8446).
  *
- * Handshake: ClientHello (x25519 and P-256 key shares, AES-GCM suites, RSA-PSS
- * signature algorithms, SNI, ALPN http/1.1) -> ServerHello ->
+ * Handshake: ClientHello (x25519 and P-256 key shares, AES-GCM suites, ECDSA
+ * and RSA signature algorithms, SNI, ALPN http/1.1) -> ServerHello ->
  * EncryptedExtensions -> Certificate -> CertificateVerify -> Finished,
- * then the client's Finished.  No resumption, no 0-RTT, no client
- * certificates.  Post-handshake NewSessionTicket messages are ignored and
+ * then the client's Finished.  No 0-RTT, no client certificates.
+ *
+ * Resumption: NewSessionTicket messages received after the handshake are
+ * kept in a small in-memory cache keyed by host name.  The next connection
+ * to that host offers the newest one (a ticket is used once) as a PSK with
+ * psk_dhe_ke, so the key exchange still happens; when the server accepts
+ * it, Certificate and CertificateVerify are skipped (the ticket came from a
+ * connection whose certificate chain was verified for the same host).
  * KeyUpdate is honoured.
  */
 #include "tls.h"
@@ -14,6 +20,9 @@
 
 #define REC_MAX (16384 + 256)
 #define MAX_CERTS 8
+#define NTICKETS 8
+#define TICKET_MAX 2048
+#define TICKET_LIFE_MAX (7 * 24 * 3600)     /* seconds (RFC 8446 4.6.1) */
 
 enum { CT_CCS = 20, CT_ALERT = 21, CT_HANDSHAKE = 22, CT_APPDATA = 23 };
 enum {
@@ -46,7 +55,65 @@ struct tls {
     size_t hslen, hscap;
     uint8_t *tr;                     /* transcript of handshake messages */
     size_t trlen, trcap;
+    char host[256];                  /* for the session tickets */
+    uint8_t res_master[HASH_MAX];    /* resumption_master_secret */
+    bool resumed;
 };
+
+/* ---------------- session tickets ---------------- */
+
+static struct ticket {
+    bool used;
+    char host[256];
+    enum hash_alg hash;
+    uint16_t suite;
+    uint8_t psk[HASH_MAX];
+    uint32_t age_add;
+    uint64_t received, expires;      /* tls_ms() */
+    size_t len;
+    uint8_t data[TICKET_MAX];
+} tickets[NTICKETS];
+
+/* The newest unexpired ticket for host, removed from the cache; false if none. */
+static bool take_ticket(const char *host, struct ticket *out)
+{
+    uint64_t now = tls_ms();
+    struct ticket *best = NULL;
+    for (int i = 0; i < NTICKETS; i++) {
+        struct ticket *k = &tickets[i];
+        if (k->used && now >= k->expires) {
+            memset(k, 0, sizeof(*k));
+            continue;
+        }
+        if (k->used && !strcmp(k->host, host) && (!best || k->received > best->received))
+            best = k;
+    }
+    if (!best)
+        return false;
+    *out = *best;
+    memset(best, 0, sizeof(*best));
+    return true;
+}
+
+static void save_ticket(const struct ticket *k)
+{
+    struct ticket *slot = &tickets[0];
+    for (int i = 0; i < NTICKETS; i++) {
+        if (!tickets[i].used) {
+            slot = &tickets[i];
+            break;
+        }
+        if (tickets[i].received < slot->received)
+            slot = &tickets[i];                        /* all in use: the oldest makes way */
+    }
+    *slot = *k;
+    slot->used = true;
+}
+
+void tls_forget_sessions(void)
+{
+    memset(tickets, 0, sizeof(tickets));
+}
 
 static bool fail(struct tls *t, const char *msg)
 {
@@ -256,8 +323,21 @@ static void put16(uint8_t *p, size_t v)
     p[1] = (uint8_t)v;
 }
 
+/* The PSK binder: an HMAC over the ClientHello up to its binders (RFC 8446 4.2.11.2). */
+static void psk_binder(const struct ticket *k, const uint8_t *ch, size_t trunc, uint8_t *out)
+{
+    size_t hs = hash_size(k->hash);
+    uint8_t early[HASH_MAX], empty[HASH_MAX], bkey[HASH_MAX], fkey[HASH_MAX], th[HASH_MAX];
+    hkdf_extract(k->hash, NULL, 0, k->psk, hs, early);
+    hash_once(k->hash, "", 0, empty);
+    hkdf_expand_label(k->hash, early, "res binder", empty, hs, bkey, hs);
+    hkdf_expand_label(k->hash, bkey, "finished", NULL, 0, fkey, hs);
+    hash_once(k->hash, ch, trunc, th);
+    hmac(k->hash, fkey, hs, th, hs, out);
+}
+
 static size_t build_client_hello(uint8_t *m, const char *host, const uint8_t pub[32], const uint8_t pub256[65],
-                                 const uint8_t random[32], const uint8_t sid[32])
+                                 const uint8_t random[32], const uint8_t sid[32], const struct ticket *k)
 {
     size_t n = 4;
     m[n++] = 3;
@@ -268,7 +348,8 @@ static size_t build_client_hello(uint8_t *m, const char *host, const uint8_t pub
     memcpy(m + n, sid, 32);
     n += 32;
     static const uint8_t suites[] = { 0, 4, 0x13, 0x01, 0x13, 0x02 };
-    memcpy(m + n, suites, sizeof(suites));
+    static const uint8_t suites384[] = { 0, 4, 0x13, 0x02, 0x13, 0x01 };   /* resuming a SHA-384 session */
+    memcpy(m + n, k && k->suite == 0x1302 ? suites384 : suites, sizeof(suites));
     n += sizeof(suites);
     m[n++] = 1;
     m[n++] = 0;                                        /* null compression */
@@ -287,8 +368,9 @@ static size_t build_client_hello(uint8_t *m, const char *host, const uint8_t pub
     static const uint8_t groups[] = { 0, 10, 0, 6, 0, 4, 0, 0x1d, 0, 23 };
     memcpy(m + n, groups, sizeof(groups));
     n += sizeof(groups);
-    /* signature_algorithms: rsa_pss_rsae_sha256/384/512, rsa_pkcs1_sha256/384/512 */
-    static const uint8_t sigalgs[] = { 0, 13, 0, 14, 0, 12, 8, 4, 8, 5, 8, 6, 4, 1, 5, 1, 6, 1 };
+    /* signature_algorithms: ecdsa_secp256r1_sha256, ecdsa_secp384r1_sha384,
+       rsa_pss_rsae_sha256/384/512, rsa_pkcs1_sha256/384/512 */
+    static const uint8_t sigalgs[] = { 0, 13, 0, 18, 0, 16, 4, 3, 5, 3, 8, 4, 8, 5, 8, 6, 4, 1, 5, 1, 6, 1 };
     memcpy(m + n, sigalgs, sizeof(sigalgs));
     n += sizeof(sigalgs);
     /* supported_versions: TLS 1.3 */
@@ -310,17 +392,44 @@ static size_t build_client_hello(uint8_t *m, const char *host, const uint8_t pub
     put16(m + n + 44, 65);
     memcpy(m + n + 46, pub256, 65);
     n += 4 + 2 + 36 + 69;
+    /* psk_key_exchange_modes: psk_dhe_ke (without it servers send no tickets) */
+    static const uint8_t modes[] = { 0, 45, 0, 2, 1, 1 };
+    memcpy(m + n, modes, sizeof(modes));
+    n += sizeof(modes);
+    size_t binder_at = 0, hs = 0;
+    if (k) {
+        /* pre_shared_key (must be last): one identity and its binder */
+        hs = hash_size(k->hash);
+        uint32_t age = (uint32_t)(tls_ms() - k->received) + k->age_add;
+        put16(m + n, 41);
+        put16(m + n + 2, 2 + 2 + k->len + 4 + 2 + 1 + hs);
+        put16(m + n + 4, 2 + k->len + 4);
+        put16(m + n + 6, k->len);
+        memcpy(m + n + 8, k->data, k->len);
+        n += 8 + k->len;
+        m[n] = (uint8_t)(age >> 24);
+        m[n + 1] = (uint8_t)(age >> 16);
+        m[n + 2] = (uint8_t)(age >> 8);
+        m[n + 3] = (uint8_t)age;
+        n += 4;
+        binder_at = n;
+        put16(m + n, 1 + hs);
+        m[n + 2] = (uint8_t)hs;
+        n += 3 + hs;
+    }
     put16(m + extlen_at, n - extlen_at - 2);
     m[0] = HS_CLIENT_HELLO;
     m[1] = 0;
     put16(m + 2, n - 4);
+    if (k)
+        psk_binder(k, m, binder_at, m + binder_at + 3);   /* lengths above are final: the binder covers them */
     return n;
 }
 
 /* ---------------- handshake ---------------- */
 
 static bool parse_server_hello(struct tls *t, const uint8_t *m, size_t len, const uint8_t priv[32],
-                               const uint8_t priv256[32], uint8_t shared[32])
+                               const uint8_t priv256[32], uint8_t shared[32], bool offered_psk)
 {
     static const uint8_t hrr[32] = { 0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C,
                                      0x02, 0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB,
@@ -360,6 +469,11 @@ static bool parse_server_hello(struct tls *t, const uint8_t *m, size_t len, cons
             if (!p256_shared(shared, priv256, e + 4))
                 return fail(t, "invalid P-256 key share");
             have_share = true;
+        }
+        if (type == 41) {
+            if (!offered_psk || l != 2 || e[0] || e[1])
+                return fail(t, "server selected a pre-shared key we did not offer");
+            t->resumed = true;
         }
         e += l;
     }
@@ -424,7 +538,12 @@ static bool verify_certificate_verify(struct tls *t, const uint8_t *m, size_t le
     if (len < 8 + sl)
         return fail(t, "malformed CertificateVerify");
     enum hash_alg h;
-    if (alg == 0x0804)
+    int curve = -1;
+    if (alg == 0x0403)
+        h = HASH_SHA256, curve = ECDSA_P256;
+    else if (alg == 0x0503)
+        h = HASH_SHA384, curve = ECDSA_P384;
+    else if (alg == 0x0804)
         h = HASH_SHA256;
     else if (alg == 0x0805)
         h = HASH_SHA384;
@@ -432,14 +551,15 @@ static bool verify_certificate_verify(struct tls *t, const uint8_t *m, size_t le
         h = HASH_SHA512;
     else
         return fail(t, "unsupported CertificateVerify algorithm");
-    if (!leaf->is_rsa)
-        return fail(t, "server key is not RSA");
+    if (curve >= 0 ? !leaf->is_ec || leaf->ec_curve != curve : !leaf->is_rsa)
+        return fail(t, "CertificateVerify algorithm does not match the server key");
     uint8_t content[64 + 34 + HASH_MAX], digest[HASH_MAX];
     memset(content, 0x20, 64);
     memcpy(content + 64, "TLS 1.3, server CertificateVerify", 34);   /* includes the NUL separator */
     memcpy(content + 98, th, t->hs);
     hash_once(h, content, 98 + t->hs, digest);
-    if (!rsa_verify_pss(&leaf->key, h, digest, m + 8, sl))
+    if (curve >= 0 ? !ecdsa_verify(curve, leaf->ec_point.p, leaf->ec_point.len, digest, hash_size(h), m + 8, sl)
+                   : !rsa_verify_pss(&leaf->key, h, digest, m + 8, sl))
         return fail(t, "server signature (CertificateVerify) is invalid");
     return true;
 }
@@ -456,8 +576,11 @@ static bool handshake(struct tls *t, const char *host)
     x25519_base(pub, priv);
     if (!p256_public(pub256, priv256))
         return fail(t, "P-256 key generation failed");
-    static uint8_t ch[1024];
-    size_t chlen = build_client_hello(ch, host, pub, pub256, rnd, sid);
+    snprintf(t->host, sizeof(t->host), "%s", host);
+    static struct ticket tk;
+    bool offer = take_ticket(host, &tk);
+    static uint8_t ch[1024 + TICKET_MAX];
+    size_t chlen = build_client_hello(ch, host, pub, pub256, rnd, sid, offer ? &tk : NULL);
     if (!append(&t->tr, &t->trlen, &t->trcap, ch, chlen))
         return fail(t, "out of memory");
     if (!send_record(t, CT_HANDSHAKE, ch, chlen))
@@ -471,8 +594,10 @@ static bool handshake(struct tls *t, const char *host)
     if (type != HS_SERVER_HELLO)
         return fail(t, "expected ServerHello");
     uint8_t shared[32];
-    if (!parse_server_hello(t, msg, len, priv, priv256, shared))
+    if (!parse_server_hello(t, msg, len, priv, priv256, shared, offer))
         return false;
+    if (t->resumed && (t->hash != tk.hash))
+        return fail(t, "server resumed with a cipher suite of another hash");
     memset(priv, 0, sizeof(priv));
     memset(priv256, 0, sizeof(priv256));
     append(&t->tr, &t->trlen, &t->trcap, msg, len);
@@ -482,7 +607,8 @@ static bool handshake(struct tls *t, const char *host)
     size_t hs = t->hs;
     uint8_t early[HASH_MAX], derived[HASH_MAX], hsecret[HASH_MAX], empty[HASH_MAX], th[HASH_MAX];
     uint8_t zeros[HASH_MAX] = { 0 };
-    hkdf_extract(t->hash, NULL, 0, zeros, hs, early);
+    hkdf_extract(t->hash, NULL, 0, t->resumed ? tk.psk : zeros, hs, early);
+    memset(&tk, 0, sizeof(tk));
     hash_once(t->hash, "", 0, empty);
     hkdf_expand_label(t->hash, early, "derived", empty, hs, derived, hs);
     hkdf_extract(t->hash, derived, hs, shared, 32, hsecret);
@@ -503,6 +629,8 @@ static bool handshake(struct tls *t, const char *host)
             /* nothing we need (ALPN, if any, is http/1.1) */
         } else if (type == HS_CERTIFICATE_REQUEST) {
             return fail(t, "server requires a client certificate");
+        } else if ((type == HS_CERTIFICATE || type == HS_CERTIFICATE_VERIFY) && t->resumed) {
+            return fail(t, "server sent a certificate in a resumed handshake");
         } else if (type == HS_CERTIFICATE) {
             /* the parsed certificates point into the message: keep a private copy */
             free(certmsg);
@@ -528,7 +656,7 @@ static bool handshake(struct tls *t, const char *host)
                 return false;
             got_cv = true;
         } else if (type == HS_FINISHED) {
-            if (!got_cv)
+            if (!got_cv && !t->resumed)
                 return fail(t, "server did not authenticate");
             uint8_t fkey[HASH_MAX], expect[HASH_MAX];
             hkdf_expand_label(t->hash, s_hs, "finished", NULL, 0, fkey, hs);
@@ -568,6 +696,10 @@ static bool handshake(struct tls *t, const char *host)
     hmac(t->hash, fkey, hs, th, hs, fin + 4);
     if (!send_record(t, CT_HANDSHAKE, fin, 4 + hs))
         return false;
+    /* resumption_master_secret (transcript through the client Finished), for tickets */
+    append(&t->tr, &t->trlen, &t->trcap, fin, 4 + hs);
+    transcript_hash(t, th);
+    hkdf_expand_label(t->hash, master, "res master", th, hs, t->res_master, hs);
     set_keys(t, &t->wr, c_ap);
     set_keys(t, &t->rd, s_ap);
     free(certmsg);
@@ -605,6 +737,34 @@ static void key_update(struct tls *t, struct dir *d)
     set_keys(t, d, next);
 }
 
+/* NewSessionTicket: keep it for the next connection to this host. */
+static void new_session_ticket(struct tls *t, const uint8_t *m, size_t n)
+{
+    if (n < 4 + 4 + 1)
+        return;
+    uint32_t life = (uint32_t)m[0] << 24 | (uint32_t)m[1] << 16 | (uint32_t)m[2] << 8 | m[3];
+    size_t nl = m[8];
+    if (n < 9 + nl + 2)
+        return;
+    const uint8_t *nonce = m + 9;
+    size_t tl = (size_t)m[9 + nl] << 8 | m[10 + nl];
+    if (n < 11 + nl + tl || !tl || tl > TICKET_MAX || !life)
+        return;                                        /* malformed, too big for us, or not to be kept */
+    static struct ticket k;
+    memset(&k, 0, sizeof(k));
+    snprintf(k.host, sizeof(k.host), "%s", t->host);
+    k.hash = t->hash;
+    k.suite = t->suite;
+    k.age_add = (uint32_t)m[4] << 24 | (uint32_t)m[5] << 16 | (uint32_t)m[6] << 8 | m[7];
+    hkdf_expand_label(t->hash, t->res_master, "resumption", nonce, nl, k.psk, t->hs);
+    k.received = tls_ms();
+    k.expires = k.received + (uint64_t)(life < TICKET_LIFE_MAX ? life : TICKET_LIFE_MAX) * 1000;
+    k.len = tl;
+    memcpy(k.data, m + 11 + nl, tl);
+    save_ticket(&k);
+    memset(&k, 0, sizeof(k));
+}
+
 /* Handle post-handshake messages. */
 static bool post_handshake(struct tls *t)
 {
@@ -621,8 +781,10 @@ static bool post_handshake(struct tls *t)
                     return false;
                 key_update(t, &t->wr);
             }
+        } else if (t->hsbuf[0] == HS_NEW_SESSION_TICKET) {
+            new_session_ticket(t, t->hsbuf + 4, n);
         }
-        consume_handshake(t, 4 + n);                   /* NewSessionTicket etc.: ignored */
+        consume_handshake(t, 4 + n);                   /* anything else: ignored */
     }
     return true;
 }
@@ -678,6 +840,11 @@ void tls_close(struct tls *t)
 const char *tls_error(struct tls *t)
 {
     return t->err;
+}
+
+bool tls_resumed(struct tls *t)
+{
+    return t->resumed;
 }
 
 const char *tls_cipher_name(struct tls *t)

@@ -10,10 +10,15 @@
   - `arch/sieos64`: the architecture;
   - `src/*/sieos64`: per-architecture replacements;
   - `src/sieos`: the emulation layer for Linux-only calls.
-- `tests/`: libc-test configuration and `runall`, the runner used on SIEOS.
+- `backports/`: fixes from later musl releases, copied over the tree after
+  `port/` (listed in `backports/README.md`).
+- `tests/`: the libc-test configuration, `runall` (the runner used on SIEOS), the
+  SIEOS tests, and `libc-test-sieos.patch` (sigprocmask-internal and Solaris's
+  signal numbers).
 
     make libc            # -> build/sysroot (headers, crt files, libc.a)
     gcc -specs=build/sysroot/lib/musl-gcc.specs -static -o prog prog.c
     make libc-test-img   # -> build/libc-test.img (tests in /opt/libc-test)
 
-See docs/abi-v2.md, "Milestone 7", for the design and the test results.
+See docs/abi-v2.md, "Milestone 7", for the design, and "Milestone 28" for the current
+test results: every test passes.

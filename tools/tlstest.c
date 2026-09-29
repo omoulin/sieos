@@ -9,6 +9,7 @@
  *   tlstest p256pub SCALAR / tlstest p256ecdh SCALAR PEERPOINT
  *   tlstest pkcs1 ALG N E DIGEST SIG / tlstest pss ALG N E DIGEST SIG -> ok|bad
  *   tlstest get HOST PATH [ROOTS]   -> HTTPS GET over TLS 1.3, prints the response
+ *                                      (TLSPORT=port, TLSREPEAT=n connections)
  */
 #define _DEFAULT_SOURCE
 #include <arpa/inet.h>
@@ -118,27 +119,31 @@ int main(int argc, char **argv)
         struct hostent *he = gethostbyname(host);
         if (!he)
             return 1;
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        struct sockaddr_in sa = { .sin_family = AF_INET, .sin_port = htons(getenv("TLSPORT") ? atoi(getenv("TLSPORT")) : 443) };
-        memcpy(&sa.sin_addr, he->h_addr_list[0], 4);
-        if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
-            return 1;
-        char err[200];
-        struct tls *t = tls_connect(fd, host, err, sizeof(err));
-        if (!t) {
-            printf("FAIL %s\n", err);
-            return 1;
+        int repeat = getenv("TLSREPEAT") ? atoi(getenv("TLSREPEAT")) : 1;
+        for (int round = 0; round < repeat; round++) {
+            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            struct sockaddr_in sa = { .sin_family = AF_INET, .sin_port = htons(getenv("TLSPORT") ? atoi(getenv("TLSPORT")) : 443) };
+            memcpy(&sa.sin_addr, he->h_addr_list[0], 4);
+            if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+                return 1;
+            char err[200];
+            struct tls *t = tls_connect(fd, host, err, sizeof(err));
+            if (!t) {
+                printf("FAIL %s\n", err);
+                return 1;
+            }
+            printf("handshake ok (%s%s)\n", tls_cipher_name(t), tls_resumed(t) ? ", resumed" : "");
+            char req[512];
+            int n = snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
+            tls_write(t, req, n);
+            long r;
+            char buf[4096];
+            while ((r = tls_read(t, buf, sizeof(buf))) > 0)
+                fwrite(buf, 1, r, stdout);
+            printf("\n[read returned %ld]\n", r);
+            tls_close(t);
+            close(fd);
         }
-        printf("handshake ok (%s)\n", tls_cipher_name(t));
-        char req[512];
-        int n = snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
-        tls_write(t, req, n);
-        long r;
-        char buf[4096];
-        while ((r = tls_read(t, buf, sizeof(buf))) > 0)
-            fwrite(buf, 1, r, stdout);
-        printf("\n[read returned %ld]\n", r);
-        tls_close(t);
     }
     return 0;
 }

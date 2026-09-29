@@ -8,6 +8,7 @@
 #include "fs.h"
 #include "tty.h"
 #include "poll.h"
+#include "display.h"
 #include "net.h"
 
 char sys_hostname[65] = "sieos";
@@ -253,8 +254,13 @@ static long sys_sbrk(long incr)
         return -ENOMEM;
     if (incr > 0 && (uint64_t)incr / PAGE_SIZE > pmm_total_pages())
         return -ENOMEM;                              /* heuristic overcommit, as for mmap */
-    if (incr > 0 && vmm_alloc_range(current->pml4, old, nbrk, PTE_U | PTE_W | pte_nx) < 0)
-        return -ENOMEM;
+    if (incr > 0) {
+        vm_space_lock(current);
+        int r = vmm_alloc_range(current->pml4, old, nbrk, PTE_U | PTE_W | pte_nx);
+        vm_space_unlock(current);
+        if (r < 0)
+            return -ENOMEM;
+    }
     current->brk = nbrk;
     return old;
 }

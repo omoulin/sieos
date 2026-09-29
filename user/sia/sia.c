@@ -82,6 +82,33 @@ static void io_text(void *ctx, const char *utf8)
     sb_free(&b);
 }
 
+/* The reply as it is written; NULL ends it. */
+static void io_delta(void *ctx, const char *utf8)
+{
+    (void)ctx;
+    static bool at_line_start = true, coloured;
+    if (!utf8) {
+        if (coloured)
+            out("\033[0m");
+        if (!at_line_start)
+            out("\n");
+        at_line_start = true;
+        coloured = false;
+        return;
+    }
+    struct sbuf b;
+    sb_init(&b);
+    sia_plain_text(utf8, &b);
+    if (b.len) {
+        if (!coloured)
+            out("\033[33m");                           /* one colour for the whole reply */
+        coloured = true;
+        write(1, b.s, b.len);
+        at_line_start = b.s[b.len - 1] == '\n';
+    }
+    sb_free(&b);
+}
+
 static void io_tool(void *ctx, const char *cmdline)
 {
     (void)ctx;
@@ -129,7 +156,7 @@ static void io_error(void *ctx, const char *msg)
         printf("\033[31msia: %s\033[0m\n", msg);
 }
 
-static const struct sia_io term_io = { NULL, io_text, io_tool, io_output, io_confirm, io_thinking, io_error };
+static const struct sia_io term_io = { NULL, io_text, io_tool, io_output, io_confirm, io_thinking, io_error, io_delta };
 
 /* ---------------- setup ---------------- */
 

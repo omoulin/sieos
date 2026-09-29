@@ -51,7 +51,8 @@ struct sieos_tms {
 #define SIEOS_RLIMIT_NOFILE 5
 #define SIEOS_RLIMIT_VMEM   6
 #define SIEOS_RLIMIT_AS     SIEOS_RLIMIT_VMEM
-#define SIEOS_RLIM_NLIMITS  7
+#define SIEOS_RLIMIT_NPROC  7    /* SIEOS extension: processes of the real user (fork fails with EAGAIN) */
+#define SIEOS_RLIM_NLIMITS  8
 
 #define SIEOS_RLIM_INFINITY  ((sieos_rlim_t)-3)
 #define SIEOS_RLIM_SAVED_MAX ((sieos_rlim_t)-2)

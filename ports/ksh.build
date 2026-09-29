@@ -1,0 +1,5 @@
+# ksh93u+m, built on SIEOS by tools/nativebuild.py (cwd: the unpacked source)
+set -e
+export CC=gcc
+/bin/sh bin/package make
+ls -l arch/*/bin/ksh arch/*/bin/shcomp

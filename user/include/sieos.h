@@ -128,7 +128,10 @@ struct sockinfo {
     int pad;
 };
 
-int netinfo(struct netinfo *ni);
+int netinfo(struct netinfo *ni);                /* eth0 */
+int netinfo_if(struct netinfo *ni, int index);  /* 0 eth0, 1 eth1, ...: -1 (ENODEV) past the last */
+struct sieos_devinfo;
+int devinfo(struct sieos_devinfo *d, int index);  /* the index'th device (PCI function): -1 (ENODEV) past the last */
 int netstat(struct sockinfo *buf, int max);     /* sockets filled, -1 */
 
 /* Name or dotted quad -> IPv4 address (network order): /etc/hosts, then
@@ -136,6 +139,20 @@ int netstat(struct sockinfo *buf, int max);     /* sockets filled, -1 */
 int resolve_host(const char *name, unsigned int *addr);
 struct sockaddr_in make_addr(unsigned int addr_net, unsigned short port);
 const char *ip_to_str(unsigned int host_order_ip, char *buf16);
+
+/* IPv4 and IPv6.  resolve_addrs: a name (hosts file, DNS through
+ * /etc/resolv.conf, then resolve_host's DNS) or a numeric address of family
+ * AF_UNSPEC, AF_INET or AF_INET6 -> up to max socket addresses with the
+ * port set, in the order to try them; the number found (0: none).
+ * addr_to_str: the numeric address ("10.0.2.2", "fe80::2"). */
+int resolve_addrs(const char *name, int family, unsigned short port, struct sockaddr_storage *out,
+                  socklen_t *lens, int max);
+const char *addr_to_str(const struct sockaddr *sa, char *buf, size_t n);
+struct sieos_netinfo6;
+struct sieos_sockinfo6;
+int netinfo6(struct sieos_netinfo6 *ni);                /* sieos/sysinfo.h; eth0 (and ::1) */
+int netinfo6_if(struct sieos_netinfo6 *ni, int index);
+int netstat6(struct sieos_sockinfo6 *buf, int max);     /* IPv4 and IPv6 sockets filled, -1 */
 
 /* ---- the framebuffer and input (SIEOS extensions) ---- */
 #define FBIOGET_INFO 0x4600
@@ -180,6 +197,11 @@ int  msleep(unsigned long ms);
 #define REBOOT_HALT    0
 #define REBOOT_RESTART 1
 int  sieos_reboot(int mode);        /* uadmin; root only */
+/* The console session's exit status (sdm, then the desktop it becomes):
+ * asks init to restart or halt the system after the session. */
+#define SESSION_EXIT_CONSOLE 3          /* (sdm) run a text login once */
+#define SESSION_EXIT_REBOOT  4
+#define SESSION_EXIT_HALT    5
 int  strftime_simple(char *buf, size_t n, time_t t);   /* "YYYY-MM-DD HH:MM:SS" UTC */
 
 /* ---- signals ---- */

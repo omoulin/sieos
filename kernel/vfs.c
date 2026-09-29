@@ -575,6 +575,21 @@ void vfs_mount_all(void)
     ensure("/proc", S_IFDIR | 0555, 0);
     ensure("/dev/pts", S_IFDIR | 0755, 0);
     ensure("/dev/ptmx", S_IFCHR | 0666, MKDEV(DEV_TTY_MAJOR, 2));
+    /* block devices: the disks there are, and the lofi devices */
+    ensure("/dev/dsk", S_IFDIR | 0755, 0);
+    for (int u = 0; u < 4; u++)
+        if (blk_present(u)) {
+            char name[32];
+            snprintf(name, sizeof(name), "/dev/dsk/c%dd%dp0", u / 2, u % 2);
+            ensure(name, S_IFBLK | 0600, MKDEV(DEV_BLK_MAJOR, u));
+        }
+    ensure("/dev/lofictl", S_IFCHR | 0600, MKDEV(DEV_LOFI_MAJOR, 0));
+    ensure("/dev/lofi", S_IFDIR | 0755, 0);
+    for (int n = 1; n <= NLOFI; n++) {
+        char name[32];
+        snprintf(name, sizeof(name), "/dev/lofi/%d", n);
+        ensure(name, S_IFBLK | 0600, MKDEV(DEV_BLK_MAJOR, BLK_LOFI0 + n - 1));
+    }
     ensure("/dev/shm", S_IFDIR | 01777, 0);
     struct { struct fs *fs; const char *path; } m[] = {
         { tmpfs_create(), "/tmp" },

@@ -9,10 +9,12 @@
 #include "fs.h"
 #include "ata.h"
 #include "blkdev.h"
+#include "display.h"
 #include "smp.h"
 #include "tty.h"
 #include "poll.h"
 #include "net.h"
+#include "hid.h"
 
 #define MB2_BOOTLOADER_MAGIC 0x36D76289
 
@@ -54,7 +56,8 @@ static void banner(void)
     console_set_color(LBLUE, BLACK);
     kprintf("|\n%s%s\n", indent, rule);
     console_set_color(DGRAY, BLACK);
-    kprintf("%s  %s %s - %s - x86_64\n\n", indent, OS_NAME, OS_RELEASE, OS_LONGNAME);
+    kprintf("%s  %s %s - %s - x86_64\n", indent, OS_NAME, OS_RELEASE, OS_LONGNAME);
+    kprintf("%s  Developed by %s - released under the %s\n\n", indent, OS_AUTHOR, OS_LICENSE);
     console_set_color(LGRAY, BLACK);
     /* the Orbit Node logo beside the banner box (framebuffer consoles) */
     int size = 132;
@@ -102,6 +105,8 @@ static const char *boot_cmdline(uint64_t mb_info)
     return "";
 }
 
+volatile bool kernel_running;
+
 void kmain(uint32_t magic, uint32_t mb_info)
 {
     console_init(magic == MB2_BOOTLOADER_MAGIC ? mb_info : 0);
@@ -115,6 +120,7 @@ void kmain(uint32_t magic, uint32_t mb_info)
 
     pmm_init(mb_info);
     vmm_init();
+    display_init();                   /* displays: the console's framebuffer write-combining, native drivers */
     char msg[128];
     snprintf(msg, sizeof(msg), "Memory: %lu MiB usable, %lu KiB kernel, paging enabled",
              pmm_total_pages() * 4 / 1024, pmm_kernel_pages() * 4);
@@ -132,11 +138,12 @@ void kmain(uint32_t magic, uint32_t mb_info)
 
     acpi_init(mb_info);
     lapic_init();
+    irq_use_ioapic();                 /* device interrupts through the I/O APIC, if there is one */
     lapic_timer_start();
     smp_boot();
     if (lapic_ok)
-        snprintf(msg, sizeof(msg), "SMP: %d CPU%s online (local APIC timers, big kernel lock)",
-                 ncpu, ncpu > 1 ? "s" : "");
+        snprintf(msg, sizeof(msg), "SMP: %d CPU%s online (local APIC timers, %s, big kernel lock)",
+                 ncpu, ncpu > 1 ? "s" : "", ioapic_ok ? "I/O APIC interrupts" : "8259 PIC interrupts");
     else
         snprintf(msg, sizeof(msg), "SMP: no ACPI MADT found, running on 1 CPU");
     ok(msg);
@@ -147,12 +154,25 @@ void kmain(uint32_t magic, uint32_t mb_info)
     snprintf(msg, sizeof(msg), "Console: %s + COM1 serial, PS/2 keyboard, %s mouse", console_mode(),
              input_absolute() ? "absolute (vmmouse)" : "PS/2");
     ok(msg);
+    const char *cmdline = boot_cmdline(mb_info);
+    usb_init(cmdline);
+    if (usb_summary(msg, sizeof(msg)))
+        ok(msg);
+    i2c_hid_init(cmdline);
+    if (i2c_hid_summary(msg, sizeof(msg)))
+        ok(msg);
+    for (int i = 0; i < ndisplays; i++) {
+        struct display *d = &displays[i];
+        snprintf(msg, sizeof(msg), "Display: fb%d %s %ux%u (%s)%s", i, d->ops->name, d->mode.width, d->mode.height,
+                 d->desc, d->console ? ", console" : "");
+        ok(msg);
+    }
 
     ata_init();
     const char *dev = blk_init();
     if (!dev)
         panic("no root device: attach an ext4 disk image or boot the ISO with its module");
-    if ((root_fs = ext4_mount())) {
+    if ((root_fs = ext4_mount(blk_root(), false))) {
         vfs_init();
         vfs_mount_all();
         snprintf(msg, sizeof(msg), "Root file system: ext4 on %s; tmpfs /tmp and /dev/shm, proc, devpts", dev);
@@ -163,18 +183,25 @@ void kmain(uint32_t magic, uint32_t mb_info)
     }
 
     net_init();
-    if (netif.present) {
-        bool dhcp = net_wait_config(3 * TIMER_HZ);
-        char ip[16], gw[16];
-        snprintf(msg, sizeof(msg), "Network: %s %02x:%02x:%02x:%02x:%02x:%02x, %s gw %s (%s)",
-                 netif.nic->name, netif.mac[0], netif.mac[1], netif.mac[2], netif.mac[3], netif.mac[4],
-                 netif.mac[5], ip_str(netif.ip, ip), ip_str(netif.gateway, gw), dhcp ? "DHCP" : "static");
-        ok(msg);
+    if (nnetif) {
+        net_wait_config(3 * TIMER_HZ);
+        for (int i = 0; i < nnetif; i++) {
+            struct netif *ifp = &netifs[i];
+            char ip[16], gw[16];
+            if (ifp->up)
+                snprintf(msg, sizeof(msg), "Network: %s %s %02x:%02x:%02x:%02x:%02x:%02x, %s gw %s (%s)", ifp->name,
+                         ifp->nic->name, ifp->mac[0], ifp->mac[1], ifp->mac[2], ifp->mac[3], ifp->mac[4],
+                         ifp->mac[5], ip_str(ifp->ip, ip), ip_str(ifp->gateway, gw), ifp->dhcp ? "DHCP" : "static");
+            else
+                snprintf(msg, sizeof(msg), "Network: %s %s %02x:%02x:%02x:%02x:%02x:%02x, no address (DHCP continues)",
+                         ifp->name, ifp->nic->name, ifp->mac[0], ifp->mac[1], ifp->mac[2], ifp->mac[3], ifp->mac[4],
+                         ifp->mac[5]);
+            ok(msg);
+        }
     } else {
-        fail("Network: no supported network card (e1000) found");
+        fail("Network: no supported network card (e1000, virtio-net) found");
     }
 
-    const char *cmdline = boot_cmdline(mb_info);
     int pid = proc_spawn_init("/sbin/init", cmdline);
     if (pid < 0)
         pid = proc_spawn_init("/bin/sh", NULL);
@@ -182,5 +209,6 @@ void kmain(uint32_t magic, uint32_t mb_info)
         panic("cannot start /sbin/init or /bin/sh (error %d)", pid);
     ok("Starting init");
 
+    kernel_running = true;            /* from now on kernel code runs in LWPs: disk I/O may sleep */
     cpu_idle();
 }

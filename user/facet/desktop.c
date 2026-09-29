@@ -137,31 +137,25 @@ static void handle(struct chan *c, const char *line, size_t len)
     } else if (!strcmp(op, "open")) {
         const char *app = json_get_str(req, "app"), *path = json_get_str(req, "path");
         const char *cmd = json_get_str(req, "command");
-        struct window *before = wm_focused(), *w = NULL;
+        struct window *w = NULL;
         if (!app) {
-            reply(c, false, "which app? terminal, shell, files, monitor, network, clock or about");
+            reply(c, false, "which app? terminal, shell, files, monitor, network, clock, settings, display, appearance or about");
             goto out;
         }
-        if (!strcmp(app, "terminal") || !strcmp(app, "shell"))
-            w = term_open(!strcmp(app, "shell"));
-        else if (!strcmp(app, "files"))
-            app_files(path && *path ? path : getenv("HOME") ? getenv("HOME") : "/");
-        else if (!strcmp(app, "monitor"))
-            app_monitor();
-        else if (!strcmp(app, "network"))
-            app_network();
-        else if (!strcmp(app, "clock"))
-            app_clock();
-        else if (!strcmp(app, "about"))
-            app_about();
-        else {
-            snprintf(msg, sizeof(msg), "unknown app '%s' (terminal, shell, files, monitor, network, clock, about)",
+        static const char *const known[] = { "terminal", "shell", "files", "monitor", "network", "clock", "settings",
+                                             "display", "appearance", "about" };
+        bool ok = false;
+        for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); i++)
+            ok |= !strcmp(app, known[i]);
+        if (!ok) {
+            snprintf(msg, sizeof(msg), "unknown app '%s' (terminal, shell, files, monitor, network, clock, settings, display, appearance, about)",
                      app);
             reply(c, false, msg);
             goto out;
         }
-        if (!w && wm_focused() != before)
-            w = wm_focused();
+        pid_t pid = app_launch(app, path);           /* a program: wait for its window */
+        if (pid > 0)
+            w = server_wait_window(pid, 5000);
         if (!w) {
             reply(c, false, "the window could not be opened");
             goto out;
@@ -207,6 +201,36 @@ static void handle(struct chan *c, const char *line, size_t len)
             snprintf(msg, sizeof(msg), "moved %s to workspace %ld", w->title, n);
         }
         reply(c, true, msg);
+    } else if (!strcmp(op, "skin")) {           /* the desktop's look: list the skins, or change */
+        const char *name = json_get_str(req, "name");
+        if (!name || !*name) {
+            size_t k = snprintf(msg, sizeof(msg), "current: %s", fct_skin->name);
+            for (int i = 0; i < FCT_NSKINS && k < sizeof(msg); i++)
+                k += snprintf(msg + k, sizeof(msg) - k, "\n%s: %s - %s", fct_skin_at(i)->name, fct_skin_at(i)->title,
+                              fct_skin_at(i)->blurb);
+            reply(c, true, msg);
+        } else {
+            char err[128] = "";
+            if (wm_set_skin(name, err, sizeof(err))) {
+                snprintf(msg, sizeof(msg), "the desktop now uses the %s skin %s", fct_skin->title, err);
+                reply(c, true, msg);
+            } else {
+                reply(c, false, err);
+            }
+        }
+    } else if (!strcmp(op, "display")) {        /* the resolution: list the modes, or change it */
+        long w = num_arg(req, "width"), h = num_arg(req, "height");
+        if (w <= 0 || h <= 0) {
+            if (wm_display_modes(msg, sizeof(msg)) < 0)
+                reply(c, false, "no display information");
+            else
+                reply(c, true, msg);
+        } else if (wm_set_resolution((int)w, (int)h, msg, sizeof(msg))) {
+            snprintf(msg, sizeof(msg), "the screen is now %ldx%ld", w, h);
+            reply(c, true, msg);
+        } else {
+            reply(c, false, msg);
+        }
     } else if (!strcmp(op, "workspace")) {
         long n = num_arg(req, "workspace");
         if (n < 0)

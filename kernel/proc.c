@@ -16,6 +16,7 @@
 #include "tty.h"
 #include "smp.h"
 #include "poll.h"
+#include "display.h"
 #include "random.h"
 #include "sieos/auxv.h"
 #include "sieos/mman.h"
@@ -29,7 +30,6 @@ static struct lwp idle_lwps[NCPU];
 static int next_pid = 1;
 static int sleep_chan;
 
-#define TIME_SLICE 5                /* ticks */
 
 void proc_init_cpu(struct cpu *c)
 {
@@ -151,6 +151,7 @@ struct lwp *lwp_alloc(struct proc *p)
     l->fpu = fpu_default;
     l->altstack_flags = SIEOS_SS_DISABLE;
     strlcpy(l->name, p->name, sizeof(l->name));
+    sched_init_lwp(l, curlwp);
     p->nlwp++;
 
     /* Trap frame at the top; below it a context that "returns" to forkret,
@@ -211,20 +212,29 @@ void schedule(void)
 {
     struct cpu *c = mycpu();
     struct lwp *cur = c->lwp, *next = NULL;
-    for (int i = 1; i <= NLWP && !c->offline; i++) {
+    int best = -1;
+    c->need_resched = false;
+    for (int i = 1; i <= NLWP && !c->offline; i++) {   /* highest priority first, round robin among equals */
         int idx = (c->rr + i) % NLWP;
         struct lwp *l = &lwp_table[idx];
         if (l->state == LWP_RUNNABLE && (!l->bound || l->bound == c->id + 1)) {
-            next = l;
-            c->rr = idx;
-            break;
+            int pri = sched_gpri(l);
+            if (pri > best) {
+                best = pri;
+                next = l;
+            }
         }
     }
-    if (!next) {
-        if (cur->state == LWP_RUNNING && !cur->is_idle && !c->offline && (!cur->bound || cur->bound == c->id + 1))
-            return;                     /* nobody else wants this CPU */
-        next = c->idle;
+    bool cur_ok = cur->state == LWP_RUNNING && !cur->is_idle && !c->offline && (!cur->bound || cur->bound == c->id + 1);
+    if (cur_ok && (!next || sched_gpri(cur) > best || (sched_gpri(cur) == best && !c->slice_expired))) {
+        c->slice_expired = false;
+        return;                         /* it keeps the CPU: nobody ranks higher */
     }
+    c->slice_expired = false;
+    if (next)
+        c->rr = next - lwp_table;
+    else
+        next = c->idle;
     if (next == cur)
         return;
     if (!cur->is_idle) {
@@ -247,6 +257,7 @@ void schedule(void)
     wrmsr(MSR_FS_BASE, next->fsbase);   /* its TLS pointer */
     c->lwp = next;
     c->slice_start = ticks;
+    next->last_run = ticks;
     switch_context(&cur->ctx_rsp, next->ctx_rsp);
     /* Note: we may now be running on a different CPU than before. */
 }
@@ -279,6 +290,7 @@ void sleep_on(void *chan)
 void make_runnable(struct lwp *l)
 {
     l->state = LWP_RUNNABLE;
+    sched_woke(l);
     smp_kick_idle();
 }
 
@@ -289,6 +301,7 @@ void wakeup(void *chan)
         struct lwp *l = &lwp_table[i];
         if (l->state == LWP_SLEEPING && l->chan == chan) {
             l->state = LWP_RUNNABLE;
+            sched_woke(l);
             woke = true;
         }
     }
@@ -316,10 +329,13 @@ void clock_tick(uint64_t n)
     bool woke = false;
     if (ticks / (5 * TIMER_HZ) != (ticks - n) / (5 * TIMER_HZ))
         update_loadavg();
+    if (ticks / TIMER_HZ != (ticks - n) / TIMER_HZ)
+        sched_second();
     for (int i = 0; i < NLWP; i++) {
         struct lwp *l = &lwp_table[i];
         if (l->state == LWP_SLEEPING && l->wake_tick && l->wake_tick <= ticks) {
             l->state = LWP_RUNNABLE;
+            sched_woke(l);
             woke = true;
         }
     }
@@ -374,8 +390,12 @@ void sched_tick(struct trapframe *tf)
             signal_send(p, SIGPROF);
         }
     }
-    if ((tf->cs & 3) == 3 && ticks - c->slice_start >= TIME_SLICE)
+    uint32_t q = sched_quantum(l);
+    if ((tf->cs & 3) == 3 && !l->is_idle && q && ticks - c->slice_start >= q) {
+        sched_expired(l);                /* its quantum is used up */
+        c->slice_expired = true;
         schedule();
+    }
 }
 
 /* Wake the high-resolution sleepers that are due; returns the earliest deadline left. */
@@ -390,6 +410,7 @@ uint64_t hr_wake(uint64_t now)
         if (l->wake_ns <= now) {
             if (l->state == LWP_SLEEPING) {
                 l->state = LWP_RUNNABLE;
+                sched_woke(l);
                 woke = true;
             }
         } else if (l->wake_ns < next) {
@@ -548,7 +569,73 @@ static int load_interp(uint64_t pml4, const char *path, struct interp_image *out
     return r;
 }
 
+static int exec_file(struct lwp *l, const char *path, char *const argv[], char *const envp[], int depth);
+
+/*
+ * A script ("#!interpreter [arg]" on its first line, up to 255 bytes): run
+ * the interpreter with argv interpreter [arg] path argv[1]...  Interpreters
+ * may be scripts themselves, 4 deep.  (The script's set-id bits are ignored:
+ * the interpreter's count.)
+ */
+static int exec_script(struct lwp *l, struct inode *ip, const char *path, char *const argv[], char *const envp[],
+                       int depth)
+{
+    char line[256];
+    long n = readi(ip, line, 0, sizeof(line) - 1);
+    iput(ip);
+    if (n < 3)
+        return -ENOEXEC;
+    line[n] = 0;
+    char *nl = strchr(line, '\n');
+    if (!nl && n == (long)sizeof(line) - 1)
+        return -ENOEXEC;                             /* the line is too long */
+    if (nl)
+        *nl = 0;
+    char *interp = line + 2, *arg = NULL;
+    while (*interp == ' ' || *interp == '\t')
+        interp++;
+    char *e = interp;
+    while (*e && *e != ' ' && *e != '\t')
+        e++;
+    if (*e) {
+        *e++ = 0;
+        while (*e == ' ' || *e == '\t')
+            e++;
+        char *end = e + strlen(e);
+        while (end > e && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r'))
+            *--end = 0;
+        if (*e)
+            arg = e;                                 /* the rest of the line: one argument */
+    }
+    if (!*interp)
+        return -ENOEXEC;
+    if (depth >= 4)
+        return -ELOOP;
+    int argc = 0;
+    while (argv && argv[argc])
+        argc++;
+    char **nargv = kmalloc((argc + 3) * sizeof(char *));
+    if (!nargv)
+        return -ENOMEM;
+    int k = 0;
+    nargv[k++] = interp;
+    if (arg)
+        nargv[k++] = arg;
+    nargv[k++] = (char *)path;
+    for (int i = 1; i < argc; i++)
+        nargv[k++] = argv[i];
+    nargv[k] = NULL;
+    int r = exec_file(l, interp, nargv, envp, depth + 1);
+    kfree(nargv);
+    return r;
+}
+
 static int exec_into(struct lwp *l, const char *path, char *const argv[], char *const envp[])
+{
+    return exec_file(l, path, argv, envp, 0);
+}
+
+static int exec_file(struct lwp *l, const char *path, char *const argv[], char *const envp[], int depth)
 {
     struct proc *p = l->proc;
     int err;
@@ -563,6 +650,9 @@ static int exec_into(struct lwp *l, const char *path, char *const argv[], char *
         iput(ip);
         return err;
     }
+    char magic[2];
+    if (readi(ip, magic, 0, 2) == 2 && magic[0] == '#' && magic[1] == '!')
+        return exec_script(l, ip, path, argv, envp, depth);
     Elf64_Ehdr eh;
     if (readi(ip, &eh, 0, sizeof(eh)) != sizeof(eh) || eh.e_magic != ELF_MAGIC ||
         eh.e_class != ELFCLASS64 || (eh.e_type != ET_EXEC && eh.e_type != ET_DYN) ||
@@ -853,8 +943,21 @@ int proc_spawn_init(const char *path, const char *cmdline)
 /* fork / exit / wait                                                  */
 /* ------------------------------------------------------------------ */
 
+/* The processes of a real user, for RLIMIT_NPROC. */
+static uint64_t user_procs(int uid)
+{
+    uint64_t n = 0;
+    for (int i = 1; i < NPROC; i++)
+        if (proc_table[i].state != PSTATE_UNUSED && proc_table[i].uid == uid)
+            n++;
+    return n;
+}
+
 long proc_fork(int flags)
 {
+    uint64_t lim = current->rlim_cur[SIEOS_RLIMIT_NPROC];
+    if (lim != SIEOS_RLIM_INFINITY && user_procs(current->uid) >= lim)
+        return -EAGAIN;                                /* (enforced for root too: it lowered its own limit) */
     struct proc *np = alloc_proc();
     if (!np)
         return -EAGAIN;
@@ -1038,15 +1141,15 @@ void lwp_exit_self(void)
     p->ru.nvcsw += l->nvcsw;
     p->ru.nivcsw += l->nivcsw;
     p->ru.minflt += l->minflt;
-    l->state = LWP_ZOMBIE;
     p->nlwp--;
     if (p->nlwp == 0) {
         if (p->pid == 1)
             panic("init exited with status %x", p->exit_status);
-        proc_teardown(p);
+        proc_teardown(p);                /* (closing files may sleep in disk I/O: still running) */
     } else {
-        wakeup(&p->nlwp);                /* lwp_wait, exec */
+        wakeup(&p->nlwp);                /* lwp_wait, exec (they run once we have switched away) */
     }
+    l->state = LWP_ZOMBIE;               /* only now: a wake-up must not make us runnable again */
     reap_detached();
     schedule();
     panic("exited LWP %d/%d was scheduled", p->pid, l->lwpid);

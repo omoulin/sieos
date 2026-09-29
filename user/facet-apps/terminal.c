@@ -1,13 +1,20 @@
 /*
- * term.c - Terminal emulator window on a pseudo-terminal.  It runs the sia
- * assistant (which falls back to /bin/sh when no model is available), or
- * the plain shell for "Shell Terminal".
+ * facet-terminal [-s] [-n number] - Terminal emulator window on a
+ * pseudo-terminal.  It runs the sia assistant (which falls back to /bin/sh
+ * when no model is available), or with -s the plain shell.  Facet starts it
+ * with the desktop control channel as fds 3 and 4, which the assistant
+ * inherits; lines the desktop types (FCT_EV_TEXT) go to the program.
+ * A Facet application (libfacet).
  *
  * Understands printable text, \n \r \b \t \f, and ANSI sequences for
  * colours (SGR 0/1/22/30-37/39/40-47/49/90-97), cursor movement
  * (A B C D H f), and erasing (J K).
+ *
+ * Text is DejaVu Sans Mono (TrueType, 13 px): Ctrl and + / - change the
+ * size, Ctrl+0 restores it; the window keeps its size and the grid follows.
  */
-#include "facet.h"
+#include "common.h"
+#include <facet/font.h>
 #include <pty.h>
 
 #define MAX_COLS 160
@@ -16,7 +23,6 @@
 
 struct term {
     int master;
-    int chan;                            /* desktop control channel of the program */
     pid_t child;
     int cols, rows;
     uint16_t cell[MAX_ROWS][MAX_COLS];   /* char | attr << 8 (attr = fg | bg << 4) */
@@ -27,7 +33,24 @@ struct term {
     bool exited;
     bool plain;                          /* plain shell, not the sia assistant */
     int number;
+    int px;                              /* font size */
+    struct fct_face *face;               /* NULL: the bitmap font */
+    int cw, chh;                         /* the character cell */
 };
+
+#define DEFAULT_PX 13
+
+static void term_metrics(struct term *t)
+{
+    t->face = fct_ui_face_px(FCT_FONT_MONO, t->px);
+    if (t->face) {
+        t->cw = MAX(4, (int)(fct_face_advance(t->face, 'M') + 0.5f));
+        t->chh = fct_face_height(t->face) + 1;
+    } else {
+        t->cw = FONT_W;
+        t->chh = FONT_H;
+    }
+}
 
 static const color_t term_palette[16] = {
     RGB(0x14, 0x19, 0x1D), RGB(0xC9, 0x4B, 0x3F), RGB(0x6C, 0xC0, 0x8A), RGB(0xE3, 0xA2, 0x33),
@@ -197,29 +220,37 @@ static color_t bg_color(uint8_t attr)
     return b == 0 ? TERM_BG : term_palette[b];
 }
 
-static void term_draw(struct window *w, struct surface *s, struct rect c)
+static void term_draw(struct fct_view *w, struct surface *s, struct rect c)
 {
     struct term *t = w->app;
     gfx_fill(s, c.x, c.y, c.w, c.h, TERM_BG);
     for (int y = 0; y < t->rows; y++) {
-        int py = c.y + PAD + y * FONT_H;
-        if (py + FONT_H < s->clip.y || py > s->clip.y + s->clip.h)
+        int py = c.y + PAD + y * t->chh;
+        if (py + t->chh < s->clip.y || py > s->clip.y + s->clip.h)
             continue;
         for (int x = 0; x < t->cols; x++) {
             uint16_t cell = t->cell[y][x];
             uint8_t attr = cell >> 8;
             unsigned char ch = cell & 255;
-            int px = c.x + PAD + x * FONT_W;
-            bool cursor = x == t->cx && y == t->cy && !t->exited && w == wm_focused();
+            int px = c.x + PAD + x * t->cw;
+            bool cursor = x == t->cx && y == t->cy && !t->exited;
             color_t fg = fg_color(attr), bgc = bg_color(attr);
             if (cursor) {
                 fg = TERM_BG;
                 bgc = TERM_FG;
             }
             if (bgc != TERM_BG || cursor)
-                gfx_fill(s, px, py, FONT_W, FONT_H, bgc);
-            if (ch != ' ')
+                gfx_fill(s, px, py, t->cw, t->chh, bgc);
+            if (ch == ' ')
+                continue;
+            if (t->face && ch > ' ' && ch != 0x7F && !(ch >= 0x80 && ch < 0xA0)) {
+                unsigned cp = ch;                /* (cells hold ISO 8859-1 bytes) */
+                int adv = (int)(fct_face_advance(t->face, cp) + 0.5f);
+                fct_face_draw_cp(s, t->face, px + (t->cw - adv) / 2,
+                                 py + (t->chh - fct_face_height(t->face)) / 2 + fct_face_ascent(t->face), cp, fg);
+            } else {
                 gfx_char(s, px, py, ch, fg, bgc, false);
+            }
         }
     }
     if (t->exited)
@@ -232,16 +263,44 @@ static void term_send(struct term *t, const char *s, size_t n)
         write(t->master, s, n);
 }
 
-static void term_key(struct window *w, const struct input_event *ev)
+static void term_resized(struct fct_view *w);
+
+/* Ctrl and + / - / 0 (the main keys or the keypad): the font size. */
+static bool term_zoom(struct fct_view *w, const struct fct_key *ev)
 {
     struct term *t = w->app;
-    if (ev->type != EV_KEY || !ev->value)
+    if (!(ev->mods & FCT_MOD_CTRL) || !t->face)
+        return false;
+    int px = t->px;
+    if (ev->code == 0x0D || ev->code == 0x4E)
+        px = MIN(32, px + 1);
+    else if (ev->code == 0x0C || ev->code == 0x4A)
+        px = MAX(8, px - 1);
+    else if (ev->code == 0x0B)
+        px = DEFAULT_PX;
+    else
+        return false;
+    if (px != t->px) {
+        t->px = px;
+        term_metrics(t);
+        term_resized(w);
+        fct_view_invalidate(w);
+    }
+    return true;
+}
+
+static void term_key(struct fct_view *w, const struct fct_key *ev)
+{
+    struct term *t = w->app;
+    if (!ev->value)
+        return;
+    if (term_zoom(w, ev))
         return;
     switch (ev->code) {
-    case KEY_UP:    term_send(t, "\033[A", 3); return;
-    case KEY_DOWN:  term_send(t, "\033[B", 3); return;
-    case KEY_RIGHT: term_send(t, "\033[C", 3); return;
-    case KEY_LEFT:  term_send(t, "\033[D", 3); return;
+    case FCT_KEY_UP:    term_send(t, "\033[A", 3); return;
+    case FCT_KEY_DOWN:  term_send(t, "\033[B", 3); return;
+    case FCT_KEY_RIGHT: term_send(t, "\033[C", 3); return;
+    case FCT_KEY_LEFT:  term_send(t, "\033[D", 3); return;
     }
     if (ev->ascii) {
         char ch = ev->ascii == '\n' ? '\r' : (char)ev->ascii;
@@ -249,35 +308,36 @@ static void term_key(struct window *w, const struct input_event *ev)
     }
 }
 
-static void term_readable(struct window *w)
+static void term_readable(struct fct_view *w)
 {
     struct term *t = w->app;
     char buf[2048];
     long n = read(t->master, buf, sizeof(buf));
     if (n <= 0) {
         t->exited = true;                /* all slave descriptors closed */
-        snprintf(w->title, sizeof(w->title), "Terminal %d (exited)", t->number);
-        wm_invalidate(w);
+        char title[FCT_TITLE_MAX];
+        snprintf(title, sizeof(title), "%s %d (exited)", t->plain ? "Shell" : "Terminal", t->number);
+        fct_view_set_title(w, title);
+        fct_view_invalidate(w);
         return;
     }
     for (long i = 0; i < n; i++)
         term_putc(t, buf[i]);
-    struct rect c = wm_content(w);
-    wm_invalidate_rect(c);
+    fct_view_invalidate(w);
 }
 
-static int term_pollfd(struct window *w)
+static int term_pollfd(struct fct_view *w)
 {
     struct term *t = w->app;
     return t->exited ? -1 : t->master;
 }
 
-static void term_resized(struct window *w)
+static void term_resized(struct fct_view *w)
 {
     struct term *t = w->app;
-    struct rect c = wm_content(w);
-    int cols = MIN(MAX_COLS, MAX(20, (c.w - 2 * PAD) / FONT_W));
-    int rows = MIN(MAX_ROWS, MAX(4, (c.h - 2 * PAD) / FONT_H));
+    struct rect c = fct_view_content(w);
+    int cols = MIN(MAX_COLS, MAX(20, (c.w - 2 * PAD) / t->cw));
+    int rows = MIN(MAX_ROWS, MAX(4, (c.h - 2 * PAD) / t->chh));
     if (cols == t->cols && rows == t->rows)
         return;
     while (t->cy >= rows) {
@@ -291,40 +351,51 @@ static void term_resized(struct window *w)
     ioctl(t->master, TIOCSWINSZ, &ws);
 }
 
-static void term_destroy(struct window *w)
+static void term_destroy(struct fct_view *w)
 {
     struct term *t = w->app;
     close(t->master);                    /* hangs up the shell's session */
-    desktop_channel_close(t->chan);
     if (t->child > 0 && !t->exited)
         kill(t->child, SIGHUP);
     free(t);
 }
 
-struct window *term_open(bool plain)
+/* A line from the desktop (the sia strip, "open terminal" with a command): type it. */
+static void term_text(struct fct_view *w, const char *line)
 {
-    static int count;
+    struct term *t = w->app;
+    term_send(t, line, strlen(line));
+    term_send(t, "\n", 1);
+}
+
+int main(int argc, char **argv)
+{
     struct term *t = calloc(1, sizeof(*t));
     if (!t)
-        return NULL;
-    t->plain = plain;
+        return 1;
+    t->number = 1;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-s"))
+            t->plain = true;
+        else if (!strcmp(argv[i], "-n") && i + 1 < argc)
+            t->number = atoi(argv[++i]);
+    }
+    signal(SIGPIPE, SIG_IGN);
     t->cols = 80;
     t->rows = 25;
     t->attr = DEFAULT_ATTR;
-    t->number = ++count;
     for (int y = 0; y < MAX_ROWS; y++)
         clear_row(t, y, 0);
 
     int fds[2];
     if (openpty(&fds[0], &fds[1], NULL, NULL, NULL) < 0) {
-        free(t);
-        return NULL;
+        perror("facet-terminal: openpty");
+        return 1;
     }
     struct winsize ws = { t->rows, t->cols, 0, 0 };
     ioctl(fds[0], TIOCSWINSZ, &ws);
-    t->chan = desktop_channel_new();
     pid_t pid = fork();
-    if (pid == 0) {
+    if (pid == 0) {                              /* (the display socket is close-on-exec) */
         close(fds[0]);
         setsid();
         dup2(fds[1], 0);
@@ -333,39 +404,41 @@ struct window *term_open(bool plain)
         if (fds[1] > 2)
             close(fds[1]);
         ioctl(0, TIOCSCTTY, 0);
-        signal(SIGINT, SIG_DFL);
-        signal(SIGTSTP, SIG_DFL);
         signal(SIGPIPE, SIG_DFL);
-        signal(SIGHUP, SIG_DFL);
-        signal(SIGTERM, SIG_DFL);
         setenv("TERM", "sieos", 1);
-        desktop_channel_child(t->chan);         /* fds 3/4; closes everything else of Facet's */
-        const char *home = getenv("HOME");
-        if (home)
-            chdir(home);
         struct stat st;
-        if (!plain && stat("/bin/sia", &st) == 0) {
-            char *argv[] = { "sia", NULL };
-            execv("/bin/sia", argv);
+        if (!t->plain && stat("/bin/sia", &st) == 0) {
+            char *av[] = { "sia", NULL };
+            execv("/bin/sia", av);
         }
-        char *argv[] = { "sh", NULL };
-        execv("/bin/sh", argv);
+        char *av[] = { "sh", NULL };
+        execv("/bin/sh", av);
         _exit(127);
     }
-    desktop_channel_parent(t->chan);
     close(fds[1]);
     t->master = fds[0];
     t->child = pid;
-
-    char title[32];
-    snprintf(title, sizeof(title), "%s %d - %s", plain ? "Shell" : "Terminal", t->number, desktop_user);
-    struct window *w = wm_create(title, -1, -1, t->cols * FONT_W + 2 * PAD, t->rows * FONT_H + 2 * PAD);
-    if (!w) {
-        close(t->master);
-        desktop_channel_close(t->chan);
-        free(t);
-        return NULL;
+    fcntl(t->master, F_SETFD, FD_CLOEXEC);
+    if (getenv("SIEOS_DESKTOP")) {               /* the desktop channel (3, 4) is the child's now */
+        close(3);
+        close(4);
     }
+    if (fct_app_init() < 0) {
+        kill(pid, SIGHUP);
+        return 1;
+    }
+
+    struct passwd *pw = getpwuid(geteuid());
+    char title[FCT_TITLE_MAX];
+    snprintf(title, sizeof(title), "%s %d - %s", t->plain ? "Shell" : "Terminal", t->number, pw ? pw->pw_name : "?");
+    t->px = DEFAULT_PX;
+    term_metrics(t);
+    struct fct_window_attr a = { title, FCT_POS_AUTO, FCT_POS_AUTO, t->cols * t->cw + 2 * PAD,
+                                 t->rows * t->chh + 2 * PAD, 30 * t->cw, 8 * t->chh,
+                                 t->plain ? 0u : FCT_WIN_ASSISTANT };
+    struct fct_view *w = fct_view_create(&a);
+    if (!w)
+        return 1;
     w->app = t;
     w->draw = term_draw;
     w->key = term_key;
@@ -373,33 +446,6 @@ struct window *term_open(bool plain)
     w->pollfd = term_pollfd;
     w->resized = term_resized;
     w->destroy = term_destroy;
-    w->min_w = 30 * FONT_W;
-    w->min_h = 8 * FONT_H;
-    return w;
-}
-
-bool term_is_assistant(struct window *w)
-{
-    struct term *t = w->app;
-    return w->draw == term_draw && t && !t->plain && !t->exited;
-}
-
-/* Type a line into the terminal, as if the user had entered it. */
-void term_type_line(struct window *w, const char *text)
-{
-    struct term *t = w->app;
-    if (w->draw != term_draw || !t || t->exited)
-        return;
-    write(t->master, text, strlen(text));
-    write(t->master, "\n", 1);
-}
-
-void app_terminal(void)
-{
-    term_open(false);
-}
-
-void app_shell_terminal(void)
-{
-    term_open(true);
+    w->text = term_text;
+    return fct_main();
 }

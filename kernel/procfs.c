@@ -22,6 +22,7 @@
 #include "abi2.h"
 #include "sieos/procfs.h"
 #include "sieos/sysinfo.h"
+#include "sieos/priocntl.h"
 
 enum { PN_ROOT = 1, PN_SELF, PN_PID, PN_PSINFO, PN_STATUS, PN_CRED, PN_USAGE, PN_LWPDIR, PN_LWP,
        PN_LWPSINFO, PN_FDDIR, PN_FD, PN_CWD, PN_ROOTLNK, PN_MNTTAB };
@@ -115,8 +116,9 @@ static void fill_lwpsinfo(struct proc *p, struct lwp *l, sieos_lwpsinfo_t *li)
     li->pr_wchan = l->state == LWP_SLEEPING ? (uint64_t)l->chan : 0;
     if (l->state == LWP_STOPPED || l->state == LWP_SUSPENDED)
         li->pr_flag |= SIEOS_PR_STOPPED;
-    li->pr_pri = 59;
-    memcpy(li->pr_clname, "TS", 3);
+    li->pr_pri = sched_gpri(l);
+    li->pr_nice = (l->cid == SIEOS_CID_TS || l->cid == SIEOS_CID_FX) ? 20 - l->upri / 3 : 0;
+    strlcpy(li->pr_clname, sched_class_name(l->cid), sizeof(li->pr_clname));
     li->pr_start.tv_sec = boot_time() + p->start_tick / TIMER_HZ;
     ticks_ts(l->ticks, &li->pr_time);
     li->pr_onpro = l->cpu;

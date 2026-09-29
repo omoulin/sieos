@@ -1,0 +1,2 @@
+# /etc/facet/settings - the desktop's defaults, and the login screen's (facet/settings.h)
+skin=beos

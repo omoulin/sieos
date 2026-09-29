@@ -12,7 +12,8 @@
 
 #define KERNEL_VBASE  0xFFFFFFFF80000000UL
 #define PHYS_OFFSET   0xFFFF800000000000UL   /* direct map of physical memory */
-#define DIRECT_MAP_SIZE (4UL << 30)          /* 4 GiB mapped by boot tables  */
+#define DIRECT_MAP_SIZE (4UL << 30)          /* 4 GiB mapped by boot tables (2 MiB pages) */
+#define DIRECT_MAP_MAX  (256UL << 30)        /* RAM mapped at most (above 4 GiB: pmm_init) */
 
 #define P2V(pa)  ((void *)((uintptr_t)(pa) + PHYS_OFFSET))
 #define V2P(va)  ((uintptr_t)(va) >= KERNEL_VBASE ? \
@@ -30,6 +31,8 @@
 #define OS_NAME     "SIEOS"
 #define OS_LONGNAME "Synthetic Intelligence Enhanced Operating System"
 #define OS_RELEASE  "0.4.0"
+#define OS_AUTHOR   "Olivier Moulin"
+#define OS_LICENSE  "GNU GPL version 3 (GPL-3.0)"
 
 /* string.c */
 void *memset(void *d, int c, size_t n);
@@ -71,6 +74,8 @@ int  serial_getc_nonblock(void);
 
 struct fb_info;
 bool console_fb_info(struct fb_info *fi, uint64_t *phys);
+void console_fb_remap(void *kva);
+void console_fb_mode(void *kva, uint32_t width, uint32_t height, uint32_t pitch);
 void console_suspend(bool on);
 
 /* keyboard.c */
@@ -82,6 +87,7 @@ extern volatile uint64_t ticks;
 void timer_init(void);
 uint64_t rtc_unix_time(void);
 uint64_t kernel_time(void);   /* current unix time */
+extern volatile bool kernel_running;    /* the boot is over: processes run (main.c) */
 uint64_t hrtime(void);        /* ns since boot (TSC) */
 int64_t  realtime_ns(void);   /* ns since the epoch */
 void     realtime_set(int64_t ns);

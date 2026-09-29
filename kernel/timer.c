@@ -1,6 +1,7 @@
 /*
  * timer.c - PIT system timer and CMOS real-time clock.
  */
+#include "hid.h"
 #include "arch.h"
 #include "proc.h"
 #include "smp.h"
@@ -156,6 +157,8 @@ static void timer_irq(struct trapframe *tf)
     }
     clock_tick(n);
     net_poll();
+    usb_poll();
+    i2c_hid_poll();
     if (!lapic_ok)
         sched_tick(tf);            /* no local APIC timer: the PIT schedules */
 }

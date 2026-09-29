@@ -1,6 +1,6 @@
 /*
  * wget - download a URL over HTTP/1.0.
- *   wget [-q] [-O file|-] http://host[:port]/path
+ *   wget [-q] [-O file|-] http://host[:port]/path     (host: a name, a.b.c.d or [IPv6])
  * Without -O the file is saved under the last path component
  * (index.html for "/").
  */
@@ -34,29 +34,54 @@ int main(int argc, char **argv)
     host[hl] = 0;
     strlcpy(path, slash ? slash : "/", sizeof(path));
     int port = 80;
-    char *colon = strchr(host, ':');
+    char hosthdr[160];                               /* for the Host header: as in the URL */
+    strlcpy(hosthdr, host, sizeof(hosthdr));
+    char *hname = host, *colon;
+    if (host[0] == '[') {                            /* [IPv6 address] */
+        char *close = strchr(host, ']');
+        if (!close) {
+            dprintf(STDERR_FILENO, "wget: bad address %s\n", host);
+            return 2;
+        }
+        *close = 0;
+        hname = host + 1;
+        colon = close[1] == ':' ? close + 1 : NULL;
+    } else {
+        colon = strchr(host, ':');
+    }
     if (colon) {
         *colon = 0;
         port = atoi(colon + 1);
     }
-    unsigned int addr;
-    if (resolve_host(host, &addr) < 0) {
-        dprintf(STDERR_FILENO, "wget: unable to resolve host %s\n", host);
+    struct sockaddr_storage addrs[8];
+    socklen_t lens[8];
+    int na = resolve_addrs(hname, AF_UNSPEC, port, addrs, lens, 8);
+    if (!na) {
+        dprintf(STDERR_FILENO, "wget: unable to resolve host %s\n", hname);
         return 1;
     }
-    if (!quiet)
-        dprintf(STDERR_FILENO, "Connecting to %s (%s):%d... ", host, inet_ntoa((struct in_addr){ addr }), port);
-    int s = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in a = make_addr(addr, port);
-    if (s < 0 || connect(s, (struct sockaddr *)&a, sizeof(a)) < 0) {
-        dprintf(STDERR_FILENO, "failed: %s\n", strerror(errno));
-        return 1;
+    int s = -1;
+    for (int i = 0; i < na && s < 0; i++) {
+        char ip[INET6_ADDRSTRLEN];
+        addr_to_str((struct sockaddr *)&addrs[i], ip, sizeof(ip));
+        if (!quiet)
+            dprintf(STDERR_FILENO, addrs[i].ss_family == AF_INET6 ? "Connecting to %s ([%s]):%d... " :
+                    "Connecting to %s (%s):%d... ", hname, ip, port);
+        s = socket(addrs[i].ss_family, SOCK_STREAM, 0);
+        if (s >= 0 && connect(s, (struct sockaddr *)&addrs[i], lens[i]) < 0) {
+            if (!quiet || i == na - 1)
+                dprintf(STDERR_FILENO, "failed: %s\n", strerror(errno));
+            close(s);
+            s = -1;
+        }
     }
+    if (s < 0)
+        return 1;
     if (!quiet)
         dprintf(STDERR_FILENO, "connected.\n");
     char req[768];
     int n = snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: SIEOS-wget/1.0\r\n"
-                     "Connection: close\r\n\r\n", path, host);
+                     "Connection: close\r\n\r\n", path, hosthdr);
     write(s, req, n);
 
     /* Read the response header. */

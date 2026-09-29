@@ -4,7 +4,8 @@ sieos-port.py SRC_TARBALL DEST - prepare the musl source tree for SIEOS.
 
 1. extract musl (pristine release tarball) into DEST
 2. copy the port overlay (libc/port) over it: arch/sieos64, src/*/sieos64
-   (musl's per-arch replacement mechanism) and src/sieos (new sources)
+   (musl's per-arch replacement mechanism) and src/sieos (new sources);
+   then libc/backports: fixes from later musl releases (see its README)
 3. copy the kernel ABI headers (abi/include/sieos) to arch/sieos64/sieos for
    the port's own sources
 4. expand @DEFINES regex@ markers in overlay headers with the matching
@@ -101,7 +102,8 @@ EMU = [
     'msgctl', 'msgrcv', 'msgsnd', 'semget', 'semctl', 'semop', 'semtimedop', 'shmget', 'shmctl', 'shmat',
     'shmdt', 'sched_getaffinity', 'sched_setaffinity', 'sched_get_priority_max', 'sched_get_priority_min',
     'sched_getscheduler', 'sched_getparam', 'rt_sigaction', 'fchown', 'fchmod', 'set_robust_list', 'get_robust_list',
-    'mount', 'umount2',
+    'mount', 'umount2', 'getpriority', 'setpriority', 'sched_setscheduler', 'sched_setparam',
+    'sched_rr_get_interval',
 ]
 
 def aarch64_names(tree):
@@ -270,7 +272,8 @@ def patches():
 #define RLIMIT_NOFILE  5
 #define RLIMIT_VMEM    6
 #define RLIMIT_AS      RLIMIT_VMEM
-#define RLIMIT_NLIMITS 7''')
+#define RLIMIT_NPROC   7
+#define RLIMIT_NLIMITS 8''')
     # sys/stat.h: UTIME_NOW / UTIME_OMIT
     add('include/sys/stat.h', '#define UTIME_NOW  0x3fffffff\n#define UTIME_OMIT 0x3ffffffe',
         '#define UTIME_NOW  (-1L)\n#define UTIME_OMIT (-2L)')
@@ -312,7 +315,29 @@ def patches():
     add('include/sys/socket.h', '#define SOCK_RAW       3\n#define SOCK_RDM       4\n#define SOCK_SEQPACKET 5',
         '#ifndef SOCK_RAW\n#define SOCK_RAW       3\n#define SOCK_RDM       4\n#define SOCK_SEQPACKET 5\n#endif')
     add('include/sys/socket.h', '#define PF_INET6        10', '#define PF_INET6        26')
+    # sockaddr_in6 is Solaris's (32 bytes, with __sin6_src_id) and so are the IPPROTO_IPV6 options
+    add('include/netinet/in.h', '\tuint32_t        sin6_scope_id;\n};',
+        '\tuint32_t        sin6_scope_id;\n\tuint32_t        __sin6_src_id;\n};')
+    for name, val in [('IPV6_UNICAST_HOPS', 'UNICAST_HOPS'), ('IPV6_MULTICAST_IF', 'MULTICAST_IF'),
+                      ('IPV6_MULTICAST_HOPS', 'MULTICAST_HOPS'), ('IPV6_MULTICAST_LOOP', 'MULTICAST_LOOP'),
+                      ('IPV6_JOIN_GROUP', 'JOIN_GROUP'), ('IPV6_LEAVE_GROUP', 'LEAVE_GROUP'),
+                      ('IPV6_V6ONLY', 'V6ONLY')]:
+        old = {'IPV6_UNICAST_HOPS': 16, 'IPV6_MULTICAST_IF': 17, 'IPV6_MULTICAST_HOPS': 18,
+               'IPV6_MULTICAST_LOOP': 19, 'IPV6_JOIN_GROUP': 20, 'IPV6_LEAVE_GROUP': 21, 'IPV6_V6ONLY': 26}[name]
+        add('include/netinet/in.h', '#define %-23s %d\n' % (name, old), '#define %-23s %s\n' % (name, D('IPV6_' + val)))
     add('include/sys/socket.h', '#define SCM_RIGHTS      0x01', '#define SCM_RIGHTS      %s' % D('SCM_RIGHTS'))
+    # process-level sched_*: SIEOS has them (priocntl); the emulation takes the pid negated
+    # (the pthread functions pass LWP ids)
+    for fn, sig, call in [
+            ('sched_setscheduler', 'pid_t pid, int sched, const struct sched_param *param',
+             'syscall(SYS_sched_setscheduler, -(pid ? pid : getpid()), sched, param)'),
+            ('sched_getscheduler', 'pid_t pid', 'syscall(SYS_sched_getscheduler, -(pid ? pid : getpid()))'),
+            ('sched_setparam', 'pid_t pid, const struct sched_param *param',
+             'syscall(SYS_sched_setparam, -(pid ? pid : getpid()), param)'),
+            ('sched_getparam', 'pid_t pid, struct sched_param *param',
+             'syscall(SYS_sched_getparam, -(pid ? pid : getpid()), param)')]:
+        add('src/sched/%s.c' % fn, 'int %s(%s)\n{\n\treturn __syscall_ret(-ENOSYS);\n}' % (fn, sig),
+            '#include <unistd.h>\nint %s(%s)\n{\n\treturn %s;\n}' % (fn, sig, call))
     # confstr(_CS_PATH): the POSIX utilities are the GNU ones in /usr/gnu/bin (as /usr/xpg4/bin on
     # Solaris); /bin holds the smaller SIEOS programs
     add('src/conf/confstr.c', 's = "/bin:/usr/bin";', 's = "/usr/gnu/bin:/bin:/usr/bin";')
@@ -441,6 +466,34 @@ int str2sig(const char *, int *);
 		CLONE_VM|CLONE_VFORK|SIGCHLD, &args);''', '''	(void)stack;
 	pid = __syscall(SYS_fork);
 	if (pid == 0) child(&args);''')
+    # POSIX.1-2024 names musl 1.2.6 does not have yet: timestamps are in ns on
+    # every SIEOS file system; there is no UUCP
+    add('include/unistd.h', '#define _PC_2_SYMLINKS	20', '#define _PC_2_SYMLINKS	20\n#define _PC_TIMESTAMP_RESOLUTION	21')
+    add('include/unistd.h', '#define _SC_SIGSTKSZ	250', '#define _SC_SIGSTKSZ	250\n#define _SC_XOPEN_UUCP	251')
+    add('src/conf/fpathconf.c', '[_PC_2_SYMLINKS] = 1', '[_PC_2_SYMLINKS] = 1,\n\t\t[_PC_TIMESTAMP_RESOLUTION] = 1')
+    add('src/conf/sysconf.c', '[_SC_SIGSTKSZ] = JT_SIGSTKSZ,', '[_SC_SIGSTKSZ] = JT_SIGSTKSZ,\n\t\t[_SC_XOPEN_UUCP] = -1,')
+    # backports/src/time/strptime.c (musl 1.2.6) parses %Z with __tzname_to_isdst
+    add('src/time/time_impl.h', 'hidden const char *__tm_to_tzname(const struct tm *);',
+        'hidden const char *__tm_to_tzname(const struct tm *);\nhidden int __tzname_to_isdst(const char *restrict *);')
+    add('src/time/__tz.c', '''const char *__tm_to_tzname(const struct tm *tm)''', '''int __tzname_to_isdst(const char *restrict *s)
+{
+	size_t len;
+	int isdst = -1;
+	LOCK(lock);
+	if (tzname[0] && !strncmp(*s, tzname[0], len = strlen(tzname[0]))) {
+		isdst = 0;
+		*s += len;
+	} else if (tzname[1] && !strncmp(*s, tzname[1], len=strlen(tzname[1]))) {
+		isdst = 1;
+		*s += len;
+	} else {
+		while (isalpha(**s)) ++*s;
+	}
+	UNLOCK(lock);
+	return isdst;
+}
+
+const char *__tm_to_tzname(const struct tm *tm)''')
     return P
 
 def apply_patches(tree):
@@ -499,6 +552,12 @@ def main():
         os.makedirs(os.path.join(dest, rel), exist_ok=True)
         for f in files:
             shutil.copy(os.path.join(root, f), os.path.join(dest, rel, f))
+    backports = os.path.join(HERE, 'backports')
+    for root, dirs, files in os.walk(backports):
+        rel = os.path.relpath(root, backports)
+        for f in files:
+            if f != 'README.md':
+                shutil.copy(os.path.join(root, f), os.path.join(dest, rel, f))
     shutil.copytree(ABI, os.path.join(dest, 'arch', 'sieos64', 'sieos'))
     for root, dirs, files in os.walk(os.path.join(dest, 'arch', 'sieos64')):
         for f in files:

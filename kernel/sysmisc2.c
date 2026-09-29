@@ -5,6 +5,8 @@
  * (processor_info, p_online, processor_bind, getloadavg).
  */
 #include "proc.h"
+#include "jbd2.h"
+#include "net.h"
 #include "mm.h"
 #include "fs.h"
 #include "poll.h"
@@ -398,6 +400,13 @@ static long do_uadmin(long cmd, long fcn)
     case SIEOS_A_REMOUNT:
         vfs_sync();
         return 0;
+    case SIEOS_A_JTEST:
+        jbd_crash_test = true;
+        return 0;
+    case SIEOS_A_NETTEST:
+        net_test_drop = fcn & 0xFFFF;
+        net_test_reorder = (fcn >> 16) & 0xFFFF;
+        return 0;
     }
     return -EINVAL;
 }
@@ -556,6 +565,7 @@ long syscall_misc_v2(struct trapframe *tf, bool *handled)
     case SIEOS_SYS_processor_info: return do_processor_info(a1, (sieos_processor_info_t *)a2);
     case SIEOS_SYS_p_online:      return do_p_online(a1, a2);
     case SIEOS_SYS_processor_bind: return do_processor_bind(a1, a2, a3, (int *)a4);
+    case SIEOS_SYS_priocntl:     return sys2_priocntl(a1, a2, a3, (void *)a4);
     case SIEOS_SYS_getloadavg:    return do_getloadavg((long *)a1, a2);
     case SIEOS_SYS_msgsys:        return sys2_msgsys(a1, a2, a3, a4, tf->r8, tf->r9);
     case SIEOS_SYS_semsys:        return sys2_semsys(a1, a2, a3, a4, tf->r8);

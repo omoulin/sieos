@@ -57,6 +57,12 @@ struct lwp {
     uint64_t nvcsw, nivcsw;     /* voluntary / involuntary context switches */
     uint64_t minflt;            /* page faults resolved */
     int bound;                  /* processor_bind: CPU + 1, 0 = unbound */
+    int cid;                    /* scheduling class (sieos/priocntl.h), see sched.c */
+    short upri, uprilim;        /* TS/FX user priority and its limit */
+    short cpupri;               /* TS: the dispatcher priority */
+    short rtpri;                /* RT: the priority */
+    uint32_t quantum;           /* RT/FX: ticks, 0 = none */
+    uint64_t last_run;          /* tick it last ran at */
 
     ksigset_t sig_blocked;
     ksigset_t sig_pending;      /* LWP-directed signals */
@@ -88,6 +94,7 @@ struct proc {
 
     uint64_t pml4;              /* physical address of page tables */
     uint64_t heap_start;
+    struct spinlock vmlock;     /* the address space: areas and page tables (vm.c) */
     uint64_t brk;
     struct vm_area *areas;      /* mmap regions (vm.c) */
 
@@ -170,6 +177,16 @@ bool pgrp_exists_in_session(int pgid, int sid);
 long proc_setpgid(int pid, int pgid);
 long proc_setsid(void);
 struct lwp *lwp_alloc(struct proc *p);
+
+/* sched.c: scheduling classes */
+void sched_init_lwp(struct lwp *l, struct lwp *from);
+int  sched_gpri(const struct lwp *l);
+uint32_t sched_quantum(const struct lwp *l);
+void sched_expired(struct lwp *l);
+void sched_woke(struct lwp *l);
+void sched_second(void);
+const char *sched_class_name(int cid);
+long sys2_priocntl(long idtype, long id, long cmd, void *arg);
 void lwp_exit_word(struct lwp *l);        /* lwp.c */
 
 /* signal.c */

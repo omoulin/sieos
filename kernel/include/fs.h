@@ -159,9 +159,7 @@ void vfs_writeback(struct inode *ip, uint64_t idx);
 void vfs_pcache_trim(struct inode *ip);
 
 /* ext4.c */
-struct fs *ext4_mount(void);
-bool ext4_writable(void);
-void ext4_sync(void);
+struct fs *ext4_mount(int dev, bool ro);           /* the ext4 file system on a block device */
 
 /* tmpfs.c, procfs.c, devpts.c */
 struct fs *tmpfs_create(void);
@@ -176,6 +174,7 @@ bool inode_owner_or_root(struct inode *ip);
 /* namei.c */
 #define NAMEI_NOFOLLOW 1           /* do not follow a final symbolic link */
 #define MAXSYMLINKS    20
+#define SYMLINK_MAX    4095        /* longest target (paths passed in: MAXPATH - 1) */
 struct inode *namei(const char *path, int *err);
 struct inode *nameiparent(const char *path, char *name, int *err);
 struct inode *namei_at(struct inode *start, const char *path, int flags, int *err);
@@ -195,6 +194,7 @@ struct inode *nameiparent_at(struct inode *start, const char *path, char *name, 
 #define FD_SOCKET 9
 #define FD_RANDOM 10           /* /dev/random, /dev/urandom */
 #define FD_UNIX  11            /* AF_UNIX socket */
+#define FD_LOFICTL 12          /* /dev/lofictl */
 
 struct pipe;
 struct pty;
@@ -222,6 +222,7 @@ struct file {
     struct tty *tty;           /* FD_TTY: console or pty slave */
     struct socket *sock;
     struct usock *usock;       /* FD_UNIX */
+    int minor;                 /* FD_FB: the display */
 };
 
 struct file *file_alloc(void);

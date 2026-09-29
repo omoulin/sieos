@@ -62,6 +62,10 @@ struct sia_io {
     int  (*confirm)(void *ctx, const char *cmdline);           /* 0 no, 1 yes, 2 yes and stop asking */
     void (*thinking)(void *ctx, bool on);                      /* waiting for the model */
     void (*error)(void *ctx, const char *msg);
+    /* Optional: the reply as it is written (streamed).  When set, pieces of
+     * the reply come here instead of one text() call, and a NULL piece ends
+     * each reply. */
+    void (*delta)(void *ctx, const char *utf8);
 };
 
 struct sia_session;

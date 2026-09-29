@@ -8,6 +8,7 @@
 #include "fs.h"
 #include "tty.h"
 #include "poll.h"
+#include "display.h"
 #include "abi2.h"
 
 struct file *fsys_file(int fd)
@@ -132,11 +133,17 @@ static int open_device(struct file *f, struct inode *ip, int flags)
         f->type = FD_EVENTS;
         return input_open();
     }
-    if (MAJOR(dev) == DEV_FB_MAJOR && MINOR(dev) == 0) {
-        int r = fb_open();
-        if (r == 0)
+    if (MAJOR(dev) == DEV_FB_MAJOR && MINOR(dev) < DISPLAY_MAX) {
+        int r = fb_open(MINOR(dev));
+        if (r == 0) {
             f->type = FD_FB;
+            f->minor = MINOR(dev);
+        }
         return r;
+    }
+    if (MAJOR(dev) == DEV_LOFI_MAJOR && MINOR(dev) == 0) {
+        f->type = FD_LOFICTL;
+        return 0;
     }
     if (MAJOR(dev) == DEV_MEM_MAJOR && MINOR(dev) == 3) {
         f->type = FD_NULL;
@@ -160,6 +167,72 @@ static char *kstrdup(const char *s)
     if (d)
         memcpy(d, s, n);
     return d;
+}
+
+/*
+ * open(O_CREAT) found a symbolic link at dir/name: follow it (and any link
+ * it leads to); a target that does not exist is created where the link
+ * points.  *dirp is consumed.  0 with *ipp, and *created if it was made.
+ */
+static int create_through_link(struct inode *dir, char *name, int mode, struct inode **ipp, bool *created)
+{
+    char *t = kmalloc(SYMLINK_MAX + 1);
+    if (!t) {
+        iput(dir);
+        return -ENOMEM;
+    }
+    int r = 0;
+    for (int links = 0;; links++) {
+        struct inode *l;
+        if (links >= MAXSYMLINKS) {
+            r = -ELOOP;
+            break;
+        }
+        if ((r = vfs_lookup(dir, name, strlen(name), &l)) < 0)
+            break;
+        long n = vfs_readlink(l, t, SYMLINK_MAX);
+        iput(l);
+        if (n <= 0) {
+            r = n < 0 ? n : -ENOENT;
+            break;
+        }
+        t[n] = 0;
+        int err;
+        struct inode *d2 = nameiparent_at(dir, t, name, &err);
+        iput(dir);
+        dir = d2;
+        if (!dir) {
+            r = err;
+            break;
+        }
+        struct inode *ip;
+        r = vfs_lookup(dir, name, strlen(name), &ip);
+        if (r == 0) {
+            struct inode *m;
+            while ((m = vfs_covering(ip))) {
+                iput(ip);
+                ip = m;
+            }
+            if (S_ISLNK(inode_mode(ip))) {
+                iput(ip);
+                continue;
+            }
+            *ipp = ip;
+            break;
+        }
+        if (r != -ENOENT)
+            break;
+        if ((r = inode_permission(dir, W_OK | X_OK)) == 0)
+            r = vfs_create(dir, name, S_IFREG | ((mode & 07777) & ~current->umask), 0, current->euid,
+                           new_gid(dir), ipp);
+        if (r == 0)
+            *created = true;
+        break;
+    }
+    if (dir)
+        iput(dir);
+    kfree(t);
+    return r;
 }
 
 long fsys_open(int dirfd, const char *upath, int flags, int mode)
@@ -189,13 +262,16 @@ long fsys_open(int dirfd, const char *upath, int flags, int mode)
             }
             if (S_ISLNK(inode_mode(ip))) {
                 iput(ip);
-                ip = (flags & O_NOFOLLOW_K) ? NULL : namei_at(dir, name, 0, &err);
-                if (!ip) {
+                ip = NULL;
+                if (flags & O_NOFOLLOW_K) {
                     iput(dir);
-                    return (flags & O_NOFOLLOW_K) ? -ELOOP : err;
+                    return -ELOOP;
                 }
+                if ((r = create_through_link(dir, name, mode, &ip, &created)) < 0)
+                    return r;
+            } else {
+                iput(dir);
             }
-            iput(dir);
         } else if (r == -ENOENT) {
             if ((r = inode_permission(dir, W_OK | X_OK)) == 0)
                 r = vfs_create(dir, name, S_IFREG | ((mode & 07777) & ~current->umask), 0, current->euid,
@@ -396,18 +472,26 @@ long fsys_link(int ofd, const char *uold, int nfd, const char *unew, int flags)
 
 long fsys_symlink(const char *utarget, int dirfd, const char *upath)
 {
-    char tgt[MAXPATH], name[256];
+    char name[256];
+    char *tgt = kmalloc(SYMLINK_MAX + 1);
     int r, err;
-    if ((r = user_fetch_str(utarget, tgt, sizeof(tgt))) < 0)
-        return r;
+    if (!tgt)
+        return -ENOMEM;
+    if ((r = user_fetch_str(utarget, tgt, SYMLINK_MAX + 1)) < 0)
+        goto out;
+    r = -ENOENT;
     if (!tgt[0])
-        return -ENOENT;
+        goto out;
     struct inode *dir = resolve_parent(dirfd, upath, name, &err);
-    if (!dir)
-        return err;
+    if (!dir) {
+        r = err;
+        goto out;
+    }
     if ((r = inode_permission(dir, W_OK | X_OK)) == 0)
         r = vfs_symlink(dir, name, tgt, current->euid, new_gid(dir));
     iput(dir);
+out:
+    kfree(tgt);
     return r;
 }
 
@@ -419,14 +503,18 @@ long fsys_readlink(int dirfd, const char *upath, char *ubuf, size_t n)
     struct inode *ip = resolve(dirfd, upath, AT_NOFOLLOW_K, &err);
     if (!ip)
         return err;
-    char buf[MAXPATH];
-    long r = vfs_readlink(ip, buf, MIN(n, sizeof(buf)));
+    char *buf = kmalloc(SYMLINK_MAX + 1);
+    if (!buf) {
+        iput(ip);
+        return -ENOMEM;
+    }
+    long r = vfs_readlink(ip, buf, MIN(n, (size_t)SYMLINK_MAX + 1));
     iput(ip);
-    if (r < 0)
-        return r;
-    if (!user_ok(ubuf, r, true))
-        return -EFAULT;
-    memcpy(ubuf, buf, r);
+    if (r >= 0 && !user_ok(ubuf, r, true))
+        r = -EFAULT;
+    if (r > 0)
+        memcpy(ubuf, buf, r);
+    kfree(buf);
     return r;
 }
 

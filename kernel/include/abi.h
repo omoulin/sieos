@@ -462,6 +462,8 @@ struct input_event {
 #define DEV_INPUT_MAJOR 13     /* 13,0 = events */
 #define DEV_FB_MAJOR   29      /* 29,0 = fb0 */
 #define DEV_PTS_MAJOR  136     /* 136,n = /dev/pts/n (5,2 = /dev/ptmx) */
+#define DEV_BLK_MAJOR  8       /* block devices: 8,n = blkdev n (see blkdev.h) */
+#define DEV_LOFI_MAJOR 147     /* 147,0 = /dev/lofictl */
 
 #define NGROUPS_MAX 16
 

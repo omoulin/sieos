@@ -5,7 +5,7 @@ build.py NAME DL SRCDIR DESTDIR - cross-build a port for x86_64-pc-sieos.
 Extracts DL/<tarball> under SRCDIR, teaches its config.sub files sieos,
 configures with --host=x86_64-pc-sieos (the cross compiler must be on
 PATH), builds, and installs into DESTDIR.  The ports:
-  GNU coreutils, sed, grep, diffutils, findutils, gawk, make: /usr/gnu
+  GNU coreutils, sed, grep, diffutils, findutils, gawk, make, tar, gzip: /usr/gnu
   (as on Solaris 11; the SIEOS programs keep /bin), make also /usr/bin
 """
 import glob
@@ -31,6 +31,8 @@ PORTS = {
     'findutils': ('findutils-4.10.0.tar.xz', GNU + ['--without-selinux']),
     'gawk': ('gawk-5.3.1.tar.xz', GNU + ['--without-readline', '--without-mpfr', '--disable-extensions']),
     'make': ('make-4.4.1.tar.gz', GNU + ['--without-guile']),
+    'tar': ('tar-1.35.tar.xz', GNU + ['--without-selinux', '--without-posix-acls', '--without-xattrs']),
+    'gzip': ('gzip-1.13.tar.xz', GNU),
 }
 
 def teach_config_sub(tree):
@@ -53,6 +55,22 @@ def run(cmd, cwd, log):
     if r.returncode:
         sys.exit('%s failed (see %s)' % (' '.join(cmd[:2]), log))
 
+def fix_shebangs(dest):
+    """Scripts that name the build host's shell (#!/bin/bash) run with SIEOS's POSIX /bin/sh."""
+    for root, _, files in os.walk(dest):
+        for f in files:
+            path = os.path.join(root, f)
+            if os.path.islink(path) or not os.access(path, os.X_OK):
+                continue
+            with open(path, 'rb') as fh:
+                head = fh.read(64)
+            if not head.startswith(b'#!'):
+                continue
+            line = head.split(b'\n', 1)[0]
+            if line.split()[0] in (b'#!/bin/bash', b'#!/usr/bin/bash', b'#!/usr/bin/sh'):
+                data = open(path, 'rb').read()
+                open(path, 'wb').write(b'#!/bin/sh' + data[len(line.split()[0]):])
+
 def main():
     name, dl, srcdir, dest = sys.argv[1:5]
     tarball, conf = PORTS[name]
@@ -67,6 +85,7 @@ def main():
     run(['./configure', '--host=' + TARGET, 'CFLAGS=-O2 -std=gnu17'] + conf + CROSS_CACHE, tree, log)
     run(['make', '-j%d' % os.cpu_count()], tree, log)
     run(['make', 'install', 'DESTDIR=' + os.path.abspath(dest)], tree, log)
+    fix_shebangs(dest)
 
 if __name__ == '__main__':
     main()
