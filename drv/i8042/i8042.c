@@ -1,7 +1,8 @@
 /*
  * i8042.c - The PS/2 controller (i8042): its keyboard (scancode set 1,
- * translated by the controller) and mouse (3-byte packets), and the
- * VMware-compatible absolute pointer hypervisors add to it.  Matched as
+ * translated by the controller) and mouse (3-byte packets, or 4 with the
+ * wheel: IntelliMouse mode, when the mouse takes it), and the VMware-compatible
+ * absolute pointer hypervisors add to it (its fourth word: the wheel).  Matched as
  * "platform,i8042" when the controller's ports do not read all ones.
  *
  * Copyright (C) 2026 Olivier Moulin
@@ -20,8 +21,8 @@ void kbd_key(uint16_t code, bool release);      /* keyboard.c: the console keybo
 void input_set_absolute(bool on);              /* input.c */
 
 static bool e0;
-static uint8_t packet[3];
-static int packet_idx;
+static uint8_t packet[4];
+static int packet_idx, packet_len = 3;
 
 static void kbd_irq(struct trapframe *tf)
 {
@@ -168,6 +169,7 @@ static void vmmouse_poll(void)
             input_mouse((int32_t)d.b, (int32_t)d.c, buttons);
         else
             input_mouse_abs(d.b & 0xFFFF, d.c & 0xFFFF, buttons);   /* 0..65535 across the screen */
+        input_wheel((int32_t)d.d);               /* (> 0: down) */
     }
 }
 
@@ -184,13 +186,15 @@ static void mouse_irq(struct trapframe *tf)
         if (packet_idx == 0 && !(b & 0x08))
             continue;                        /* resynchronise on the "always 1" bit */
         packet[packet_idx++] = b;
-        if (packet_idx < 3)
+        if (packet_idx < packet_len)
             continue;
         packet_idx = 0;
         if (packet[0] & 0xC0)
             continue;                        /* overflow */
         input_mouse((int)packet[1] - ((packet[0] << 4) & 0x100), -((int)packet[2] - ((packet[0] << 3) & 0x100)),
                     packet[0] & 7);
+        if (packet_len == 4)
+            input_wheel((int8_t)packet[3]);  /* (> 0: down) */
     }
     if (vmmouse)
         vmmouse_poll();
@@ -215,6 +219,18 @@ static void mouse_init(void)
     mouse_write(0xFF);
     drain();                                 /* self-test result 0xAA, id 0x00 */
     mouse_write(0xF6);                       /* defaults: 3-byte packets */
+    /* The wheel: sample rates 200, 100, 80 ask for IntelliMouse mode, which a
+     * wheel mouse then reports as its id (3), with a fourth, wheel byte. */
+    static const uint8_t knock[] = { 200, 100, 80 };
+    for (unsigned i = 0; i < sizeof(knock); i++) {
+        mouse_write(0xF3);
+        mouse_write(knock[i]);
+    }
+    mouse_write(0xF2);                       /* get the id */
+    i8042_wait_read();
+    packet_len = (inb(0x64) & 1) && inb(0x60) == 3 ? 4 : 3;
+    mouse_write(0xF3);                       /* back to the default rate */
+    mouse_write(100);
     mouse_write(0xF4);                       /* enable streaming */
     drain();
     packet_idx = 0;

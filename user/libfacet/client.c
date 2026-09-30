@@ -355,6 +355,8 @@ static int translate(fct_display *d, const struct fct_msg *m, struct fct_event *
         ev->y = m->y;
         ev->kind = m->kind;
         ev->buttons = m->buttons;
+        if (m->kind == FCT_MOUSE_WHEEL)
+            ev->wheel = (int32_t)m->value;
         return 1;
     case FCT_EV_RESIZE: {
         if (m->w == w->w && m->h == w->h)
@@ -507,6 +509,47 @@ void fct_view_close(struct fct_view *v) { v->closing = true; }
 
 void fct_quit(void) { quit = true; }
 
+/* A button's pressed look (ui_button): the view the left button went down in,
+ * where, and where the pointer is now.  A button under the press point looks
+ * pressed while the button is held with the pointer over it, and at least
+ * PRESS_MIN_MS after the press, so that a quick click shows. */
+#define PRESS_MIN_MS 150
+static long now_ms(void);
+static struct {
+    struct fct_view *v;
+    int px, py, cx, cy;
+    bool held;
+    long until;
+} press;
+static struct fct_view *drawing;                 /* the view redraw() is drawing */
+
+static void press_mouse(struct fct_view *v, int x, int y, int kind, int buttons)
+{
+    if ((kind == FCT_MOUSE_DOWN || kind == FCT_MOUSE_DOUBLE) && (buttons & 1)) {
+        if (press.v && press.v != v)
+            press.v->dirty = true;
+        press.v = v;
+        press.px = press.cx = x;
+        press.py = press.cy = y;
+        press.held = true;
+        press.until = now_ms() + PRESS_MIN_MS;
+        v->dirty = true;
+    } else if (press.v == v && press.held && (kind == FCT_MOUSE_MOVE || kind == FCT_MOUSE_UP)) {
+        press.cx = x;
+        press.cy = y;
+        press.held = kind == FCT_MOUSE_MOVE;
+        v->dirty = true;
+    }
+}
+
+/* (ui.c) whether the button at r, being drawn, looks pressed */
+bool fct__button_pressed(struct rect r)
+{
+    if (!press.v || drawing != press.v || !rect_contains(r, press.px, press.py))
+        return false;
+    return press.held ? rect_contains(r, press.cx, press.cy) : now_ms() < press.until;
+}
+
 static void reap(void)
 {
     for (struct fct_view **p = &views; *p;) {
@@ -516,6 +559,8 @@ static void reap(void)
             continue;
         }
         *p = v->next;
+        if (press.v == v)
+            press.v = NULL;
         if (v->destroy)
             v->destroy(v);
         fct_window_destroy(v->win);
@@ -532,10 +577,12 @@ static void redraw(void)
         struct surface *s = fct_window_surface(v->win);
         struct rect c = fct_view_content(v);
         gfx_set_clip(s, c);
+        drawing = v;
         if (v->draw)
             v->draw(v, s, c);
         else
             gfx_fill(s, c.x, c.y, c.w, c.h, C_CONTENT);
+        drawing = NULL;
         fct_window_damage(v->win, c);
     }
 }
@@ -563,6 +610,7 @@ static void dispatch(const struct fct_event *ev)
             v->key(v, &ev->key);
         break;
     case FCT_MOUSE:
+        press_mouse(v, ev->x, ev->y, ev->kind, ev->buttons);
         if (v->mouse)
             v->mouse(v, ev->x, ev->y, ev->kind, ev->buttons);
         break;
@@ -607,6 +655,8 @@ int fct_main(void)
             }
         }
         long wait = 250 - (now_ms() - last_tick);
+        if (press.v && !press.held)              /* a quick click's pressed look: until then */
+            wait = MIN(wait, press.until - now_ms());
         if (poll(p, n, wait < 0 ? 0 : (int)wait) > 0) {
             if (p[0].revents) {
                 struct fct_event ev;
@@ -619,6 +669,10 @@ int fct_main(void)
             for (int i = 1; i < n; i++)
                 if (p[i].revents && owner[i]->readable && !owner[i]->closing)
                     owner[i]->readable(owner[i]);
+        }
+        if (press.v && !press.held && now_ms() >= press.until) {
+            press.v->dirty = true;               /* the button comes back up */
+            press.v = NULL;
         }
         if (now_ms() - last_tick >= 250) {
             last_tick = now_ms();

@@ -441,7 +441,7 @@ static void stop(void)
 /* An input event: true if the saver took it (the desktop does not see it). */
 bool saver_input(const struct input_event *ev)
 {
-    bool moved = false;
+    bool moved = ev->type == EV_WHEEL;
     if (ev->type == EV_MOUSE)
         moved = ev->dx || ev->dy || ev->buttons;
     else if (ev->type == EV_MOUSE_ABS) {

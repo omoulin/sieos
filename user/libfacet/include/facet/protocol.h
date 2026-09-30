@@ -49,7 +49,8 @@ enum {
     /* Facet -> client */
     FCT_WELCOME = 64,
     FCT_EV_KEY,          /* code, value (1 press, 0 release), ascii, mods */
-    FCT_EV_MOUSE,        /* x, y (content coordinates), kind (FCT_MOUSE_*), buttons */
+    FCT_EV_MOUSE,        /* x, y (content coordinates), kind (FCT_MOUSE_*), buttons;
+                            FCT_MOUSE_WHEEL: value, the notches (int32, > 0 down) */
     FCT_EV_RESIZE,       /* w, h: the new content size */
     FCT_EV_CLOSE,        /* the window was closed */
     FCT_EV_TEXT,         /* title: text to type (the desktop's commands for an
@@ -63,6 +64,9 @@ enum {
 
 /* FCT_CREATE flags */
 #define FCT_WIN_ASSISTANT 1      /* a terminal running the sia assistant */
+#define FCT_WIN_POINTER   2      /* all the pointer's events over the content: moves without a
+                                    button (hover), the right and middle buttons (the window
+                                    menu stays on the title bar), the wheel (FCT_MOUSE_WHEEL) */
 
 struct fct_msg {
     uint32_t type;

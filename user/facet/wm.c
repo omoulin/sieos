@@ -139,6 +139,7 @@ static bool running = true;
 enum { DRAG_NONE, DRAG_MOVE, DRAG_RESIZE, DRAG_CONTENT, DRAG_BUTTON };
 static int drag_mode;
 static struct window *drag_win;
+static struct window *other_press_win;          /* a right or middle press went to it (FCT_WIN_POINTER) */
 static int drag_dx, drag_dy;
 static struct rect drag_start;
 static int pressed_button = -1;
@@ -1719,6 +1720,8 @@ static void reap_windows(void)
             drag_win = NULL;
             drag_mode = DRAG_NONE;
         }
+        if (other_press_win == w)
+            other_press_win = NULL;
         bool was_focus = focus == w;
         if (was_focus)
             focus = NULL;
@@ -2203,6 +2206,17 @@ static struct window *window_at(int x, int y)
     return NULL;
 }
 
+/* The window that takes all the pointer's events (FCT_WIN_POINTER) with the
+ * pointer over its content, when no menu is open and nothing is dragged. */
+static struct window *pointer_win(void)
+{
+    if (menu.open || drag_mode != DRAG_NONE)
+        return NULL;
+    struct window *w = window_at(mouse_x, mouse_y);
+    return w && w->pointer && hit_test(w, mouse_x, mouse_y) == HIT_CONTENT ? w : NULL;
+}
+
+
 static void content_mouse(struct window *w, int kind)
 {
     if (!w->mouse)
@@ -2460,6 +2474,9 @@ static void handle_event(const struct input_event *ev)
             wm_invalidate_rect(old);
             wm_invalidate_rect(cursor_rect());
             mouse_moved();
+            struct window *pw = !(buttons & 1) ? pointer_win() : NULL;
+            if (pw)
+                content_mouse(pw, MOUSE_MOVE);   /* (hover, or a right or middle drag) */
         }
         if ((buttons & 1) && !(prev & 1)) {
             long now = uptime_ms();
@@ -2472,6 +2489,23 @@ static void handle_event(const struct input_event *ev)
         }
         if (!(buttons & 1) && (prev & 1))
             release_left();
+        /* the right and middle buttons: to a FCT_WIN_POINTER window's content, else the menus */
+        unsigned other = (buttons ^ prev) & 6;
+        if (other_press_win && other_press_win->dead)
+            other_press_win = NULL;
+        if (other && other_press_win && !(buttons & 6)) {
+            content_mouse(other_press_win, MOUSE_UP);
+            other_press_win = NULL;
+        } else if (other && (other_press_win || (buttons & other & 6))) {
+            struct window *pw = other_press_win ? other_press_win : pointer_win();
+            if (pw) {
+                if (!other_press_win)
+                    wm_focus(pw);
+                other_press_win = pw;
+                content_mouse(pw, (buttons & other) ? MOUSE_DOWN : MOUSE_UP);
+                return;
+            }
+        }
         if ((buttons & 2) && !(prev & 2)) {
             close_menus();
             struct window *w = window_at(mouse_x, mouse_y);
@@ -2483,6 +2517,14 @@ static void handle_event(const struct input_event *ev)
                           tile_rect(t).y);
             else if (!rect_contains(spine_rect(), mouse_x, mouse_y) && !rect_contains(strip_rect(), mouse_x, mouse_y))
                 desktop_menu(mouse_x, mouse_y);
+        }
+        return;
+    }
+    if (ev->type == EV_WHEEL) {
+        struct window *pw = pointer_win();
+        if (pw && pw->wheel) {
+            struct rect c = wm_content(pw);
+            pw->wheel(pw, mouse_x - c.x, mouse_y - c.y, ev->value);
         }
         return;
     }

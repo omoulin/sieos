@@ -115,6 +115,16 @@ static void rwin_mouse(struct window *w, int x, int y, int kind, int buttons)
     send_to(r->conn, &m);
 }
 
+static void rwin_wheel(struct window *w, int x, int y, int notches)
+{
+    struct rwin *r = rw(w);
+    if (r->client_gone)
+        return;
+    struct fct_msg m = { .type = FCT_EV_MOUSE, .window = r->id, .x = x, .y = y, .kind = MOUSE_WHEEL,
+                         .value = (uint32_t)notches };
+    send_to(r->conn, &m);
+}
+
 static void rwin_resized(struct window *w)
 {
     struct rwin *r = rw(w);
@@ -220,6 +230,10 @@ static void create(int ci, const struct fct_msg *m, int fd)
     w->draw = rwin_draw;
     w->key = rwin_key;
     w->mouse = rwin_mouse;
+    if (r->flags & FCT_WIN_POINTER) {
+        w->pointer = true;
+        w->wheel = rwin_wheel;
+    }
     w->resized = rwin_resized;
     w->destroy = rwin_destroy;
     if (m->code > 0)

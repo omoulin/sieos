@@ -21,9 +21,15 @@
  *     Shift table turns into it, between a Shift press and release.  The
  *     real Shift keys are not passed on: the character already has them.
  *     Ctrl+letter goes with a Ctrl press (NetSurf's copy, paste, select all).
- *   - Mouse: Facet gives the buttons' state after each change (left, and
- *     moves while it is held); the buttons that changed become presses and
- *     releases, each after a move to where it happened.
+ *   - Mouse: the window asks for all the pointer's events (FCT_WIN_POINTER:
+ *     moves without a button, so NetSurf shows links under the pointer; the
+ *     right and middle buttons; the wheel).  Facet gives the buttons' state
+ *     after each change; the buttons that changed become presses and
+ *     releases, each after a move to where it happened.  A wheel notch is
+ *     a click of button 4 (up) or 5 (down), NetSurf's scroll.
+ *   - The title: nsfb_set_parameters(nsfb, "title=...") (NetSurf's page
+ *     title) sets the window's, as "NetSurf: title" (the Spine's Web
+ *     Browser finds its windows by that prefix).
  *   - A resize: the desktop has already resized the buffer; the surface
  *     takes the new one at once, then NetSurf redraws (NSFB_EVENT_RESIZE).
  *   - Closing the window, or the desktop going away: NSFB_CONTROL_QUIT.
@@ -32,7 +38,9 @@
  */
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include <facet/facet.h>
@@ -198,6 +206,14 @@ static void mouse(struct facet_priv *p, int x, int y, unsigned buttons)
     p->buttons = buttons;
 }
 
+static void wheel(struct facet_priv *p, int x, int y, int notches)
+{
+    push(p, NSFB_EVENT_MOVE_ABSOLUTE, x, y);
+    int code = notches > 0 ? NSFB_KEY_MOUSE_5 : NSFB_KEY_MOUSE_4;
+    for (int n = notches > 0 ? notches : -notches; n > 0 && p->qlen < QMAX - 1; n--)
+        press(p, code);
+}
+
 /* ---------------------------------------------------------------- surface */
 
 static int facet_defaults(nsfb_t *nsfb)
@@ -239,7 +255,7 @@ static int facet_initialise(nsfb_t *nsfb)
     }
     struct fct_window_attr a = {
         .title = "NetSurf", .x = FCT_POS_AUTO, .y = FCT_POS_AUTO,
-        .w = nsfb->width, .h = nsfb->height, .min_w = 320, .min_h = 240,
+        .w = nsfb->width, .h = nsfb->height, .min_w = 320, .min_h = 240, .flags = FCT_WIN_POINTER,
     };
     p->w = fct_window_create(p->d, &a);
     if (!p->w) {
@@ -300,7 +316,10 @@ static bool facet_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
             key(p, &ev.key);
             break;
         case FCT_MOUSE:
-            mouse(p, ev.x, ev.y, (unsigned)ev.buttons);
+            if (ev.kind == FCT_MOUSE_WHEEL)
+                wheel(p, ev.x, ev.y, ev.wheel);
+            else
+                mouse(p, ev.x, ev.y, (unsigned)ev.buttons);
             break;
         case FCT_RESIZE:
             adopt(nsfb, p);
@@ -317,6 +336,26 @@ static bool facet_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
     p->qhead = (p->qhead + 1) % QMAX;
     p->qlen--;
     return true;
+}
+
+/* "title=TEXT": the window's title, "NetSurf: TEXT" (cut to Facet's length on
+ * a character boundary: TEXT is UTF-8). */
+static int facet_parameters(nsfb_t *nsfb, const char *parameters)
+{
+    struct facet_priv *p = nsfb->surface_priv;
+    if (!p || strncmp(parameters, "title=", 6) != 0)
+        return 0;
+    const char *t = parameters + 6;
+    char title[FCT_TITLE_MAX];
+    int n = snprintf(title, sizeof(title), *t ? "NetSurf: %s" : "NetSurf", t);
+    if (n >= (int)sizeof(title)) {
+        n = sizeof(title) - 1;
+        while (n > 0 && ((unsigned char)title[n] & 0xC0) == 0x80)
+            n--;                                 /* (the cut fell inside a character) */
+        title[n] = 0;
+    }
+    fct_window_set_title(p->w, title);
+    return 0;
 }
 
 static int facet_claim(nsfb_t *nsfb, nsfb_bbox_t *box)
@@ -346,6 +385,7 @@ const nsfb_surface_rtns_t facet_rtns = {
     .initialise = facet_initialise,
     .finalise = facet_finalise,
     .input = facet_input,
+    .parameters = facet_parameters,
     .claim = facet_claim,
     .update = facet_update,
     .cursor = facet_cursor,

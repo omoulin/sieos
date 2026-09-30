@@ -436,6 +436,7 @@ struct fb_info {
 #define EV_KEY   1
 #define EV_MOUSE 2              /* relative motion in dx, dy */
 #define EV_MOUSE_ABS 3          /* absolute position: dx, dy in 0..65535 */
+#define EV_WHEEL 4              /* the wheel turned: value notches, > 0 down (towards the user) */
 struct input_event {
     unsigned short type;
     unsigned short code;         /* EV_KEY: key code (KEY_* or scancode) */

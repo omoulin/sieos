@@ -129,7 +129,7 @@ so it can be written to a USB stick.
 | Drivers     | Loadable: each driver is an ELF relocatable object (`/drv/NAME.drv`) that the kernel links against its own symbol table when a device matches the driver's aliases (`pciVVVV,DDDD`, `pciclass,CCSSPP`). GRUB loads a boot archive of them with the kernel, for the devices needed before the root is mounted, as Solaris does. `modinfo` and `modload`; a driver development kit in `/usr/include/ddk` and `/usr/share/ddk`. |
 | Console     | VGA text mode, or a GOP/VBE linear framebuffer with an 8x16 font. Both handle ANSI colours and are mirrored to COM1. The kernel's messages are kept for `dmesg`. |
 | Display     | QEMU's standard VGA (Bochs VBE), and Intel integrated graphics with its own mode setting (display versions 11 to 14: Ice Lake, Raptor Lake-S, Arrow Lake-P); the screen's resolution is chosen in Settings. |
-| Input       | PS/2 keyboard and mouse (i8042); USB keyboards, mice and tablets on every xHCI controller (the chipset's and Thunderbolt ones), directly or through USB 2 hubs, plugged in at any time; HID-over-I2C touchpads and keyboards on the Intel LPSS I2C controllers (Raptor Lake, Ice Lake, Tiger/Alder/Meteor/Arrow Lake), found through the ACPI tables. Boot options `nousb`, `noi2c`, `usbdebug`, `i2cdebug`. |
+| Input       | PS/2 keyboard and mouse (i8042, with the wheel in IntelliMouse mode); USB keyboards, mice and tablets on every xHCI controller (the chipset's and Thunderbolt ones), directly or through USB 2 hubs, plugged in at any time (mouse wheels included); HID-over-I2C touchpads and keyboards on the Intel LPSS I2C controllers (Raptor Lake, Ice Lake, Tiger/Alder/Meteor/Arrow Lake), found through the ACPI tables. Boot options `nousb`, `noi2c`, `usbdebug`, `i2cdebug`. |
 | SMP         | CPUs found through the ACPI MADT and started with INIT-SIPI-SIPI via a real-mode trampoline. Per-CPU GDT/TSS/idle process reached through `%gs` (`swapgs`). Local APIC timers preempt on every CPU, and idle CPUs are woken by reschedule IPIs. A big kernel lock serialises kernel code while user processes run in parallel. |
 | Memory      | Bitmap frame allocator over all RAM (up to 256 GiB), 4-level paging with a per-process address space, direct map of physical memory, kernel heap. |
 | System calls | ABI v2, Solaris-inspired (Solaris errno values, signal numbers, flags and structure layouts), entered with the `syscall` instruction; specified in [`docs/abi-v2.md`](docs/abi-v2.md) and `abi/include/sieos/`. |
@@ -349,12 +349,13 @@ the disk and the USB image, not in the ISO's small root.
 
 - **Address bar:** click it, **Ctrl+U** clears it, type the address, Enter. Home/End and
   Ctrl+Left/Right move the caret. (NetSurf's address bar has no select-all.)
-- **Pages:** click links; scroll with the scroll bar (its trough moves a page, its
-  arrows a line); Back, Forward, Stop and Reload are on the toolbar.
-- **Not yet:** JavaScript (NetSurf's Duktape is not built), and, until Facet has them,
-  the mouse wheel, hover (link highlighting, the link's address in the status bar),
-  right-click menus, non-ASCII typing and the clipboard. The window's title stays
-  "NetSurf".
+- **Pages:** click links; scroll with the mouse wheel or the scroll bar (its trough
+  moves a page, its arrows a line); the status bar shows the address of the link under
+  the pointer; Back, Forward, Stop and Reload are on the toolbar. The window's title is
+  the page's ("NetSurf: ...").
+- **Not yet:** JavaScript (NetSurf's Duktape is not built), non-ASCII typing (the
+  keyboard is US only) and the clipboard. NetSurf's framebuffer front end has no
+  right-click menu.
 
 How it is built (`make netsurf`, part of `make`), into `build/ports`:
 
@@ -366,9 +367,10 @@ make netsurf        # NetSurf's framebuffer front end: build/ports/netsurf-root/
 
 `ports/netsurf/` holds the SIEOS parts: `nsfb-facet.c`, libnsfb's Facet surface (a
 Facet window whose shared buffer libnsfb draws into directly, with keys, clicks, resizing
-and closing turned into libnsfb's events), and `netsurf-curl.patch`, with which the
+and closing turned into libnsfb's events), `netsurf-curl.patch`, with which the
 fetcher resolves IPv4 addresses only when the machine has no global IPv6 address (as on
-QEMU's user network), instead of waiting on IPv6 for every dual-stack site.
+QEMU's user network), instead of waiting on IPv6 for every dual-stack site, and
+`netsurf-title.patch`, which gives the page's title to the window.
 `prepare.sh` applies both and sets the build options (`Makefile.config`).
 
 ## Limitations

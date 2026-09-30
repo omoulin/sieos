@@ -1,0 +1,38 @@
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -18,6 +18,7 @@
+ 
+ #include <stdint.h>
+ #include <limits.h>
++#include <stdio.h>
+ #include <getopt.h>
+ #include <assert.h>
+ #include <string.h>
+@@ -1987,6 +1988,19 @@
+ 	}
+ }
+ 
++/**
++ * The page's title: to the surface, as its "title" parameter (a window
++ * system's surface, such as SIEOS's Facet, shows it on the window).
++ */
++static void
++gui_window_set_title(struct gui_window *g, const char *title)
++{
++	char param[256];
++
++	snprintf(param, sizeof(param), "title=%s", title ? title : "");
++	nsfb_set_parameters(fbtk_get_nsfb(g->window), param);
++}
++
+ static nserror
+ gui_window_set_url(struct gui_window *g, nsurl *url)
+ {
+@@ -2156,6 +2170,7 @@
+ 	.get_dimensions = gui_window_get_dimensions,
+ 	.event = gui_window_event,
+ 
++	.set_title = gui_window_set_title,
+ 	.set_url = gui_window_set_url,
+ 	.set_status = gui_window_set_status,
+ 	.set_pointer = gui_window_set_pointer,

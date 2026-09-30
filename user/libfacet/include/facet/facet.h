@@ -73,8 +73,11 @@ struct fct_key {
 #define FCT_KEY_DELETE 0x153
 #define FCT_KEY_F1     0x03B        /* F2.. follow */
 
-/* mouse event kinds; buttons: bit 0 left, 1 right, 2 middle */
-enum { FCT_MOUSE_DOWN, FCT_MOUSE_UP, FCT_MOUSE_MOVE, FCT_MOUSE_DOUBLE };
+/* mouse event kinds; buttons: bit 0 left, 1 right, 2 middle.  Without
+ * FCT_WIN_POINTER a window gets the left button's presses and releases, and
+ * moves while it is held; with it, every move over the content, the right and
+ * middle buttons, and FCT_MOUSE_WHEEL (wheel: notches, > 0 down). */
+enum { FCT_MOUSE_DOWN, FCT_MOUSE_UP, FCT_MOUSE_MOVE, FCT_MOUSE_DOUBLE, FCT_MOUSE_WHEEL };
 
 /* ---------------- windows and events ---------------- */
 
@@ -97,7 +100,10 @@ struct fct_event {
     fct_window *window;
     struct fct_key key;             /* FCT_KEY */
     int x, y, kind, buttons;        /* FCT_MOUSE (content coordinates, FCT_MOUSE_*) */
-    int w, h;                       /* FCT_RESIZE: the new size (the buffer already has it) */
+    union {
+        struct { int w, h; };       /* FCT_RESIZE: the new size (the buffer already has it) */
+        int wheel;                  /* FCT_MOUSE_WHEEL: notches, > 0 down */
+    };
     const char *text;               /* FCT_TEXT: a line, valid until the next call */
 };
 

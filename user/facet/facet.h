@@ -27,7 +27,7 @@ struct frame_insets wm_frame(void);
 bool wm_set_skin(const char *name, char *err, size_t n);
 
 /* ---------------- windows ---------------- */
-enum { MOUSE_DOWN, MOUSE_UP, MOUSE_MOVE, MOUSE_DOUBLE };
+enum { MOUSE_DOWN, MOUSE_UP, MOUSE_MOVE, MOUSE_DOUBLE, MOUSE_WHEEL };     /* (= FCT_MOUSE_*) */
 
 struct window {
     int id;
@@ -43,6 +43,9 @@ struct window {
     void (*draw)(struct window *w, struct surface *s, struct rect content);
     void (*key)(struct window *w, const struct input_event *ev);
     void (*mouse)(struct window *w, int x, int y, int kind, int buttons);
+    bool pointer;               /* all pointer events over the content (FCT_WIN_POINTER): moves
+                                   without a button, right and middle buttons, the wheel */
+    void (*wheel)(struct window *w, int x, int y, int notches);   /* (> 0 down) */
     void (*tick)(struct window *w);             /* ~4 times per second */
     void (*resized)(struct window *w);
     void (*destroy)(struct window *w);

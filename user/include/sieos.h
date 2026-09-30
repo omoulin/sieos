@@ -178,6 +178,7 @@ void *fbmap(int fd);                /* map /dev/fb0; MAP_FAILED on failure */
 #define EV_KEY       1
 #define EV_MOUSE     2
 #define EV_MOUSE_ABS 3
+#define EV_WHEEL     4             /* value: notches, > 0 down */
 struct input_event {
     unsigned short type;
     unsigned short code;

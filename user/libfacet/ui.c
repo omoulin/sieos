@@ -18,8 +18,11 @@ static void bevel(struct surface *s, struct rect r, bool raised, int depth)
               raised ? C_FACE_SHADOW : C_FACE_LIGHT);
 }
 
+bool fct__button_pressed(struct rect r);          /* client.c: a view's button held down */
+
 void ui_button(struct surface *s, struct rect r, const char *label, bool pressed)
 {
+    pressed = pressed || fct__button_pressed(r);
     if (fct_skin->id == FCT_SKIN_BEOS) {           /* soft grey, a rounded dark outline */
         gfx_round_rect_vgradient(s, r.x, r.y, r.w, r.h, 4, pressed ? RGB(0xB8, 0xB8, 0xB8) : RGB(0xFA, 0xFA, 0xFA),
                                  pressed ? RGB(0xD0, 0xD0, 0xD0) : RGB(0xD4, 0xD4, 0xD4));

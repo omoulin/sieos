@@ -252,13 +252,14 @@ static void boot_keyboard(struct hid *h, const uint8_t *r, size_t n)
     kbd_update(h, keys, nk);
 }
 
-static void pointer(struct hid *h, int dx, int dy, bool abs, int ax, int ay, unsigned buttons)
+static void pointer(struct hid *h, int dx, int dy, bool abs, int ax, int ay, unsigned buttons, int wheel)
 {
     if (abs)
         input_mouse_abs(ax, ay, buttons);
     else if (dx || dy || buttons != h->buttons)
         input_mouse(dx, dy, buttons);
     h->buttons = buttons;
+    input_wheel(-wheel);                         /* HID: > 0 away from the user; SIEOS: > 0 down */
 }
 
 void hid_input(struct hid *h, const uint8_t *r, size_t n)
@@ -274,8 +275,8 @@ void hid_input(struct hid *h, const uint8_t *r, size_t n)
         return;
     }
     if (h->boot_mouse) {
-        if (n >= 3)
-            pointer(h, (int8_t)r[1], (int8_t)r[2], false, 0, 0, r[0] & 7);
+        if (n >= 3)                              /* (a fourth byte: the wheel, on most mice) */
+            pointer(h, (int8_t)r[1], (int8_t)r[2], false, 0, 0, r[0] & 7, n >= 4 ? (int8_t)r[3] : 0);
         return;
     }
     uint8_t id = 0;
@@ -288,7 +289,7 @@ void hid_input(struct hid *h, const uint8_t *r, size_t n)
     uint8_t keys[HID_MAX_KEYS];
     int nk = 0;
     bool kbd = false, mouse = false, abs = false;
-    int dx = 0, dy = 0, ax = 0, ay = 0;
+    int dx = 0, dy = 0, ax = 0, ay = 0, wheel = 0;
     unsigned buttons = 0;
     for (int i = 0; i < h->nfields; i++) {
         const struct hid_field *f = &h->f[i];
@@ -318,8 +319,13 @@ void hid_input(struct hid *h, const uint8_t *r, size_t n)
         } else if (f->app == HID_APP_MOUSE && f->page == 1 && (f->flags & 2)) {
             for (int k = 0; k < f->count; k++) {
                 uint16_t u = field_usage(f, k);
+                if (u == 0x38 && (f->flags & 4)) {   /* the wheel (relative) */
+                    wheel += field_value(f, r, n, k);
+                    mouse = true;
+                    continue;
+                }
                 if (u != 0x30 && u != 0x31)
-                    continue;                    /* (the wheel, and the rest) */
+                    continue;                    /* (the rest) */
                 int32_t v = field_value(f, r, n, k);
                 mouse = true;
                 if (f->flags & 4) {
@@ -337,7 +343,7 @@ void hid_input(struct hid *h, const uint8_t *r, size_t n)
     if (kbd)
         kbd_update(h, keys, nk);
     if (mouse)
-        pointer(h, dx, dy, abs, ax, ay, buttons);
+        pointer(h, dx, dy, abs, ax, ay, buttons, wheel);
 }
 
 void hid_tick(struct hid *h)

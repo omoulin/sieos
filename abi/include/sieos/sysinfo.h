@@ -231,10 +231,11 @@ struct sieos_fb_modes {
 #define SIEOS_EV_KEY       1
 #define SIEOS_EV_MOUSE     2        /* relative motion in dx, dy */
 #define SIEOS_EV_MOUSE_ABS 3        /* absolute position: dx, dy in 0..65535 */
+#define SIEOS_EV_WHEEL     4        /* the wheel turned: value notches, > 0 down (towards the user) */
 struct sieos_input_event {
     unsigned short type;
     unsigned short code;            /* EV_KEY: key code (SIEOS_KEY_* or scancode) */
-    int value;                      /* EV_KEY: 1 press, 0 release */
+    int value;                      /* EV_KEY: 1 press, 0 release; EV_WHEEL: notches */
     int dx, dy;
     unsigned int buttons;           /* bit 0 left, 1 right, 2 middle */
     unsigned int ascii;             /* EV_KEY: the character, 0 if none */

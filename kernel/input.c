@@ -66,6 +66,16 @@ void input_mouse_abs(int x, int y, unsigned buttons)
     push(&e);
 }
 
+void input_wheel(int notches)
+{
+    if (!notches)
+        return;
+    struct input_event e = { 0 };
+    e.type = EV_WHEEL;
+    e.value = notches;
+    push(&e);
+}
+
 bool input_readable(void)
 {
     return q_head != q_tail;

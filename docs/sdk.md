@@ -57,7 +57,7 @@ the last view is gone. The callbacks:
 |----------|------|
 | `draw(v, surface, content)` | the view needs redrawing: after `fct_view_invalidate(v)`, a resize, and when it first appears; `content` is `(0, 0, width, height)` |
 | `key(v, const struct fct_key *)` | a key went down (`value` 1) or up (0); `code` is the scan code (`FCT_KEY_UP` ...), `ascii` the character, `mods` `FCT_MOD_SHIFT`/`CTRL`/`ALT` |
-| `mouse(v, x, y, kind, buttons)` | `FCT_MOUSE_DOWN`, `UP`, `MOVE` (while dragging) or `DOUBLE`, in content coordinates |
+| `mouse(v, x, y, kind, buttons)` | `FCT_MOUSE_DOWN`, `UP`, `MOVE` (while dragging) or `DOUBLE`, in content coordinates; with the `FCT_WIN_POINTER` flag also moves without a button, the right and middle buttons, and `FCT_MOUSE_WHEEL` |
 | `tick(v)` | about four times a second |
 | `resized(v)` | the user resized the window (before the redraw) |
 | `pollfd(v)` / `readable(v)` | a descriptor the loop should watch, and "it is readable": terminals watch their pty, the chat example its sia request |
@@ -69,7 +69,13 @@ the last view is gone. The callbacks:
 - a position: `FCT_POS_AUTO` to cascade, `FCT_POS_CENTER` for dialogs, or screen
   coordinates (the screen size is `fct_screen(&w, &h)`);
 - the smallest content size;
-- flags.
+- flags: `FCT_WIN_POINTER` asks for every pointer event over the content (hover moves,
+  the right and middle buttons, the wheel: `FCT_MOUSE_WHEEL`, with the notches, > 0 down,
+  in the low-level `struct fct_event`'s `wheel`). Without it a window gets the left
+  button's presses, releases and drags.
+
+`ui_button` draws a button pressed while the left button is held on it, and for at least
+150 ms after a click, by itself: an application only draws its buttons.
 
 `fct_view_set_title` retitles a view.
 

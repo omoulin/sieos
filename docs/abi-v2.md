@@ -1810,8 +1810,8 @@ Milestone 34 (done): Facet skins.
   - Other HID devices (tablets, keyboards and mice that are not boot devices) are read
     through their report descriptor. The parser keeps the input fields of the keyboard,
     mouse and pointer application collections: modifier and key bitmaps, key arrays,
-    buttons, relative X/Y, and absolute X/Y (scaled to 0..65535, `EV_MOUSE_ABS`). The
-    rest (touchpad collections, consumer keys, the wheel) is ignored.
+    buttons, relative X/Y, absolute X/Y (scaled to 0..65535, `EV_MOUSE_ABS`) and the
+    wheel (`EV_WHEEL`). The rest (touchpad collections, consumer keys) is ignored.
   - Keys become set 1 scancodes through `kbd_key` (split out of the PS/2 driver). So a
     USB keyboard types on the console and in `/dev/events` exactly as the PS/2 one does.
   - A held key repeats after 500 ms, 30 times a second, since USB keyboards do not
@@ -2748,6 +2748,29 @@ Milestone 34 (done): Facet skins.
   command line (the GRUB entry "wait at the boot messages") or `BOOT_PAUSE=yes` in
   `/etc/default/init` brings the wait back.
 
+### Milestone 69: the web browser; the mouse wheel; pointer events for Facet windows
+
+- **NetSurf 3.11** (`/bin/netsurf`, Facet's Web Browser) on libnsfb's Facet surface
+  (`ports/netsurf/`), with its libraries, curl and Mbed TLS cross-built from pinned
+  tarballs; see the README's Web browser section.
+- **The wheel** in `/dev/events`: a new record type, `SIEOS_EV_WHEEL` (4), whose `value`
+  is the notches turned, > 0 down (towards the user). `struct sieos_input_event` is
+  unchanged (28 bytes); readers that do not know the type skip it. Its sources:
+  - the vmmouse's fourth word (QEMU, VMware, VirtualBox);
+  - PS/2 mice in IntelliMouse mode (sample rates 200, 100, 80, then id 3: 4-byte packets);
+  - USB and I2C HID mice (usage 0x38, the sign turned to "> 0 down"), and the fourth byte
+    of boot-protocol reports.
+- **Facet: `FCT_WIN_POINTER`** (`FCT_CREATE` flag 2): the window gets every pointer event
+  over its content: moves without a button (hover), the right and middle buttons (the
+  window menu stays on the title bar), and the wheel (`FCT_EV_MOUSE` of kind
+  `FCT_MOUSE_WHEEL`, 4, the notches in `value`; `ev.wheel` in libfacet). Other windows
+  get the left button only, as before.
+- **Facet: pressed buttons.** The view toolkit draws a `ui_button` pressed while the left
+  button is held on it with the pointer over it, and at least 150 ms after the press, so
+  that a quick click shows; every application on the toolkit has it without a change.
+- **Non-blocking `connect`** (`EINPROGRESS`, then `poll` and `SO_ERROR`; `EALREADY`,
+  `EISCONN`), which curl's IPv6-to-IPv4 fallback needs.
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -2814,6 +2837,7 @@ Milestone 34 (done): Facet skins.
 | 60 | the AX201's start for the integrated 22000 family: persistence bit, forced power gating, boot LTR, ALIVE handshake (done; ALIVE confirmed on the Surface) |
 | 61 | Wi-Fi stage 2: receive processing, the command queue, INIT/NVM commands, the NVM's information, the MAC address (done) |
 | 62 | Wi-Fi stage 3: the runtime configuration (antennas, SoC, power, regulatory domain), UMAC scans, the wifi() call, dladm, the Settings Wi-Fi page (done) |
+| 69 | NetSurf (the web browser); the mouse wheel (`EV_WHEEL`); `FCT_WIN_POINTER`; pressed buttons; non-blocking connect (done) |
 | 68 | Wi-Fi 802.11n/ac (HT/VHT, 40/80 MHz, 2x2, QoS), Wi-Fi power save (powermode), no boot pause (done) |
 | 67 | Installed disks boot (8.3 name of the boot archive on the ESP); the full root on the USB image; no model connection in any image; Settings > Assistant; GPL-3.0 notices (done) |
 | 66 | AX201: the firmware's error tables dumped, SOC_CONFIGURATION without the LTR delay, the used ring's buffer ids (done) |
