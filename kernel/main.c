@@ -1,5 +1,9 @@
 /*
  * main.c - Kernel entry point.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "kernel.h"
 #include "random.h"
@@ -15,6 +19,8 @@
 #include "poll.h"
 #include "net.h"
 #include "hid.h"
+#include "power.h"
+#include "ddi.h"
 
 #define MB2_BOOTLOADER_MAGIC 0x36D76289
 
@@ -86,6 +92,35 @@ static void fail(const char *what)
     kprintf("] %s\n", what);
 }
 
+/* A boot summary line, for the drivers. */
+void ddi_report(const char *line)
+{
+    ok(line);
+}
+
+static const char *kernel_cmdline = "";
+
+const char *ddi_cmdline(void)
+{
+    return kernel_cmdline;
+}
+
+/* A word of the boot command line. */
+bool boot_option(const char *cmdline, const char *word)
+{
+    size_t n = strlen(word);
+    for (const char *p = cmdline; *p;) {
+        while (*p == ' ')
+            p++;
+        const char *e = strchr(p, ' ');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len == n && !strncmp(p, word, n))
+            return true;
+        p += len;
+    }
+    return false;
+}
+
 /* The multiboot2 command line (after the kernel path), e.g. "text". */
 static const char *boot_cmdline(uint64_t mb_info)
 {
@@ -120,7 +155,15 @@ void kmain(uint32_t magic, uint32_t mb_info)
 
     pmm_init(mb_info);
     vmm_init();
-    display_init();                   /* displays: the console's framebuffer write-combining, native drivers */
+    const char *cmdline = boot_cmdline(mb_info);
+    kernel_cmdline = cmdline;
+    smp_want_x2apic = boot_option(cmdline, "x2apic");
+    acpi_init(mb_info);               /* the tables (the PM timer and HPET: references when there is no PIT) */
+    dmar_init();                      /* VT-d left on by the firmware: off, before any driver's DMA */
+    modules_init(boot_archive_pa, boot_archive_size);   /* the drivers the boot loader brought */
+    display_init();                   /* displays: the console's framebuffer write-combining */
+    modules_attach(DDI_PHASE_DISPLAY);                  /* the displays' drivers */
+    display_order();
     char msg[128];
     snprintf(msg, sizeof(msg), "Memory: %lu MiB usable, %lu KiB kernel, paging enabled",
              pmm_total_pages() * 4 / 1024, pmm_kernel_pages() * 4);
@@ -128,39 +171,50 @@ void kmain(uint32_t magic, uint32_t mb_info)
 
     proc_init_cpu(&cpus[0]);
     bkl_lock();                       /* held by the BSP until its idle loop */
+
     timer_init();
-    snprintf(msg, sizeof(msg), "Timer: PIT at %d Hz, scheduler ready", TIMER_HZ);
+    if (pit_ok)
+        snprintf(msg, sizeof(msg), "Timer: PIT at %d Hz, TSC %lu MHz, scheduler ready", TIMER_HZ, tsc_hz / 1000000);
+    else
+        snprintf(msg, sizeof(msg), "Timer: no PIT (gated off), local APIC at %d Hz, TSC %lu MHz (%s), scheduler ready",
+                 TIMER_HZ, tsc_hz / 1000000, timer_tsc_source());
     ok(msg);
 
     random_init();
     ok(random_hw_available() ? "Random: /dev/urandom (ChaCha20, RDRAND/RDSEED + interrupt timing)"
                              : "Random: /dev/urandom (ChaCha20, interrupt timing)");
 
-    acpi_init(mb_info);
     lapic_init();
     irq_use_ioapic();                 /* device interrupts through the I/O APIC, if there is one */
     lapic_timer_start();
     smp_boot();
     if (lapic_ok)
-        snprintf(msg, sizeof(msg), "SMP: %d CPU%s online (local APIC timers, %s, big kernel lock)",
-                 ncpu, ncpu > 1 ? "s" : "", ioapic_ok ? "I/O APIC interrupts" : "8259 PIC interrupts");
+        snprintf(msg, sizeof(msg), "SMP: %d CPU%s online (local %sAPIC timers, %s, big kernel lock)",
+                 ncpu, ncpu > 1 ? "s" : "", x2apic ? "x2" : "", ioapic_ok ? "I/O APIC interrupts" : "8259 PIC interrupts");
     else
         snprintf(msg, sizeof(msg), "SMP: no ACPI MADT found, running on 1 CPU");
     ok(msg);
+    uint64_t t0 = ticks, until = hrtime() + 100000000UL;  /* the tick advances (100 ms)? */
+    while (ticks == t0 && hrtime() < until) {
+        sti();
+        __asm__ volatile("pause");
+        cli();
+    }
+    if (ticks == t0)
+        fail("Timer: no timer interrupt (PIT IRQ 0 nor the local APIC): the system cannot schedule");
+
+    power_init(cmdline);
+    ok(power_summary(msg, sizeof(msg)));
 
     tty_init();
     keyboard_init();
-    input_init();
-    snprintf(msg, sizeof(msg), "Console: %s + COM1 serial, PS/2 keyboard, %s mouse", console_mode(),
-             input_absolute() ? "absolute (vmmouse)" : "PS/2");
+    modules_attach(DDI_PHASE_BOOT);   /* the drivers of the devices found: input, USB, disks */
+    if (ps2_present)
+        snprintf(msg, sizeof(msg), "Console: %s + COM1 serial, PS/2 keyboard, %s mouse", console_mode(),
+                 input_absolute() ? "absolute (vmmouse)" : "PS/2");
+    else
+        snprintf(msg, sizeof(msg), "Console: %s + COM1 serial, no PS/2 controller", console_mode());
     ok(msg);
-    const char *cmdline = boot_cmdline(mb_info);
-    usb_init(cmdline);
-    if (usb_summary(msg, sizeof(msg)))
-        ok(msg);
-    i2c_hid_init(cmdline);
-    if (i2c_hid_summary(msg, sizeof(msg)))
-        ok(msg);
     for (int i = 0; i < ndisplays; i++) {
         struct display *d = &displays[i];
         snprintf(msg, sizeof(msg), "Display: fb%d %s %ux%u (%s)%s", i, d->ops->name, d->mode.width, d->mode.height,
@@ -168,10 +222,9 @@ void kmain(uint32_t magic, uint32_t mb_info)
         ok(msg);
     }
 
-    ata_init();
-    const char *dev = blk_init();
+    const char *dev = blk_init(cmdline);
     if (!dev)
-        panic("no root device: attach an ext4 disk image or boot the ISO with its module");
+        panic("no root device: attach an ext4 disk image or boot the ISO with its module (no disk driver? see the drv: lines)");
     if ((root_fs = ext4_mount(blk_root(), false))) {
         vfs_init();
         vfs_mount_all();
@@ -182,6 +235,7 @@ void kmain(uint32_t magic, uint32_t mb_info)
         panic("cannot mount root file system");
     }
 
+    modules_root();                   /* /drv's drivers; the network cards' (DDI_PHASE_ROOT) */
     net_init();
     if (nnetif) {
         net_wait_config(3 * TIMER_HZ);

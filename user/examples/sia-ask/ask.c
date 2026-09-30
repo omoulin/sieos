@@ -6,6 +6,10 @@
  *   cc ask.c -lsia -o ask
  *   ./ask "What is the capital of Australia?"
  *   ./ask -c                  a conversation: one line per turn, empty line ends
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include <stdio.h>
 #include <stdlib.h>

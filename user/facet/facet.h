@@ -1,5 +1,9 @@
 /*
  * facet.h - The Facet desktop: windows, theme and applications.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_H
 #define FACET_H
@@ -107,6 +111,18 @@ void app_clock(void);
 void app_about(void);
 void app_message(const char *title, const char *line1, const char *line2);
 void app_network(void);
+void app_installer(void);
+void app_power(void);             /* Power and Temperature */         /* Install SIEOS (on a disk) */
+void wm_reboot(void);             /* end the session: reboot */
+bool wm_set_pointer(int speed, int accel, char *msg, size_t n);   /* -1: unchanged; msg: the settings */
+/* saver.c: the screen saver and the lock */
+void saver_load_settings(void);
+bool saver_configure(const char *kind, int timeout, int lock, char *msg, size_t n);   /* -1/NULL: unchanged */
+void saver_preview(void);
+void saver_lock_now(void);
+bool saver_active(void);
+bool saver_input(const struct input_event *ev);   /* true: the saver took it */
+int  saver_step(struct surface *back);            /* the poll's timeout it wants (ms) */
 void app_settings(void);
 
 #endif

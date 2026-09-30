@@ -6,7 +6,12 @@
  * resources; its LWPs (struct lwp) are what the scheduler runs.  Kernel code
  * runs under the big kernel lock with interrupts disabled; an LWP gives up
  * its CPU by sleeping, or when the timer fires while it is in user mode.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
+#include "power.h"
 #include "proc.h"
 #include "mm.h"
 #include "vm.h"
@@ -271,8 +276,7 @@ void cpu_idle(void)
         schedule();
         idle->state = LWP_RUNNING;
         bkl_unlock();
-        sti();
-        hlt();
+        power_idle();                        /* HLT, or MWAIT into a deep C-state */
         cli();
         bkl_lock();
     }

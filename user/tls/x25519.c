@@ -3,6 +3,10 @@
  *
  * Field elements are 16 limbs of 16 bits held in 64-bit integers, in the
  * style of TweetNaCl (public domain); the ladder runs in constant time.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "crypto.h"
 

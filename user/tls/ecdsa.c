@@ -6,6 +6,10 @@
  * moduli) serves both the field (p) and the group order (n); points are in
  * Jacobian coordinates (curves with a = -3).  Only public values are
  * handled, so nothing here needs to be constant time.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "crypto.h"
 

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 # GNU make, configured and built on SIEOS (a self-hosting check), then used to rebuild itself.
 # Upstream config.sub does not know SIEOS yet: teach it, as ports/build.py does when cross-building.
 set -e

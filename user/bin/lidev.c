@@ -6,6 +6,10 @@
  *   lidev -n    IDs only (no names looked up)
  * Names come from the PCI ID database (/usr/share/misc/pci.ids) when the
  * system has it, else from a small built-in list.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 #include "sieos/sysinfo.h"

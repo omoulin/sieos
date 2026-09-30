@@ -3,6 +3,10 @@
  *   nc [-4|-6] [-u] host port        connect (IPv4 or IPv6, as the name resolves)
  *   nc -l [-4|-6] [-u] port          listen for one connection (or datagrams);
  *                                    on IPv4 and IPv6 unless -4 or -6
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

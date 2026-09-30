@@ -4,6 +4,10 @@
  * Inside the kernel, signals use the Solaris numbers of ABI v2
  * (SIGUSR1 = 16, SIGCHLD = 18, SIGSTOP = 23, real-time 42..73) and 128-bit
  * sets.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_KSIG_H
 #define SIEOS_KSIG_H

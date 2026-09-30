@@ -6,6 +6,10 @@
  * and long mode using the kernel page tables (with the temporary identity
  * map in place), and jumps to ap_main(cpu) on the stack prepared by the
  * BSP in the parameter block at the end of the trampoline.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #define BASE 0x8000
 #define ADDR(x) (BASE + ((x) - ap_trampoline))

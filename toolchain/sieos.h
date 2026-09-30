@@ -1,6 +1,10 @@
 /* Target definitions for SIEOS (x86_64-pc-sieos): the kernel's ABI v2 with
    the musl-based C library.  Programs are linked dynamically against
    /lib/ld-musl-sieos64.so.1 (libc.so), or statically with -static / -static-pie.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
    This file is installed as gcc/config/sieos.h by toolchain/sieos-toolchain.py.  */
 
 #undef  TARGET_OS_CPP_BUILTINS

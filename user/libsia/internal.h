@@ -1,5 +1,9 @@
 /*
  * internal.h - Shared between the parts of libsia (not a public interface).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef LIBSIA_INTERNAL_H
 #define LIBSIA_INTERNAL_H

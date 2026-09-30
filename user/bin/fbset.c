@@ -5,6 +5,10 @@
  *   fbset [-d N] WxH       change display N to WxH (a mode it lists)
  * The console follows a mode change of the display it draws on.  A display
  * a program has mapped (Facet) can only be changed by that program.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 #include "sieos/sysinfo.h"

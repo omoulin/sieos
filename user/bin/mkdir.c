@@ -1,4 +1,10 @@
-/* mkdir - create directories (-p: create parents, no error if existing) */
+/*
+ * mkdir - create directories (-p: create parents, no error if existing)
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include "sieos.h"
 
 static int mkdir_p(char *path)

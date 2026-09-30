@@ -2,6 +2,10 @@
  * ping - send ICMP or ICMPv6 echo requests (installed set-user-ID root,
  * since raw sockets are privileged).
  *   ping [-4|-6] [-c count] host        (ping6 is ping -6)
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

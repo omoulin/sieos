@@ -1,5 +1,9 @@
 /*
  * abi.h - Definitions shared between the kernel and user space.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_ABI_H
 #define SIEOS_ABI_H
@@ -464,6 +468,7 @@ struct input_event {
 #define DEV_PTS_MAJOR  136     /* 136,n = /dev/pts/n (5,2 = /dev/ptmx) */
 #define DEV_BLK_MAJOR  8       /* block devices: 8,n = blkdev n (see blkdev.h) */
 #define DEV_LOFI_MAJOR 147     /* 147,0 = /dev/lofictl */
+#define DEV_POWER_MAJOR 181    /* 181,0 = /dev/power */
 
 #define NGROUPS_MAX 16
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 """
 build.py NAME DL SRCDIR DESTDIR - cross-build a port for x86_64-pc-sieos.
 

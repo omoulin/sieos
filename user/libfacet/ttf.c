@@ -8,6 +8,10 @@
  * method of font-rs): each line adds its signed area to an accumulation
  * buffer, and a running sum along each row gives the coverage.  There is
  * no hinting.  Each face caches the glyphs it has drawn.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include <fcntl.h>
 #include <math.h>

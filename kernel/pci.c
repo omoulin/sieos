@@ -1,5 +1,9 @@
 /*
  * pci.c - PCI configuration space access (mechanism #1, ports 0xCF8/0xCFC).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "pci.h"
 
@@ -212,6 +216,30 @@ uint64_t pci_bar_size(const struct pci_dev *d, int i)
 int pci_scan(void)
 {
     return pci_count();
+}
+
+/*
+ * The bridges between the root and d's bus: memory space and bus master on.
+ * A PCIe root port forwards a device's DMA upstream only with its own bus
+ * master bit (the firmware may leave it off when it did not use the device).
+ */
+void pci_enable_path(const struct pci_dev *d)
+{
+    for (int i = 0; i < pci_count(); i++) {
+        const struct pci_dev *b = pci_at(i);
+        if (((pci_read32(b->bus, b->dev, b->func, 0x0C) >> 16) & 0x7F) != 1)
+            continue;                                /* (not a PCI-to-PCI bridge) */
+        uint32_t buses = pci_read32(b->bus, b->dev, b->func, 0x18);
+        uint8_t sec = (buses >> 8) & 0xFF, sub = (buses >> 16) & 0xFF;
+        if (d->bus < sec || d->bus > sub || !sec)
+            continue;
+        uint32_t cmd = pci_read32(b->bus, b->dev, b->func, 0x04);
+        if ((cmd & 0x06) != 0x06) {
+            pci_write32(b->bus, b->dev, b->func, 0x04, cmd | 0x06);
+            kprintf("pci: bridge %02x:%02x.%x (to bus %02x-%02x): memory and bus master turned on\n", b->bus, b->dev,
+                    b->func, sec, sub);
+        }
+    }
 }
 
 void pci_enable_bus_master(const struct pci_dev *d)

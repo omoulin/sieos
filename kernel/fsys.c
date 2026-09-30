@@ -2,10 +2,15 @@
  * fsys.c - File system calls shared by ABI v1 (syscall.c) and ABI v2
  * (syscall2.c).  Paths are user pointers; dirfd is a directory descriptor
  * or AT_FDCWD_K; flags use the kernel's O_* and AT_*_K values.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "mm.h"
 #include "fs.h"
+#include "blkdev.h"
 #include "tty.h"
 #include "poll.h"
 #include "display.h"
@@ -141,6 +146,10 @@ static int open_device(struct file *f, struct inode *ip, int flags)
         }
         return r;
     }
+    if (MAJOR(dev) == DEV_POWER_MAJOR && MINOR(dev) == 0) {
+        f->type = FD_POWER;
+        return 0;
+    }
     if (MAJOR(dev) == DEV_LOFI_MAJOR && MINOR(dev) == 0) {
         f->type = FD_LOFICTL;
         return 0;
@@ -158,6 +167,23 @@ static int open_device(struct file *f, struct inode *ip, int flags)
         return 0;
     }
     return -ENXIO;
+}
+
+/* An opened block-special inode: the device itself, read and written in bytes (root). */
+static int open_blk(struct file *f, struct inode *ip, int flags)
+{
+    uint32_t dev = inode_rdev(ip);
+    if (MAJOR(dev) != DEV_BLK_MAJOR)
+        return -ENXIO;
+    if (current->euid != 0)
+        return -EACCES;
+    int r = blk_file_open(MINOR(dev), (flags & O_ACCMODE) != O_RDONLY);
+    if (r == 0) {
+        f->type = FD_BLK;
+        f->minor = MINOR(dev);
+        f->off = 0;
+    }
+    return r;
 }
 
 static char *kstrdup(const char *s)
@@ -320,7 +346,7 @@ long fsys_open(int dirfd, const char *upath, int flags, int mode)
     f->pname = kstrdup(path);
     if (path[0] != '/')
         f->pdir = idup(start ? start : current->cwd);
-    if ((S_ISCHR(m) && (r = open_device(f, ip, flags)) < 0) || (S_ISFIFO(m) && (r = fifo_open(f, ip, flags)) < 0)) {
+    if ((S_ISCHR(m) && (r = open_device(f, ip, flags)) < 0) || (S_ISBLK(m) && (r = open_blk(f, ip, flags)) < 0) || (S_ISFIFO(m) && (r = fifo_open(f, ip, flags)) < 0)) {
         file_close(f);
         return r;
     }
@@ -763,6 +789,14 @@ long fsys_lseek(int fd, int64_t off, int whence)
     struct file *f = fsys_file(fd);
     if (!f)
         return -EBADF;
+    if (f->type == FD_BLK) {                         /* a disk: its size is the end */
+        int64_t end = (int64_t)blk_sectors(f->minor) * 512;
+        int64_t b = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? (int64_t)f->off : whence == SEEK_END ? end : -1;
+        if (b < 0 || b + off < 0)
+            return -EINVAL;
+        f->off = b + off;
+        return f->off;
+    }
     if (f->type != FD_INODE)
         return -ESPIPE;
     int64_t base, size = inode_size(f->ip);

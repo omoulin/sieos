@@ -5,6 +5,10 @@
  * and converted at the wire and at the sockets API.  The transports (TCP,
  * UDP) name endpoints with 16-byte addresses (naddr_t, network order): IPv6
  * ones, or IPv4 ones mapped as ::ffff:a.b.c.d (net6.c has the IPv6 layer).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_NET_H
 #define SIEOS_NET_H
@@ -179,11 +183,14 @@ struct ip_hdr {
 } __attribute__((packed));
 
 /* drivers: each registers the cards it finds */
-void e1000_probe(void);
+void e1000_probe(void);                       /* (drv/e1000, drv/virtio_net: from their _init) */
 void virtio_net_probe(void);
 
 /* net.c */
 void net_init(void);
+void net_attach(struct netif *ifp);           /* an interface registered after net_init starts (DHCP, IPv6) */
+int  net_configure(int index, bool dhcp, uint32_t ip, uint32_t mask, uint32_t gw, uint32_t dns);
+extern bool net_started;
 bool net_wait_config(int max_ticks);
 void net_poll(void);                          /* called every timer tick on the BSP */
 void net_rx(struct netif *ifp, const uint8_t *frame, size_t len);
@@ -242,6 +249,7 @@ long socket_read(struct socket *s, void *buf, size_t n);
 long socket_write(struct socket *s, const void *buf, size_t n);
 bool socket_readable(struct socket *s);
 bool socket_writable(struct socket *s);
+bool socket_failed(struct socket *s);
 void socket_wake(struct socket *s);
 long socket_kopt(int fd, int which, bool set, int *val);
 long socket_netinfo6(struct sieos_netinfo6 *u, long idx);
@@ -255,7 +263,8 @@ void dhcp_input(const uint8_t *msg, size_t len);
 void tcp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_t len);
 void tcp_tick(void);
 struct tcb *tcp_alloc(void);
-int  tcp_connect(struct tcb *t, const naddr_t *lip, uint16_t lport, const naddr_t *rip, uint16_t rport);
+int  tcp_connect(struct tcb *t, const naddr_t *lip, uint16_t lport, const naddr_t *rip, uint16_t rport,
+                 bool nonblock);
 int  tcp_listen(struct tcb *t, const naddr_t *lip, uint16_t lport, bool v6only);
 long tcp_send(struct tcb *t, const void *buf, size_t n, bool nonblock);
 long tcp_recv(struct tcb *t, void *buf, size_t n, bool nonblock, int timeout_ms);
@@ -264,6 +273,8 @@ void tcp_close(struct tcb *t);
 void tcp_abort(struct tcb *t);
 int  tcp_state(struct tcb *t);
 int  tcp_error(struct tcb *t);
+int  tcp_take_error(struct tcb *t);
+bool tcp_connecting(struct tcb *t);
 bool tcp_readable(struct tcb *t);
 bool tcp_writable(struct tcb *t);
 struct tcb *tcp_accept_ready(struct tcb *listener);

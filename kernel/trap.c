@@ -1,6 +1,11 @@
 /*
  * trap.c - IDT, 8259 PIC and the central trap dispatcher.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
+#include "power.h"
 #include "arch.h"
 #include "proc.h"
 #include "mm.h"
@@ -305,6 +310,8 @@ void trap_handler(struct trapframe *tf)
     } else if (tf->int_no == 14 && vm_fault(read_cr2(), tf->err_code, from_user)) {
         curlwp->minflt++;
         /* resolved: demand paging or copy-on-write */
+    } else if (tf->int_no == 13 && !from_user && msr_fixup(tf)) {
+        /* an MSR that is not there (power.c probes them) */
     } else {
         const char *name = tf->int_no < ARRAY_SIZE(exc_names) ? exc_names[tf->int_no] : "Unknown";
         if (from_user && current) {

@@ -5,6 +5,10 @@
  * or the data pages (files and symbolic links).  A node lives as long as it
  * has a link or a reference.  Directory offsets are per-entry cookies that
  * never change, so readdir resumes correctly around insertions/removals.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
 #include "proc.h"

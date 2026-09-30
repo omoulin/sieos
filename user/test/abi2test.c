@@ -6,6 +6,10 @@
  * auxv, self-relocation at the PIE load address, the carry-flag error
  * convention, second return values, stat/dirent layouts, clocks,
  * sysinfo, brk, FPU/SSE state across context switches, and NX.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos/abi.h"
 

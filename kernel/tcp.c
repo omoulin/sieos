@@ -11,6 +11,10 @@
  * zero-window probes, orderly release (FIN) in both directions, TIME_WAIT,
  * and RST handling.  Not implemented: SACK, timestamps, urgent data,
  * keepalives.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "net.h"
 #include "proc.h"
@@ -158,6 +162,16 @@ void tcp_set_owner(struct tcb *t, struct socket *s)
 
 int tcp_state(struct tcb *t) { return t->state; }
 int tcp_error(struct tcb *t) { return t->err; }
+
+/* SO_ERROR: the pending error, cleared by reading it (a failed connect stays closed) */
+int tcp_take_error(struct tcb *t)
+{
+    int e = t->err;
+    t->err = 0;
+    return e;
+}
+
+bool tcp_connecting(struct tcb *t) { return t->state == TCP_SYN_SENT; }
 
 void tcp_endpoints(struct tcb *t, naddr_t *lip, uint16_t *lport, naddr_t *rip, uint16_t *rport)
 {
@@ -852,7 +866,10 @@ struct tcb *tcp_accept_ready(struct tcb *l)
     return NULL;
 }
 
-int tcp_connect(struct tcb *t, const naddr_t *lip, uint16_t lport, const naddr_t *rip, uint16_t rport)
+/* Send the SYN; with nonblock, return -EINPROGRESS at once (poll shows the
+ * outcome: POLLOUT when established, POLLERR and SO_ERROR when it failed). */
+int tcp_connect(struct tcb *t, const naddr_t *lip, uint16_t lport, const naddr_t *rip, uint16_t rport,
+                bool nonblock)
 {
     t->lip = *lip;
     t->lport = lport;
@@ -864,6 +881,8 @@ int tcp_connect(struct tcb *t, const naddr_t *lip, uint16_t lport, const naddr_t
     t->state = TCP_SYN_SENT;
     send_seg(t, F_SYN, t->iss, NULL, 0);
     arm_rto(t);
+    if (nonblock)
+        return -EINPROGRESS;
     while (t->state == TCP_SYN_SENT) {
         if (signal_pending(current))
             return -EINTR;
@@ -880,6 +899,14 @@ long tcp_send(struct tcb *t, const void *buf, size_t n, bool nonblock)
     while (done < n) {
         if (t->err)
             return done ? (long)done : -t->err;
+        if (t->state == TCP_SYN_SENT) {           /* (a non-blocking connect in progress) */
+            if (nonblock)
+                return -EAGAIN;
+            if (signal_pending(current))
+                return -ERESTART;
+            sleep_on(t->owner);
+            continue;
+        }
         if (t->state != TCP_ESTABLISHED && t->state != TCP_CLOSE_WAIT) {
             if (!done)
                 signal_send(current, SIGPIPE);

@@ -1,6 +1,10 @@
 /*
  * config.c - ~/.sia/config (model connection), ~/.sia/status (for the
  * desktop) and plain-text conversion of model replies.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "libsia.h"
 

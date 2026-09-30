@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 # vfio-gpu.sh - hand a host PCI GPU to QEMU (VFIO) for 'make run-uefi GPU=intel', and back.
 #
 #   tools/vfio-gpu.sh status  [PCI]        which driver has the GPU, its IOMMU group

@@ -5,6 +5,10 @@
  * writes frames to a pipe as the answer arrives: a tag byte, a 4-byte
  * little-endian length and the payload -- 'D' a piece of the answer, then
  * 'A' (done, empty) or 'E' (the error message).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include <poll.h>
 #include "internal.h"

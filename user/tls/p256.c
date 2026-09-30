@@ -6,6 +6,10 @@
  * Jacobian coordinates (a = -3 doubling).  Only ephemeral keys are used,
  * so the scalar ladder does the same work for every bit but point
  * addition has data-dependent branches for the special cases.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "crypto.h"
 

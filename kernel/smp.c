@@ -9,10 +9,20 @@
  * Application processors are started with the INIT-SIPI-SIPI sequence
  * into a real-mode trampoline (ap_boot.S) copied to AP_TRAMPOLINE.
  *
+ * The local APICs are used in the mode the firmware left: xAPIC (memory
+ * mapped) or x2APIC (MSRs 0x800 + register / 16), which recent firmware
+ * turns on (the Surface Pro 7, most Ice Lake and later laptops); the MADT's
+ * x2APIC entries are read too.
+ *
  * Concurrency: a big kernel lock serialises all kernel code, so user
  * programs run in parallel on every CPU while the kernel itself keeps
  * its simple uniprocessor structure.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
+#include "power.h"
 #include "smp.h"
 #include "proc.h"
 #include "cpu.h"
@@ -45,10 +55,13 @@ int ncpu = 1;
 bool lapic_ok;
 
 static volatile uint32_t *lapic;
+bool x2apic;                                 /* the firmware left the local APICs in x2APIC mode */
+bool smp_want_x2apic;                        /* "x2apic": turn it on when the processor has it */
 static uint64_t lapic_phys;
 static int apic_ids[NCPU];
 static int napic;
 static uint32_t lapic_timer_count;
+static volatile uint64_t lapic_irqs[NCPU];   /* local timer interrupts per CPU */
 
 static struct spinlock bkl;
 static volatile int bkl_owner = -1;
@@ -92,31 +105,40 @@ bool bkl_held(void)
 
 static inline uint32_t lapic_read(uint32_t reg)
 {
+    if (x2apic)
+        return (uint32_t)rdmsr(0x800 + reg / 16);
     return lapic[reg / 4];
 }
 
 static inline void lapic_write(uint32_t reg, uint32_t v)
 {
+    if (x2apic) {
+        wrmsr(0x800 + reg / 16, v);
+        return;
+    }
     lapic[reg / 4] = v;
     (void)lapic[LAPIC_ID / 4];         /* wait for the write to complete */
 }
 
 void lapic_eoi(void)
 {
-    if (lapic)
+    if (lapic_ok)
         lapic_write(LAPIC_EOI, 0);
 }
 
 static int lapic_id(void)
 {
-    return lapic_read(LAPIC_ID) >> 24;
+    return x2apic ? (int)lapic_read(LAPIC_ID) : (int)(lapic_read(LAPIC_ID) >> 24);
 }
 
 void lapic_init(void)
 {
     if (!lapic_ok)
         return;
-    wrmsr(MSR_APIC_BASE, rdmsr(MSR_APIC_BASE) | (1 << 11));
+    uint64_t base = rdmsr(MSR_APIC_BASE) | (1 << 11);
+    wrmsr(MSR_APIC_BASE, base);
+    if (x2apic && !(base & (1 << 10)))
+        wrmsr(MSR_APIC_BASE, base | (1 << 10));          /* (an application processor: x2APIC like the boot one) */
     lapic_write(LAPIC_SVR, 0x100 | T_SPURIOUS);
     lapic_write(LAPIC_TPR, 0);
     bool bsp = mycpu()->id == 0;
@@ -131,6 +153,16 @@ void lapic_init(void)
 
 static void wait_ticks(uint64_t n)
 {
+    if (tsc_hz) {                            /* by the clock: no timer interrupt is needed (boot) */
+        uint64_t end = hrtime() + n * (1000000000UL / TIMER_HZ);
+        while (hrtime() < end) {
+            sti();
+            for (int i = 0; i < 100; i++)
+                __asm__ volatile("pause");
+            cli();
+        }
+        return;
+    }
     uint64_t end = ticks + n;
     while (ticks < end) {
         sti();
@@ -145,11 +177,24 @@ static void udelay(int us)
         io_wait();
 }
 
-/* Measure the APIC timer against the PIT (must run on the BSP). */
+/* Measure the APIC timer against the TSC, else the PIT ticks (must run on the BSP). */
 static void lapic_timer_calibrate(void)
 {
     lapic_write(LAPIC_TMR_DIV, 0x3);                    /* divide by 16 */
     lapic_write(LAPIC_LVT_TMR, 0x10000);
+    if (tsc_hz) {                                        /* (there may be no PIT at all) */
+        uint64_t t0 = hrtime();
+        lapic_write(LAPIC_TMR_INIT, 0xFFFFFFFF);
+        uint64_t t1;
+        while ((t1 = hrtime()) - t0 < 100000000UL)
+            __asm__ volatile("pause");
+        uint32_t elapsed = 0xFFFFFFFF - lapic_read(LAPIC_TMR_CUR);
+        lapic_write(LAPIC_TMR_INIT, 0);
+        lapic_timer_count = (uint64_t)elapsed * (1000000000UL / TIMER_HZ) / (t1 - t0);
+        if (lapic_timer_count < 1000)
+            lapic_timer_count = 1000;
+        return;
+    }
     wait_ticks(1);
     lapic_write(LAPIC_TMR_INIT, 0xFFFFFFFF);
     wait_ticks(10);
@@ -197,17 +242,32 @@ void lapic_timer_start(void)
     uint64_t now = hrtime();
     c->next_tick_ns = now + TICK_NS;
     lapic_arm(c, now, c->next_tick_ns);
+    if (c->id == 0 && tsc_hz) {                          /* does it interrupt? (the boot CPU, once) */
+        uint64_t end = hrtime() + 50000000UL;
+        while (!lapic_irqs[0] && hrtime() < end) {
+            sti();
+            __asm__ volatile("pause");
+            cli();
+        }
+        if (!lapic_irqs[0])
+            kprintf("smp: the local %sAPIC timer does not interrupt (count %u)\n", x2apic ? "x2" : "",
+                    lapic_timer_count);
+    }
 }
 
 void lapic_timer_irq(struct trapframe *tf)
 {
     struct cpu *c = mycpu();
+    lapic_irqs[c->id]++;
     uint64_t now = hrtime();
     uint64_t hr = hr_wake(now);
     bool tick = now >= c->next_tick_ns;
     if (tick || c->next_tick_ns > now + 2 * TICK_NS)       /* also after the TSC offset was set */
         c->next_tick_ns = now + TICK_NS;
     lapic_arm(c, now, MIN(c->next_tick_ns, hr));
+    if (c->id == 0)
+        timer_lapic_tick(tf);                           /* the clock and the polls, when there is no PIT */
+    power_cpu_tick();                                   /* temperatures, frequencies, the thermal policy */
     if (tick)
         sched_tick(tf);
 }
@@ -223,6 +283,10 @@ void lapic_timer_hint(uint64_t when)
 
 static void lapic_send_ipi(int apic_id, uint32_t low)
 {
+    if (x2apic) {                                        /* one 64-bit ICR, a 32-bit destination */
+        wrmsr(0x830, (uint64_t)(uint32_t)apic_id << 32 | low);
+        return;
+    }
     lapic_write(LAPIC_ICR_HI, (uint32_t)apic_id << 24);
     lapic_write(LAPIC_ICR_LO, low);
     for (int i = 0; i < 100000 && (lapic_read(LAPIC_ICR_LO) & (1 << 12)); i++)
@@ -310,10 +374,14 @@ static void parse_madt(struct acpi_sdt *madt)
     uint8_t *end = (uint8_t *)madt + madt->length;
     p += 8;                                              /* lapic addr + flags */
     while (p + 2 <= end && p[1] >= 2) {
-        if (p[0] == 0 && napic < NCPU) {                 /* processor local APIC */
-            uint32_t flags = *(uint32_t *)(p + 4);
-            if (flags & 3)
-                apic_ids[napic++] = p[3];
+        if ((p[0] == 0 || (p[0] == 9 && p[1] >= 16)) && napic < NCPU) {   /* processor local (x2)APIC */
+            uint32_t flags = *(uint32_t *)(p + (p[0] == 0 ? 4 : 8));
+            int id = p[0] == 0 ? p[3] : (int)*(uint32_t *)(p + 4);
+            bool dup = false;
+            for (int k = 0; k < napic; k++)
+                dup |= apic_ids[k] == id;
+            if ((flags & 3) && !dup && !(p[0] == 0 && id == 0xFF))
+                apic_ids[napic++] = id;
         } else if (p[0] == 5) {                          /* 64-bit LAPIC override */
             lapic_phys = *(uint64_t *)(p + 4);
         } else if (p[0] == 1 && madt_nioapic < MADT_MAX_IOAPIC) {   /* I/O APIC */
@@ -328,6 +396,10 @@ static void parse_madt(struct acpi_sdt *madt)
         p += p[1];
     }
 }
+
+uint32_t acpi_pm_timer_port;
+bool acpi_pm_timer_32;
+uint64_t acpi_hpet_base;
 
 /* The tables of the RSDT/XSDT, and the DSDT (for acpi_table). */
 #define ACPI_MAX_TABLES 64
@@ -384,16 +456,34 @@ void acpi_init(uint64_t mb_info_phys)
         acpi_add(pa);
         if (memcmp(t->sig, "APIC", 4) == 0)
             parse_madt(t);
+        if (memcmp(t->sig, "FACP", 4) == 0 && t->length >= 116) {        /* the PM timer */
+            uint8_t *f = (uint8_t *)t;
+            acpi_pm_timer_port = *(uint32_t *)(f + 76);
+            acpi_pm_timer_32 = *(uint32_t *)(f + 112) & (1U << 8);
+            if (t->length >= 220 && f[208] == 1 && *(uint64_t *)(f + 212))  /* X_PM_TMR_BLK, in I/O space */
+                acpi_pm_timer_port = (uint32_t)*(uint64_t *)(f + 212);
+        }
+        if (memcmp(t->sig, "HPET", 4) == 0 && t->length >= 56 && ((uint8_t *)t)[40] == 0)
+            acpi_hpet_base = *(uint64_t *)((uint8_t *)t + 44);
         if (memcmp(t->sig, "FACP", 4) == 0 && t->length >= 44) {         /* the DSDT: X_DSDT, else DSDT */
             uint8_t *f = (uint8_t *)t;
             uint64_t dsdt = t->length >= 148 ? *(uint64_t *)(f + 140) : 0;
             acpi_add(dsdt ? dsdt : *(uint32_t *)(f + 40));
         }
     }
+    x2apic = napic > 0 && (rdmsr(MSR_APIC_BASE) & (1 << 10));   /* EXTD: the firmware chose x2APIC */
+    uint32_t a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    if (napic > 0 && !x2apic && smp_want_x2apic && (c & (1U << 21))) {   /* "x2apic" on the command line */
+        wrmsr(MSR_APIC_BASE, rdmsr(MSR_APIC_BASE) | (1 << 11) | (1 << 10));
+        x2apic = true;
+    }
     if (napic > 0 && lapic_phys && lapic_phys < DIRECT_MAP_SIZE) {
         vmm_set_uncached(lapic_phys);
         lapic = P2V(lapic_phys);
         lapic_ok = true;
+    } else if (x2apic) {
+        lapic_ok = true;                                 /* (no MMIO needed) */
     }
 }
 
@@ -435,6 +525,7 @@ void smp_boot(void)
     if (napic < 2)
         return;
 
+    kprintf("smp: starting %d more CPU%s (%sAPIC)\n", napic - 1, napic > 2 ? "s" : "", x2apic ? "x2" : "x");
     size_t len = ap_trampoline_end - ap_trampoline;
     memcpy(P2V(AP_TRAMPOLINE), ap_trampoline, len);
     uint8_t *tramp = P2V(AP_TRAMPOLINE);
@@ -467,7 +558,8 @@ void smp_boot(void)
         for (int k = 0; k < 20 && !c->online; k++)
             wait_ticks(1);
         if (c->online) {
-            tsc_sync_master();
+            if (!tsc_sync_master())                      /* (it runs: it keeps its slot, without an offset) */
+                kprintf("smp: CPU with APIC id %d did not answer the clock synchronisation\n", c->apic_id);
             ncpu++;
         }
         else

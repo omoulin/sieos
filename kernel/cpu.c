@@ -5,6 +5,10 @@
  * FPU/SSE registers belong to user processes only (the kernel is compiled
  * with -mgeneral-regs-only), so they are saved and restored eagerly at every
  * context switch with fxsave/fxrstor.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "kernel.h"
 #include "arch.h"

@@ -14,6 +14,10 @@
  * is written in place before the metadata that points to it commits
  * (data=ordered).  A journal left by a crash is replayed at mount.  Without
  * a journal, writes go straight to disk.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
 #include "bcache.h"

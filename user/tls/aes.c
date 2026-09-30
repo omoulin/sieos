@@ -4,6 +4,10 @@
  * Only the forward cipher is needed: GCM uses AES in counter mode.
  * The S-box is computed once from its definition (inverse in GF(2^8)
  * followed by the affine map) rather than stored.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "crypto.h"
 

@@ -1,6 +1,10 @@
 /*
  * session.c - The conversation engine: the model and the tools take turns
  * until the model answers.  Presentation is left to the caller (sia_io).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "internal.h"
 

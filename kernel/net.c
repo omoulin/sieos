@@ -13,6 +13,10 @@
  * Everything runs under the big kernel lock.  Received frames are pulled
  * from the cards by net_poll(), called from the PIT tick on the BSP (and at
  * their interrupts); this also drives the ARP, DHCP and TCP timers.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "net.h"
 #include "mm.h"
@@ -697,17 +701,49 @@ static void dhcp_tick(struct netif *ifp)
 /* Setup and polling                                                   */
 /* ------------------------------------------------------------------ */
 
-void net_init(void)
+bool net_started;
+
+/* An interface's IPv4 settings: DHCP again, or static ones (netconfig). */
+int net_configure(int index, bool dhcp, uint32_t ip, uint32_t mask, uint32_t gw, uint32_t dns)
 {
-    e1000_probe();
-    virtio_net_probe();
-    for (int i = 0; i < nnetif; i++) {
-        struct netif *ifp = &netifs[i];
-        ifp->dhcp_xid = (uint32_t)(ticks * 2654435761U) ^ (ifp->mac[5] << 8) ^ (ifp->mac[4] << 16) ^ 0xA1E05 ^ i;
+    struct netif *ifp = netif_by_index(index);
+    if (!ifp)
+        return -ENODEV;
+    if (dhcp) {
+        ifp->up = false;
+        ifp->dhcp = false;
+        ifp->ip = ifp->gateway = 0;
+        ifp->dhcp_xid = (uint32_t)(ticks * 2654435761U) ^ ifp->mac[5] ^ 0x5EE05;
         ifp->dhcp_state = DHCP_SELECTING;
         ifp->dhcp_next_send = 0;
-        net6_attach(ifp);
+        return 0;
     }
+    if (!ip || (mask && (~mask & (~mask + 1))))    /* (a netmask is ones then zeros) */
+        return -EINVAL;
+    ifp->dhcp_state = DHCP_OFF;
+    ifp->dhcp = false;
+    ifp->ip = ip;
+    ifp->netmask = mask ? mask : 0xFFFFFF00;
+    ifp->gateway = gw;
+    ifp->dns = dns;
+    ifp->up = true;
+    return 0;
+}
+
+/* An interface starts: DHCP, IPv6 (at boot, and for a card plugged in later: a USB adapter). */
+void net_attach(struct netif *ifp)
+{
+    ifp->dhcp_xid = (uint32_t)(ticks * 2654435761U) ^ (ifp->mac[5] << 8) ^ (ifp->mac[4] << 16) ^ 0xA1E05 ^ ifp->index;
+    ifp->dhcp_state = DHCP_SELECTING;
+    ifp->dhcp_next_send = 0;
+    net6_attach(ifp);
+}
+
+void net_init(void)
+{
+    for (int i = 0; i < nnetif; i++)             /* (the cards' drivers registered them: DDI_PHASE_ROOT) */
+        net_attach(&netifs[i]);
+    net_started = true;
 }
 
 /* Wait (at boot) for DHCP on every interface; eth0 falls back to the QEMU user-network defaults. */

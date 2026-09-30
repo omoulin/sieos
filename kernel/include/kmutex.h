@@ -7,6 +7,10 @@
  * may take it again (ext4 re-enters itself through iput, for example).
  * Outside process context (at boot) nobody can contend, and it is a no-op
  * besides the bookkeeping.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_KMUTEX_H
 #define SIEOS_KMUTEX_H

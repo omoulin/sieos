@@ -1,5 +1,9 @@
 /*
  * abi2.h - Kernel side of ABI v2 (the syscall instruction).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_ABI2_H
 #define SIEOS_ABI2_H

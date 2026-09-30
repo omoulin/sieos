@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 # /etc/shrc - read by every interactive /bin/sh (login sets ENV=/etc/shrc)
 case $- in
 *i*)

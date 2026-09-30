@@ -1,6 +1,10 @@
 /*
  * abi-check.c - compile-time and run-time checks of the ABI v2 headers.
  * Built by "make abi-check" as C (hosted and freestanding) and as C++.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos/abi.h"
 

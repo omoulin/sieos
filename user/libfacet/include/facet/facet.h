@@ -31,6 +31,10 @@
  *
  * Drawing is facet/gfx.h, widgets and icons facet/ui.h, the desktop's
  * colours facet/theme.h (all included here).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_FACET_H
 #define FACET_FACET_H

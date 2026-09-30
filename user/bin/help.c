@@ -1,4 +1,10 @@
-/* help - how to use the shell, and the programs there are */
+/*
+ * help - how to use the shell, and the programs there are
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include "sieos.h"
 
 static void list(const char *dir)

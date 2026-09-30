@@ -1,5 +1,9 @@
 /*
  * fs.h - In-memory inodes, the ext4 file system interface and open files.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_FS_H
 #define SIEOS_FS_H
@@ -144,6 +148,7 @@ int  vfs_create(struct inode *dir, const char *name, uint16_t mode, uint32_t rde
                 struct inode **out);
 int  vfs_mkdir(struct inode *dir, const char *name, uint16_t mode, int uid, int gid);
 int  vfs_unlink(struct inode *dir, const char *name, bool is_dir);
+void vfs_blk_nodes(void);            /* the /dev/dsk nodes of the block devices there are */
 int  vfs_rename(struct inode *od, const char *on, struct inode *nd, const char *nn);
 int  vfs_link(struct inode *dir, const char *name, struct inode *ip);
 int  vfs_symlink(struct inode *dir, const char *name, const char *target, int uid, int gid);
@@ -195,6 +200,8 @@ struct inode *nameiparent_at(struct inode *start, const char *path, char *name, 
 #define FD_RANDOM 10           /* /dev/random, /dev/urandom */
 #define FD_UNIX  11            /* AF_UNIX socket */
 #define FD_LOFICTL 12          /* /dev/lofictl */
+#define FD_BLK   13            /* a block device (/dev/dsk/...): f->minor, f->off */
+#define FD_POWER 14            /* /dev/power */
 
 struct pipe;
 struct pty;

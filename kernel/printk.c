@@ -1,5 +1,9 @@
 /*
  * printk.c - Formatted output for the kernel.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "kernel.h"
 
@@ -51,15 +55,26 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             continue;
         }
         fmt++;
-        bool zero = false, left = false;
-        int width = 0, lng = 0;
+        bool zero = false, left = false, alt = false;
+        int width = 0, lng = 0, prec = -1;
         for (;; fmt++) {
             if (*fmt == '0') zero = true;
             else if (*fmt == '-') left = true;
+            else if (*fmt == '#') alt = true;       /* 0x before hexadecimal */
             else break;
         }
         while (*fmt >= '0' && *fmt <= '9')
             width = width * 10 + (*fmt++ - '0');
+        if (*fmt == '.') {                          /* precision: at most so many characters of a string */
+            fmt++;
+            prec = 0;
+            if (*fmt == '*') {
+                prec = va_arg(ap, int);
+                fmt++;
+            }
+            while (*fmt >= '0' && *fmt <= '9')
+                prec = prec * 10 + (*fmt++ - '0');
+        }
         while (*fmt == 'l') {
             lng++;
             fmt++;
@@ -83,6 +98,11 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
         case 'x':
         case 'X': {
             uint64_t v = lng ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+            if (alt && v) {
+                out_char(&o, '0');
+                out_char(&o, 'x');
+                width = width > 2 ? width - 2 : 0;
+            }
             out_num(&o, v, 16, false, width, zero, left, *fmt == 'X');
             break;
         }
@@ -101,11 +121,13 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             if (!s)
                 s = "(null)";
             int len = strlen(s);
+            if (prec >= 0 && len > prec)
+                len = prec;
             if (!left)
                 for (; width > len; width--)
                     out_char(&o, ' ');
-            while (*s)
-                out_char(&o, *s++);
+            for (int i = 0; i < len; i++)
+                out_char(&o, s[i]);
             if (left)
                 for (; width > len; width--)
                     out_char(&o, ' ');
@@ -136,6 +158,34 @@ int snprintf(char *buf, size_t size, const char *fmt, ...)
     return n;
 }
 
+/* The kernel's messages, the last 64 KiB (/proc/msgbuf, dmesg). */
+#define KLOG_SIZE 65536
+static char klog[KLOG_SIZE];
+static uint64_t klog_total;                          /* bytes ever written */
+
+static void klog_add(const char *s, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        klog[klog_total++ % KLOG_SIZE] = s[i];
+}
+
+size_t klog_size(void)
+{
+    return klog_total < KLOG_SIZE ? klog_total : KLOG_SIZE;
+}
+
+long klog_read(void *dst, uint64_t off, size_t n)
+{
+    size_t size = klog_size();
+    if (off >= size)
+        return 0;
+    n = MIN(n, size - off);
+    uint64_t first = klog_total - size;              /* the oldest byte kept */
+    for (size_t i = 0; i < n; i++)
+        ((char *)dst)[i] = klog[(first + off + i) % KLOG_SIZE];
+    return n;
+}
+
 void kprintf(const char *fmt, ...)
 {
     char buf[512];
@@ -143,7 +193,9 @@ void kprintf(const char *fmt, ...)
     va_start(ap, fmt);
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    console_write(buf, MIN((size_t)n, sizeof(buf) - 1));
+    size_t len = MIN((size_t)n, sizeof(buf) - 1);
+    klog_add(buf, len);
+    console_write(buf, len);
 }
 
 void panic(const char *fmt, ...)

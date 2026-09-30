@@ -3,6 +3,7 @@
  *
  *   /proc/self                 -> <pid>
  *   /proc/mnttab               the mount table (text, as Solaris /etc/mnttab)
+ *   /proc/msgbuf               the kernel's messages, the last 64 KiB (dmesg)
  *   /proc/<pid>/psinfo         sieos_psinfo_t   (0444)
  *   /proc/<pid>/status         sieos_pstatus_t  (0600)
  *   /proc/<pid>/cred           sieos_prcred_t   (0600)
@@ -14,6 +15,10 @@
  * Nodes are made on lookup and freed when unreferenced.  aux[] holds the
  * node type, the pid and the LWP id or descriptor number.  Records are
  * generated on every read.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
 #include "proc.h"
@@ -25,7 +30,7 @@
 #include "sieos/priocntl.h"
 
 enum { PN_ROOT = 1, PN_SELF, PN_PID, PN_PSINFO, PN_STATUS, PN_CRED, PN_USAGE, PN_LWPDIR, PN_LWP,
-       PN_LWPSINFO, PN_FDDIR, PN_FD, PN_CWD, PN_ROOTLNK, PN_MNTTAB };
+       PN_LWPSINFO, PN_FDDIR, PN_FD, PN_CWD, PN_ROOTLNK, PN_MNTTAB, PN_MSGBUF };
 
 static const struct { const char *name; int type; uint16_t mode; } pid_entries[] = {
     { "psinfo", PN_PSINFO, S_IFREG | 0444 },
@@ -297,6 +302,9 @@ static struct inode *pnode(struct fs *fs, int type, struct proc *p, int sub, uin
         size = n > 0 ? (size_t)n : 0;
         break;
     }
+    case PN_MSGBUF:
+        size = klog_size();
+        break;
     case PN_MNTTAB:
         size = vfs_mnttab(NULL, 0);
         break;
@@ -321,6 +329,10 @@ static int procfs_lookup(struct inode *dir, const char *name, size_t len, struct
         }
         if (len == 4 && !memcmp(name, "self", 4)) {
             *out = pnode(fs, PN_SELF, NULL, 0, S_IFLNK | 0777);
+            return *out ? 0 : -ENOMEM;
+        }
+        if (len == 6 && !memcmp(name, "msgbuf", 6)) {
+            *out = pnode(fs, PN_MSGBUF, NULL, 0, S_IFREG | 0444);
             return *out ? 0 : -ENOMEM;
         }
         if (len == 6 && !memcmp(name, "mnttab", 6)) {
@@ -399,6 +411,7 @@ static int procfs_readdir(struct inode *dir, uint64_t *off, filldir_t fill, void
     case PN_ROOT:
         EMIT("self", pino(PN_SELF, 0, 0), DT_LNK);
         EMIT("mnttab", pino(PN_MNTTAB, 0, 0), DT_REG);
+        EMIT("msgbuf", pino(PN_MSGBUF, 0, 0), DT_REG);
         for (int i = 1; i < NPROC; i++) {
             struct proc *q = &proc_table[i];
             if (q->state == PSTATE_UNUSED || q->state == PSTATE_EMBRYO) {
@@ -458,6 +471,8 @@ static long procfs_read(struct inode *ip, void *dst, uint64_t off, size_t n)
     } rec;
     size_t size;
     int type = PTYPE(ip);
+    if (type == PN_MSGBUF)
+        return klog_read(dst, off, n);
     if (type == PN_MNTTAB) {
         char *text = kmalloc(4096);
         if (!text)

@@ -1,6 +1,10 @@
 /*
  * settings.c - The desktop's settings: ~/.facet/settings over
  * /etc/facet/settings (facet/settings.h).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include <fcntl.h>
 #include <stdio.h>

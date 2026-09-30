@@ -16,6 +16,10 @@
  * (~/.facet/settings); FACET_SKIN overrides it.  When Facet
  * changes skin it tells every application (FCT_EV_SKIN), and libfacet
  * switches and redraws its views.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_SKIN_H
 #define FACET_SKIN_H

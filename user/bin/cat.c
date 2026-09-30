@@ -1,4 +1,10 @@
-/* cat - concatenate files to standard output */
+/*
+ * cat - concatenate files to standard output
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include "sieos.h"
 
 static int cat_fd(int fd)

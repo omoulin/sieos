@@ -1,5 +1,9 @@
 /*
  * sha2.c - SHA-256, SHA-384, SHA-512 (FIPS 180-4), HMAC and HKDF.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "crypto.h"
 

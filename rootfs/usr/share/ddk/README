@@ -1,0 +1,42 @@
+SIEOS driver development kit
+
+A driver is an ELF relocatable object, NAME.drv, that the kernel links when
+it loads it.  Every global symbol of the kernel is its library: the headers
+of /usr/include/ddk declare them (ddi.h: what a driver declares and the
+services made for drivers; pci.h, mm.h, blkdev.h, net.h, display.h, hid.h,
+poll.h, ...).  The kernel's own drivers are built the same way: /drv holds
+them, and /boot/bootarch.tar (loaded by GRUB with the kernel) has a copy,
+for the drivers the root device needs.
+
+A driver declares its name, its phase and the devices it drives:
+
+    #include "ddi.h"
+    #include "pci.h"
+
+    DDI_DRIVER("mydrv", DDI_PHASE_ROOT, "My card");
+    DDI_ALIAS("pci1234,5678");         /* pciVVVV,DDDD (hexadecimal, no leading zeros) */
+    DDI_ALIAS("pciclass,020000");      /* or pciclass,CCSSPP, pciclass,CCSS, platform,i8042 */
+
+    int _init(void)                    /* once: find the devices (pci_find_all), register them */
+    {
+        ...
+        return 0;
+    }
+
+At boot every device found is matched with the drivers' aliases (the most
+specific name first); the driver of a device is loaded in its phase
+(DDI_PHASE_DISPLAY with the console, DDI_PHASE_BOOT before the root is
+mounted, DDI_PHASE_ROOT after) and its _init is called.
+
+Build it (the kernel's code model: the driver is loaded in the kernel's
+upper 2 GiB):
+
+    gcc -c -O2 -ffreestanding -fno-pic -fno-pie -mcmodel=kernel -mno-red-zone \
+        -mgeneral-regs-only -fno-stack-protector -fno-builtin -I/usr/include/ddk mydrv.c
+    ld -r -o mydrv.drv mydrv.o
+
+Load it now with modload mydrv.drv (as root), or copy it to /drv to have it
+loaded at every boot when its device is there.  modinfo lists the drivers.
+
+example/ is a driver that attaches to nothing and says hello: make, then
+modload hello.drv.

@@ -12,6 +12,10 @@
  * Keys go to keyboard.c as set 1 scancodes, so they behave like the PS/2
  * keyboard's (the console, /dev/events); the keyboard repeats keys itself
  * there, so here a held key repeats after 500 ms, 30 times a second.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "hid.h"
 #include "poll.h"

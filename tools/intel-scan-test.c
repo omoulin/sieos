@@ -1,12 +1,16 @@
 /*
  * intel-scan-test.c - host test of the Intel display driver's register scan
- * (kernel/intel_gen12.c, built with INTEL_HOST_TEST) on simulated registers:
+ * (drv/intel_gen12/intel_gen12.c, built with INTEL_HOST_TEST) on simulated registers:
  * a GOP-like setup (pipe A linear XRGB8888 on eDP, 1920x1200), a second
  * pipe on a Type-C DP port, and the cases that must be refused; then the
  * mode setting's register writes (plane, pipe source, the scaler window).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #define INTEL_HOST_TEST
-#include "../kernel/intel_gen12.c"
+#include "../drv/intel_gen12/intel_gen12.c"
 #include <stdlib.h>
 
 static uint32_t regs[0x80000 / 4];
@@ -66,6 +70,23 @@ int main(void)
         printf("display 11: pipe %c -> %s %s\n", 'A' + out[i].pipe, out[i].output, out[i].usable ? "usable" : out[i].why);
     CHECK(n == 2 && out[0].usable && !strcmp(out[0].output, "DDI A (DP)"));
     CHECK(out[1].usable && !strcmp(out[1].output, "DDI TC2 (DP)"));
+    /* Ice Lake laptop: the panel on the eDP transcoder, fed by pipe A (transcoder A off) */
+    memset(regs, 0, sizeof(regs));
+    pipe(0, 2736, 1824, 4, 0, 0, 0, 2);
+    wr(TRANSCONF, 0);
+    wr(TRANS_DDI_FUNC_CTL, 0);
+    wr(TRANSCONF_EDP, 1U << 31);
+    wr(TRANS_DDI_FUNC_CTL_EDP, 1U << 31 | 0U << 12);
+    wr(TRANS_HTOTAL_EDP, (2736 + 160 - 1) << 16 | (2736 - 1));
+    wr(TRANS_VTOTAL_EDP, (1824 + 40 - 1) << 16 | (1824 - 1));
+    n = intel_scan(rd, NULL, 11, 256UL << 20, out, NPIPES);
+    for (int i = 0; i < n; i++)
+        printf("display 11 eDP: pipe %c %ux%u (native %ux%u) -> %s %s\n", 'A' + out[i].pipe, out[i].width,
+               out[i].height, out[i].native_w, out[i].native_h, out[i].output, out[i].usable ? "usable" : out[i].why);
+    CHECK(n == 1 && out[0].pipe == 0 && out[0].usable && !strcmp(out[0].output, "DDI A (eDP)"));
+    CHECK(out[0].native_w == 2736 && out[0].native_h == 1824);
+    wr(TRANS_DDI_FUNC_CTL_EDP, 1U << 31 | 5U << 12);          /* fed by pipe B: pipe A (transcoder off) is not */
+    CHECK(intel_scan(rd, NULL, 11, 256UL << 20, out, NPIPES) == 0);
     /* nothing running; a pipe reading all ones (not there) */
     memset(regs, 0, sizeof(regs));
     CHECK(intel_scan(rd, NULL, 12, 256UL << 20, out, NPIPES) == 0);

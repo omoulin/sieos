@@ -1,4 +1,8 @@
 /* rm - remove files (-r: recursive, -f: ignore missing).  Symbolic links
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  * are removed themselves, never followed. */
 #include "sieos.h"
 

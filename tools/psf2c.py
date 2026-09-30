@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 """Convert a PSF1/PSF2 console font (8 pixels wide) into a C array indexed by
 code point 0..255 (Latin-1), using the font's Unicode table when present."""
 import gzip, struct, sys

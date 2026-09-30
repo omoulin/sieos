@@ -1,6 +1,10 @@
 /*
  * chmod - change file mode bits.
  *   chmod MODE file...     MODE is octal (755) or symbolic (u+x,go-w,a=r,+t)
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

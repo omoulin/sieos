@@ -7,6 +7,10 @@
  * Session tickets from a server are kept in memory (per process, per host)
  * and a later connection to the same host resumes with one (PSK with
  * (EC)DHE, so forward secrecy is kept); no 0-RTT data.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef TLS_TLS_H
 #define TLS_TLS_H

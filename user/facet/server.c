@@ -7,6 +7,10 @@
  * whose content is the client's shared-memory buffer; its input is sent to
  * the client.  Replies and events go out through a per-connection queue so
  * a slow client never blocks the desktop.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "facet.h"
 #include "facet/protocol.h"

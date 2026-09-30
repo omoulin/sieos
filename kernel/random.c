@@ -5,6 +5,10 @@
  * clock and, when the CPU has them, RDSEED/RDRAND.  Output comes from a
  * ChaCha20 keystream whose key is re-derived from the pool on every
  * request and replaced after it (forward secrecy).  Reads never block.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "kernel.h"
 #include "random.h"

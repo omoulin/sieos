@@ -5,6 +5,10 @@
  * by every file system, and its operations dispatch on ip->fs->ops.  This
  * file holds the generic attribute code, the dispatchers, the mount table
  * and path reconstruction (getcwd).  Path lookup is in namei.c.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
 #include "blkdev.h"
@@ -567,23 +571,52 @@ static void ensure(const char *path, uint16_t mode, uint32_t rdev)
         kprintf("vfs: cannot create %s (%d)\n", path, err);
 }
 
+/*
+ * The /dev/dsk nodes of the block devices there are: created, or made
+ * again where the name now stands for another device (after a disk's
+ * partitions were read again).
+ */
+void vfs_blk_nodes(void)
+{
+    ensure("/dev/dsk", S_IFDIR | 0755, 0);
+    for (int u = 0; u < NBLKDEV; u++) {
+        if (!blk_present(u) || !blk_name(u))
+            continue;
+        char path[48];
+        snprintf(path, sizeof(path), "/dev/dsk/%s", blk_name(u));
+        int err;
+        struct inode *ip = namei(path, &err);
+        if (ip) {
+            bool same = S_ISBLK(inode_mode(ip)) && inode_rdev(ip) == (uint32_t)MKDEV(DEV_BLK_MAJOR, u);
+            iput(ip);
+            if (same)
+                continue;
+            char name[64];
+            struct inode *dir = nameiparent(path, name, &err);
+            if (dir) {
+                vfs_unlink(dir, name, false);
+                iput(dir);
+            }
+        }
+        ensure(path, S_IFBLK | 0600, MKDEV(DEV_BLK_MAJOR, u));
+    }
+}
+
 void vfs_mount_all(void)
 {
-    strlcpy(root_fs->special, blk_is_ramdisk() ? "/dev/ramdisk" : "/dev/hda", sizeof(root_fs->special));
+    if (blk_is_ramdisk())
+        strlcpy(root_fs->special, "/dev/ramdisk", sizeof(root_fs->special));
+    else
+        snprintf(root_fs->special, sizeof(root_fs->special), "/dev/dsk/%s", blk_name(blk_root()));
     root_fs->mount_time = kernel_time();
     ensure("/tmp", S_IFDIR | 01777, 0);
     ensure("/proc", S_IFDIR | 0555, 0);
     ensure("/dev/pts", S_IFDIR | 0755, 0);
     ensure("/dev/ptmx", S_IFCHR | 0666, MKDEV(DEV_TTY_MAJOR, 2));
     /* block devices: the disks there are, and the lofi devices */
-    ensure("/dev/dsk", S_IFDIR | 0755, 0);
-    for (int u = 0; u < 4; u++)
-        if (blk_present(u)) {
-            char name[32];
-            snprintf(name, sizeof(name), "/dev/dsk/c%dd%dp0", u / 2, u % 2);
-            ensure(name, S_IFBLK | 0600, MKDEV(DEV_BLK_MAJOR, u));
-        }
+    vfs_blk_nodes();
     ensure("/dev/lofictl", S_IFCHR | 0600, MKDEV(DEV_LOFI_MAJOR, 0));
+    ensure("/dev/power", S_IFCHR | 0666, MKDEV(DEV_POWER_MAJOR, 0));
     ensure("/dev/lofi", S_IFDIR | 0755, 0);
     for (int n = 1; n <= NLOFI; n++) {
         char name[32];

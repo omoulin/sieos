@@ -1306,7 +1306,7 @@ Milestone 27 (done): the TLS client and sia's model connection.
     secrecy is kept.
   - The ClientHello always carries `psk_key_exchange_modes`. Without it, servers send
     no tickets (Google and Cloudflare sent none before).
-  - Resumed: Google, Cloudflare, Wikipedia, example.com, api.anthropic.com, and OpenSSL
+  - Resumed: Google, Cloudflare, Wikipedia, example.com, and OpenSSL
     with either suite. GitHub and letsencrypt.org do not resume for OpenSSL's client
     either.
   - `tls_resumed()` reports whether a ticket was used, and `tls_forget_sessions()`
@@ -1661,8 +1661,7 @@ Milestone 34 (done): Facet skins.
     with GRUB `x86_64-efi`, and GRUB `i386-pc` for BIOS.
   - It holds the kernel and the root file system, which is loaded as a RAM disk: the
     kernel has no USB or NVMe storage driver. Changes are lost at power-off.
-  - Like the ISO, it carries sia's model connection from `ai.config` when that file
-    exists. `USB_SIA=0` leaves it out.
+  - It has no model connection: sia asks for one on first use.
   - Write it to the drive itself, not a partition (see `lsblk`):
     `sudo dd if=build/sieos-usb.img of=/dev/sdX bs=4M conv=fsync status=progress`
   - On the PC, Secure Boot must be off, because GRUB is not signed.
@@ -1882,6 +1881,873 @@ Milestone 34 (done): Facet skins.
     report ignored.
   - Not tested on the hardware. QEMU has no DesignWare I2C controller on x86.
 
+### Milestone 42: machines without a PIT or a PS/2 controller (Surface Pro 7)
+
+- **The freeze:** on the Surface Pro 7 (Ice Lake) the boot stopped after the memory line.
+  - The firmware gates the 8254 PIT off, as many Ice Lake and later platforms do, so it
+    neither counts nor interrupts.
+  - The TSC calibration waited up to 100 million port reads (about 100 s) for PIT
+    channel 2, then computed a wrong frequency.
+  - The local APIC timer calibration waited for PIT ticks that never came.
+  - The PIT's interrupt was also the only source of the 100 Hz tick (the clock, the
+    network, USB and I2C polls).
+  - The Surface also has no i8042, and the keyboard driver emptied its (all ones) output
+    buffer forever.
+- **Now:**
+  - `timer_init` checks that the PIT counts (channel 0 latched twice, about 100 µs
+    apart). The TSC is calibrated against the first reference that works and gives
+    100 MHz to 10 GHz: the PIT (channel 2, with a TSC-bounded wait), the ACPI PM timer
+    (from the FADT, 24 or 32 bits), the HPET (its main counter), then CPUID 15h/16h (the
+    frequency the CPU states).
+  - `acpi_init` now runs before `timer_init`, for the PM timer and the HPET.
+  - The local APIC timer is calibrated against the TSC.
+  - Without a PIT, the boot CPU's local timer interrupt drives the tick.
+  - The i8042 is only used when its status port does not read all ones. Its drain loops
+    and the RTC's update wait are bounded.
+- **Boot lines:** `Timer: no PIT (gated off), local APIC at 100 Hz, TSC 3686 MHz (ACPI PM
+  timer)` and `Console: ... no PS/2 controller`.
+- **Tested in QEMU:**
+  - `-machine pc,pit=off,i8042=off`, `q35,pit=off,hpet=off` and, through UEFI from the USB
+    image, `q35,pit=off,i8042=off`. Each boots to the login screen, all CPUs start, and
+    DHCP completes.
+  - USB typing works, with key repeat, with the tick driven by the local APIC.
+
+### Milestone 43: NVMe disks and partitions
+
+- **NVMe** (`kernel/nvme.c`): every NVMe controller (PCI class 01/08/02), such as the
+  Surface Pro 7's SSD.
+  - The controller is reset and given an admin queue and one I/O queue of 32 entries. It
+    runs without interrupts: each command is submitted and its completion polled for,
+    under the controller's lock.
+  - Every namespace with 512 or 4096-byte blocks becomes a disk,
+    `/dev/dsk/c<4+controller>t0d<namespace-1>p0`.
+  - Data goes through a 128 KiB bounce buffer (a PRP list), and commands are split at the
+    controller's MDTS.
+  - On 4K namespaces, sectors that do not fill whole blocks are read around, or read,
+    patched and written back.
+- **The block layer** (`kernel/blkdev.c`):
+  - Drivers register disks (`blk_register`, from device 16) with read and write
+    operations.
+  - Every disk's partitions become devices: GPT partitions as slices `s0`, `s1`, ... (the
+    header in sector 1, or at 4096 bytes on 4K disks) and MBR primary partitions as
+    `p1`..`p4`, as on Solaris for x86. The ATA disks get them too.
+  - `/dev/dsk` holds a node for each.
+  - Up to 64 block devices (their minor numbers).
+- **root=:** `root=c4t0d0s1` (or `root=/dev/dsk/c4t0d0s1`) on the boot command line puts
+  the root file system on that disk or partition, when it holds ext4. SIEOS can then run
+  from an ext4 partition of the internal SSD (or of any disk) and keep its changes.
+  Without it the choice is as before: the first ATA disk with ext4, else the RAM disk.
+  The other partitions (Windows' NTFS, the EFI partition) are never written unless
+  mounted, and only ext4 can be mounted.
+- **Tested in QEMU:**
+  - QEMU's NVMe device, with a GPT disk (an EFI partition, then an ext4 root) as 512-byte
+    and as 4096-byte namespaces, booted with `root=c4t0d0s1`.
+  - Each boots from the partition. A boot script there writes files and copies two
+    binaries (145 and 123 KB). On the host they read back identical, and `e2fsck -f` finds
+    the file system clean.
+  - Booting from an ATA disk is unchanged.
+
+### Milestone 44: USB Ethernet (CDC ECM and NCM)
+
+- **Why:** the Surface Pro 7 has no wired network, and its Wi-Fi (Intel AX201) needs
+  Intel's firmware, an 802.11 stack and WPA2, far beyond one milestone. The wired way is
+  a USB adapter: the Surface USB-C Ethernet adapter and the Surface Docks use a Realtek
+  RTL8153, as most USB-C adapters do.
+- **What** (`kernel/xhci.c`): CDC Ethernet adapters become network interfaces (ethN)
+  with DHCP and IPv6, like the e1000.
+  - ECM carries plain Ethernet frames. NCM carries 16-bit transfer blocks (NTH16/NDP16),
+    with the adapter's alignment (GET_NTB_PARAMETERS) and input blocks of up to 16 KiB.
+  - A device whose first configuration is its vendor's (the RTL8153's) is put in the
+    configuration that has the CDC function.
+  - The MAC address comes from the iMACAddress string. SET_INTERFACE turns the data
+    interface on, and the packet filter passes directed, broadcast and multicast frames
+    (for IPv6).
+- **The transport:**
+  - Bulk IN and OUT endpoints (with the SuperSpeed burst) join the interrupt ones.
+  - 32 receive buffers of 2 KiB (ECM), or 4 of 16 KiB (NCM), stay queued. Their frames
+    go straight to `net_rx` from the tick.
+  - `send` may run on any CPU, so it takes a free buffer of 16 and pushes onto the OUT
+    ring under the adapter's lock (the tick only reads the completions).
+  - A transfer whose length is a multiple of the max packet size ends with a zero-length
+    packet. A halted bulk endpoint is reset and its buffers queued again.
+- **Hot plug:** an adapter plugged in after boot is attached to the network stack then
+  (`net_attach`, split out of `net_init`). Unplugged, its interface stays. Plugged in
+  again (the same MAC), it gets the same ethN back.
+- **Tested in QEMU** (`usb-net`, which is CDC ECM):
+  - The only network card: DHCP at boot.
+  - A 6 MB download with `wget` from a host HTTP server, stored on the NVMe root of
+    milestone 43: byte-identical, with the boot, in 9 s.
+  - Hot plug beside the e1000: eth1 appears, is removed, and comes back as eth1.
+  - Not tested: NCM (QEMU has no NCM device), a real RTL8153.
+
+### Milestone 45: installing on a disk (sieinstall)
+
+- **Disks as files** (`kernel/blkdev.c`, `<sieos/dkio.h>`):
+  - Root can open the block devices under `/dev/dsk`. They are read and written at byte
+    offsets (`read`, `write`, `pread`, `pwrite`, `lseek` with the size as the end),
+    through a 64 KiB kernel bounce buffer. Partial sectors are read, patched and written.
+  - A write is refused (EBUSY) while the device, its disk or one of its partitions is
+    mounted or holds the root. Opening for writing forgets the cached blocks of the disk
+    and its partitions.
+  - `SIEOS_DKIOCINFO` returns the size, the logical block size, the name, the disk of a
+    partition, a description, and flags (disk or partition, in use, root, read-only,
+    virtual).
+  - `SIEOS_DKIOCREREAD` reads a whole disk's partition table again, and the `/dev/dsk`
+    nodes are made again where a name now means another device.
+- **e2fsprogs 1.47.2** (the build host's version) is cross-built: `/sbin/mke2fs` and
+  `/sbin/e2fsck`, static. `/etc/mke2fs.conf` gives the ext4 features of the build images,
+  which SIEOS's driver reads and writes.
+- **`/usr/share/sieos/esp.img`** (16 MiB, FAT16) is the installed system's EFI system
+  partition.
+  - It holds GRUB at the removable-media path `EFI/BOOT/BOOTX64.EFI`, which every UEFI
+    firmware boots without a boot entry. Its prefix `/boot/grub` names no device, so it
+    reads `grub.cfg` from its own partition and never a USB stick's.
+  - It also holds the kernel and `grub.cfg` (`iso/boot/grub/installed.cfg`) with a
+    `root=` placeholder.
+  - The root image grows to 96 MiB for it.
+- **`sieinstall`:**
+  - `sieinstall -l` lists the disks (name, MiB, flags, description).
+  - `sieinstall [-y] DISK` installs on a whole disk. Without `-y` it asks for the disk's
+    name again. It refuses virtual disks, disks in use, and the disk SIEOS runs from.
+  - The disk gets a new GPT (in the disk's own block size, 512 or 4096), with a
+    protective MBR and the backup header:
+    - `s0` is the 256 MiB EFI system partition: `esp.img`, with `root=<disk>s1`
+      written in.
+    - `s1` is the rest: ext4, made by mke2fs.
+  - The running root is then copied into `s1`, keeping owners, modes (set-ID bits
+    included), times, symbolic links, hard links and device nodes. `/proc`, `/tmp`,
+    `/dev/pts`, `/dev/shm`, `/mnt` and other mounts are left empty.
+  - Progress is printed as `step N/M`, `progress PCT`, `done` and `error` lines for the
+    Facet installer (milestone 46).
+- **Tested in QEMU:**
+  - Booted from the ISO, `sieinstall -y c4t0d0p0` installs on a blank 2 GiB NVMe disk
+    in about 8 seconds.
+  - The host's `sfdisk` reads the table. `e2fsck -f` finds the root clean. `su` keeps
+    mode 04755, and `grub.cfg` has `root=c4t0d0s1`.
+  - With nothing else attached, OVMF boots the disk, and SIEOS mounts its root from
+    `c4t0d0s1`.
+- **Not done:** BIOS (legacy) boot of the installed disk, and installing beside another
+  system (the whole disk is used).
+
+### Milestone 46: the Facet installer (Install SIEOS)
+
+- **`facet-installer`** (the SIEOS menu: Install SIEOS) installs the running system on a
+  disk of the computer. It has four pages:
+  - **Welcome:** what it does. The whole disk is used and erased (Windows included), and
+    the computer must start in UEFI mode with Secure Boot off.
+  - **The disk:** this computer's disks from `sieinstall -l`, with their size,
+    description and `/dev/dsk` name. Disks that cannot be chosen are dimmed with the
+    reason: the one SIEOS runs from, mounted ones, RAM disks and lofi devices,
+    read-only ones, and those under 1 GiB.
+  - **Confirmation:** a red warning naming the disk, a box to tick ("I understand that
+    all the data on this disk will be lost") and, when the session is not root's, the
+    root password.
+  - **Installation:** the current step (from `sieinstall`'s `step` lines) and a meter
+    (the copy is most of it), then the result. On success it offers Restart, which sends
+    the new `reboot` request on the desktop channel. On a failure it shows the error
+    and offers Back.
+- **Root:** `sieinstall` is now set-user-ID root, as `su` is.
+  - A user other than root must give root's password: on the terminal, or with `-P` as
+    the first line of standard input (how the installer passes it through a pipe). A
+    wrong password changes nothing.
+  - `-l` needs no password. The environment's `PATH` is replaced.
+  - SIGPIPE is ignored, so an installation goes on if the window is closed.
+- **`/etc/mtab`** links to `/proc/mnttab`, so mke2fs checks mounts instead of warning.
+- **Tested in QEMU:**
+  - Logged in as `user`, the installer found the blank 3 GiB NVMe disk and refused a
+    wrong root password. With the right one it installed in about 3 seconds, and
+    Restart rebooted.
+  - The installed disk alone boots through OVMF to the graphical login, with its root
+    on `c4t0d0s1`.
+
+### Milestone 47: power management (power-off, restart, power button, processors, temperatures)
+
+- **Power-off and restart** were QEMU's ports and the i8042: a real PC only halted, and
+  the Surface (no i8042) could not restart. Now (`kernel/power.c`, without AML):
+  - **Power-off (ACPI S5):** SLP_TYPa/b come from the DSDT's (or an SSDT's) `\_S5`
+    package, which is read, not run. They are written with SLP_EN into PM1a/PM1b_CNT,
+    or into the hardware-reduced SLEEP_CONTROL_REG. QEMU's ports remain the last
+    resort.
+  - **Restart:** the FADT's reset register (I/O, memory or PCI configuration), then port
+    0xCF9 (reset, then a full reset), then the i8042 if there is one, then a triple
+    fault.
+  - **ACPI mode** is entered at boot (SMI_CMD, ACPI_ENABLE), as every ACPI system does.
+    The SCI itself is not used.
+- **The power button** (the fixed one) is polled from the boot processor's tick.
+  PWRBTN_EN is set too, because some chipsets (QEMU's) latch the status only then; the
+  SCI stays masked.
+  - A press sends SIGPWR to init. init now asks every process to end (SIGTERM, then
+    SIGKILL), synchronises the disks and powers off.
+  - A control-method button (an AML device) is not seen.
+- **Idle:** MWAIT into the deepest C-state CPUID 5 lists (Intel), when the local APIC
+  timer keeps running there (ARAT, which the scheduler's tick needs). Otherwise, and with
+  the performance policy, HLT.
+- **Frequency** (Intel):
+  - **HWP:** hardware P-states (IA32_PM_ENABLE, IA32_HWP_REQUEST).
+    - performance: the minimum at the top, EPP 0.
+    - balanced: the whole range, EPP 128.
+    - power saver: up to the guaranteed level (no turbo), EPP 255.
+  - **Legacy P-states** (IA32_PERF_CTL) otherwise: the turbo ratio, the guaranteed one or
+    the most efficient one.
+  - The actual frequency is measured from APERF/MPERF.
+- **Temperatures:**
+  - Intel: the digital thermal sensors below TjMax (MSR_TEMPERATURE_TARGET), per core
+    and for the package; PROCHOT is noticed.
+  - AMD family 17h to 1Ah: Tctl through the SMN.
+  - Each processor reads its own registers on its own tick, once a second.
+- **The thermal policy** (passive cooling):
+  - At or above the passive threshold (default TjMax - 10) the highest performance
+    allowed drops a tenth of the range each second. It rises again 5 degrees below.
+  - At the critical threshold (default TjMax + 5, above where the processor throttles
+    itself) for 3 seconds, init gets SIGPWR.
+- **Fans:**
+  - On a laptop or tablet (the FADT's PM profile), the embedded controller runs the fans.
+    ACPI reaches it only through AML, so they are reported as the firmware's.
+  - On desktops the Super I/O hardware monitor is read, read-only: Nuvoton NCT6779D and
+    later (the RPM registers), ITE IT87xx (the 16-bit counters). `nosuperio` skips it.
+    Not tested on hardware.
+- **MSRs that are not there** (virtual machines, other models): the #GP handler skips a
+  probed `rdmsr`/`wrmsr` (`msr_fixup`), which then fails. Checked in QEMU with an MSR
+  that does not exist.
+- **`/dev/power`** (181,0, `<sieos/power.h>`):
+  - `SIEOS_POWER_GET` (anyone): the policy, the temperatures, the frequencies, the
+    thresholds, the throttling, the fans, and what the machine supports.
+  - `SIEOS_POWER_SET` (root): the policy and the thresholds.
+- **`thermaltest`** on the command line makes the temperature up (70 C, rising 2 C a
+  second) to see the policy work.
+- **Boot line:** `Power: Intel HWP, thermal sensors, MWAIT C7 (hint 0x60) idle, ACPI
+  power-off, power button`.
+- **Tested in QEMU:**
+  - The power button (QMP `system_powerdown`) shuts down cleanly and QEMU powers off, on
+    `pc`, `q35`, and `pc` without an i8042 or a PIT.
+  - Restart from the login screen resets `pc`, `q35`, and `q35` without an i8042 or a
+    PIT.
+  - `thermaltest`: passive cooling at 90 C, then at 110 C (3 s over the critical 105 C)
+    a clean shutdown and power-off.
+  - KVM (`-cpu host`) and TCG (`-cpu max`) boot: their CPUID shows no HWP or sensors.
+  - Not tested: HWP, MWAIT, the sensors and the fans on hardware.
+
+### Milestone 48: poweradm and Power and Temperature
+
+- **`poweradm`** (after Solaris `poweradm(1M)`, set-user-ID root):
+  - `poweradm` shows the policy, the processors (frequency control, levels, idle state),
+    the temperature and the thresholds, the throttling, each processor's temperature and
+    frequency, the fans, and the machine.
+  - `poweradm set policy=performance|balanced|powersave` is allowed to any user.
+    `passive=` and `critical=` (degrees, or `default`) are root's.
+  - The settings are kept in `/etc/power.conf`, which `/etc/rc` applies at boot
+    (`poweradm -r`).
+- **`facet-power`** (SIEOS menu: Power and Temperature):
+  - The three policies as cards; a click sets one through poweradm.
+  - The temperature over the last minute, against the passive and shutdown thresholds,
+    with the throttling when there is some.
+  - Each processor's temperature and frequency, the fans (or who runs them), the
+    frequency control, idle state and sensor, and power-off, reset and the power button.
+- **Tested in QEMU:** logged in as `user`, the window opens from the menu and a click
+  on Power saver changes the policy.
+
+### Milestone 49: x2APIC; the Ice Lake eDP transcoder (Surface Pro 7)
+
+- **The hang** after the Random line (on the Surface Pro 7) came from the local APIC:
+  - The firmware leaves it in **x2APIC mode**, where it answers only through MSRs. The
+    memory-mapped accesses did nothing, so the timer's calibration read nothing, its
+    interrupt never came, and without a PIT (milestone 42) the tick stopped. `smp_boot`
+    then waited for a tick forever.
+  - Now `acpi_init` sees the mode the firmware chose (IA32_APIC_BASE.EXTD) and the
+    local APICs are driven in it:
+    - Registers are the MSRs 0x800 + offset / 16.
+    - IPIs (INIT, STARTUP, reschedule, TLB shootdown) use the 64-bit ICR (MSR 0x830)
+      with a 32-bit destination.
+    - Each application processor puts its own APIC in x2APIC mode.
+  - The MADT's x2APIC entries (type 9) are read too, without duplicates.
+  - `x2apic` on the command line turns x2APIC on when the processor has it (to test it,
+    or where the firmware does not).
+  - The boot line says `local x2APIC timers`.
+- **The graphics** on Ice Lake laptops:
+  - Up to display 11 the panel (eDP, DDI A) has a transcoder of its own:
+    TRANSCONF_EDP 0x7F008, TRANS_DDI_FUNC_CTL_EDP 0x6F400 (14:12 the pipe feeding it),
+    and its timings at 0x6F000/0x6F00C.
+  - The pipe that feeds it has transcoder A to C off, so the driver saw no running pipe
+    and left the firmware's framebuffer.
+  - The scan now finds that pipe, with the eDP timings (the native mode for the
+    scaler) and `DDI A (eDP)` as its output.
+  - When no pipe can be taken, the driver logs the transcoders' state.
+- **Tests:**
+  - With `x2apic` under KVM (`-cpu host,+x2apic`), all 4 CPUs start and run on `q35`, with
+    and without a PIT, and USB and the network work.
+  - `make intel-test` adds the Ice Lake eDP case: pipe A 2736x1824 on the eDP transcoder
+    is taken, and pipe A is not when the eDP transcoder is fed by pipe B.
+  - Not yet tested on the Surface.
+
+### Milestone 50: the tick without the PIT's interrupt; bounded boot waits
+
+- **The hang** (the Surface Pro 7 again, after the Random line):
+  - Its PIT counts (`Timer: PIT at 100 Hz, TSC 1497 MHz`), so the kernel counted on its
+    IRQ 0 for the tick. On such laptops IRQ 0 does not reach the processor.
+  - `smp_boot` waits for ticks (INIT, then STARTUP), so it waited forever.
+  - The Intel driver took the panel there (`pipe A 1024x768 (output 2736x1824, scaled) ->
+    DDI A (eDP)`), as milestone 49 intended.
+- **Now:**
+  - The boot processor's local timer always drives the tick, PIT or not. The tick
+    follows `hrtime`, so when both come it is counted once.
+  - Boot-time waits (`wait_ticks`) are measured on the clock (TSC) and need no timer
+    interrupt.
+  - The TSC synchronisation with an application processor gives up after a second (the
+    processor keeps its place, without an offset).
+- **Diagnostics:**
+  - `smp: starting N more CPUs (xAPIC|x2APIC)` before the start.
+  - `smp: the local APIC timer does not interrupt` if it does not within 50 ms.
+  - `[FAIL] Timer: no timer interrupt ...` if the tick does not advance in 100 ms after
+    the processors start.
+- **Tested in QEMU** with the PIT's handler removed, as IRQ 0 not arriving: `pc` and
+  `q35` boot to init. So do `q35` with x2APIC, with 8 CPUs, and without a PIT or an
+  i8042.
+
+### Milestone 51: every resolution up to the panel's (the Intel driver)
+
+- **Before:** the Intel driver offered only the modes that fit in the firmware's
+  framebuffer. On the Surface Pro 7 the firmware sets 1024x768 (scaled to the 2736x1824
+  panel), so nothing larger could be chosen.
+- **Now:**
+  - When the firmware's framebuffer is smaller than the native mode needs, the driver
+    gives the plane one of that size in RAM, mapped in the GGTT at the top of the
+    aperture:
+    - The entries are 8 bytes each (the address | present), in BAR0's upper half. The
+      region must be free (all the same entry: the scratch page).
+    - The zeroed pages are written back (`wbinvd`), because the display does not snoop
+      the CPU's caches. The GGTT is flushed (GFX_FLSH_CNTL).
+    - The firmware's picture is copied, and PLANE_SURF moves at the next vertical blank.
+  - It stays for good, so `/dev/fb0`'s memory, which Facet maps once, never moves, and
+    every mode up to the native one fits.
+  - Modes offered: 30 standard ones up to the native one, now with 3:2 (1368x912,
+    1440x960, 1500x1000, 1824x1216, 1920x1280, 2160x1440, 2256x1504, 3000x2000) beside
+    4:3, 16:9 and 16:10.
+- **Not tested on the hardware** (QEMU has no Intel GPU). The log says
+  `intel: pipe A: a N KiB framebuffer for modes up to WxH`.
+
+### Milestone 52: the touchpad and mouse: no lost reports, speed and acceleration
+
+- **Sluggish** (the Surface Pro 7's Type Cover touchpad, a USB HID device):
+  - Each interrupt endpoint had a single transfer queued, and the event ring is polled
+    at 100 Hz. A touchpad reporting faster lost the reports between two polls.
+  - Facet then added the remaining small steps one to one on a 2736-pixel panel.
+- **Now:**
+  - **USB:** an interrupt IN endpoint of a HID interface keeps 4 transfers queued (its
+    1 KiB buffer in 4 when the reports are at most 256 bytes). Each TRB is tagged with
+    its buffer, and a completed one is queued again at once.
+  - **Facet:** relative motion (mice, touchpads) is scaled by:
+    - the pointer speed, 1 to 10 (5 is one to one);
+    - the screen's size (from 1280 pixels wide: up to 2.5 times);
+    - with acceleration, how fast it moves (up to 3 times).
+
+    The fractions carry over between events. The settings `pointer_speed` and
+    `pointer_accel` are kept in `~/.facet/settings`. The desktop channel has
+    `{"op":"pointer","speed":N,"accel":0|1}`, which returns the settings.
+  - **Settings:** a Pointer section with the speed (1 to 10) and the acceleration.
+- **Tested in QEMU:** the Pointer section reads and changes the speed. Not tested on the
+  Surface's touchpad.
+
+### Milestone 53: network settings (ifconfig, Settings: Network)
+
+- **The kernel:** `netconfig()` (system call 209, root, `struct sieos_netconfig`) sets an
+  interface's IPv4 settings. It either restarts DHCP or sets a static address, netmask
+  (ones then zeros), gateway and DNS server (DHCP off).
+- **`ifconfig`** now also sets them. It is set-user-ID root, and users other than root
+  give root's password (on the terminal, or with `-P` as the first line of standard
+  input):
+  - `ifconfig IF dhcp`
+  - `ifconfig IF inet A [netmask M] [gateway G] [dns D]`
+  - The setting is kept as IF's line in `/etc/network.conf`. `/etc/rc` applies the file
+    at boot (`ifconfig -a`), before writing `resolv.conf`.
+- **Settings: Network:**
+  - The interfaces (tabs), each with its driver, MAC and current settings.
+  - Automatic (DHCP) or a static address, with the address, netmask, gateway and DNS
+    fields (digits and dots; Tab moves between them, Enter applies).
+  - Root's password when the session is not root's, and Apply (through ifconfig).
+  - Below, the Wi-Fi adapter: the one found, its PCI ids and driver.
+- **Tested in QEMU:**
+  - `ifconfig`: static 10.0.2.50, then a ping through the gateway, then DHCP again, with
+    `network.conf` kept each time.
+  - Settings as `user`: a static 10.0.2.60 applied with root's password, and the
+    desktop's strip shows the new address.
+
+### Milestone 54: Wi-Fi, stage 1: the AX201's firmware (iwlwifi)
+
+- **The plan:** the Surface Pro 7's only network is its Intel Wi-Fi 6 AX201 (the
+  "22000" family: the Qu MAC with the Hr radio, integrated in Ice Lake, 8086:34F0). A
+  driver for it has several stages, and each can only be tested on the hardware (QEMU
+  has no such device):
+  1. The firmware loaded and running (this milestone).
+  2. Commands: the command queue, NVM (the MAC address, the channels), the PHY and MAC
+     contexts.
+  3. Scanning: the networks for Settings.
+  4. Joining a network: authentication and association, then WPA2 (the 4-way
+     handshake, CCMP keys in the device), then an interface for the network stack.
+- **Stage 1** (`kernel/iwlwifi.c`):
+  - **The firmware:** Intel's firmware, from the build host's linux-firmware, is in
+    `/lib/firmware` with Intel's licence (redistributable):
+    `iwlwifi-Qu-b0-hr-b0-77`, `Qu-c0-hr-b0-77` (Ice Lake, by the MAC's step) and
+    `QuZ-a0-hr-b0-77` (Comet Lake).
+    - The driver reads the file once the root is mounted, checks the header, and puts
+      its runtime sections in DMA memory: 14 LMAC, 15 UMAC and 20 paging sections,
+      divided by the file's separators.
+  - **The context info:** the sections' addresses (the LMAC, UMAC and virtual image
+    tables), the receive ring (56 of 64 4 KiB buffers, used descriptors, the status),
+    and the command queue (32 long TFDs).
+  - **The card:** made ready (NIC_READY, PREPARE), reset, APM (L0s off, INIT_DONE,
+    MAC_CLOCK_READY), and configured with the MAC's and the radio's steps (the PHY
+    SKU).
+  - **Start:** CSR_CTXT_INFO_BA and UREG_CPU_INIT_RUN start the CPUs, which load the
+    firmware themselves. The driver then waits up to a second for the ALIVE
+    notification (status 0xCAFE) in the first receive buffer.
+  - Every step logs a line (`wifi: ...`), and a failure names the step with the
+    registers' values. `nowifi` on the command line leaves the device alone.
+- **The registers, the context info and the firmware's format are Intel's device
+  interface, as the open drivers document it (OpenBSD's `iwx`, FreeBSD's
+  `iwlwifi`). The driver is SIEOS's own. Not tested on the hardware.** The next stage starts from what the Surface's boot log shows.
+
+### Milestone 55: fixes from the Surface Pro 7's boot log
+
+- **Resolutions:** the native-size framebuffer (milestone 51) was not made. The GGTT
+  entries at the top of the aperture were not all the same (the firmware maps the whole
+  aperture, to its stolen memory), so they looked in use and only the modes of the
+  firmware's 3 MiB framebuffer were offered (up to 1024x768). Nothing but the planes
+  uses the GGTT before a driver, so the region is now taken unless an enabled plane
+  scans from it: a display driver owns the GGTT from its start.
+- **Wi-Fi:**
+  - The boot stopped at `wifi: starting the firmware`. Peripheral addresses in the
+    22000 family keep 20 bits (0x000FFFFF: UREG_CPU_INIT_RUN 0xA05C44 is 0x05C44). With
+    24 bits, the start went to another register.
+  - The RF kill bit was read the wrong way round: set means the radio is on.
+  - Without ALIVE the device is now reset (no DMA into memory given back), and the
+    context info's address is logged before the CPUs start.
+- **kprintf** now has `#` (0x before hexadecimal) and a precision (`%.4s`, `%.*s`). The
+  log showed `%#lx` as it was, which also shifted the arguments after it.
+- **Diagnostics:** "did not start" now says why.
+  - NVMe: which step, with CAP, CC and CSTS. The Surface's SK hynix 1c5c:1327 did not
+    start.
+  - I2C: which step, with COMP_TYPE, the LPSS RESETS register and PMCSR (the four Ice
+    Lake controllers).
+
+### Milestone 56: reading the boot messages: a pause, dmesg
+
+- **The pause:** before the login screen, init waits for Enter, with the kernel's
+  messages still on the screen (they scrolled by too fast to photograph on the Surface).
+  `nopause` on the kernel command line, or `BOOT_PAUSE=no` in `/etc/default/init`,
+  turns it off. The text login waits by itself.
+- **The kernel's log:** `kprintf` also keeps its messages in a 64 KiB ring, readable as
+  `/proc/msgbuf`. `dmesg` prints it, so the boot messages can be read in a terminal, or
+  saved to a file, after boot.
+- **Tested in QEMU:** the boot stops at `Press Enter to continue...`, Enter starts the
+  login screen, and `dmesg` returns the boot's lines.
+
+### Milestone 57: VT-d left on by the firmware; more from the Surface's log
+
+- **What the Surface's log showed:**
+  - The NVMe controller became ready (CSTS.RDY) but its first command (IDENTIFY) did not
+    complete.
+  - The AX201 got its context info and the start, but sent no ALIVE.
+  - Both touch memory by DMA, which is what a remapping unit left on stops.
+- **VT-d** (`kernel/dmar.c`):
+  - The Surface's firmware offers pre-boot DMA protection (for Windows' Kernel DMA
+    Protection), which can leave a remapping unit translating, or its protected memory
+    regions on.
+  - SIEOS has no IOMMU driver. So at boot, before any driver sets up DMA (ACPI now comes
+    right after paging), every unit of the DMAR table is checked. Translation (GCMD.TE)
+    and the protected memory regions (PMEN.EPM) are turned off where they are on, and
+    each is logged (`dmar: unit at ...`). Interrupt remapping is only reported.
+  - Tested in QEMU (`-device intel-iommu`) with translation turned on over an empty root
+    table, which blocks every DMA: it is turned off, and the e1000's DHCP then works.
+- **Wi-Fi:** the software reset now comes before the ready handshake (the reset cleared
+  NIC_READY). Without ALIVE the log gives the device CPUs' load status (SB_CPU_1/2),
+  their program counters (UMAC, LMAC), the receive status and the interrupt causes.
+- **NVMe:** a failed IDENTIFY says whether it timed out or which status it returned.
+- **Intel:** the native-size framebuffer tries the top of the aperture, then just after
+  the firmware's framebuffer, then below it. Each refusal is logged (the aperture's and
+  BAR0's sizes).
+- **I2C:** the Surface's controllers have no BAR (the firmware left them unconfigured):
+  now logged as not used, not as a failure.
+
+### Milestone 58: the AX201's silicon step; the bridges' bus master; the Intel log
+
+- **Wi-Fi:** the firmware started (UMAC PC 0x80473210), then raised SW_ERR (CSR_INT bit
+  25).
+  - From the 8000 family on, CSR_HW_REV keeps the step in bits 1-0: the Surface's 0x332
+    is a C-step chip (0x338 once normalised). The driver took the B0 firmware for it.
+  - The revision is now normalised (the step in bits 3-2), which chooses
+    `iwlwifi-Qu-c0-hr-b0-77.ucode` and goes into the context info and the step
+    configuration.
+- **NVMe:**
+  - The controller was ready but its IDENTIFY never completed: its root port did not
+    forward its DMA. A PCIe bridge passes a device's memory requests upstream only with
+    its own Bus Master bit, which the firmware may leave off (QEMU's did).
+  - `pci_enable_path` turns on memory space and bus master on every bridge above a
+    device (NVMe, Wi-Fi, xHCI), and logs the ones it changes.
+- **Intel:** the framebuffer line was printed between the copy of the picture and the
+  switch to the new framebuffer, so it went to the old, hidden one (the blank line
+  under the `intel:` line). It is now printed once the console is on the new one.
+
+### Milestone 59: the AX201's receive queue
+
+- **From the Surface's log:** with the C0 firmware there was no error any more, and the
+  UMAC ran (PC 0xC00C0538). But no ALIVE came and no receive buffer was used: the
+  firmware had nowhere to put it.
+  - In the 22000 family the receive queue's free-buffer write index is the receive frame
+    handler's register RFH_Q0_FRBDCB_WIDX_TRG (0x1C80). HBUS_TARG_WRPTR with the queue
+    number is the AX210 family's.
+  - The driver now writes the index there, before the CPUs start and again after, and
+    waits up to 3 s for ALIVE.
+- **Confirmed on the Surface in the same boot:**
+  - The native-size framebuffer (`a 19496 KiB framebuffer for modes up to 2736x1824`).
+  - The NVMe SSD: its root port's bus master was off, and once on, the 238 GiB SK hynix
+    HFB1M8MO331C0MR and its three partitions came up.
+
+### Milestone 60: the AX201's start as its interface wants it (integrated 22000)
+
+- **From the Surface's log:** with the receive index moved, the firmware was still stuck.
+  The UMAC stayed at the same program counter (0xC00C0538), the LMAC never ran, and no
+  interrupt cause was set: the firmware had not reached ALIVE.
+- **The start sequence,** checked against how OpenBSD's `iwx` (ISC licence) describes
+  the device's interface for the integrated 22000 family (CNVi, the AX201 in Ice Lake):
+  1. The card made ready (with the link power-management and PREPARE retries), and
+     MBOX OS_ALIVE set.
+  2. The power manager's persistence bit (HPM_DEBUG bit 12) cleared, unless
+     PREG_PRPH_WPROT forbids it.
+  3. A reset; for an integrated device, the clocks started, the power gating forced once
+     (HPM_HIPM_GEN_CFG: FORCE_ACTIVE, PG_EN and SLP_EN, FORCE_ACTIVE off), and a reset
+     again.
+  4. The power manager (APM): L1A_NO_L0S_RX, the FH threshold, HAP_WAKE_L1A, L0s
+     disabled (CSR_GIO_REG), INIT_DONE, MAC_CLOCK_READY. Then again in the NIC's init,
+     with the steps, interrupt coalescing and the shadow registers (0x800FFFFF).
+  5. The context info with the register's own CSR_HW_REV and a 512-buffer receive ring
+     (the device's table size). Free descriptors are the address | the index, from 0.
+  6. Under the NIC lock, the boot LTR (HPM_MAC_LTR_CSR, HPM_UMAC_LTR: about 250 µs),
+     then UREG_CPU_INIT_RUN.
+  7. The ALIVE interrupt cause (CSR_INT bit 0) first: the firmware has then set up the
+     receive side. Then 8 buffers are given (RFH_Q0_FRBDCB_WIDX_TRG), then the ALIVE
+     packet is read.
+- **The diagnostics** read the secure-boot status at this family's addresses (0xA038C0,
+  0xA038C4), under the NIC lock.
+
+### Milestone 61: Wi-Fi stage 2: the command queue, the NVM, the MAC address
+
+- **Stage 1 done:** the Surface Pro 7 reports `wifi: the firmware is alive (status
+  0xcafe)`.
+- **Receive processing** (`rx_process`): the buffers the firmware closed
+  (`closed_rb_num`) are read in the ring's order. Each holds packets at 64-byte
+  boundaries (the length in `len_n_flags`), up to an invalid or empty header. The buffers
+  are then given back through RFH_Q0_FRBDCB_WIDX_TRG, the index before the closed one,
+  in eights.
+- **Commands** (`send_cmd`), one at a time, on the command queue (queue 0, 256 TFDs of
+  256 bytes, `cmd_queue_size` 5 in the context info):
+  - A wide header (opcode, group, index, queue, length, version) and the payload, in a
+    DMA buffer. The first transfer buffer holds its first 20 bytes and the second the
+    rest.
+  - The write pointer is `queue << 16 | next index` (HBUS_TARG_WRPTR).
+  - Group 0 commands go as group 1, which the firmware wants from API 50.
+  - The answer is the packet with the command's queue and index, awaited 1 s. SW_ERR
+    ends the wait.
+- **The initialisation after ALIVE** (the firmware's version from the ALIVE packet):
+  1. INIT_EXTENDED_CFG (system group, NVM access).
+  2. NVM_ACCESS_COMPLETE.
+  3. The INIT_COMPLETE notification.
+  4. NVM_GET_INFO: the NVM version, the number of addresses, the bands, 802.11n/ac/ax,
+     the antennas, LAR.
+  5. The MAC address: the OEM's strap registers (0x388, 0x38C) if valid, else the
+     chip's OTP (0x380, 0x384).
+
+  Each result is logged (`wifi: NVM version ...`, `wifi: MAC address ...`).
+- The device interface is as OpenBSD's `iwx` documents it; the driver is SIEOS's own.
+  Not yet tested on the hardware. The next stage: scanning.
+
+### Milestone 62: Wi-Fi stage 3: the runtime configuration, scanning
+
+- **The firmware file's API and capability bits** (TLVs 29 and 30) are kept; they choose
+  the commands' layouts and which optional ones are sent.
+- **The runtime configuration** after the NVM, in the order the firmware expects:
+  1. TX_ANT_CONFIGURATION: the antennas the file and the NVM both allow.
+  2. BT_CONFIG: Wi-Fi only.
+  3. SOC_CONFIGURATION: integrated, the LTR delay, the crystal's 500 us.
+  4. DQA_ENABLE, if the firmware has DQA.
+  5. TEMP_REPORTING_THRESHOLDS, empty, if the firmware throttles by itself.
+  6. POWER_TABLE: awake.
+  7. MCC_UPDATE "ZZ", if LAR is on. The answer lists the country's channels (else the
+     NVM's are used).
+  8. SCAN_CFG: the scan's antennas.
+  9. BEACON_FILTER: off.
+
+  `wifi: ready: N channels at 2.4 GHz, M at 5 GHz` ends it.
+- **The scan** (SCAN_REQ_UMAC, the version 14/15 layout, 1940 bytes):
+  - Every allowed channel, with the band.
+  - Passive dwell 110 ms, adaptive dwell, all frames passed up.
+  - The probe request's template (the header, the 2.4 and 5 GHz rates).
+- **The results:**
+  - The frames (RX_MPDU) are read after their 48-byte descriptor: beacons and probe
+    answers only.
+  - From each: the BSSID, the SSID, the channel (DS parameter set), the signal (the
+    antennas' energy), and the security. The security comes from the RSN and WPA
+    elements, with their key management (PSK, 802.1X, SAE), or else the privacy bit.
+  - Up to 48 networks are kept.
+  - SCAN_COMPLETE ends the scan (`wifi: scan N done: M networks`).
+- **Polling:** `wifi_poll`, called from the network timer, processes the notifications.
+  The device is locked (a try-lock for the poll) while a command runs.
+- **The system call** `wifi(op, buf, n)` (210):
+  - `SIEOS_WIFI_OP_STATUS`: `struct sieos_wifi_status`.
+  - `SIEOS_WIFI_OP_SCAN`: starts a scan (anyone can).
+  - `SIEOS_WIFI_OP_RESULTS`: `struct sieos_wifi_bss[]`.
+- **User programs:**
+  - `dladm show-link`, `dladm show-wifi` and `dladm scan-wifi`, as in Solaris (ESSID,
+    BSSID, security, strength, channel).
+  - Settings has a Wi-Fi page: the state, the MAC address, a Scan button, and the
+    networks by signal (security, bars, dBm, channel). It scans again every 30 s.
+
+### Milestone 63: Wi-Fi stage 4: joining a network, WPA2-Personal
+
+- **The firmware's contexts for a network** (`ctx_setup`), in the order the firmware
+  wants them. Each command's layout follows the version the firmware file lists.
+  1. The PHY context: the channel. The 8-byte channel information, since the firmware
+     has the ultra-high-band channels.
+  2. RLC_CONFIG (version 2): the receive chains.
+  3. The MAC context: a BSS station. It holds our address, the BSSID, the ACK rates,
+     preamble and slot, and the default EDCA parameters by FIFO.
+  4. The binding.
+  5. ADD_STA: the access point as station 0.
+  6. SCD_QUEUE_CONFIG (version 3): a transmit queue for TID 15. The firmware gives the
+     queue's number.
+  7. The session protection: stay on the channel while joining.
+
+  `ctx_teardown` undoes them in the reverse order.
+- **The transmit queue:**
+  - 256 TFDs with their byte-count table. A page per slot holds the narrow command
+    header, the TX command (version 9's layout), the 802.11 header and the body.
+  - TB0 is 20 bytes, TB1 the rest of the command, TB2 the body.
+  - The write pointer is `queue << 16 | index`.
+  - The TX notification's SSN frees the slots.
+  - Management frames go at the lowest basic rate (1 Mb/s CCK, 6 Mb/s OFDM), unencrypted.
+    Data frames use the firmware's rate selection.
+- **The state machine** (`mlme_step`, from `wifi_poll`):
+  1. Open-system authentication.
+  2. Association: the access point's rates, and our RSN element (CCMP, PSK).
+  3. On association: ADD_STA and the MAC context again (associated, with the AID), the
+     smart FIFO, the multicast filter, and TLC_MNG_CONFIG (legacy rates, 20 MHz).
+  4. For a WPA2 network, the 4-way handshake, then the link is up.
+
+  Timeouts and retries (3 each) are handled. A deauthentication or disassociation from
+  the access point, or 30 missed beacons, ends the link; a link lost is joined again (up
+  to 5 times).
+- **The handshake** (802.11-2016 12.7.6, key descriptor version 2):
+  1. Message 1: our SNonce; the PTK = PRF-384(PMK, "Pairwise key expansion", the
+     addresses, the nonces).
+  2. Message 2 is sent with our RSN element and the MIC (HMAC-SHA1 with the KCK).
+  3. Message 3: its MIC is checked, and the key data unwrapped (AES key wrap, the KEK)
+     for the GTK KDE.
+  4. Message 4 is sent in the clear. Then the TK and the GTK (with its RSC) go into the
+     device (SEC_KEY_CMD, CCMP).
+
+  Group key handshakes are answered too. The frames' CCMP encryption and decryption is
+  the device's; a received protected frame must say it was decrypted with its MIC OK.
+- **The cryptography** (`kernel/wpa.c`, from the specifications):
+  - SHA-1 (FIPS 180-4) and HMAC.
+  - PBKDF2 (RFC 8018: the passphrase's PMK, 4096 rounds).
+  - The 802.11 PRF.
+  - AES-128 decryption (FIPS 197) for the key unwrap (RFC 3394).
+
+  Checked against 802.11's and RFC 3394's test vectors.
+- **The interface `iwx0`** is registered at the first join. Frames are converted between
+  802.11 (LLC/SNAP, to and from the DS) and Ethernet. DHCP and IPv6 start at each join.
+  Received frames wait in a queue: the state machine takes the management and EAPOL ones,
+  and the rest go to the stack after the device is unlocked.
+- **`wifi()`** has two more operations:
+  - `SIEOS_WIFI_OP_CONNECT` (`struct sieos_wifi_connect`: SSID or BSSID, the passphrase
+    or the 64-digit PSK; root).
+  - `SIEOS_WIFI_OP_DISCONNECT`.
+
+  The status carries the state, the SSID and the interface index.
+- **`dladm connect-wifi [-e essid] [-k key|-] [-i bssid] [-q]`**:
+  - It scans first if needed and waits for the result.
+  - It keeps the network and its key in `/etc/wifi.conf` (0600).
+  - Once DHCP has answered, it rewrites `/etc/resolv.conf`.
+  - Without `-e`, it joins the strongest network kept there. `/etc/rc` runs this in the
+    background at boot.
+
+  `dladm disconnect-wifi` leaves the network. `dladm` is set-user-ID root.
+- **Settings, Wi-Fi page:** choose a network, type its password, then Connect (dladm
+  runs in the background) or Disconnect. It shows the state and why a join failed.
+- **Supported:** open networks and WPA2-Personal with CCMP. Refused (EOPNOTSUPP): TKIP,
+  WEP, WPA1, 802.1X, SAE (WPA3) and networks that require management frame protection.
+  Not yet: 802.11n/ac rates (HT/VHT), power save. Not tested on the hardware.
+
+### Milestone 64: loadable drivers (/drv/NAME.drv), the boot archive, the DDK
+
+- **The drivers are no longer part of the kernel.** Each is an ELF relocatable object,
+  `/drv/NAME.drv`, built from `drv/NAME/*.c` (`ld -r`):
+
+  | Driver | Hardware |
+  |---|---|
+  | `ata` | ATA/IDE disks |
+  | `bochs` | QEMU/Bochs VGA |
+  | `e1000` | Intel PRO/1000 Ethernet |
+  | `i2c_hid` | HID over I2C |
+  | `i8042` | PS/2 keyboard and mouse, vmmouse (split from `keyboard.c`/`input.c`) |
+  | `intel_gen12` | Intel graphics |
+  | `iwlwifi` | Intel Wi-Fi, with `wpa.c` |
+  | `nvme` | NVMe disks |
+  | `virtio_net` | virtio network device |
+  | `xhci` | USB 3 host controllers |
+
+  The kernel keeps the frameworks: PCI, the block layer, the display layer, the network
+  stack, HID parsing, the input queue and the console keyboard, ACPI and power, and
+  VT-d's shutdown.
+- **A driver declares itself** (`kernel/include/ddi.h`):
+  - `DDI_DRIVER(name, phase, description)`: the `.drv_info` section.
+  - `DDI_ALIAS("pci8086,34f0")`, any number, in `.drv_aliases`. The forms are
+    `pciVVVV,DDDD`, `pciclass,CCSSPP`, `pciclass,CCSS` and `platform,i8042`, as Solaris
+    names devices.
+  - `int _init(void)`, its entry point.
+
+  The kernel's services for drivers are `ddi_poll_register` (a function called every
+  timer tick), `ddi_report` (a boot summary line), `ddi_cmdline`, `boot_option` and the
+  Wi-Fi hook. Otherwise drivers call the frameworks as before: `blk_register(_at)`,
+  `netif_register`, `display_register`, `hid_*`, `pci_*`, `mmio_map`.
+- **The boot archive** (`/boot/bootarch.tar`, GRUB module `boot_archive`, as Solaris has one): a ustar of `drv/`.
+  - GRUB loads it with the kernel (`module2 ... boot_archive`) on the ISO, the USB image
+    and installed disks (the ESP).
+  - The kernel recognises GRUB's modules by name (`rootfs`, `boot_archive`).
+  - The drivers the root device needs are therefore there before it is mounted.
+- **Matching** (`kernel/modload.c`), at each phase:
+  1. `DDI_PHASE_DISPLAY`, with the console.
+  2. `DDI_PHASE_BOOT`, before the root is mounted: input, USB, disks.
+  3. `DDI_PHASE_ROOT`, after: network cards, the Wi-Fi's firmware files. `/drv` is read
+     first, so drivers added there are found too.
+
+  The devices (every PCI function, and the i8042 if its ports answer) are matched against
+  the drivers' aliases, the most specific name first. A matched driver is loaded once and
+  its `_init` called; `_init` finds its devices and registers them.
+- **Loading:**
+  - The allocated sections are placed in physically contiguous memory below 2 GiB, used
+    through the kernel's own window, so drivers are compiled `-mcmodel=kernel` like the
+    kernel.
+  - Symbols resolve against the kernel's exported table, then against the drivers
+    loaded before.
+  - RELA relocations applied: `64`, `PC32`, `PLT32`, `32S`, `PC64`.
+- **The exported table** (`ksyms`): every global symbol of the kernel.
+  - The kernel is linked twice. The first link has an empty table; its `nm` gives the
+    table (`tools/mkksyms.py`), placed last (`.ksyms`, its own segment).
+  - The build checks that no other symbol moved between the two links.
+- **User space:**
+  - `modinfo [-a]`: the drivers known, their state, their address, the device alias
+    matched.
+  - `modload FILE.drv` (root; system calls `modinfo` 211 and `modload` 212).
+- **The DDK:**
+  - `/usr/include/ddk`: the kernel's headers and the ABI's.
+  - `/usr/share/ddk/README`: how to write and build a driver.
+  - `/usr/share/ddk/example`: `hello.c` and its Makefile.
+
+  Tested: built on SIEOS with its gcc, then loaded with `modload`.
+- Tested in QEMU (pc: bochs, ata, i8042, e1000; q35: xhci, nvme, virtio_net, i8042).
+  The host tests of the Intel display and I2C HID drivers include the moved files.
+
+### Milestone 65: Facet's screen saver and screen lock
+
+- **When it starts:** after the idle time (no key, no move of the mouse), Facet's
+  screen goes black and the screen saver runs (`user/facet/saver.c`).
+- **The settings**, in `~/.facet/settings`:
+  - `screensaver`: `logo` (the default), `blank` or `none`.
+  - `screensaver_timeout`: seconds, 300 (5 minutes) by default; 0 means never.
+  - `screensaver_lock`: 1 by default.
+- **The logo:** the Orbit Node in 3D (the ring, its lower right quarter darker; the
+  stratum bar; the orange node with its halo), in the console logo's proportions, with
+  the SIEOS wordmark under it in extruded blocks. It turns about the vertical axis every
+  9 s with a slow nod, in the middle of the screen.
+- **The renderer** is a small software one:
+  - Triangle meshes: a torus, a capsule, spheres, the letters' visible faces.
+  - Rotation, perspective and a depth buffer.
+  - Lighting per vertex (ambient, diffuse, a specular highlight), shaded smoothly.
+  - About 30 frames a second. On large screens it renders at up to 720 lines and each
+    pixel is scaled up.
+- **The lock:** a key or a move of the mouse asks for the user's password on a small
+  panel. It is checked by `ckpw`, a set-user-ID helper that checks the password of its
+  caller (its real user ID) only, a second's delay after a wrong one. Esc, or 30 s
+  without typing, goes back to the saver. A preview does not lock.
+- **Settings has a Screen Saver page:**
+  - the saver (SIEOS logo, blank, none);
+  - the delay (1, 2, 5, 10, 15, 30, 60 minutes);
+  - "Ask for my password to come back";
+  - Preview and Lock now buttons.
+
+  These use the desktop op `screensaver` (`saver`, `timeout`, `lock`, `preview`,
+  `lock_now`). The SIEOS menu's Exit submenu has Lock Screen.
+
+### Milestone 66: the AX201 on the Surface: the init chain's firmware error
+
+- **The Surface's log:** stage 2 works there (NVM 1223, 4 addresses, both bands,
+  802.11n/ac/ax, antennas 3/3, LAR; the MAC address; the regulatory domain, 51
+  channels). The firmware then reported an error (SW_ERR) while BEACON_FILTER waited
+  for its answer.
+- **The firmware's error tables** are now dumped when it reports an error: the LMAC's
+  and the UMAC's, at the addresses the ALIVE gives, read through HBUS_TARG_MEM. The
+  error id, the branch and interrupt links, the data words and the last host command
+  are logged (`wifi: UMAC error ...`, `wifi: LMAC error ...`).
+- **SOC_CONFIGURATION** is sent with no LTR-delay flag, as OpenBSD's driver effectively
+  does (the driver configures no LTR).
+- **Receive:** a closed buffer is found by the id in the used ring, not by its position.
+
+### Milestone 67: installed disks boot again; the full system on the USB images; Settings > Assistant
+
+- **"No root device" after an installation:**
+  - The EFI system partition's FAT image (`tools/mkfat.py`) holds 8.3 names only.
+    `boot_archive` became `BOOT_ARC` there, GRUB did not find it, and without the boot
+    archive no disk driver was loaded.
+  - The archive is now `/boot/bootarch.tar` everywhere (GRUB's module name stays
+    `boot_archive`).
+  - `mkfat.py` refuses names it cannot store.
+  - The kernel says when no boot archive came, and the panic points to the `drv:` lines.
+  - Tested: UEFI install on NVMe, then a boot from the NVMe disk alone. The installed
+    gcc builds the DDK example and `modload` loads it.
+- **The USB images carry the hard disk's root** (384 MiB): the native toolchain, the
+  DDK, ksh93 and the GNU tools. The installer copies the running root, so an
+  installed system has all of it too.
+- **No model connection in any image** (`sieos-usb.img`, the ISO, the QEMU disk):
+  sia asks for the endpoint, the model and the API key on first use.
+- **Settings > Assistant:** the endpoint, the model and the API key, written to
+  `~/.sia/config` (0600). A kept key is not shown; typing one replaces it.
+- **Every SIEOS source file** carries a GPL-3.0 notice with its author. libc (musl, MIT),
+  the ABI headers and third-party files keep their own terms.
+
+### Milestone 68: Wi-Fi at 802.11n/ac rates, Wi-Fi power save; no pause at boot
+
+- **Confirmed on the Surface:** after BEACON_FILTER was sent at the firmware's 60 bytes,
+  the AX201 scans, joins a WPA2 network, gets its address by DHCP and pings.
+- **Faster Wi-Fi: the access point's elements** are read from its beacons: HT
+  capabilities and operation, VHT capabilities and operation, WMM.
+- **Faster Wi-Fi: the association request** carries ours:
+  - HT: 2 streams, SGI 20, 40 MHz and SGI 40 at 5 GHz, 1 RX STBC stream.
+  - VHT: 80 MHz, SGI 80, MCS 0-9 on 2 streams.
+  - WMM (QoS).
+- **Faster Wi-Fi: after the association:**
+  - The PHY context is modified to the width (40 or 80 MHz, with the control channel's
+    position), and RLC to both chains.
+  - ADD_STA gets the width, MIMO2 and the A-MPDU parameters.
+  - The MAC context gets QoS (EDCA, 11n) and HT protection.
+  - TLC_MNG_CONFIG gets HT or VHT mode with the access point's MCS sets per stream and
+    the short guard intervals.
+- **Faster Wi-Fi: frames:**
+  - Data frames go as QoS data (TID 0).
+  - A-MSDU subframes (split by the device) are unpacked.
+  - Block ack requests are declined (status 37), since there is no receive reordering
+    yet.
+  - `wifilegacy` on the kernel command line keeps 802.11a/g.
+- **Power save** (`dladm set-linkprop -p powermode=off|fast|max`, kept in
+  `/etc/dladm/linkprop.conf`, "fast" by default):
+  - The device's power table allows power save.
+  - MAC_PM_POWER_TABLE turns power management on, with keep-alive and the data
+    timeouts (50/100 ms fast; 25/25 ms and DTIM skipping max).
+  - Settings > Wi-Fi and `dladm show-wifi` show the mode, width and streams;
+    `dladm show-linkprop` shows the power mode.
+- **init** no longer waits for Enter before the login screen. `pause` on the kernel
+  command line (the GRUB entry "wait at the boot messages") or `BOOT_PAUSE=yes` in
+  `/etc/default/init` brings the wait back.
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -1927,6 +2793,33 @@ Milestone 34 (done): Facet skins.
 | 39 | Ice Lake graphics (display 11) in the Intel driver (done; not tested on the hardware) |
 | 40 | USB keyboards and mice: xHCI, hubs, HID boot and report protocols (done) |
 | 41 | HID over I2C: touchpads on the Intel LPSS I2C controllers, found through ACPI (done; not tested on the hardware) |
+| 42 | no PIT (gated off) and no i8042: TSC from the PM timer/HPET/CPUID, the tick from the local APIC (done) |
+| 43 | NVMe disks; GPT and MBR partitions of every disk; `root=` (done) |
+| 44 | USB Ethernet: CDC ECM and NCM (the RTL8153 of the Surface adapters), hot plug (done) |
+| 45 | installing on a disk: disks as files, mke2fs/e2fsck, the EFI system partition, `sieinstall` (done) |
+| 46 | the Facet installer: Install SIEOS (disk choice, confirmation, root password, progress, restart) (done) |
+| 47 | power management: ACPI power-off and restart, the power button, MWAIT idle, HWP/P-states, temperatures, passive cooling, fans (done) |
+| 48 | `poweradm` and the Power and Temperature application (done) |
+| 49 | x2APIC (the firmware's mode; `x2apic`); the Ice Lake eDP transcoder in the Intel driver (done) |
+| 50 | the tick from the local timer even with a PIT (IRQ 0 may not arrive); boot waits on the clock (done) |
+| 51 | the Intel driver: a native-size framebuffer in the GGTT, every mode up to the native one, 3:2 modes (done) |
+| 52 | touchpads and mice: 4 queued HID transfers, pointer speed and acceleration, Settings: Pointer (done) |
+| 53 | network settings: `netconfig()`, `ifconfig IF dhcp|inet`, `/etc/network.conf`, Settings: Network (done) |
+| 54 | Wi-Fi stage 1: the AX201's firmware loaded through the context info, ALIVE (done; not tested on the hardware) |
+| 55 | from the Surface's log: the GGTT region, the 22000 family's register mask, `kprintf` flags, NVMe/I2C diagnostics (done) |
+| 56 | a pause before the login screen (`nopause`); the kernel's log in `/proc/msgbuf`, `dmesg` (done) |
+| 57 | VT-d translation / protected memory left on by the firmware: off; Wi-Fi reset order and diagnostics (done) |
+| 58 | the AX201's silicon step (C0 firmware); bus master on the bridges above a device; the Intel log line (done) |
+| 59 | the AX201's receive queue index (RFH_Q0_FRBDCB_WIDX_TRG) (done) |
+| 60 | the AX201's start for the integrated 22000 family: persistence bit, forced power gating, boot LTR, ALIVE handshake (done; ALIVE confirmed on the Surface) |
+| 61 | Wi-Fi stage 2: receive processing, the command queue, INIT/NVM commands, the NVM's information, the MAC address (done) |
+| 62 | Wi-Fi stage 3: the runtime configuration (antennas, SoC, power, regulatory domain), UMAC scans, the wifi() call, dladm, the Settings Wi-Fi page (done) |
+| 68 | Wi-Fi 802.11n/ac (HT/VHT, 40/80 MHz, 2x2, QoS), Wi-Fi power save (powermode), no boot pause (done) |
+| 67 | Installed disks boot (8.3 name of the boot archive on the ESP); the full root on the USB image; no model connection in any image; Settings > Assistant; GPL-3.0 notices (done) |
+| 66 | AX201: the firmware's error tables dumped, SOC_CONFIGURATION without the LTR delay, the used ring's buffer ids (done) |
+| 65 | Facet's screen saver (the 3D SIEOS logo, 5 minutes by default) and screen lock (ckpw), the Settings page (done) |
+| 64 | Loadable drivers: drv/NAME -> /drv/NAME.drv, the boot archive, aliases and phases, the ELF loader and the kernel's symbol table, modinfo/modload, the DDK (done) |
+| 63 | Wi-Fi stage 4: firmware contexts, the transmit queue, authentication/association, the WPA2 4-way handshake (SHA-1, PBKDF2, PRF, AES unwrap), iwx0, dladm connect-wifi, Settings join (done) |
 
 ### Milestone 12: deferred kernel features
 

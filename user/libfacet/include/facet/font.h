@@ -15,6 +15,10 @@
  * at 13 px, which fill the 8x16 cells of the older bitmap font.  They are
  * loaded on first use.  FACET_FONT=bitmap keeps the bitmap font, and
  * FACET_FONT_SIZE=N sets the size in pixels.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_FONT_H
 #define FACET_FONT_H

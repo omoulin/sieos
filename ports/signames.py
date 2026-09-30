@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 """
 signames.py CC OUT - dash's signames.c for the target: its mksignames runs
 on the build machine and would record the build machine's signal numbers,

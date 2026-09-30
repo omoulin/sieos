@@ -4,6 +4,10 @@
  * The upper half (PML4 entries 256..511) is shared by every address
  * space and holds the direct map and the kernel image.  The lower half
  * belongs to user space and is built from 4K pages.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "mm.h"
 #include "vm.h"

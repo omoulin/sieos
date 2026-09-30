@@ -10,6 +10,10 @@
  *   tlstest pkcs1 ALG N E DIGEST SIG / tlstest pss ALG N E DIGEST SIG -> ok|bad
  *   tlstest get HOST PATH [ROOTS]   -> HTTPS GET over TLS 1.3, prints the response
  *                                      (TLSPORT=port, TLSREPEAT=n connections)
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #define _DEFAULT_SOURCE
 #include <arpa/inet.h>

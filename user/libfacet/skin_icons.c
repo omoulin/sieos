@@ -6,6 +6,10 @@
  * saturated gradients.  IRIX style: soft pastel volumes with thin outlines,
  * in the manner of Indigo Magic.  Every shape is an antialiased polygon on
  * a 48-unit design grid, scaled to the icon size.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include <math.h>
 #include "facet/theme.h"

@@ -1,5 +1,9 @@
 /*
  * http.h - Minimal HTTP/1.1 client over TCP or TLS 1.3.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIA_HTTP_H
 #define SIA_HTTP_H

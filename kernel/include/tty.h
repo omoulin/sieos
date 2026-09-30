@@ -1,3 +1,10 @@
+/*
+ * tty.h
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #ifndef SIEOS_TTY_H
 #define SIEOS_TTY_H
 

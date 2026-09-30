@@ -1,3 +1,10 @@
+/*
+ * libshtest.cc
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 // A shared library linked into shtest: constructors, TLS, C++ exceptions and
 // an interposable function.
 #include <stdexcept>

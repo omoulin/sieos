@@ -1,6 +1,10 @@
 /*
  * client.c - libfacet: the connection to the desktop, windows with
  * shared-memory buffers, events, and the view toolkit (facet/facet.h).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #define _GNU_SOURCE
 #include <errno.h>

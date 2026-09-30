@@ -3,6 +3,10 @@
  * a touchpad's mouse collection (report ID 1) beside its touchpad collection,
  * a keyboard with a key bitmap (NKRO, report ID 1), an array keyboard, an
  * absolute pointer; the keys and pointer events that come out.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include <stdio.h>
 #include <stdint.h>

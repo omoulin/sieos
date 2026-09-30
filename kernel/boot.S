@@ -9,6 +9,10 @@
  *   PML4[0]   -> identity map of 0..4G      (temporary, removed in C)
  *   PML4[256] -> direct map  0xFFFF800000000000 -> phys 0..4G
  *   PML4[511] -> kernel map  0xFFFFFFFF80000000 -> phys 0..2G
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 
 #define KERNEL_VBASE 0xFFFFFFFF80000000

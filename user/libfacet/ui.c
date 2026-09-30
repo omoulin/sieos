@@ -1,6 +1,10 @@
 /*
  * ui.c - libfacet: widgets and icons in the Facet desktop's style.
  * Every icon is drawn from primitives; sizes scale from a 48px design.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "facet/theme.h"
 #include "facet/ui.h"

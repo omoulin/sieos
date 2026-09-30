@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 # SIEOS - Synthetic Intelligence Enhanced Operating System
 #
 #   make          build kernel, user programs, bootable ISO and ext4 disk image
@@ -14,11 +17,15 @@
 #   make fsck     check the ext4 disk image with e2fsck
 #   make clean    remove all build output
 
+# mkfs.ext4, debugfs and e2fsck are in /usr/sbin (/sbin), which a Debian user's
+# PATH does not have (Ubuntu's does)
+export PATH := $(PATH):/usr/sbin:/sbin
+
 BUILD    := build
 ISO      := $(BUILD)/sieos.iso
 DISK     := $(BUILD)/disk.img
 # sizes: the ISO's root file system (a RAM disk), the hard disk; guest memory
-ROOT_MB  := 64
+ROOT_MB  := 96
 DISK_MB  := 768
 MEM      ?= 1G
 ROOTIMG  := $(BUILD)/rootfs.img
@@ -34,8 +41,15 @@ COMMON_CFLAGS := -std=gnu11 -O2 -g -Wall -Wextra -ffreestanding -fno-pic -fno-pi
 
 KCFLAGS  := $(COMMON_CFLAGS) -mcmodel=kernel -Ikernel/include -Iabi/include
 
-KSRCS    := $(wildcard kernel/*.c) $(wildcard kernel/*.S)
+# the drivers: drv/NAME/*.c -> build/drv/NAME.drv (ELF relocatable, loaded by the kernel: kernel/modload.c),
+# and the boot archive (a ustar of drv/, which GRUB loads with the kernel)
+DRVS      := $(notdir $(wildcard drv/*))
+
+# kernel/NAME.c left over from before NAME moved to drv/NAME/ is not linked into the kernel
+KSRCS    := $(filter-out $(DRVS:%=kernel/%.c),$(wildcard kernel/*.c)) $(wildcard kernel/*.S)
 KOBJS    := $(patsubst kernel/%,$(BUILD)/kernel/%.o,$(KSRCS))
+DRV_FILES := $(DRVS:%=$(BUILD)/drv/%.drv)
+BOOTARCH  := $(BUILD)/boot_archive
 
 # the cross toolchain (x86_64-pc-sieos, built by 'make toolchain') and its sysroot
 SYSROOT   := $(abspath $(BUILD))/sysroot
@@ -46,6 +60,9 @@ SIEOS_CC  := $(CROSS)/bin/$(TARGET)-gcc
 SIEOS_CXX := $(CROSS)/bin/$(TARGET)-g++
 TC_DONE   := $(CROSS)/.gcc-final
 TCDEP     := $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
+# the native toolchain (binutils and GCC hosted on SIEOS, see 'native' below)
+NATIVE     := $(abspath $(BUILD))/native
+NATIVE_DONE := $(TC)/.native-gcc
 
 # ports (third-party programs, see the ports section)
 PORTS    := $(abspath $(BUILD))/ports
@@ -58,7 +75,20 @@ GNU_PORTS := coreutils-9.5.tar.xz sed-4.9.tar.xz grep-3.11.tar.xz diffutils-3.10
              findutils-4.10.0.tar.xz gawk-5.3.1.tar.xz make-4.4.1.tar.gz tar-1.35.tar.xz gzip-1.13.tar.xz
 GNU_NAMES := coreutils sed grep diffutils findutils gawk make tar gzip
 GNU_DONE  := $(GNU_NAMES:%=$(PORTS)/.done-%)
+E2FS     := e2fsprogs-1.47.2
+E2FS_BINS := $(PORTS)/$(E2FS)/misc/mke2fs $(PORTS)/$(E2FS)/e2fsck/e2fsck
+NETLIB_TARS := zlib-1.3.2.tar.xz libpng-1.6.58.tar.xz jpegsrc.v9f.tar.gz expat-2.8.5.tar.xz \
+               freetype-2.14.3.tar.xz mbedtls-3.6.7.tar.bz2 curl-8.22.0.tar.xz netsurf-all-3.11.tar.gz
 PORT_URLS := http://gondor.apana.org.au/~herbert/dash/files/$(DASH).tar.gz \
+             https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz \
+             https://download.sourceforge.net/libpng/libpng-1.6.58.tar.xz \
+             https://ijg.org/files/jpegsrc.v9f.tar.gz \
+             https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz \
+             https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz \
+             https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2 \
+             https://curl.se/download/curl-8.22.0.tar.xz \
+             https://download.netsurf-browser.org/netsurf/releases/source-full/netsurf-all-3.11.tar.gz \
+             https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.2/$(E2FS).tar.xz \
              $(foreach t,$(GNU_PORTS),https://ftp.gnu.org/gnu/$(firstword $(subst -, ,$(t)))/$(t))
 
 # user programs: the cross compiler and libsieos
@@ -102,8 +132,6 @@ SDM_OBJS := $(BUILD)/user/sdm/sdm.o
 SDM      := $(BUILD)/user/sbin/sdm
 
 ROOTFS   := $(BUILD)/rootfs
-# Model connection pre-registered for sia (endpoint, model, API key); optional, never committed.
-AI_CONFIG ?= ai.config
 PCI_IDS   ?= $(firstword $(wildcard /usr/share/misc/pci.ids /usr/share/hwdata/pci.ids))
 
 QEMU     := qemu-system-x86_64
@@ -131,8 +159,35 @@ $(BUILD)/kernel/%.S.o: kernel/%.S
 	@mkdir -p $(dir $@)
 	$(CC) $(KCFLAGS) -c $< -o $@
 
-$(KERNEL): $(KOBJS) kernel/linker.ld
-	$(LD) -n -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -T kernel/linker.ld -o $@ $(KOBJS)
+# Two links: the first with an empty symbol table, then the table of its symbols (tools/mkksyms.py)
+# linked last (.ksyms at the end: no other address moves); checked.
+KLD = $(LD) -n -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -T kernel/linker.ld
+$(KERNEL): $(KOBJS) kernel/linker.ld tools/mkksyms.py
+	python3 tools/mkksyms.py - $(BUILD)/ksyms0.S && $(CC) -c $(BUILD)/ksyms0.S -o $(BUILD)/ksyms0.o
+	$(KLD) -o $(BUILD)/kernel.pass1 $(KOBJS) $(BUILD)/ksyms0.o
+	nm $(BUILD)/kernel.pass1 > $(BUILD)/kernel.pass1.nm
+	python3 tools/mkksyms.py $(BUILD)/kernel.pass1.nm $(BUILD)/ksyms.S && $(CC) -c $(BUILD)/ksyms.S -o $(BUILD)/ksyms.o
+	$(KLD) -o $@ $(KOBJS) $(BUILD)/ksyms.o
+	nm $@ | grep -v ' ksyms_\| _kernel_' > $(BUILD)/kernel.nm
+	grep -v ' ksyms_\| _kernel_' $(BUILD)/kernel.pass1.nm | cmp -s - $(BUILD)/kernel.nm || \
+		{ echo "kernel: symbols moved between the two links"; rm -f $@; exit 1; }
+
+$(BUILD)/drvobj/%.c.o: drv/%.c $(wildcard kernel/include/*.h) $(wildcard drv/*/*.h) $(wildcard abi/include/sieos/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(KCFLAGS) -Idrv/$(firstword $(subst /, ,$*)) -c $< -o $@
+
+define DRV_RULE
+$(BUILD)/drv/$(1).drv: $(patsubst drv/%.c,$(BUILD)/drvobj/%.c.o,$(wildcard drv/$(1)/*.c))
+	@mkdir -p $$(dir $$@)
+	$(LD) -r --strip-debug -o $$@ $$^
+endef
+$(foreach d,$(DRVS),$(eval $(call DRV_RULE,$(d))))
+
+$(BOOTARCH): $(DRV_FILES)
+	tar --format=ustar --owner=0 --group=0 --numeric-owner --mtime=@0 --sort=name -C $(BUILD) -cf $@ $(DRVS:%=drv/%.drv)
+
+.PHONY: drivers
+drivers: $(DRV_FILES) $(BOOTARCH)
 
 # ---------------------------------------------------------------- user space
 #
@@ -256,20 +311,37 @@ $(BUILD)/user/test/abi2test.o: user/test/abi2test.c $(wildcard abi/include/sieos
 		-Iabi/include -c $< -o $@
 
 $(ABI2TEST): $(BUILD)/user/test/abi2test.o
+	@mkdir -p $(dir $@)
 	$(LD) -pie --no-dynamic-linker -z text -z max-page-size=0x1000 -e _start -o $@ $<
 
 # ---------------------------------------------------------------- images
 
+# esp.img: the EFI system partition sieinstall writes on the disk it installs
+# on: GRUB (the removable-media path EFI/BOOT/BOOTX64.EFI; its prefix names no
+# device, so it reads grub.cfg from the partition it was loaded from), the
+# kernel, and grub.cfg whose root= sieinstall sets.
+ESPIMG := $(BUILD)/esp.img
+$(ESPIMG): $(KERNEL) $(BOOTARCH) iso/boot/grub/installed.cfg tools/mkfat.py
+	grub-mkimage -O x86_64-efi -d /usr/lib/grub/x86_64-efi -p /boot/grub -o $(BUILD)/BOOTX64-disk.EFI \
+		normal configfile search search_fs_file test echo multiboot2 part_gpt part_msdos fat \
+		efi_gop all_video video gfxterm
+	python3 tools/mkfat.py $@ 16384 EFI/BOOT/BOOTX64.EFI=$(BUILD)/BOOTX64-disk.EFI \
+		boot/kernel.elf=$(KERNEL) boot/bootarch.tar=$(BOOTARCH) boot/grub/grub.cfg=iso/boot/grub/installed.cfg
+
 # rootfs.img: pristine ext4 image built from rootfs/ + the user programs.
 # It is embedded in the ISO (loaded by GRUB as a RAM disk) and is the
 # template for disk.img.
-$(ROOTIMG): $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(ABI2TEST) $(TCDEP) $(DASH_BIN) $(shell find rootfs -type f 2>/dev/null) tools/rootfs.perms tools/mkperms.sh tools/mkshadow.py \
-             tools/mksiaconfig.py $(wildcard $(AI_CONFIG))
+$(ROOTIMG): $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(ABI2TEST) $(TCDEP) $(DASH_BIN) $(E2FS_BINS) $(ESPIMG) $(shell find rootfs -type f 2>/dev/null) tools/rootfs.perms tools/mkperms.sh tools/mkshadow.py
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/sbin $(ROOTFS)/tmp $(ROOTFS)/proc $(ROOTFS)/dev/pts $(ROOTFS)/dev/shm $(ROOTFS)/mnt
 	cp -r rootfs/. $(ROOTFS)/
 	for p in $(UPROGS); do cp $(BUILD)/user/bin/$$p $(ROOTFS)/bin/$$p; done
 	cp $(FAPP_BINS) $(ROOTFS)/bin/
 	mv $(ROOTFS)/bin/init $(ROOTFS)/sbin/init
+	@# the drivers (/drv, also in the boot archive) and what building one needs (/usr/include/ddk)
+	mkdir -p $(ROOTFS)/drv $(ROOTFS)/usr/include/ddk
+	cp $(DRV_FILES) $(ROOTFS)/drv/
+	cp kernel/include/*.h $(ROOTFS)/usr/include/ddk/
+	cp -r abi/include/sieos $(ROOTFS)/usr/include/ddk/
 	ln -sf ping $(ROOTFS)/bin/ping6
 	@# the PCI ID database (device names for lidev), from the build host when it has one
 	if [ -f $(PCI_IDS) ]; then mkdir -p $(ROOTFS)/usr/share/misc && cp $(PCI_IDS) $(ROOTFS)/usr/share/misc/pci.ids; fi
@@ -277,6 +349,15 @@ $(ROOTIMG): $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(ABI2TEST) $
 	cp $(SIA_PROGS) $(ROOTFS)/bin/
 	cp $(ABI2TEST) $(ROOTFS)/bin/abi2test
 	cp $(DASH_BIN) $(ROOTFS)/bin/sh
+	@# Intel's Wi-Fi firmware (AX201: Qu/QuZ with the Hr radio), from the build host's linux-firmware
+	mkdir -p $(ROOTFS)/lib/firmware
+	for f in iwlwifi-Qu-b0-hr-b0-77 iwlwifi-Qu-c0-hr-b0-77 iwlwifi-QuZ-a0-hr-b0-77; do \
+		if [ -f /lib/firmware/$$f.ucode.zst ]; then zstd -dqf /lib/firmware/$$f.ucode.zst -o $(ROOTFS)/lib/firmware/$$f.ucode; \
+		elif [ -f /lib/firmware/$$f.ucode ]; then cp /lib/firmware/$$f.ucode $(ROOTFS)/lib/firmware/; fi; done
+	cp ports/firmware/LICENCE.iwlwifi_firmware $(ROOTFS)/lib/firmware/
+	@# the installer's tools: mke2fs, e2fsck, the EFI system partition
+	cp $(E2FS_BINS) $(ROOTFS)/sbin/
+	mkdir -p $(ROOTFS)/usr/share/sieos && cp $(ESPIMG) $(ROOTFS)/usr/share/sieos/esp.img
 	@# the runtime: dynamic linker and C library, libstdc++ and libgcc_s
 	mkdir -p $(ROOTFS)/usr/lib $(ROOTFS)/lib
 	cp $(SYSROOT)/usr/lib/libc.so $(ROOTFS)/usr/lib/
@@ -290,8 +371,8 @@ $(ROOTIMG): $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(ABI2TEST) $
 	find $(ROOTFS) -type f -exec chmod 644 {} +
 	chmod 755 $(ROOTFS)/bin/* $(ROOTFS)/sbin/*
 	find $(ROOTFS)/usr/lib -name '*.so*' -type f -exec chmod 755 {} +
-	python3 tools/mksiaconfig.py $(AI_CONFIG) $(ROOTFS) $(BUILD)/sia.perms
-	cat tools/rootfs.perms $(BUILD)/sia.perms > $(BUILD)/all.perms
+	@# (no model connection in any image: sia asks for one on first use, or Settings > Assistant)
+	cp tools/rootfs.perms $(BUILD)/all.perms
 	rm -f $@
 	mkfs.ext4 -q -F -b 4096 -L sieos-root -E root_owner=0:0 -d $(ROOTFS) $@ $(ROOT_MB)M
 	tools/mkperms.sh $(ROOTFS) $(BUILD)/all.perms > $(BUILD)/perms.debugfs
@@ -299,9 +380,10 @@ $(ROOTIMG): $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(ABI2TEST) $
 	@# index the larger directories (htree), as a long-used ext4 file system has them
 	e2fsck -fyD $@ >/dev/null 2>&1; [ $$? -le 1 ]
 
-$(ISO): $(KERNEL) $(ROOTIMG) iso/boot/grub/grub.cfg tools/mkiso.sh tools/mkfat.py
+$(ISO): $(KERNEL) $(BOOTARCH) $(ROOTIMG) iso/boot/grub/grub.cfg tools/mkiso.sh tools/mkfat.py
 	@mkdir -p $(BUILD)/isodir/boot/grub
 	cp $(KERNEL) $(BUILD)/isodir/boot/kernel.elf
+	cp $(BOOTARCH) $(BUILD)/isodir/boot/bootarch.tar
 	cp $(ROOTIMG) $(BUILD)/isodir/boot/rootfs.img
 	cp iso/boot/grub/grub.cfg $(BUILD)/isodir/boot/grub/grub.cfg
 	tools/mkiso.sh $@ $(BUILD)/isodir $(BUILD)
@@ -313,7 +395,7 @@ $(ISO): $(KERNEL) $(ROOTIMG) iso/boot/grub/grub.cfg tools/mkiso.sh tools/mkfat.p
 DISKROOT := $(BUILD)/diskroot
 DEVROOT  := $(BUILD)/.devroot
 DISKIMG  := $(BUILD)/diskroot.img
-$(DEVROOT): $(ROOTIMG) $(LIBSIEOS) $(SDK_STAMP) $(GNU_DONE) $(wildcard $(NATIVE_DONE)) $(wildcard abi/include/sieos/*.h) user/include/sieos.h
+$(DEVROOT): $(ROOTIMG) $(LIBSIEOS) $(SDK_STAMP) $(GNU_DONE) $(NATIVE_DONE) $(wildcard abi/include/sieos/*.h) user/include/sieos.h
 	rm -rf $(DISKROOT) && cp -a $(ROOTFS) $(DISKROOT)
 	mkdir -p $(DISKROOT)/usr/bin && cp -a $(PORTS)/root/usr/gnu $(DISKROOT)/usr/ && rm -rf $(DISKROOT)/usr/gnu/share
 	for f in $(DISKROOT)/usr/gnu/bin/* $$(find $(DISKROOT)/usr/gnu/libexec -type f 2>/dev/null); do \
@@ -332,8 +414,9 @@ $(DEVROOT): $(ROOTIMG) $(LIBSIEOS) $(SDK_STAMP) $(GNU_DONE) $(wildcard $(NATIVE_
 		ln -sf gcc $(DISKROOT)/usr/bin/cc && \
 		for f in $(DISKROOT)/usr/bin/* $$(find $(DISKROOT)/usr/libexec -type f -perm -u+x); do \
 			[ -L $$f ] || $(CROSS)/bin/$(TARGET)-strip $$f 2>/dev/null; done; \
+		rm -f $(DISKROOT)/usr/lib/*.py; \
 		for f in $(DISKROOT)/usr/lib/*.so*; do [ -L $$f ] || $(CROSS)/bin/$(TARGET)-strip --strip-unneeded $$f; done; \
-		find $(DISKROOT)/usr -name '*.la' -delete; rm -f $(DISKROOT)/usr/lib/*.py; \
+		find $(DISKROOT)/usr -name '*.la' -delete; \
 		chmod -R go-w,a+rX $(DISKROOT)/usr; fi
 	touch $@
 
@@ -412,32 +495,34 @@ run-uefi: all
 # partition, BIOS boot) to write to a USB drive for a real PC:
 #     sudo dd if=build/sieos-usb.img of=/dev/sdX bs=4M conv=fsync status=progress
 # The root file system is a RAM disk loaded from the drive (the kernel has no
-# USB or NVMe storage driver), so changes are lost at power-off.  Like the ISO,
-# the image carries the sia model connection from ai.config when there is one
-# (its API key included: the image is under build/, which git ignores);
-# USB_SIA=0 leaves it out.
-USB_SIA ?= 1
+# USB storage driver), so changes are lost at power-off.  It is the hard disk's
+# root, native toolchain included (USB_ROOT_MB large), which the installer
+# copies to the disk.
+# It has no model connection: sia asks for one on first use (or Settings > Assistant).
+USB_ROOT_MB ?= 384
 USBIMG  := $(BUILD)/sieos-usb.img
 USBROOT := $(BUILD)/usbroot.img
-$(USBROOT): $(ROOTIMG) tools/rootfs.perms
-	rm -rf $(BUILD)/usbroot && cp -a $(ROOTFS) $(BUILD)/usbroot
-	rm -rf $(BUILD)/usbroot/root/.sia $(BUILD)/usbroot/home/user/.sia
+# the USB image's root: the hard disk's (the native toolchain, the DDK, ksh93), so that the
+# installer, which copies the running root, puts all of it on the disk too
+$(USBROOT): $(DISKIMG) tools/rootfs.perms
+	rm -rf $(BUILD)/usbroot && cp -a $(DISKROOT) $(BUILD)/usbroot
 	rm -f $@
-	mkfs.ext4 -q -F -b 4096 -L sieos-root -E root_owner=0:0 -d $(BUILD)/usbroot $@ $(ROOT_MB)M
-	tools/mkperms.sh $(BUILD)/usbroot tools/rootfs.perms > $(BUILD)/usbperms.debugfs
+	mkfs.ext4 -q -F -b 4096 -L sieos-root -E root_owner=0:0 -d $(BUILD)/usbroot $@ $(USB_ROOT_MB)M
+	tools/mkperms.sh $(BUILD)/usbroot $(BUILD)/all.perms > $(BUILD)/usbperms.debugfs
 	debugfs -w -f $(BUILD)/usbperms.debugfs $@ >/dev/null 2>&1
 	e2fsck -fyD $@ >/dev/null 2>&1; [ $$? -le 1 ]
 
-$(USBIMG): $(KERNEL) $(if $(filter 1,$(USB_SIA)),$(ROOTIMG),$(USBROOT)) iso/boot/grub/grub.cfg tools/mkiso.sh tools/mkfat.py
+$(USBIMG): $(KERNEL) $(BOOTARCH) $(USBROOT) iso/boot/grub/grub.cfg tools/mkiso.sh tools/mkfat.py
 	rm -rf $(BUILD)/usbdir $(BUILD)/usbwork && mkdir -p $(BUILD)/usbdir/boot/grub $(BUILD)/usbwork
 	cp $(KERNEL) $(BUILD)/usbdir/boot/kernel.elf
-	cp $(if $(filter 1,$(USB_SIA)),$(ROOTIMG),$(USBROOT)) $(BUILD)/usbdir/boot/rootfs.img
+	cp $(BOOTARCH) $(BUILD)/usbdir/boot/bootarch.tar
+	cp $(USBROOT) $(BUILD)/usbdir/boot/rootfs.img
 	cp iso/boot/grub/grub.cfg $(BUILD)/usbdir/boot/grub/grub.cfg
 	tools/mkiso.sh $@ $(BUILD)/usbdir $(BUILD)/usbwork
 
 .PHONY: usb run-usb
 usb: $(USBIMG)
-	@echo "$(USBIMG): write it to a USB drive (all its data is lost) with"
+	@echo "Write $(USBIMG) to a USB drive (all its data is lost) with"
 	@echo "    sudo dd if=$(USBIMG) of=/dev/sdX bs=4M conv=fsync status=progress"
 	@echo "where /dev/sdX is the drive itself (see lsblk), not a partition."
 
@@ -580,7 +665,7 @@ TC_URLS   := https://ftp.gnu.org/gnu/binutils/binutils-2.45.tar.xz \
 .PHONY: toolchain toolchain-fetch toolchain-test toolchain-test-img
 toolchain-fetch:
 	@mkdir -p $(TC)/dl
-	cd $(TC)/dl && for u in $(TC_URLS); do [ -f $$(basename $$u) ] || curl -sSfLO $$u; done
+	cd $(TC)/dl && for u in $(TC_URLS); do $(abspath tools/fetch.sh) $$u $$(basename $$u) || exit 1; done
 
 $(TC)/src/.stamp: toolchain/sieos-toolchain.py toolchain/sieos.h | toolchain-fetch
 	python3 toolchain/sieos-toolchain.py $(TC)/dl $(TC)/src
@@ -639,12 +724,12 @@ toolchain: $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
 # SHA256SUMS does not rebuild every port)
 $(PORTS_DL)/$(KSH).tar.gz:
 	@mkdir -p $(PORTS_DL)
-	cd $(PORTS_DL) && [ -f $(KSH).tar.gz ] || curl -sSfL -o $(KSH).tar.gz https://github.com/ksh93/ksh/archive/refs/tags/v1.0.10.tar.gz
+	cd $(PORTS_DL) && $(abspath tools/fetch.sh) https://github.com/ksh93/ksh/archive/refs/tags/v1.0.10.tar.gz $(KSH).tar.gz
 	cd $(PORTS_DL) && grep " $(KSH).tar.gz$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
 
 $(PORTS_DL)/%:
 	@mkdir -p $(PORTS_DL)
-	cd $(PORTS_DL) && [ -f $* ] || curl -sSfLO $(filter %/$*,$(PORT_URLS))
+	cd $(PORTS_DL) && $(abspath tools/fetch.sh) $(filter %/$*,$(PORT_URLS)) $*
 	cd $(PORTS_DL) && grep " $*$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
 
 # dash: its build-time signal table is regenerated from the target's <signal.h>
@@ -658,6 +743,19 @@ $(DASH_BIN): $(PORTS_DL)/$(DASH).tar.gz ports/signames.py | $(TC_DONE) $(SYSROOT
 	PATH=$(CROSS)/bin:$$PATH $(MAKE) -C $(PORTS)/$(DASH) >>$(PORTS)/$(DASH)/build.log
 	$(CROSS)/bin/$(TARGET)-strip $@
 
+# e2fsprogs: mke2fs and e2fsck for SIEOS (static), for the installer (sieinstall)
+$(E2FS_BINS) &: $(PORTS_DL)/$(E2FS).tar.xz ports/build.py | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
+	rm -rf $(PORTS)/$(E2FS) && tar xf $< -C $(PORTS)
+	python3 -c "import sys; sys.path.insert(0, 'ports'); import build; build.teach_config_sub('$(PORTS)/$(E2FS)')"
+	cd $(PORTS)/$(E2FS) && PATH=$(CROSS)/bin:$$PATH ./configure --host=$(TARGET) --prefix=/usr --disable-nls \
+		--disable-fuse2fs --disable-uuidd --disable-defrag --disable-imager --disable-e2initrd-helper \
+		--disable-tdb --disable-bmap-stats --without-libarchive CFLAGS="-O2 -std=gnu17" LDFLAGS=-static \
+		>$(PORTS)/$(E2FS).log 2>&1
+	PATH=$(CROSS)/bin:$$PATH $(MAKE) -C $(PORTS)/$(E2FS) libs >>$(PORTS)/$(E2FS).log 2>&1
+	PATH=$(CROSS)/bin:$$PATH $(MAKE) -C $(PORTS)/$(E2FS)/misc mke2fs >>$(PORTS)/$(E2FS).log 2>&1
+	PATH=$(CROSS)/bin:$$PATH $(MAKE) -C $(PORTS)/$(E2FS)/e2fsck e2fsck >>$(PORTS)/$(E2FS).log 2>&1
+	$(CROSS)/bin/$(TARGET)-strip $(E2FS_BINS)
+
 # GNU utilities in /usr/gnu (as on Solaris 11), cross-built by ports/build.py
 $(PORTS)/.done-%: ports/build.py | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
 	$(MAKE) $(PORTS_DL)/$(filter $*-%,$(GNU_PORTS))
@@ -666,6 +764,47 @@ $(PORTS)/.done-%: ports/build.py | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
 
 .PHONY: ports
 ports: $(DASH_BIN) $(GNU_DONE) $(KSH_BIN)
+
+# The libraries under the web browser (NetSurf): static, in the staging root
+# $(NETLIBS)/usr (not the SDK sysroot, nor the disk), cross-built by ports/netlibs.py
+NETLIBS      := $(PORTS)/netlibs
+NETLIB_NAMES := zlib libpng jpeg expat freetype mbedtls curl
+NETLIB_DONE  := $(NETLIB_NAMES:%=$(PORTS)/.lib-%)
+$(PORTS)/.lib-libpng: $(PORTS)/.lib-zlib
+$(PORTS)/.lib-curl: $(PORTS)/.lib-zlib $(PORTS)/.lib-mbedtls
+$(PORTS)/.lib-%: ports/netlibs.py ports/build.py | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
+	$(MAKE) $(PORTS_DL)/$(filter $*-% $(if $(filter jpeg,$*),jpegsrc.%),$(NETLIB_TARS))
+	PATH=$(CROSS)/bin:$$PATH python3 ports/netlibs.py $* $(PORTS_DL) $(PORTS) $(NETLIBS)
+	touch $@
+
+.PHONY: netlibs
+netlibs: $(NETLIB_DONE)
+
+# NetSurf's own libraries (HTML and CSS parsing, the DOM, image decoders, libnsfb),
+# from the release bundle, static, in the same staging root (their -I$(PREFIX)/include
+# must not name the build host's /usr/include: PREFIX is the staging root itself);
+# pkg-config sees only the staging root.  nsgenbind (JavaScript binding generator)
+# is a build-host tool, in $(NSHOST).
+NS_ALL     := netsurf-all-3.11
+NS_SRC     := $(PORTS)/$(NS_ALL)
+NSHOST     := $(PORTS)/nshost
+NS_LIBS    := buildsystem libwapcaplet libparserutils libcss libhubbub libdom libnsutils \
+              libnsbmp libnsgif libutf8proc libnspsl libnslog libsvgtiny libnsfb
+NS_MAKE     = CFLAGS=-fPIC PATH=$(CROSS)/bin:$$PATH $(MAKE) HOST=$(TARGET) PREFIX=$(NETLIBS)/usr DESTDIR= Q= \
+              PKGCONFIG="PKG_CONFIG_LIBDIR=$(NETLIBS)/usr/lib/pkgconfig pkg-config" \
+              WARNFLAGS='-Wall -W -Wno-error' WITH_HUBBUB_BINDING=yes WITH_EXPAT_BINDING=yes
+$(PORTS)/.lib-netsurf: $(PORTS_DL)/$(NS_ALL).tar.gz $(NETLIB_DONE)
+	rm -rf $(NS_SRC) && tar xzf $< -C $(PORTS)
+	for l in $(NS_LIBS); do \
+		echo "netsurf: $$l"; $(NS_MAKE) -C $(NS_SRC)/$$l install >$(PORTS)/ns-$$l.log 2>&1 || \
+			{ tail -20 $(PORTS)/ns-$$l.log; exit 1; }; done
+	$(MAKE) -C $(NS_SRC)/buildsystem install PREFIX=$(NSHOST) DESTDIR= Q= >$(PORTS)/ns-nsgenbind.log 2>&1
+	$(MAKE) -C $(NS_SRC)/nsgenbind install PREFIX=$(NSHOST) DESTDIR= Q= >>$(PORTS)/ns-nsgenbind.log 2>&1 || \
+		{ tail -20 $(PORTS)/ns-nsgenbind.log; exit 1; }
+	touch $@
+
+.PHONY: netsurf-libs
+netsurf-libs: $(PORTS)/.lib-netsurf
 
 # a self-hosting check: GNU make configured and built on SIEOS, then rebuilt by itself
 .PHONY: native-make-test
@@ -680,8 +819,6 @@ native-make-test: $(PORTS_DL)/make-4.4.1.tar.gz ports/make.build | $(DEVROOT) $(
 # under build/native/usr with prefix /usr.  'make native' builds it; the
 # disk image (make newdisk) carries it with the C library headers and
 # static libraries, so programs can be compiled on SIEOS.
-NATIVE     := $(abspath $(BUILD))/native
-NATIVE_DONE := $(TC)/.native-gcc
 NATIVE_CONF := --build=x86_64-pc-linux-gnu --host=$(TARGET) --target=$(TARGET) --prefix=/usr \
 	--disable-nls --disable-werror MAKEINFO=true
 

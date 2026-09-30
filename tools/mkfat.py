@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 """
 mkfat.py IMAGE SIZE_KB DEST=SRC...
 
@@ -63,7 +66,9 @@ def main():
 
     def name83(name):
         base, _, ext = name.upper().partition('.')
-        return base[:8].ljust(8).encode() + ext[:3].ljust(3).encode()
+        if not base or len(base) > 8 or len(ext) > 3 or '.' in ext:
+            sys.exit(f'mkfat.py: {name}: not an 8.3 name (the image has no long file names)')
+        return base.ljust(8).encode() + ext.ljust(3).encode()
 
     def dirent(name11, attr, cl, size):
         return struct.pack('<11sBBBHHHHHHHI', name11, attr, 0, 0, 0, 0, 0, 0, 0x21, 0, cl, size)

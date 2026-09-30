@@ -2,6 +2,10 @@
  * pipe.c - Anonymous pipes and named FIFOs.  A FIFO's pipe is found through
  * its inode (file system and inode number) while it is open, and goes away
  * with the last open descriptor, as on Solaris.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
 #include "proc.h"

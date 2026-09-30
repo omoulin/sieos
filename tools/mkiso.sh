@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 # mkiso.sh OUT.iso ISODIR BUILDDIR
 #
 # Build a hybrid ISO that boots with both legacy BIOS (El Torito, GRUB

@@ -1,4 +1,13 @@
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 # /etc/rc - system startup script, run by init as root before login.
 echo "SIEOS: file systems checked, starting multi-user mode."
+# the interfaces' settings kept by ifconfig (/etc/network.conf)
+[ -f /etc/network.conf ] && ifconfig -a
 # the DNS servers learnt from DHCP and router advertisements, for the C library's resolver
 ifconfig -r > /etc/resolv.conf 2>/dev/null
+# the Wi-Fi network last joined, if one kept in /etc/wifi.conf is in range (in the background)
+[ -f /etc/wifi.conf ] && dladm connect-wifi -q &
+# the power management settings kept by poweradm (/etc/power.conf)
+[ -f /etc/power.conf ] && poweradm -r

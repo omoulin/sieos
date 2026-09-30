@@ -1,6 +1,10 @@
 /*
  * facet-viewer file - a text viewer with line numbers (up to 256 KB): arrows, Page Up/Down, Home/End, Space.
  * A Facet application (libfacet).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "common.h"
 

@@ -2,6 +2,10 @@
  * useradd - create a user account (root only).
  *   useradd [-u uid] [-g group] [-d home] [-s shell] [-c comment] name
  * The account is locked until a password is set with passwd(1).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

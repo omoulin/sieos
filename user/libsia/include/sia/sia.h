@@ -28,6 +28,10 @@
  * Answers are UTF-8; sia_plain() turns one into text for the 8-bit
  * console and Facet fonts.  All functions return NULL or -1 on failure,
  * with a message in err.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIA_SIA_H
 #define SIA_SIA_H

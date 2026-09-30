@@ -6,6 +6,10 @@
  * the slave as keyboard input, and output written to the slave is queued
  * for the master to read.  Closing the master hangs up the slave's
  * session; closing every slave makes master reads return EOF.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "fs.h"

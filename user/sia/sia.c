@@ -18,6 +18,10 @@
  *   sia            start the harness (the Facet terminal runs this)
  *   sia --setup    (re)configure the model connection
  *   sia --off      unregister the model: terminals start the plain shell
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "libsia.h"
 

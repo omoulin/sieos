@@ -1,5 +1,9 @@
 /*
  * facet/ui.h - Widgets and icons in the Facet desktop's style (libfacet).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_UI_H
 #define FACET_UI_H

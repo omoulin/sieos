@@ -1,3 +1,10 @@
+/*
+ * pci.h
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #ifndef SIEOS_PCI_H
 #define SIEOS_PCI_H
 
@@ -17,6 +24,7 @@ void     pci_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t off, uint32
 bool     pci_find(uint16_t vendor, const uint16_t *devices, int ndev, struct pci_dev *out);
 bool     pci_find_class(uint8_t class_code, uint8_t subclass, struct pci_dev *out);
 void     pci_enable_bus_master(const struct pci_dev *d);
+void     pci_enable_path(const struct pci_dev *d);   /* the bridges above d: memory space, bus master */
 int      pci_scan(void);                /* returns number of devices, logs nothing */
 
 /* The devices found at boot (every function), in bus order. */

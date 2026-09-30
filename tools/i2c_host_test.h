@@ -1,4 +1,10 @@
-/* i2c_host_test.h - host build of kernel/i2c_hid.c on a simulated controller (make i2c-test). */
+/*
+ * i2c_host_test.h - host build of kernel/i2c_hid.c on a simulated controller (make i2c-test).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

@@ -19,6 +19,10 @@
  * takes vmlock around its own page-table changes and area-list changes (never
  * across anything that sleeps), and frees areas only after unlinking them
  * under it.  Order: kernel lock, vmlock, the frame allocator's lock.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "mm.h"

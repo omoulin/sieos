@@ -5,6 +5,10 @@
  * user and group IDs plus supplementary groups.  The superuser (euid 0)
  * bypasses read/write checks and may execute any file that has at least
  * one execute bit set.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
 #include "proc.h"

@@ -3,6 +3,10 @@
  * record locks, positioned and vector I/O, getdents with d_off cookies,
  * statvfs, and the terminal/pseudo-terminal ioctls.  The work is done by
  * fsys.c; this file translates the Solaris constants and structures.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "mm.h"
@@ -21,6 +25,9 @@
 #include "sieos/socket.h"
 #include "sieos/mount.h"
 #include "sieos/lofi.h"
+#include "sieos/dkio.h"
+#include "sieos/power.h"
+#include "power.h"
 #include "blkdev.h"
 
 /* ---------------- translations ---------------- */
@@ -549,6 +556,30 @@ static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
         if (f->type != FD_PTM)
             return -ENOTTY;
         return pty_master_ioctl(f->pty, cmd & 0xFF, (char *)arg);
+    case SIEOS_DKIOCINFO: {
+        if (f->type != FD_BLK)
+            return -ENOTTY;
+        if (!user_ok((void *)arg, sizeof(struct sieos_dk_info), true))
+            return -EFAULT;
+        struct sieos_dk_info di;
+        int r = blk_info(f->minor, &di);
+        if (r == 0)
+            memcpy((void *)arg, &di, sizeof(di));
+        return r;
+    }
+    case SIEOS_POWER_GET:
+    case SIEOS_POWER_SET: {
+        if (f->type != FD_POWER)
+            return -ENOTTY;
+        size_t sz = cmd == SIEOS_POWER_GET ? sizeof(struct sieos_power_info) : sizeof(struct sieos_power_set);
+        if (!user_ok((void *)arg, sz, cmd == SIEOS_POWER_GET))
+            return -EFAULT;
+        return power_ioctl(cmd, (void *)arg);
+    }
+    case SIEOS_DKIOCREREAD:
+        if (f->type != FD_BLK)
+            return -ENOTTY;
+        return blk_reread(f->minor);
     case SIEOS_LOFI_MAP_FILE:
     case SIEOS_LOFI_UNMAP_FILE_MINOR:
     case SIEOS_LOFI_GET_FILENAME:

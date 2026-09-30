@@ -4,6 +4,10 @@
  * Text is drawn in rows of FONT_H pixels, with DejaVu Sans (TrueType, see
  * facet/font.h), or with the 8x16 bitmap font where the fonts are missing.  Colours are 0x00RRGGBB.  All drawing is clipped to the
  * surface's clip rectangle.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_GFX_H
 #define FACET_GFX_H

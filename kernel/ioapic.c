@@ -10,6 +10,10 @@
  * delivery is fixed to one CPU.  Level-triggered lines are acknowledged at
  * the local APIC after their handler has quietened the device (trap.c).
  * Without an I/O APIC the PICs stay in charge.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "kernel.h"
 #include "arch.h"

@@ -6,6 +6,10 @@
  * device's block size (up to 4 KiB) is set by the file system on it.
  * Programs and shared libraries are read again at every exec and mmap, so
  * the cache has to hold the working set.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "bcache.h"
 #include "ata.h"

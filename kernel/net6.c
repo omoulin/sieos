@@ -17,6 +17,10 @@
  * first interface; anything else by the first interface with a router.
  * Not implemented: path MTU discovery, privacy addresses, scope ids.
  * Everything runs under the big kernel lock, driven by net_poll() like IPv4.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "net.h"
 #include "proc.h"

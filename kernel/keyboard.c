@@ -1,5 +1,10 @@
 /*
- * keyboard.c - PS/2 keyboard (scancode set 1, US layout) and serial input.
+ * keyboard.c - The console keyboard (scancode set 1, US layout: from the
+ * PS/2, USB and I2C keyboards' drivers) and serial input.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "arch.h"
 #include "tty.h"
@@ -21,7 +26,7 @@ static const char keymap_shift[128] = {
     '*', 0, ' ',
 };
 
-static bool shift, ctrl, caps, alt, e0;
+static bool shift, ctrl, caps, alt;
 
 /*
  * One key, as a set 1 scancode (0x100 | code for the E0-prefixed keys):
@@ -77,24 +82,6 @@ void kbd_key(uint16_t code, bool release)
         tty_input(&console_tty, c);
 }
 
-static void kbd_irq(struct trapframe *tf)
-{
-    UNUSED(tf);
-    while (inb(0x64) & 1) {
-        uint8_t status = inb(0x64);
-        if (status & 0x20)
-            break;                           /* mouse byte: leave it to IRQ12 */
-        uint8_t sc = inb(0x60);
-        if (sc == 0xE0) {
-            e0 = true;
-            continue;
-        }
-        bool ext = e0;
-        e0 = false;
-        kbd_key((ext ? 0x100 : 0) | (sc & 0x7F), sc & 0x80);
-    }
-}
-
 static void serial_irq(struct trapframe *tf)
 {
     UNUSED(tf);
@@ -108,38 +95,15 @@ static void serial_irq(struct trapframe *tf)
     }
 }
 
-static void i8042_wait_write(void)
-{
-    for (int i = 0; i < 100000 && (inb(0x64) & 2); i++)
-        ;
-}
+/*
+ * Whether there is an i8042 at all: machines without one (the Surface
+ * tablets, some recent laptops and desktops) read all ones at its ports.
+ * Set by its driver (drv/i8042).
+ */
+bool ps2_present;
 
-static void i8042_wait_read(void)
-{
-    for (int i = 0; i < 100000 && !(inb(0x64) & 1); i++)
-        ;
-}
-
+/* The console's input: the serial port (the PS/2 keyboard is drv/i8042's, the USB and I2C ones hid.c's). */
 void keyboard_init(void)
 {
-    while (inb(0x64) & 1)
-        inb(0x60);
-    /* Enable the keyboard IRQ and scancode translation in the controller
-     * configuration byte; UEFI firmware does not always leave them on. */
-    i8042_wait_write();
-    outb(0x64, 0x20);
-    i8042_wait_read();
-    uint8_t cfg = inb(0x60);
-    cfg |= 0x01 | 0x40;
-    cfg &= ~0x10;                    /* keyboard clock enabled */
-    i8042_wait_write();
-    outb(0x64, 0x60);
-    i8042_wait_write();
-    outb(0x60, cfg);
-    i8042_wait_write();
-    outb(0x64, 0xAE);                /* enable first port */
-    while (inb(0x64) & 1)
-        inb(0x60);
-    irq_register(IRQ_KBD, kbd_irq);
     irq_register(IRQ_COM1, serial_irq);
 }

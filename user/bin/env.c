@@ -1,6 +1,10 @@
 /*
  * env - run a program in a modified environment, or print the environment.
  *   env [-i] [-u NAME] [NAME=value...] [command [args...]]
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

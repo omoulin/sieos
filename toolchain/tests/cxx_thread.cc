@@ -1,3 +1,10 @@
+/*
+ * cxx_thread.cc
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 // std::thread, mutex, condition_variable, future/async, atomics, thread_local, jthread.
 #include "check.h"
 #include <atomic>

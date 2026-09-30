@@ -4,6 +4,10 @@
  * SHA-256/384/512, HMAC, HKDF (RFC 5869, TLS 1.3 labels), AES-GCM,
  * X25519 (RFC 7748), P-256 ECDH, and signature verification: RSA (PKCS #1 v1.5 and PSS)
  * and ECDSA on P-256 and P-384.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef TLS_CRYPTO_H
 #define TLS_CRYPTO_H

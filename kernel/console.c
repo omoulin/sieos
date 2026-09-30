@@ -5,6 +5,10 @@
  * The screen is a grid of character cells.  On a framebuffer, glyphs from
  * an 8x16 bitmap font are rendered and a shadow copy of the cells is kept
  * so the cursor can be drawn and erased.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "kernel.h"
 

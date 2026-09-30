@@ -5,6 +5,10 @@
  * DIRECT_MAP_MAX: RAM above 4 GiB is added to the direct map (2 MiB pages)
  * here, before the allocator starts.  The bitmap and the reference counts
  * are sized for the highest usable address and placed in RAM themselves.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "mm.h"
 #include "smp.h"
@@ -96,13 +100,15 @@ static uint64_t early_table(void)
     return early_alloc(PAGE_SIZE, true);
 }
 
+uint64_t boot_archive_pa, boot_archive_size;   /* the drivers' boot archive (modload.c) */
+
 void pmm_init(uint64_t mb_info_phys)
 {
     uint32_t total = *(uint32_t *)P2V(mb_info_phys);
     uint8_t *p = (uint8_t *)P2V(mb_info_phys) + 8;
     uint8_t *end = (uint8_t *)P2V(mb_info_phys) + total;
     bool have_mmap = false;
-    uint64_t mod_start = 0, mod_end = 0, top = 0;
+    uint64_t mod_start = 0, mod_end = 0, top = 0, arch_start = 0, arch_end = 0;
 
     while (p < end) {
         struct mb2_tag *tag = (struct mb2_tag *)p;
@@ -129,9 +135,12 @@ void pmm_init(uint64_t mb_info_phys)
                 have_mmap = true;
             }
         }
-        if (tag->type == 3 && !mod_end) {          /* first module = root fs image */
-            mod_start = *(uint32_t *)(p + 8);
-            mod_end = *(uint32_t *)(p + 12);
+        if (tag->type == 3) {                      /* a module: the boot archive, or the root fs image */
+            uint64_t s = *(uint32_t *)(p + 8), e = *(uint32_t *)(p + 12);
+            if (!strcmp((const char *)p + 16, "boot_archive"))
+                arch_start = s, arch_end = e;
+            else if (!mod_end)                     /* ("rootfs", or the first other) */
+                mod_start = s, mod_end = e;
         }
         p += (tag->size + 7) & ~7;
     }
@@ -145,6 +154,11 @@ void pmm_init(uint64_t mb_info_phys)
     piece_cut(mb_info_phys, mb_info_phys + total);
     if (mod_end > mod_start)
         piece_cut(mod_start, mod_end);
+    if (arch_end > arch_start) {
+        piece_cut(arch_start, arch_end);
+        boot_archive_pa = arch_start;
+        boot_archive_size = arch_end - arch_start;
+    }
 
     /* RAM above 4 GiB joins the direct map before anything lives there. */
     for (int i = 0; i < npieces; i++)

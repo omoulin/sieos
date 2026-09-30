@@ -1,5 +1,9 @@
 /*
  * x509.h - X.509 certificates: DER parsing, chain and host-name checks.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef TLS_X509_H
 #define TLS_X509_H

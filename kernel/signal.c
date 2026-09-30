@@ -9,6 +9,10 @@
  * ignore; user handlers get an ABI v1 frame (sigreturn) or, when installed
  * through ABI v2, a Solaris ucontext + siginfo and return with
  * context(SETCONTEXT).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "abi2.h"

@@ -2,6 +2,10 @@
  * facet-network - Network Status: an interface (Tab or a click on it: the
  * next one), its traffic graph, and the sockets.
  * A Facet application (libfacet).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "common.h"
 

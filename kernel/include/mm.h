@@ -1,5 +1,9 @@
 /*
  * mm.h - Physical memory, virtual memory and kernel heap.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_MM_H
 #define SIEOS_MM_H
@@ -30,6 +34,7 @@
 
 /* pmm.c */
 void     pmm_init(uint64_t mb_info_phys);
+extern uint64_t boot_archive_pa, boot_archive_size;   /* the boot loader's "boot_archive" module (the drivers) */
 uint64_t pmm_alloc(void);                 /* zeroed 4K frame, 0 on failure */
 uint64_t pmm_alloc_contig(size_t npages); /* zeroed, physically contiguous */
 void     pmm_free(uint64_t pa);

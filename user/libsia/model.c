@@ -8,6 +8,10 @@
  *   https://NAME.services.ai.azure.com/...         Foundry model inference (any model)
  *   https://X.REGION.models.ai.azure.com           serverless deployment
  *   any full ".../chat/completions" URL            used as given
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "model.h"
 

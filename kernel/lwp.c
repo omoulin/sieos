@@ -1,6 +1,10 @@
 /*
  * lwp.c - ABI v2 lightweight-process calls: create/exit/wait, suspend,
  * park/unpark, the TLS pointer, user-mutex wait/wake and names.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "mm.h"

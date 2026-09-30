@@ -1,5 +1,9 @@
 /*
  * common.c - Pieces the desktop's applications share: the scroll bar.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "common.h"
 

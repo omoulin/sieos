@@ -1,6 +1,10 @@
 /*
  * common.h - The Facet desktop's applications (separate programs on
  * libfacet): shared definitions.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_APPS_COMMON_H
 #define FACET_APPS_COMMON_H

@@ -12,6 +12,10 @@
  * Job control follows the POSIX model: every pipeline runs in its own
  * process group; the foreground job owns the terminal (tcsetpgrp); ^Z
  * stops it, 'fg' / 'bg' continue it.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

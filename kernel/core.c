@@ -2,6 +2,10 @@
  * core.c - Core files (see abi/include/sieos/procfs.h): an ELF64 ET_CORE
  * image of a process killed by a core-action signal, written to "core" in
  * its working directory when RLIMIT_CORE allows it.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "mm.h"

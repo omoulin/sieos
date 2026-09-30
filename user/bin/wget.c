@@ -3,6 +3,10 @@
  *   wget [-q] [-O file|-] http://host[:port]/path     (host: a name, a.b.c.d or [IPv6])
  * Without -O the file is saved under the last path component
  * (index.html for "/").
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

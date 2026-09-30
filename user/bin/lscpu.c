@@ -1,4 +1,10 @@
-/* lscpu - show processors, what they are running and their load */
+/*
+ * lscpu - show processors, what they are running and their load
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include "sieos.h"
 
 static void cpuid(unsigned leaf, unsigned *a, unsigned *b, unsigned *c, unsigned *d)

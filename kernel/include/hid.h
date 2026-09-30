@@ -1,6 +1,10 @@
 /*
  * hid.h - HID keyboards and pointers (USB and I2C): report descriptors,
  * input reports, key repeat.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_HID_H
 #define SIEOS_HID_H

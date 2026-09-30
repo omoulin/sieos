@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
 """Compare user/tls primitives with Python's hashlib/hmac/cryptography on random inputs."""
 import hashlib, hmac, os, subprocess, sys
 from cryptography.hazmat.primitives import hashes

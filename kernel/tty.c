@@ -8,6 +8,10 @@
  * ^C, ^\ and ^Z send SIGINT, SIGQUIT and SIGTSTP to that group, and
  * background processes that read (or write with TOSTOP) get SIGTTIN /
  * SIGTTOU.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "tty.h"

@@ -1,6 +1,10 @@
 /*
  * cmdtools.c - Terminal commands as tools: one per program in /bin and
  * /sbin, plus sh (a full command line), cd and write_file.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "internal.h"
 

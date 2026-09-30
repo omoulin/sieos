@@ -6,6 +6,10 @@
  * replaces (and splits) its existing locks in the range.  All of a
  * process's locks on a file go when it closes any descriptor of that file.
  * F_SETLKW sleeps; a wait that would close a cycle fails with EDEADLK.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
 #include "proc.h"

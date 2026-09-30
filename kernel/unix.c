@@ -8,6 +8,10 @@
  * of the message that carried them, and a read stops at such a boundary so
  * the descriptors arrive with the first byte of their message.  A datagram
  * socket has a queue of messages.  Writers wait on the receiving socket.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "fs.h"

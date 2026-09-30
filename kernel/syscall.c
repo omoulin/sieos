@@ -1,7 +1,12 @@
 /*
  * syscall.c - Process, credential and information calls used by the ABI v2
  * dispatcher (syscall2.c), and helpers shared with it.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
+#include "power.h"
 #include "proc.h"
 #include "mm.h"
 #include "vm.h"
@@ -332,13 +337,11 @@ long system_halt(bool restart)
     vfs_sync();
     if (restart) {
         kprintf("Restarting system...\n");
-        while (inb(0x64) & 2)
-            ;
-        outb(0x64, 0xFE);
+        power_reset();           /* ACPI reset register, 0xCF9, the i8042, a triple fault */
     } else {
+        kprintf("Powering off...\n");
+        power_off();             /* ACPI S5 */
         kprintf("System halted. It is now safe to turn off the machine.\n");
-        outw(0x604, 0x2000);     /* QEMU / Bochs ACPI poweroff */
-        outw(0xB004, 0x2000);
     }
     cli();
     for (;;)

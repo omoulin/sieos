@@ -3,6 +3,10 @@
  * standard headers the programs use, and libsieos, the SIEOS extensions
  * (processor, memory and process tables, the network interface, the
  * framebuffer and input events) and a few shared helpers.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_H
 #define SIEOS_H
@@ -130,6 +134,12 @@ struct sockinfo {
 
 int netinfo(struct netinfo *ni);                /* eth0 */
 int netinfo_if(struct netinfo *ni, int index);  /* 0 eth0, 1 eth1, ...: -1 (ENODEV) past the last */
+struct sieos_netconfig;
+int netconfig(const struct sieos_netconfig *nc);  /* an interface's IPv4 settings: DHCP or static (root) */
+long wifi(int op, void *buf, long n);            /* the Wi-Fi device: SIEOS_WIFI_OP_* (sieos/sysinfo.h) */
+struct sieos_modinfo;
+int modinfo(struct sieos_modinfo *mi, int index);   /* the index'th driver known: -1 (ENOENT) past the last */
+int modload(const char *path);                      /* load a driver file (root) */
 struct sieos_devinfo;
 int devinfo(struct sieos_devinfo *d, int index);  /* the index'th device (PCI function): -1 (ENODEV) past the last */
 int netstat(struct sockinfo *buf, int max);     /* sockets filled, -1 */

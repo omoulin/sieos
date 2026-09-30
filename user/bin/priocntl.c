@@ -6,6 +6,10 @@
  *   priocntl -e -c class [-p pri] [-m uprilim] [-t ms] command [arg...]
  * Classes: TS (time sharing, -p/-m -60..60), FX (fixed, 0..60), RT (real
  * time, -p 0..59, root only; -t the quantum in ms, 0 for none).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 #include "sieos/syscall.h"

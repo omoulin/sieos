@@ -1,5 +1,9 @@
 /*
  * kernel.h - Core kernel types and helpers.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_KERNEL_H
 #define SIEOS_KERNEL_H
@@ -93,6 +97,12 @@ int64_t  realtime_ns(void);   /* ns since the epoch */
 void     realtime_set(int64_t ns);
 int64_t  realtime_adjust(int64_t delta_ns, bool set);
 extern uint64_t tsc_hz;
+extern bool pit_ok;                  /* the PIT counts (some platforms gate it off) */
+size_t klog_size(void);              /* printk.c: the kernel's messages kept (/proc/msgbuf) */
+long klog_read(void *dst, uint64_t off, size_t n);
+struct trapframe;
+void timer_lapic_tick(struct trapframe *tf);
+const char *timer_tsc_source(void);  /* what the TSC was calibrated against */
 
 /* Port I/O */
 static inline void outb(uint16_t port, uint8_t v) { __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(port)); }

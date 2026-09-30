@@ -4,6 +4,10 @@
  * kernel's IPv4 and IPv6 sockets.  sockaddr_in has the same layout in both
  * ABIs; AF_INET6 and sockaddr_in6 are the Solaris ones.
  * AF_UNIX sockets are in unix.c.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "fs.h"
@@ -224,6 +228,9 @@ static long do_getsockopt(long fd, long level, long name, void *val, unsigned in
             iv = type_from_k(t);
             break;
         case SIEOS_SO_ERROR:
+            socket_kopt(fd, 6, false, &iv);
+            iv = iv ? sieos_errno(iv) : 0;
+            break;
         case SIEOS_SO_REUSEADDR:
         case SIEOS_SO_KEEPALIVE:
         case SIEOS_SO_BROADCAST:

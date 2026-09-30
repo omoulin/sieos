@@ -1,3 +1,10 @@
+/*
+ * cxx_misc.cc
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 // regex, format, chrono, random, optional/variant/any, function, smart pointers, static objects.
 #include "check.h"
 #include <any>

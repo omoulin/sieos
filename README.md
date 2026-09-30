@@ -23,30 +23,67 @@ away.
 
 ## Build and run
 
-Requirements (Ubuntu/Debian): `gcc g++ binutils make python3 curl grub-pc-bin
-grub-efi-amd64-bin xorriso dosfstools e2fsprogs qemu-system-x86 ovmf`.
+Requirements (Debian 13 or Ubuntu):
+
+```sh
+sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-amd64-bin \
+                 xorriso e2fsprogs qemu-system-x86 ovmf
+```
+
+- **KVM:** the build boots SIEOS in QEMU once, to compile ksh93 on SIEOS itself. With
+  access to `/dev/kvm` (the `kvm` group, or the desktop session's access) this takes a
+  few minutes; without it QEMU emulates the CPU, which is much slower.
+- **Wi-Fi firmware** (optional): the AX201 firmware is copied from the build host's
+  `/lib/firmware`: `firmware-iwlwifi` on Debian (from `non-free-firmware`),
+  `linux-firmware` on Ubuntu.
+- **Web browser libraries** (optional, `make netsurf-libs`): `bison flex gperf pkg-config`.
+- `mkfs.ext4`, `debugfs` and `e2fsck` are in `/usr/sbin`, which a Debian user's `PATH`
+  lacks; the Makefile adds it, so `make` needs no root and no `PATH` change.
 
 The kernel is built by the host gcc in freestanding mode. The user programs are built
 by an `x86_64-pc-sieos` cross compiler (GCC 15.2, binutils 2.45) against the C library
-(musl 1.2.5 adapted to SIEOS). The first `make` downloads the pinned GCC, binutils,
-GMP, MPFR and MPC releases (checked by SHA-256) and builds the cross toolchain into
-`build/cross`, which takes a while; later builds reuse it.
+(musl 1.2.5 adapted to SIEOS). The first `make` builds everything from pinned release
+tarballs, each checked against its SHA-256 (`ports/SHA256SUMS`, and
+`toolchain/sieos-toolchain.py` for the toolchain):
+
+1. the cross toolchain, into `build/cross`;
+2. the C library, libsieos, libfacet, libsia, the programs and the drivers;
+3. the GNU utilities, dash and e2fsprogs, cross-compiled;
+4. the native toolchain (binutils and GCC hosted on SIEOS, into `build/native`);
+5. ksh93, compiled on SIEOS itself under QEMU (`tools/nativebuild.py`);
+6. the ISO, the root file system and the disk.
+
+A clean build took about 20 minutes on a 28-core machine with KVM, most of it
+compiling GCC (twice: cross and native), so expect longer on fewer cores; later builds
+reuse it all. Downloads (`tools/fetch.sh`) give up on a stalled
+server after a minute, and a GNU tarball that ftp.gnu.org does not serve is fetched
+through the `ftpmirror.gnu.org` mirrors.
 
 ```sh
-make            # build/sieos.iso (BIOS + UEFI) and build/disk.img (the cross toolchain first)
-make native     # GCC and binutils for SIEOS itself; then 'make newdisk' puts them on the disk
+make            # build/sieos.iso (BIOS + UEFI) and build/disk.img, toolchains included
 make run        # BIOS boot, 4 CPUs, e1000 network, persistent disk, QEMU window + serial here
 make run SMP=8  # any CPU count up to 16
 make run-uefi   # the same through UEFI firmware (OVMF)
 make run-nox    # serial console only (no window)
 make run-iso    # the ISO alone: root fs is a RAM disk shipped on the ISO
+make usb        # build/sieos-usb.img, to write to a USB drive for a real PC
+make run-usb    # boot sieos-usb.img in QEMU (UEFI) as a USB drive
 make fsck       # check build/disk.img with e2fsck
 make newdisk    # reset build/disk.img to the pristine root file system
+make drivers    # the loadable drivers (build/drv/*.drv) and the boot archive
+make clean      # remove build/
 ```
 
-The guest gets 1 GiB of memory (`make run MEM=2G` for more). With `make native` done, the
-disk carries `gcc`, `g++`, `as`, `ld` and the other binutils, the C and C++ headers and
-libraries, and `sieos.h`/`libsieos.a`, so programs can be compiled on SIEOS itself:
+To write the USB image to a drive (all its data is lost; `/dev/sdX` is the drive itself,
+see `lsblk`, not a partition):
+
+```sh
+sudo dd if=build/sieos-usb.img of=/dev/sdX bs=4M conv=fsync status=progress
+```
+
+The guest gets 1 GiB of memory (`make run MEM=2G` for more). The disk carries `gcc`,
+`g++`, `as`, `ld` and the other binutils, the C and C++ headers and libraries, and
+`sieos.h`/`libsieos.a`, so programs can be compiled on SIEOS itself:
 
 ```sh
 gcc -O2 -o hello hello.c           # dynamically linked against /usr/lib/libc.so
@@ -71,6 +108,12 @@ IPv6 works too: QEMU advertises the prefix `fec0::/64`, so the guest configures
 `fec0::5054:ff:fe12:3456` itself, and the host's `::1` is reachable as `fec0::2`
 (for example `wget http://[fec0::2]:8000/` against `python3 -m http.server --bind ::1`).
 
+To install SIEOS on a computer's disk, boot it from the USB drive (`make usb`), log in and
+choose **Install SIEOS** in the SIEOS menu: pick the disk (all its data is erased),
+confirm, give root's password, and restart without the USB drive. The installed system
+boots through UEFI. `sieinstall` does the same from a shell (`sieinstall -l` lists the
+disks).
+
 The same ISO boots on legacy BIOS (El Torito, GRUB i386-pc) and on UEFI
 (EFI system partition with GRUB x86_64-efi). It also carries a GPT/MBR hybrid,
 so it can be written to a USB stick.
@@ -80,8 +123,10 @@ so it can be written to a USB stick.
 | Area        | Implementation |
 |-------------|----------------|
 | Boot        | GRUB multiboot2 → 32-bit stub builds page tables → long mode → higher-half kernel. Works on BIOS and UEFI. |
-| Console     | VGA text mode, or a GOP/VBE linear framebuffer with an 8x16 font. Both handle ANSI colours and are mirrored to COM1. PS/2 keyboard. |
-| Input       | PS/2 keyboard and mouse; USB keyboards, mice and tablets on every xHCI controller (the chipset's and Thunderbolt ones), directly or through USB 2 hubs, plugged in at any time; HID-over-I2C touchpads and keyboards on the Intel LPSS I2C controllers (Raptor Lake, Ice Lake, Tiger/Alder/Meteor/Arrow Lake), found through the ACPI tables. Boot options `nousb`, `noi2c`, `usbdebug`, `i2cdebug`. |
+| Drivers     | Loadable: each driver is an ELF relocatable object (`/drv/NAME.drv`) that the kernel links against its own symbol table when a device matches the driver's aliases (`pciVVVV,DDDD`, `pciclass,CCSSPP`). GRUB loads a boot archive of them with the kernel, for the devices needed before the root is mounted, as Solaris does. `modinfo` and `modload`; a driver development kit in `/usr/include/ddk` and `/usr/share/ddk`. |
+| Console     | VGA text mode, or a GOP/VBE linear framebuffer with an 8x16 font. Both handle ANSI colours and are mirrored to COM1. The kernel's messages are kept for `dmesg`. |
+| Display     | QEMU's standard VGA (Bochs VBE), and Intel integrated graphics with its own mode setting (display versions 11 to 14: Ice Lake, Raptor Lake-S, Arrow Lake-P); the screen's resolution is chosen in Settings. |
+| Input       | PS/2 keyboard and mouse (i8042); USB keyboards, mice and tablets on every xHCI controller (the chipset's and Thunderbolt ones), directly or through USB 2 hubs, plugged in at any time; HID-over-I2C touchpads and keyboards on the Intel LPSS I2C controllers (Raptor Lake, Ice Lake, Tiger/Alder/Meteor/Arrow Lake), found through the ACPI tables. Boot options `nousb`, `noi2c`, `usbdebug`, `i2cdebug`. |
 | SMP         | CPUs found through the ACPI MADT and started with INIT-SIPI-SIPI via a real-mode trampoline. Per-CPU GDT/TSS/idle process reached through `%gs` (`swapgs`). Local APIC timers preempt on every CPU, and idle CPUs are woken by reschedule IPIs. A big kernel lock serialises kernel code while user processes run in parallel. |
 | Memory      | Bitmap frame allocator over all RAM (up to 256 GiB), 4-level paging with a per-process address space, direct map of physical memory, kernel heap. |
 | System calls | ABI v2, Solaris-inspired (Solaris errno values, signal numbers, flags and structure layouts), entered with the `syscall` instruction; specified in [`docs/abi-v2.md`](docs/abi-v2.md) and `abi/include/sieos/`. |
@@ -93,7 +138,9 @@ so it can be written to a USB stick.
 | Terminal    | termios with canonical and raw modes, `ECHO` (used for password prompts), and editable control characters. |
 | Users       | Real, effective and saved uid/gid plus supplementary groups; `setuid`, `seteuid`, `setgid`, `setgroups`; `umask`; `access`. |
 | Permissions | Owner/group/other `rwx` checks on every open, exec and directory search. Creating or removing files needs write+search on the directory. Sticky directories (`/tmp`) restrict deletion. The superuser bypasses checks. `chown` is restricted to root, as in Solaris's `rstchown`, and a non-root `chown` clears the set-ID bits. |
-| Network     | PCI enumeration; interrupt-driven Intel e1000 and virtio-net drivers, with any number of cards as eth0, eth1, ... (each with its own addresses, DHCP and IPv6, and routes chosen per destination). Ethernet, ARP (with a queue for packets awaiting resolution), IPv4 routing through a gateway, loopback (127.0.0.0/8), ICMP echo, UDP, **TCP** and a **DHCP** client at boot. **IPv6**: neighbor discovery, stateless address autoconfiguration from router advertisements (with MTU and RDNSS), ICMPv6 echo, `::1`, and TCP and UDP over IPv6; `AF_INET6` sockets are dual-stack (IPv4-mapped peers) unless `IPV6_V6ONLY`. TCP covers the three-way handshake, MSS and window scaling, flow control, out-of-order reassembly, NewReno congestion control, RTT-based retransmission with backoff, zero-window probes, FIN/RST, TIME_WAIT and listen/accept backlogs. The **BSD sockets** API integrates with `read`/`write`/`poll`. Ports below 1024 and raw sockets require root. |
+| Network     | PCI enumeration; interrupt-driven Intel e1000 and virtio-net drivers, USB Ethernet adapters (CDC ECM and NCM, such as the Realtek RTL8153 ones, plugged in at any time), with any number of cards as eth0, eth1, ... (each with its own addresses, DHCP and IPv6, and routes chosen per destination). Ethernet, ARP (with a queue for packets awaiting resolution), IPv4 routing through a gateway, loopback (127.0.0.0/8), ICMP echo, UDP, **TCP** and a **DHCP** client at boot. **IPv6**: neighbor discovery, stateless address autoconfiguration from router advertisements (with MTU and RDNSS), ICMPv6 echo, `::1`, and TCP and UDP over IPv6; `AF_INET6` sockets are dual-stack (IPv4-mapped peers) unless `IPV6_V6ONLY`. TCP covers the three-way handshake, MSS and window scaling, flow control, out-of-order reassembly, NewReno congestion control, RTT-based retransmission with backoff, zero-window probes, FIN/RST, TIME_WAIT and listen/accept backlogs. The **BSD sockets** API integrates with `read`/`write`/`poll`, including non-blocking `connect` (`EINPROGRESS`, then `poll` and `SO_ERROR`). Ports below 1024 and raw sockets require root. **Wi-Fi**: Intel Wi-Fi 6 AX201 (Intel's firmware), scanning and WPA2-Personal, with `dladm`. |
+| Power       | ACPI power-off (S5) and restart (reset register, 0xCF9), the power button; MWAIT idle states, Intel HWP or P-states with performance/balanced/power-saver policies, per-core and package temperatures (Intel DTS, AMD), passive cooling and a critical shutdown, desktop fan speeds (Nuvoton, ITE); `poweradm` and the Power and Temperature window. |
+| Disks       | ATA (bus-master DMA) and NVMe disks, GPT and MBR partitions (`/dev/dsk/c4t0d0s1`), a RAM disk from the ISO, lofi devices; `root=` on the boot command line picks the root partition. |
 | Files       | ext4 read/write (see below), tmpfs (`/tmp`, `/dev/shm`), pipes and named FIFOs, `AF_UNIX` sockets (with descriptor passing), pseudo-terminals, `poll()`, record locks, and device nodes `/dev/console`, `/dev/tty`, `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/fb0` and `/dev/events` stored as real ext4 character-special inodes. |
 | Random      | `/dev/random` and `/dev/urandom` never block. They output a ChaCha20 keystream that is rekeyed after every read, from a pool fed by interrupt timing, the RTC and RDSEED/RDRAND when the CPU has them. |
 | TLS         | A TLS 1.3 client in user space (`user/tls`): X25519 and P-256 key exchange, AES-128/256-GCM, RSA-PSS/PKCS #1 and ECDSA (P-256, P-384) signatures, X.509 chain and host-name validation against `/etc/ssl/certs.pem` (the Mozilla roots), plus optional site roots in `/etc/ssl/local.pem`, and session resumption with tickets. |
@@ -114,7 +161,12 @@ The programs are C programs on the C library, linked dynamically; `libsieos`
   `wget`, `httpd` (web server with directory listings), `netstat`. The resolver uses
   `/etc/hosts` and then DNS.
 - **System:** `ps` (with CPU column), `lscpu`, `nproc`, `kill`, `free`, `df`, `mount`, `umount`,
-  `lofiadm`, `priocntl`, `getconf`, `uname`, `date`, `uptime`, `sleep`, `sync`, `clear`, `sifetch`, `halt`, `reboot`.
+  `lofiadm`, `priocntl`, `getconf`, `uname`, `date`, `uptime`, `sleep`, `sync`, `clear`, `sifetch`,
+  `dmesg`, `poweradm` (power policy, temperatures, fans), `halt`, `reboot`.
+- **Drivers and devices:** `lidev` (each PCI function and its driver), `modinfo`, `modload`,
+  `dladm` (`show-link`, `scan-wifi`, `connect-wifi`; the WPA2 passphrase is kept in the
+  root-only `/etc/wifi.conf` and the network rejoined at boot), `fbset`.
+- **Installation:** `sieinstall` (the installer, also in Facet).
 - **GNU utilities** in `/usr/gnu/bin`, as on Solaris 11: coreutils, sed, grep, diffutils,
   findutils, gawk, make (also `/usr/bin/make`), tar and gzip.
 - **Development** (with `make native`): `gcc`, `g++`, `cpp`, `as`, `ld`, `ar`, `nm`, `objdump`, `readelf`, `strip` and the other binutils.
@@ -155,8 +207,9 @@ TrueType fonts rendered anti-aliased by libfacet at any size. The terminal zooms
 Ctrl and + or -.
 
 Facet is a window manager and window server. Its applications (`facet-terminal`,
-`facet-files`, `facet-viewer`, `facet-monitor`, `facet-network`, `facet-clock`,
-`facet-about`, `facet-message`) are separate programs built on **libfacet**. Programs of
+`facet-files`, `facet-viewer`, `facet-monitor`, `facet-network`, `facet-power`,
+`facet-settings`, `facet-installer`, `facet-clock`, `facet-about`, `facet-message`) are
+separate programs built on **libfacet**. Programs of
 your own can be too, and can ask the model through **libsia** without handling the
 connection. [docs/sdk.md](docs/sdk.md) explains both. The headers and libraries are
 installed for the cross compiler and for SIEOS's own `cc`, with examples in
@@ -190,8 +243,13 @@ installed for the cross compiler and for SIEOS's own `cc`, with examples in
   - Alt+Tab: next window;
   - Alt+F4: close.
 - **Applications:** Terminal (sia, or the plain shell), Files and Viewer, System Monitor,
-  **Network Status** (addresses, a live traffic graph and open sockets), Clock and About.
-  All of them use the dark theme.
+  **Network Status** (addresses, a live traffic graph and open sockets), **Power and
+  Temperature**, **Settings** (display resolution, appearance and the other desktop
+  settings, one page per section), **Install SIEOS**, Clock and About. All of them follow
+  the current skin.
+- **Screen saver and lock:** after the idle time set in Settings (5 minutes by default,
+  or never) the screen goes black; the lock then asks for the user's password (checked
+  by `ckpw`).
 
 The drawing library (`gfx.c`) now includes alpha blending, antialiased rounded rectangles
 and soft shadows, all in integer arithmetic.
@@ -246,12 +304,8 @@ programs use it:
     (typed hidden), and stores them in `~/.sia/config` (mode 0600). Accepted endpoints are
     `https://NAME.openai.azure.com/`, `https://NAME.services.ai.azure.com/`, a serverless
     `https://X.REGION.models.ai.azure.com`, or a full `.../chat/completions` URL.
-  - **Pre-registered model.** If an `ai.config` file sits at the top of the source tree
-    when you build, `make` writes its settings into `~/.sia/config` for root and user. It
-    can hold `key=value` lines, `key: value` lines or JSON, and the build never prints the
-    values. Use `make AI_CONFIG=path` to use another file, and `make newdisk` to put the
-    settings on an existing `disk.img`. `ai.config` is in `.gitignore`. The key ends up
-    inside `rootfs.img`, `disk.img` and `sieos.iso`, so treat those images as secret too.
+    **Settings > Assistant** edits the same settings.
+  - No image carries a model connection or a key: every user enters their own in SIEOS.
   - Without a model, or if it can't be reached, terminals start the standard shell.
     `sia --setup` reconfigures and `sia --off` unregisters.
 - **Safety.**
@@ -280,14 +334,33 @@ user@sieos:~$ jobs
 user@sieos:~$ bg %2 ; kill %1 ; fg %2
 ```
 
+## Web browser (in progress)
+
+SIEOS is getting a web browser: [NetSurf](https://www.netsurf-browser.org/) 3.11 on its
+framebuffer library (libnsfb), which will draw into a Facet window. Built so far, into a
+staging root (`build/ports/netlibs/usr`) and not yet on the disk:
+
+```sh
+make netlibs        # zlib, libpng, libjpeg, expat, FreeType, Mbed TLS and curl (ports/netlibs.py)
+make netsurf-libs   # NetSurf's own libraries (libcss, libdom, libhubbub, libnsfb, ...) and nsgenbind
+```
+
+curl fetches over HTTP and HTTPS on SIEOS (certificates checked against
+`/etc/ssl/certs.pem`), and the HTML parser and libnsfb behave as on Linux. Still to come:
+libnsfb's Facet surface, NetSurf itself, and the mouse wheel, Unicode text input and a
+clipboard in Facet.
+
 ## Limitations
 
 - ext4 journaling covers metadata (data=ordered). Changes are committed within five
   seconds and at `sync`, so a power cut loses at most those seconds, never consistency.
-- The desktop renders in software, with an 8x16 bitmap font only.
+- The desktop renders in software (no GPU acceleration).
 - Network: no IPv6 privacy addresses or path MTU discovery, and no TCP SACK or timestamps.
-- TLS: server certificates must be RSA (ECDSA chains are rejected); there is no
-  session resumption. sia sends one request per connection and doesn't stream.
+- TLS: `libtls` speaks TLS 1.3 only (a server limited to TLS 1.2 is refused); the ported
+  curl (below) uses Mbed TLS, which also speaks TLS 1.2.
+- The C library has `eventfd()`, but the kernel has no `eventfd2` system call yet: it
+  fails with `ENOSYS` (ports must be configured without it, as curl is).
+- No web browser yet (see below).
 - SMP uses a big kernel lock. User code, page faults and simple system calls run in
   parallel across CPUs, and disk I/O releases the lock while it waits; the rest of the
   kernel does not run in parallel. Device interrupts go to the
@@ -297,6 +370,12 @@ user@sieos:~$ bg %2 ; kill %1 ; fg %2
 
 ```
 kernel/          kernel sources and include/
+drv/             the loadable drivers, one directory each (built into build/drv/NAME.drv)
+abi/include/     the system-call ABI v2 headers (sieos/*.h), shared by the kernel and libc
+libc/            musl 1.2.5 and its port to SIEOS (sieos-port.py), with libc-test
+toolchain/       the x86_64-pc-sieos GCC/binutils target (cross and native) and its tests
+ports/           third-party software: build scripts, SHA256SUMS, Wi-Fi firmware licence
+docs/            ABI v2 specification, SDK guide, logo
 user/libsieos/   SIEOS extensions and helpers over the C library (user/include/sieos.h)
 user/bin/        user programs
 user/facet/      the Facet desktop: window manager, window server, launcher, desktop channel
@@ -308,10 +387,12 @@ user/tls/        libtls: TLS 1.3 client and cryptography (SHA-2, HKDF, AES-GCM, 
 user/libsia/     libsia: the assistant library (JSON, HTTP, Azure AI Foundry client, engine, tools;
                  include/sia/sia.h is the interface for applications)
 user/sia/        sia (terminal) and sia-agent (headless, for the Facet strip) on libsia
-rootfs/          files copied into the root file system (/etc, /home, /root)
-tools/           ISO/FAT/shadow/permission build helpers, font converter
-iso/boot/grub/   GRUB configuration
-build/           output: kernel.elf, sieos.iso, rootfs.img, disk.img
+rootfs/          files copied into the root file system (/etc, /home, /root, /usr/share)
+tools/           build helpers: ISO, FAT, kernel symbols, shadow, permissions, downloads,
+                 building on SIEOS under QEMU (nativebuild.py), host-side tests
+iso/boot/grub/   GRUB configuration (the ISO's, and the installed system's)
+build/           output (ignored by git): kernel.elf, sieos.iso, disk.img, sieos-usb.img,
+                 cross/ and native/ (toolchains), sysroot/, ports/
 ```
 
 ## Credits
@@ -326,6 +407,12 @@ Third-party components:
 
 - **GRUB 2** (GPLv3) is the bootloader. It is placed on the ISO as a separate
   program and not linked into SIEOS.
+- **Ported software**, built from unmodified release tarballs (with patches applied at
+  build time where SIEOS needs them): the C library (musl), GCC and binutils, ksh93, dash,
+  the GNU utilities, e2fsprogs, and for the browser zlib, libpng, libjpeg, expat, FreeType,
+  Mbed TLS, curl and NetSurf's libraries. Each keeps its own licence.
+- **Intel's Wi-Fi firmware** is copied from the build host's linux-firmware, under its
+  licence (`ports/firmware/LICENCE.iwlwifi_firmware`).
 - **Font:** `kernel/font8x16.c` is generated by `tools/psf2c.py` from
   `Lat15-VGA16.psf.gz` in the console-setup package. That package's copyright
   file states that the console fonts are in the public domain.

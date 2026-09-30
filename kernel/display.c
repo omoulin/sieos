@@ -12,6 +12,10 @@
  * the display can scan out, write-combining; while it does, it owns the
  * display: the console stops drawing there, and only the owner may change
  * the mode.  When the owner exits, the console repaints.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "display.h"
 #include "vm.h"
@@ -89,7 +93,7 @@ void display_mode_changed(struct display *d)
 
 /* Number the displays by kind (a stable sort: each kind keeps the probe
  * order) and put the console on display 0.  Before any process opens one. */
-static void order_displays(void)
+void display_order(void)
 {
     for (int i = 1; i < ndisplays; i++)
         for (int k = i; k > 0 && displays[k].ops->kind < displays[k - 1].ops->kind; k--) {
@@ -125,9 +129,7 @@ void display_init(void)
             console_fb_remap(d->fb);            /* write-combining from now on */
         }
     }
-    intel_probe();                              /* the physical cards first */
-    bochs_probe();
-    order_displays();
+    /* (then the displays' drivers, loaded with the console: modules_attach(DDI_PHASE_DISPLAY), display_order) */
 }
 
 /* ------------------------------------------------------------------ */

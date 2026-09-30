@@ -22,6 +22,10 @@
  *   -> {"op":"windows"}   {"op":"focus","id":N}   {"op":"close","id":N}
  *   -> {"op":"workspace","n":1..4}   {"op":"move","id":N,"workspace":1..4}
  *   <- {"ok":true,"result":"..."}  or  {"ok":false,"error":"..."}
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef LIBSIA_H
 #define LIBSIA_H

@@ -5,6 +5,10 @@
  * AF_INET6 sockets are dual-stack unless IPV6_V6ONLY is set: they talk IPv4
  * too, with IPv4 addresses mapped (::ffff:a.b.c.d).  Unbound AF_INET
  * sockets have the local address 0.0.0.0 (mapped), AF_INET6 ones ::.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "net.h"
 #include "proc.h"
@@ -315,8 +319,14 @@ bool socket_readable(struct socket *s)
 bool socket_writable(struct socket *s)
 {
     if (s->type == SOCK_STREAM)
-        return s->tcb && tcp_writable(s->tcb);
+        return s->tcb && (tcp_writable(s->tcb) || socket_failed(s));
     return true;
+}
+
+/* A stream socket with an error pending (a connect that failed): POLLERR */
+bool socket_failed(struct socket *s)
+{
+    return s->type == SOCK_STREAM && s->tcb && tcp_error(s->tcb);
 }
 
 /* ------------------------------------------------------------------ */
@@ -562,8 +572,12 @@ static long sys_connect(int fd, const void *ua, unsigned int len)
         }
         return 0;
     }
-    if (s->tcb)
-        return -EISCONN;
+    if (s->tcb) {                                /* again, after a non-blocking one */
+        if (tcp_connecting(s->tcb))
+            return -EALREADY;
+        int e = tcp_take_error(s->tcb);
+        return e ? -e : -EISCONN;
+    }
     naddr_t lip = na_any(&s->lip) ? net_source(&ip) : s->lip;
     if (!net_reachable(&ip) || (!na_is_v4(&ip) && na_zero(&lip)))
         return -ENETUNREACH;
@@ -575,8 +589,8 @@ static long sys_connect(int fd, const void *ua, unsigned int len)
     if (!s->tcb)
         return -ENOBUFS;
     tcp_set_owner(s->tcb, s);
-    r = tcp_connect(s->tcb, &lip, s->lport, &ip, port);
-    if (r < 0) {
+    r = tcp_connect(s->tcb, &lip, s->lport, &ip, port, current->ofile[fd]->flags & O_NONBLOCK_K);
+    if (r < 0 && r != -EINPROGRESS) {
         tcp_set_owner(s->tcb, NULL);
         tcp_abort(s->tcb);
         s->tcb = NULL;
@@ -586,7 +600,7 @@ static long sys_connect(int fd, const void *ua, unsigned int len)
     s->rip = ip;
     s->rport = port;
     s->connected = true;
-    return 0;
+    return r;
 }
 
 static long sys_sendto(int fd, const void *buf, size_t n, int flags, const void *ua, unsigned int alen)
@@ -724,6 +738,9 @@ long socket_kopt(int fd, int which, bool set, int *val)
         return 0;
     case 5:
         *val = s->family;
+        return 0;
+    case 6:                                      /* SO_ERROR (ABI v1 errno), cleared */
+        *val = s->type == SOCK_STREAM && s->tcb ? tcp_take_error(s->tcb) : 0;
         return 0;
     }
     return -EINVAL;

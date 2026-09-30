@@ -1,6 +1,10 @@
 /*
  * head - print the first lines of files
  *   head [-n N | -N] [-c N] [file...]    (several files: a "==> name <==" header each)
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

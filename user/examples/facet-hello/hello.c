@@ -3,6 +3,10 @@
  * greeting, a button that counts clicks, and a key that closes it.
  *
  *   cc hello.c -lfacet -o hello && ./hello        (in a Facet terminal)
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include <stdio.h>
 #include <facet/facet.h>

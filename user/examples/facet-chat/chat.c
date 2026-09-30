@@ -7,6 +7,10 @@
  * answer appears as it is written.
  *
  *   cc chat.c -lfacet -lsia -o chat && ./chat      (in a Facet terminal)
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include <stdio.h>
 #include <stdlib.h>

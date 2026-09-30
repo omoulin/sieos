@@ -5,6 +5,10 @@
  * directory (the cwd, or the directory of an *at() call).  Mount points are
  * crossed in both directions, ".." never climbs above the process root, and
  * symbolic links are followed (at most MAXSYMLINKS per lookup: ELOOP).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
 #include "proc.h"

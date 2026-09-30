@@ -1,5 +1,9 @@
 /*
  * gdt.c - Per-CPU Global Descriptor Table and Task State Segment.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "arch.h"
 #include "smp.h"

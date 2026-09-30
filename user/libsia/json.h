@@ -1,5 +1,9 @@
 /*
  * json.h - JSON values (RFC 8259) and a growable string buffer.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIA_JSON_H
 #define SIA_JSON_H

@@ -4,6 +4,10 @@
  * (sieos/ipc.h).  Identifiers are slot + generation * NSLOT, so a removed
  * object's id stops working.  Semaphore SEM_UNDO adjustments are applied
  * when the process exits.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "mm.h"

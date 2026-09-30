@@ -9,6 +9,10 @@
  * displays are numbered by kind: the physical cards' first, then virtual
  * ones (QEMU's), then a firmware framebuffer no driver took; the text
  * console moves to display 0 (/dev/fb0, the desktop's).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_DISPLAY_H
 #define SIEOS_DISPLAY_H
@@ -72,7 +76,6 @@ long sys_fbmap(int fd);
 void fb_release_owner(int pid);
 
 /* drivers */
-void bochs_probe(void);
-void intel_probe(void);
+void display_order(void);               /* after the displays' drivers: the console's display chosen */
 
 #endif

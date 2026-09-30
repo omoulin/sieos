@@ -180,6 +180,10 @@
 #define SIEOS_SYS_netinfo6       206   /* netinfo6(sieos_netinfo6 *, int index) */
 #define SIEOS_SYS_netstat6       207   /* netstat6(sieos_sockinfo6 *, max) - IPv4 and IPv6 sockets */
 #define SIEOS_SYS_devinfo        208   /* devinfo(sieos_devinfo *, int index): ENODEV past the last */
+#define SIEOS_SYS_netconfig      209   /* netconfig(const sieos_netconfig *): an interface's IPv4 settings (root) */
+#define SIEOS_SYS_wifi           210   /* wifi(int op, void *buf, long n): the Wi-Fi device (SIEOS_WIFI_OP_*) */
+#define SIEOS_SYS_modinfo        211   /* modinfo(sieos_modinfo *, int index): the drivers known; ENOENT past the last */
+#define SIEOS_SYS_modload        212   /* modload(const char *path): load a driver (root) */
 
 #define SIEOS_NSYSCALLS          256
 

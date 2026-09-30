@@ -3,6 +3,10 @@
  * high-resolution time, interval timers, times, stime/adjtime, resource
  * limits and usage, pollsys, sysconfig, uadmin, and the processor calls
  * (processor_info, p_online, processor_bind, getloadavg).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "jbd2.h"

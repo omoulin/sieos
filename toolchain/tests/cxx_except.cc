@@ -1,3 +1,10 @@
+/*
+ * cxx_except.cc
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 // Exceptions: unwinding through frames, rethrow, exception_ptr, bad_alloc, nested, destructors run.
 #include "check.h"
 #include <exception>

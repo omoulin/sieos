@@ -11,6 +11,10 @@
  *   RT  real time, 100-159 (rt_pri 0-59 + 100), 100 ms quantum by default, or
  *       none; only root may enter it.
  * A woken LWP that outranks the LWP running on a CPU preempts it.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "smp.h"

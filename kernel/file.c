@@ -1,7 +1,12 @@
 /*
  * file.c - Open file objects shared between file descriptors.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "fs.h"
+#include "blkdev.h"
 #include "mm.h"
 #include "tty.h"
 #include "poll.h"
@@ -175,6 +180,12 @@ long file_read(struct file *f, void *buf, size_t n)
     case FD_RANDOM:
         random_bytes(buf, n);
         return n;
+    case FD_BLK: {
+        long r = blk_file_io(f->minor, f->off, buf, n, false);
+        if (r > 0)
+            f->off += r;
+        return r;
+    }
     case FD_INODE: {
         if (S_ISDIR(inode_mode(f->ip)))
             return -EISDIR;
@@ -210,6 +221,12 @@ long file_write(struct file *f, const void *buf, size_t n)
     case FD_NULL:
     case FD_ZERO:
         return n;
+    case FD_BLK: {
+        long r = blk_file_io(f->minor, f->off, (void *)buf, n, true);
+        if (r > 0)
+            f->off += r;
+        return r;
+    }
     case FD_RANDOM:                       /* writes stir the pool */
         for (size_t i = 0; i + 8 <= n; i += 8)
             random_add_entropy(*(const uint64_t *)((const uint8_t *)buf + i));
@@ -233,6 +250,8 @@ long file_pread(struct file *f, void *buf, size_t n, uint64_t off)
 {
     if ((f->flags & O_ACCMODE) == O_WRONLY)
         return -EBADF;
+    if (f->type == FD_BLK)
+        return blk_file_io(f->minor, off, buf, n, false);
     if (f->type != FD_INODE || !f->ip)
         return -ESPIPE;
     if (S_ISDIR(inode_mode(f->ip)))
@@ -246,6 +265,8 @@ long file_pwrite(struct file *f, const void *buf, size_t n, uint64_t off)
 {
     if ((f->flags & O_ACCMODE) == O_RDONLY)
         return -EBADF;
+    if (f->type == FD_BLK)
+        return blk_file_io(f->minor, off, (void *)buf, n, true);
     if (f->type != FD_INODE || !f->ip || S_ISCHR(inode_mode(f->ip)))
         return -ESPIPE;
     long e = fsize_check(f, off, &n);

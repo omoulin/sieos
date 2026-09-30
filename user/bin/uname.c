@@ -2,6 +2,10 @@
  * uname - print system information
  *   -s system  -n node  -r release  -v version  -m machine  -p processor
  *   -i platform  -a all (-snrvmpi); no option: -s
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 #include <sys/systeminfo.h>

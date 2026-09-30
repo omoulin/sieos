@@ -2,6 +2,10 @@
  * inet.c - libsieos: IPv4 helpers and host name resolution (/etc/hosts,
  * then an A query to the DNS server the interface was configured with), and
  * resolve_addrs for IPv4 and IPv6 (getaddrinfo first).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 #include <netdb.h>

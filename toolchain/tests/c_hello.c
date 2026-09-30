@@ -1,4 +1,10 @@
-/* A C program built by x86_64-pc-sieos-gcc: stdio, math, TLS, the static-PIE variant too. */
+/*
+ * A C program built by x86_64-pc-sieos-gcc: stdio, math, TLS, the static-PIE variant too.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>

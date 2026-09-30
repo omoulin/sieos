@@ -1,15 +1,19 @@
 /*
- * i2c-hid-test.c - host test of the HID-over-I2C driver (kernel/i2c_hid.c)
+ * i2c-hid-test.c - host test of the HID-over-I2C driver (drv/i2c_hid/i2c_hid.c)
  * on a simulated DesignWare controller (FIFOs, aborts, stop detection)
  * with a simulated ELAN-like touchpad at 0x15, a device at 0x2A that is not
  * HID, and nobody at 0x2C; the ACPI side is a DSDT with the touchpad's
  * Device () (_HID ELAN0129, _CID PNP0C50, an I2cSerialBusV2 in _CRS).
  * Checks the discovery, the start-up (SET_POWER, RESET, the report
  * descriptor read beyond the FIFO depth) and the polled input reads.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #define I2C_HOST_TEST
 #include "i2c_host_test.h"
-#include "../kernel/i2c_hid.c"
+#include "../drv/i2c_hid/i2c_hid.c"
 #include "../kernel/hid.c"
 
 static int fails;

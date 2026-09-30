@@ -6,6 +6,10 @@
  *   skin        strata, beos or irix (default beos)
  *   resolution  WIDTHxHEIGHT of the screen Facet runs on (default: as booted)
  * Facet applies them when a session starts and saves them when they change.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_SETTINGS_H
 #define FACET_SETTINGS_H

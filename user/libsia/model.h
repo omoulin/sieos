@@ -1,5 +1,9 @@
 /*
  * model.h - Chat-completions client for Azure AI Foundry models.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIA_MODEL_H
 #define SIA_MODEL_H

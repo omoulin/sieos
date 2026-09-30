@@ -3,6 +3,10 @@
  *   getconf NAME            system variable (sysconf) or string (confstr)
  *   getconf NAME PATH       file-system variable (pathconf)
  *   getconf -a              all of them
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

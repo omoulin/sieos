@@ -8,6 +8,10 @@
  * datagram whose fragments overlap is dropped (RFC 5722); IPv4 fragments
  * may overlap, the later data wins.  Incomplete datagrams are dropped after
  * 30 s (IPv4) or 60 s (IPv6), and at most NFRAG are reassembled at once.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "net.h"
 #include "mm.h"

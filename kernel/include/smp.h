@@ -1,5 +1,9 @@
 /*
  * smp.h - Per-CPU state, spinlocks, the big kernel lock and the local APIC.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef SIEOS_SMP_H
 #define SIEOS_SMP_H
@@ -54,10 +58,12 @@ struct cpu {
 extern struct cpu cpus[NCPU];
 
 /* timer.c: align an application processor's TSC with the boot CPU's */
-void tsc_sync_master(void);
+bool tsc_sync_master(void);          /* false: the processor did not answer */
 void tsc_sync_slave(struct cpu *c);
 extern int ncpu;
 extern bool lapic_ok;
+extern bool x2apic;                 /* the local APICs are in x2APIC mode (MSR access) */
+extern bool smp_want_x2apic;        /* set before acpi_init: "x2apic" on the command line */
 
 static inline struct cpu *mycpu(void)
 {
@@ -111,6 +117,11 @@ void cpu_early_init(void);          /* BSP per-CPU data (before anything else) *
 void acpi_init(uint64_t mb_info_phys);
 /* The n-th ACPI table with this signature ("DSDT", "SSDT", ...), header included; NULL if none. */
 const void *acpi_table(const char *sig, int n, uint32_t *len);
+void dmar_init(void);                /* dmar.c: VT-d translation / protected memory left on by the firmware: off */
+/* Time references from the FADT and the HPET table (0: none), for timer.c's TSC calibration. */
+extern uint32_t acpi_pm_timer_port;
+extern bool acpi_pm_timer_32;
+extern uint64_t acpi_hpet_base;
 void lapic_init(void);
 void lapic_timer_start(void);
 struct trapframe;

@@ -1,4 +1,10 @@
-/* netstat - list network sockets, IPv4 and IPv6 */
+/*
+ * netstat - list network sockets, IPv4 and IPv6
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include "sieos.h"
 #include "sieos/socket.h"
 #include "sieos/sysinfo.h"

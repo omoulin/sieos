@@ -12,6 +12,10 @@
  * style unless changed there): the desktop's look before anyone logs in.
  *
  * Exit status 3 asks init for a text console login instead.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "facet.h"
 

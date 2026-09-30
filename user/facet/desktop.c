@@ -5,6 +5,10 @@
  * pair as fds 3 (replies) and 4 (requests) and SIEOS_DESKTOP="3,4".
  * libsia's desktop tools send one JSON request per line; Facet answers
  * each with one JSON line (see libsia.h for the protocol).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "facet.h"
 #include "json.h"
@@ -231,6 +235,25 @@ static void handle(struct chan *c, const char *line, size_t len)
         } else {
             reply(c, false, msg);
         }
+    } else if (!strcmp(op, "pointer")) {        /* the pointer's speed (1..10) and acceleration (0, 1) */
+        long sp = num_arg(req, "speed"), ac = num_arg(req, "accel");
+        wm_set_pointer((int)sp, (int)ac, msg, sizeof(msg));
+        reply(c, true, msg);
+    } else if (!strcmp(op, "screensaver")) {    /* the screen saver: saver (logo, blank, none), timeout (s), lock (0, 1) */
+        if (num_arg(req, "preview") == 1) {
+            reply(c, true, "preview");
+            saver_preview();
+        } else if (num_arg(req, "lock_now") == 1) {
+            reply(c, true, "locked");
+            saver_lock_now();
+        } else {
+            saver_configure(json_get_str(req, "saver"), (int)num_arg(req, "timeout"), (int)num_arg(req, "lock"), msg,
+                            sizeof(msg));
+            reply(c, true, msg);
+        }
+    } else if (!strcmp(op, "reboot")) {         /* (the installer's Restart) */
+        reply(c, true, "restarting");
+        wm_reboot();
     } else if (!strcmp(op, "workspace")) {
         long n = num_arg(req, "workspace");
         if (n < 0)

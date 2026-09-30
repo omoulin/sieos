@@ -2,6 +2,10 @@
  * rsa.c - RSA signature verification (RFC 8017): RSASSA-PKCS1-v1_5 and
  * RSASSA-PSS with MGF1.  Public-key operations only, moduli up to 4096
  * bits, Montgomery multiplication on 32-bit limbs.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "crypto.h"
 

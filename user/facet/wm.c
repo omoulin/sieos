@@ -12,6 +12,10 @@
  *
  * Keys: Ctrl+Space strip, Ctrl+Alt+1..4 or Ctrl+Alt+Left/Right workspaces,
  * Alt+Tab next window, Alt+F4 close.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "facet.h"
 #include "json.h"
@@ -90,6 +94,44 @@ static struct window *focus, *prev_focus;
 static int cur_ws;
 
 static int mouse_x, mouse_y;
+/* The pointer's speed (1..10, 5 plain) and acceleration (the "pointer_speed",
+ * "pointer_accel" settings): relative motion (mice, touchpads) is scaled by
+ * the speed, by the screen's size (a touchpad's steps are small on a large
+ * panel) and, with acceleration, by how fast it moves; the fractions carry. */
+static int ptr_speed = 5;
+static bool ptr_accel = true;
+static float ptr_fx, ptr_fy;
+
+static void pointer_motion(int dx, int dy)
+{
+    float gain = ptr_speed / 5.0f;
+    float scale = screen_w / 1280.0f;
+    gain *= scale < 1 ? 1 : scale > 2.5f ? 2.5f : scale;
+    if (ptr_accel) {
+        float v = (float)(abs(dx) + abs(dy));
+        gain *= 1 + (v > 16 ? 16 : v) / 8;     /* up to 3 times for fast moves */
+    }
+    ptr_fx += dx * gain;
+    ptr_fy += dy * gain;
+    int mx = (int)ptr_fx, my = (int)ptr_fy;
+    ptr_fx -= mx;
+    ptr_fy -= my;
+    mouse_x += mx;
+    mouse_y += my;
+}
+
+bool wm_set_pointer(int speed, int accel, char *msg, size_t n)
+{
+    if (speed > 0)
+        ptr_speed = speed > 10 ? 10 : speed;
+    if (accel >= 0)
+        ptr_accel = accel;
+    char v[8];
+    snprintf(v, sizeof(v), "%d", ptr_speed);
+    bool ok = fct_setting_set("pointer_speed", v) && fct_setting_set("pointer_accel", ptr_accel ? "1" : "0");
+    snprintf(msg, n, "speed %d\naccel %d%s", ptr_speed, ptr_accel, ok ? "" : "\n(not saved in ~/.facet/settings)");
+    return true;
+}
 static unsigned buttons;
 static unsigned key_mods;
 static bool running = true;
@@ -125,6 +167,7 @@ static bool agent_busy, agent_thinking, confirm_pending, panel_open;   /* the st
 static int exit_status;                  /* 0 log out, SESSION_EXIT_REBOOT, SESSION_EXIT_HALT */
 static void do_logout(void) { running = false; }
 static void do_reboot(void) { exit_status = SESSION_EXIT_REBOOT; running = false; }
+void wm_reboot(void) { do_reboot(); }
 static void do_shutdown(void) { exit_status = SESSION_EXIT_HALT; running = false; }
 static void open_home(void) { app_files(getenv("HOME") ? getenv("HOME") : "/"); }
 
@@ -1898,6 +1941,7 @@ static void menu_show_window(void *a)
 
 /* The "Exit..." submenu. */
 static const struct menu_item exit_items[] = {
+    { "Lock Screen", call_action, (void *)saver_lock_now, ICON_LOGOUT, NULL, 0 },
     { "Log Out", call_action, (void *)do_logout, ICON_LOGOUT, NULL, 0 },
     { "Reboot", call_action, (void *)do_reboot, ICON_LOGOUT, NULL, 0 },
     { "Shut Down", call_action, (void *)do_shutdown, ICON_LOGOUT, NULL, 0 },
@@ -1913,7 +1957,9 @@ static void open_gem_menu(void)
     items[n++] = (struct menu_item){ "System Monitor", call_action, (void *)app_monitor, ICON_MONITOR, NULL, 0 };
     items[n++] = (struct menu_item){ "Network Status", call_action, (void *)app_network, ICON_NETWORK, NULL, 0 };
     items[n++] = (struct menu_item){ "Clock", call_action, (void *)app_clock, ICON_CLOCK, NULL, 0 };
+    items[n++] = (struct menu_item){ "Power and Temperature", call_action, (void *)app_power, ICON_MONITOR, NULL, 0 };
     items[n++] = (struct menu_item){ "Settings", call_action, (void *)app_settings, ICON_PROGRAM, NULL, 0 };
+    items[n++] = (struct menu_item){ "Install SIEOS", call_action, (void *)app_installer, ICON_DISK, NULL, 0 };
     items[n++] = (struct menu_item){ "About SIEOS", call_action, (void *)app_about, ICON_INFO, NULL, 0 };
     int listed = 0;
     for (int i = nwin - 1; i >= 0 && listed < 10; i--) {
@@ -2098,6 +2144,30 @@ static void draw_cursor(struct surface *s)
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 
+/* A rectangle of a surface (the screen's size) to the framebuffer, in its pixel format. */
+void wm_present(const struct surface *s, struct rect d)
+{
+    bool native = fbi.red_pos == 16 && fbi.green_pos == 8 && fbi.blue_pos == 0;
+    for (int y = d.y; y < d.y + d.h; y++) {
+        const uint32_t *src = s->px + y * s->stride + d.x;
+        uint32_t *dst = (uint32_t *)((uint8_t *)fbmem + (size_t)y * fbi.pitch) + d.x;
+        if (native) {
+            memcpy(dst, src, d.w * 4);
+        } else {
+            for (int x = 0; x < d.w; x++) {
+                uint32_t c = src[x];
+                dst[x] = (((c >> 16) & 255) << fbi.red_pos) | (((c >> 8) & 255) << fbi.green_pos) |
+                         ((c & 255) << fbi.blue_pos);
+            }
+        }
+    }
+}
+
+void wm_redraw_all(void)
+{
+    invalidate_all();
+}
+
 static void render(void)
 {
     if (rect_empty(dirty))
@@ -2114,21 +2184,7 @@ static void render(void)
     draw_panel(&back);                               /* drops down over the spine and windows */
     draw_menu(&back);
     draw_cursor(&back);
-
-    bool native = fbi.red_pos == 16 && fbi.green_pos == 8 && fbi.blue_pos == 0;
-    for (int y = d.y; y < d.y + d.h; y++) {
-        uint32_t *src = back.px + y * back.stride + d.x;
-        uint32_t *dst = (uint32_t *)((uint8_t *)fbmem + (size_t)y * fbi.pitch) + d.x;
-        if (native) {
-            memcpy(dst, src, d.w * 4);
-        } else {
-            for (int x = 0; x < d.w; x++) {
-                uint32_t c = src[x];
-                dst[x] = (((c >> 16) & 255) << fbi.red_pos) | (((c >> 8) & 255) << fbi.green_pos) |
-                         ((c & 255) << fbi.blue_pos);
-            }
-        }
-    }
+    wm_present(&back, d);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2383,6 +2439,8 @@ int abs_int(int v)
 
 static void handle_event(const struct input_event *ev)
 {
+    if (saver_input(ev))
+        return;                                  /* (the screen saver's, or the lock's) */
     if (ev->type == EV_MOUSE || ev->type == EV_MOUSE_ABS) {
         struct rect old = cursor_rect();
         int ox = mouse_x, oy = mouse_y;
@@ -2390,8 +2448,7 @@ static void handle_event(const struct input_event *ev)
             mouse_x = (int)((long)ev->dx * screen_w / 65536);
             mouse_y = (int)((long)ev->dy * screen_h / 65536);
         } else {
-            mouse_x += ev->dx;
-            mouse_y += ev->dy;
+            pointer_motion(ev->dx, ev->dy);
         }
         mouse_x = MAX(0, MIN(screen_w - 1, mouse_x));
         mouse_y = MAX(0, MIN(screen_h - 1, mouse_y));
@@ -2537,6 +2594,12 @@ int main(void)
     if (fct_setting_get("resolution", res, sizeof(res)) && sscanf(res, "%dx%d", &rw, &rh) == 2 &&
         (rw != screen_w || rh != screen_h) && !set_resolution(rw, rh, err, sizeof(err)))
         dprintf(STDERR_FILENO, "facet: resolution %s: %s\n", res, err);   /* (the display keeps its mode) */
+    char pv[8];
+    if (fct_setting_get("pointer_speed", pv, sizeof(pv)) && atoi(pv) >= 1 && atoi(pv) <= 10)
+        ptr_speed = atoi(pv);
+    if (fct_setting_get("pointer_accel", pv, sizeof(pv)))
+        ptr_accel = atoi(pv) != 0;
+    saver_load_settings();
     render_background();
     mouse_x = screen_w / 2;
     mouse_y = screen_h / 2;
@@ -2550,7 +2613,9 @@ int main(void)
 
     long last_tick = uptime_ms(), last_sec = 0, last_blink = 0;
     while (running) {
-        render();
+        int wait = saver_step(&back);                /* (starts it after the idle time; its frames) */
+        if (!saver_active())
+            render();
         struct pollfd pfd[MAXWIN + 1 + 1 + 32 + 33];
         struct window *owner[MAXWIN + 1];
         int n = 0;
@@ -2577,7 +2642,7 @@ int main(void)
         int srv_ids[33], srv_base = n;
         int nsrv = server_poll_fds(pfd + n, 33, srv_ids);
         n += nsrv;
-        int r = poll(pfd, n, agent_thinking ? 100 : 100);
+        int r = poll(pfd, n, saver_active() ? wait : 100);
         if (r > 0) {
             if (pfd[0].revents & POLLIN) {
                 struct input_event evs[32];

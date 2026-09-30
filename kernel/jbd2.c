@@ -21,6 +21,10 @@
  * block never receives file data that an uncommitted transaction still
  * owns.  Recovery reads any valid JBD2 log (as Linux or e2fsck leave it):
  * scan, revoke and replay passes, v2/v3 checksums, 32/64-bit tags.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "jbd2.h"
 #include "blkdev.h"

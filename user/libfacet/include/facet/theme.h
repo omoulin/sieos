@@ -2,6 +2,10 @@
  * facet/theme.h - The Facet desktop's colours, for applications that want
  * to look like the rest of the desktop: the current skin's (facet/skin.h),
  * so they follow a change of skin.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_THEME_H
 #define FACET_THEME_H

@@ -25,6 +25,8 @@
 #include "ipc.h"
 #include "mount.h"
 #include "lofi.h"
+#include "dkio.h"
+#include "power.h"
 #include "priocntl.h"
 
 #endif

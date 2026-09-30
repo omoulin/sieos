@@ -3,6 +3,10 @@
  *
  * The library is built for SIEOS (libc.h) and, for testing, for the host
  * (-DTLS_HOSTED with the host C library).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef TLS_PORT_H
 #define TLS_PORT_H

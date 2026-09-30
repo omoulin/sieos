@@ -3,6 +3,10 @@
  *   lofiadm                     list the attached files
  *   lofiadm -a file [-r]        attach (read-only with -r); prints the device
  *   lofiadm -d file|/dev/lofi/N detach
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 #include "sieos/lofi.h"

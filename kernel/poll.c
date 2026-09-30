@@ -3,6 +3,10 @@
  *
  * Every event source calls poll_wakeup(); pollers re-check their file
  * descriptors each time.  Simple and adequate for a handful of pollers.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "proc.h"
 #include "fs.h"
@@ -52,6 +56,8 @@ short file_poll(struct file *f, short events)
             r |= POLLIN;
         if (socket_writable(f->sock))
             r |= POLLOUT;
+        if (socket_failed(f->sock))
+            r |= POLLERR;
         break;
     case FD_UNIX:
         r |= unix_poll(f->usock);

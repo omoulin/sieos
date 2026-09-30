@@ -2,6 +2,10 @@
  * httpd - a small HTTP/1.0 file server.
  *   httpd [-p port] [root]       (default: port 80 as root, else 8080; root /var/www)
  * Serves files and directory listings; one child process per connection.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

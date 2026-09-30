@@ -12,6 +12,10 @@
  *
  * Text is DejaVu Sans Mono (TrueType, 13 px): Ctrl and + / - change the
  * size, Ctrl+0 restores it; the window keeps its size and the grid follows.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "common.h"
 #include <facet/font.h>

@@ -5,6 +5,10 @@
  *     h = SHA256(salt "$" password), then 5000 times h = SHA256(h password salt).
  * This is an SIEOS-specific scheme (tools/mkshadow.py implements the same),
  * not glibc's sha256-crypt.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 

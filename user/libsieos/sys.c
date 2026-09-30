@@ -1,6 +1,10 @@
 /*
  * sys.c - libsieos: the SIEOS system-call extensions (cpuinfo, meminfo,
  * procinfo, netinfo, netstat, fbmap) and small system helpers.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "sieos.h"
 #include <sys/syscall.h>
@@ -37,6 +41,26 @@ int procinfo(struct procinfo *buf, int max)
 int netinfo_if(struct netinfo *ni, int index)
 {
     return syscall(SIEOS_SYS_netinfo, ni, index);
+}
+
+int netconfig(const struct sieos_netconfig *nc)
+{
+    return syscall(SIEOS_SYS_netconfig, nc);
+}
+
+int modinfo(struct sieos_modinfo *mi, int index)
+{
+    return syscall(SIEOS_SYS_modinfo, mi, index);
+}
+
+int modload(const char *path)
+{
+    return syscall(SIEOS_SYS_modload, path);
+}
+
+long wifi(int op, void *buf, long n)
+{
+    return syscall(SIEOS_SYS_wifi, op, buf, n);
 }
 
 int devinfo(struct sieos_devinfo *d, int index)

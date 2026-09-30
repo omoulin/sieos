@@ -1,6 +1,10 @@
 /*
  * facet-monitor - the System Monitor: processor load with history, memory, and the processes.
  * A Facet application (libfacet).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "common.h"
 

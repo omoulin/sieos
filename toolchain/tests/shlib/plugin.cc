@@ -1,3 +1,10 @@
+/*
+ * plugin.cc
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 // Loaded by shtest with dlopen: its own TLS, a static object, and a C++ exception.
 #include <stdexcept>
 #include <string>

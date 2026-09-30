@@ -1,4 +1,10 @@
-/* wc - count lines, words and bytes: wc [-lwc] [file...] */
+/*
+ * wc - count lines, words and bytes: wc [-lwc] [file...]
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include "sieos.h"
 
 static void count(int fd, unsigned long *l, unsigned long *w, unsigned long *c)

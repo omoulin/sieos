@@ -25,6 +25,10 @@
  * buffer of that size arrives.  FCT_EV_CLOSE means the window is gone (the
  * user closed it); the client should drop it.  All integers are native
  * (little-endian).
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #ifndef FACET_PROTOCOL_H
 #define FACET_PROTOCOL_H

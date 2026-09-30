@@ -2,6 +2,10 @@
  * http.c - Minimal HTTP/1.1 client: one request per connection,
  * Content-Length or chunked response bodies (collected, or handed to a sink
  * as they arrive, for server-sent events), https via the TLS library.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "http.h"
 #include "../tls/tls.h"

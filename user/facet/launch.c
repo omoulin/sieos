@@ -3,6 +3,10 @@
  * programs (/bin/facet-*) that draw through libfacet; Facet starts them
  * with FACET_DISPLAY set, and terminals also get the desktop control
  * channel (desktop.c) for the sia assistant inside them.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "facet.h"
 
@@ -76,6 +80,10 @@ pid_t app_launch(const char *app, const char *arg)
         return spawn("facet-clock", NULL, NULL, NULL, false);
     if (!strcmp(app, "about"))
         return spawn("facet-about", NULL, NULL, NULL, false);
+    if (!strcmp(app, "power"))
+        return spawn("facet-power", NULL, NULL, NULL, false);
+    if (!strcmp(app, "installer"))
+        return spawn("facet-installer", NULL, NULL, NULL, true);   /* (Restart: the desktop channel) */
     if (!strcmp(app, "settings") || !strcmp(app, "display") || !strcmp(app, "appearance"))   /* (on that section) */
         return spawn("facet-settings", strcmp(app, "settings") ? app : arg, NULL, NULL, true);   /* (asks Facet through the desktop channel) */
     return -1;
@@ -89,6 +97,8 @@ void app_monitor(void) { app_launch("monitor", NULL); }
 void app_clock(void) { app_launch("clock", NULL); }
 void app_about(void) { app_launch("about", NULL); }
 void app_network(void) { app_launch("network", NULL); }
+void app_installer(void) { app_launch("installer", NULL); }
+void app_power(void) { app_launch("power", NULL); }
 void app_settings(void) { app_launch("settings", NULL); }
 
 void app_message(const char *title, const char *line1, const char *line2)

@@ -1,4 +1,10 @@
-/* host - look up a host name (hosts file, then DNS): IPv4 and IPv6 addresses */
+/*
+ * host - look up a host name (hosts file, then DNS): IPv4 and IPv6 addresses
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
+ */
 #include "sieos.h"
 
 int main(int argc, char **argv)

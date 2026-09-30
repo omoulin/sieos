@@ -13,6 +13,10 @@
  * it, Certificate and CertificateVerify are skipped (the ticket came from a
  * connection whose certificate chain was verified for the same host).
  * KeyUpdate is honoured.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "tls.h"
 #include "crypto.h"

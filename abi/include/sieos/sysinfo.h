@@ -83,6 +83,13 @@ struct sieos_netinfo {
 
 /* SIEOS extension: IPv6 on the interface (netinfo6) */
 #define SIEOS_NET6_ADDRS 4
+/* netconfig(): DHCP, or a static address (host byte order, as struct netinfo). */
+struct sieos_netconfig {
+    int nc_index;                        /* 0 eth0, 1 eth1, ... */
+    int nc_dhcp;                         /* 1: ask DHCP (the others are ignored) */
+    unsigned int nc_ip, nc_netmask, nc_gateway, nc_dns;
+};
+
 struct sieos_netinfo6 {
     int up;                         /* link-local address configured */
     int naddr;                      /* entries used in addr[] */
@@ -247,6 +254,77 @@ struct sieos_input_event {
 #define SIEOS_KEY_DELETE 0x153
 #define SIEOS_KEY_F1     0x03B
 
+/* SIEOS extension: the Wi-Fi device (wifi()) */
+#define SIEOS_WIFI_OP_STATUS  0          /* buf: struct sieos_wifi_status */
+#define SIEOS_WIFI_OP_SCAN    1          /* start a scan (EBUSY while one runs); the results come in a few seconds */
+#define SIEOS_WIFI_OP_RESULTS 2          /* buf: struct sieos_wifi_bss[n]; returns the number filled */
+#define SIEOS_WIFI_OP_CONNECT 3          /* buf: struct sieos_wifi_connect (root): join a network of the last scan */
+#define SIEOS_WIFI_OP_DISCONNECT 4       /* leave the network (root) */
+#define SIEOS_WIFI_OP_POWER   5          /* n: the power mode, 0 off, 1 fast (the default), 2 max (root) */
+
+#define SIEOS_WIFI_NONE      0           /* no Wi-Fi device */
+#define SIEOS_WIFI_DOWN      1           /* the device or its firmware failed (ws_info says why) */
+#define SIEOS_WIFI_READY     2           /* the firmware runs, not joined to a network */
+#define SIEOS_WIFI_SCANNING  3
+#define SIEOS_WIFI_JOINING   4
+#define SIEOS_WIFI_JOINED    5
+
+struct sieos_wifi_status {
+    int ws_state;                        /* SIEOS_WIFI_* */
+    char ws_info[64];                    /* the driver's state, readable */
+    sieos_uint8_t ws_mac[6];
+    char ws_ssid[34];                    /* the network joined ("" none) */
+    int ws_nbss;                         /* networks the last scan found */
+    unsigned int ws_scans;               /* scans completed since boot */
+    int ws_link;                         /* the interface index when joined, else -1 */
+    int ws_power;                        /* the power mode: 0 off, 1 fast, 2 max */
+    int ws_mode;                         /* joined with: 1 802.11a/g, 2 802.11n, 3 802.11ac (0: not joined) */
+    int ws_width;                        /* the channel width, MHz */
+    int ws_streams;                      /* spatial streams */
+};
+
+/* Joining: the network by its SSID (the strongest of the last scan), or by its BSSID if not zero; the key: a
+ * passphrase (8-63 characters) or 64 hexadecimal digits (the PSK). ENOENT: not heard; EOPNOTSUPP: a security
+ * other than WPA2-Personal (CCMP) or open; EINVAL: the key. The result comes later, in the status. */
+struct sieos_wifi_connect {
+    char wc_ssid[34];
+    sieos_uint8_t wc_bssid[6];
+    char wc_key[66];
+    char wc_reserved[2];
+};
+
+/* A network (BSS) seen by a scan. */
+#define SIEOS_WIFI_SEC_WEP   0x01        /* privacy without WPA/RSN information */
+#define SIEOS_WIFI_SEC_WPA   0x02        /* WPA (the vendor element) */
+#define SIEOS_WIFI_SEC_RSN   0x04        /* WPA2/WPA3 (the RSN element) */
+#define SIEOS_WIFI_SEC_PSK   0x10        /* key management: pre-shared key */
+#define SIEOS_WIFI_SEC_8021X 0x20        /* 802.1X (enterprise) */
+#define SIEOS_WIFI_SEC_SAE   0x40        /* SAE (WPA3 personal) */
+struct sieos_wifi_bss {
+    sieos_uint8_t wb_bssid[6];
+    char wb_ssid[34];                    /* "" for a hidden network */
+    int wb_channel;
+    int wb_rssi;                         /* dBm */
+    unsigned int wb_sec;                 /* SIEOS_WIFI_SEC_* (0: open) */
+    unsigned int wb_age;                 /* seconds since it was last heard */
+};
+
+/* SIEOS extension: a driver (modinfo): the boot archive's and /drv's, loaded or not */
+#define SIEOS_MOD_KNOWN   0              /* not loaded: no device of its */
+#define SIEOS_MOD_LOADED  1
+#define SIEOS_MOD_FAILED  2              /* loading or its _init failed */
+struct sieos_modinfo {
+    char mi_name[32];
+    char mi_desc[96];
+    int mi_state;                        /* SIEOS_MOD_* */
+    int mi_phase;                        /* 0 display, 1 boot, 2 after the root */
+    unsigned long mi_base;               /* where it is loaded (kernel address) */
+    unsigned int mi_size;                /* bytes */
+    char mi_source[16];                  /* "boot archive", "/drv", "modload" */
+    char mi_alias[64];                   /* the alias its first device matched ("pci8086,34f0") */
+    int mi_ndev;                         /* devices matched */
+};
+
 SIEOS_STATIC_ASSERT(sizeof(sieos_processor_info_t) == 56, "processor_info size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_sockinfo) == 36, "sockinfo size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_sockinfo6) == 64, "sockinfo6 size");
@@ -254,5 +332,9 @@ SIEOS_STATIC_ASSERT(sizeof(struct sieos_netinfo6) == 160, "netinfo6 size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_devinfo) == 64, "devinfo size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_procinfo) == 88, "procinfo size");
 SIEOS_STATIC_ASSERT(sizeof(struct sieos_input_event) == 28, "input_event size");
+SIEOS_STATIC_ASSERT(sizeof(struct sieos_wifi_status) == 136, "wifi_status size");
+SIEOS_STATIC_ASSERT(sizeof(struct sieos_wifi_bss) == 56, "wifi_bss size");
+SIEOS_STATIC_ASSERT(sizeof(struct sieos_wifi_connect) == 108, "wifi_connect size");
+SIEOS_STATIC_ASSERT(sizeof(struct sieos_modinfo) == 232, "modinfo size");
 
 #endif

@@ -6,7 +6,13 @@
  * Processes, LWPs, signals, credentials, time and memory are dispatched
  * here; the file calls are in sysfile2.c.  Where v1 and v2 constants differ
  * (signals, errno), the kernel translates at this boundary.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
+#include "net.h"
+#include "ddi.h"
 #include "proc.h"
 #include "mm.h"
 #include "fs.h"
@@ -146,6 +152,106 @@ static long do_nanosleep(const struct sieos_timespec *ureq, struct sieos_timespe
         struct sieos_timespec rem = { (long)(left / 1000000000UL), (long)(left % 1000000000UL) };
         memcpy(urem, &rem, sizeof(rem));
     }
+    return r;
+}
+
+/* netconfig: an interface's IPv4 settings (root). */
+static long sys_netconfig(const struct sieos_netconfig *u)
+{
+    if (current->euid != 0)
+        return -EPERM;
+    if (!user_ok((void *)u, sizeof(*u), false))
+        return -EFAULT;
+    struct sieos_netconfig nc;
+    memcpy(&nc, u, sizeof(nc));
+    return net_configure(nc.nc_index, nc.nc_dhcp, nc.nc_ip, nc.nc_netmask, nc.nc_gateway, nc.nc_dns);
+}
+
+/* The Wi-Fi driver's operation, if one is loaded (else: no device). */
+static long wifi_op(int op, void *buf, long n)
+{
+    if (ddi_wifi_op)
+        return ddi_wifi_op(op, buf, n);
+    if (op == SIEOS_WIFI_OP_STATUS) {
+        memset(buf, 0, sizeof(struct sieos_wifi_status));        /* (SIEOS_WIFI_NONE) */
+        return 0;
+    }
+    return -ENODEV;
+}
+
+/* modinfo: the index'th driver known. */
+static long sys_modinfo(struct sieos_modinfo *u, long idx)
+{
+    if (!user_range_ok(current->pml4, (uint64_t)u, sizeof(*u), true))
+        return -EFAULT;
+    struct sieos_modinfo mi;
+    int r = modinfo_get((int)idx, &mi);
+    if (r < 0)
+        return r;
+    memcpy(u, &mi, sizeof(mi));
+    return 0;
+}
+
+/* modload: a driver file (root). */
+static long sys_modload(const char *upath)
+{
+    if (current->euid != 0)
+        return -EPERM;
+    char path[256];
+    long l = user_strlen(current->pml4, upath, sizeof(path));
+    if (l < 0 || l >= (long)sizeof(path))
+        return l < 0 ? -EFAULT : -ENAMETOOLONG;
+    memcpy(path, upath, l + 1);
+    return modload_path(path);
+}
+
+/* wifi: the Wi-Fi device's status, a scan (anyone), the networks found. */
+static long sys_wifi(long op, void *u, long n)
+{
+    static union { struct sieos_wifi_status st; struct sieos_wifi_bss bss[64]; } kb;
+    size_t sz;
+    switch (op) {
+    case SIEOS_WIFI_OP_STATUS:
+        sz = sizeof(kb.st);
+        break;
+    case SIEOS_WIFI_OP_RESULTS:
+        if (n < 0)
+            return -EINVAL;
+        if (n > 64)
+            n = 64;
+        sz = n * sizeof(struct sieos_wifi_bss);
+        break;
+    case SIEOS_WIFI_OP_SCAN:
+        return wifi_op((int)op, NULL, 0);
+    case SIEOS_WIFI_OP_CONNECT: {
+        if (current->euid != 0)
+            return -EPERM;
+        if (!user_ok(u, sizeof(struct sieos_wifi_connect), false))
+            return -EFAULT;
+        struct sieos_wifi_connect c;
+        memcpy(&c, u, sizeof(c));
+        c.wc_ssid[sizeof(c.wc_ssid) - 1] = 0;
+        c.wc_key[sizeof(c.wc_key) - 1] = 0;
+        long r = wifi_op((int)op, &c, sizeof(c));
+        memset(&c, 0, sizeof(c));
+        return r;
+    }
+    case SIEOS_WIFI_OP_DISCONNECT:
+        if (current->euid != 0)
+            return -EPERM;
+        return wifi_op((int)op, NULL, 0);
+    case SIEOS_WIFI_OP_POWER:
+        if (current->euid != 0)
+            return -EPERM;
+        return wifi_op((int)op, NULL, n);
+    default:
+        return -EINVAL;
+    }
+    if (!user_range_ok(current->pml4, (uint64_t)u, sz, true))
+        return -EFAULT;
+    long r = wifi_op((int)op, &kb, op == SIEOS_WIFI_OP_STATUS ? (long)sz : n);
+    if (r >= 0)
+        memcpy(u, &kb, op == SIEOS_WIFI_OP_STATUS ? sz : r * sizeof(struct sieos_wifi_bss));
     return r;
 }
 
@@ -366,6 +472,10 @@ long syscall_dispatch_v2(struct trapframe *tf)
     case SIEOS_SYS_meminfo:   return v1(tf, SYS_meminfo, a1, 0, 0);
     case SIEOS_SYS_procinfo:  return v1(tf, SYS_procinfo, a1, a2, 0);
     case SIEOS_SYS_devinfo:   return sys_devinfo((struct sieos_devinfo *)a1, (long)a2);
+    case SIEOS_SYS_netconfig: return sys_netconfig((const struct sieos_netconfig *)a1);
+    case SIEOS_SYS_wifi:      return sys_wifi((long)a1, (void *)a2, (long)a3);
+    case SIEOS_SYS_modinfo:   return sys_modinfo((struct sieos_modinfo *)a1, (long)a2);
+    case SIEOS_SYS_modload:   return sys_modload((const char *)a1);
     }
     return -ENOSYS;
 }

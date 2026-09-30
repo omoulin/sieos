@@ -4,6 +4,10 @@
  * Small requests are served from per-size-class free lists carved out of
  * 4K pages; large requests get physically contiguous page runs.  Every
  * allocation is preceded by a 16-byte header describing it.
+ *
+ * Copyright (C) 2026 Olivier Moulin
+ * Part of SIEOS, released under the GNU General Public License version 3
+ * (GPL-3.0); see the LICENSE file.
  */
 #include "mm.h"
 
