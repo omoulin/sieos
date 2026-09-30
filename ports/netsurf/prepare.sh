@@ -8,6 +8,8 @@
 # built; its type, NSFB_SURFACE_FACET, before NSFB_SURFACE_RAM, so that
 # NetSurf, which takes the lowest type built as its default, opens a Facet
 # window; and libfacet (shared, /usr/lib/libfacet.so.1) in libnsfb's link.
+# NetSurf: netsurf-curl.patch (the fetcher resolves IPv4 only when the host has
+# no global IPv6 address; curl's long options given longs), and Makefile.config.
 set -e
 TREE=$1
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -27,3 +29,27 @@ grep -q -- '-lfacet' "$NSFB/libnsfb.pc.in" ||
 grep -q 'facet\.c' "$NSFB/src/surface/Makefile"
 grep -q 'NSFB_SURFACE_FACET' "$NSFB/include/libnsfb.h"
 grep -q -- '-lfacet' "$NSFB/libnsfb.pc.in"
+
+# NetSurf's patches (patch -p1 in TREE)
+for p in "$HERE"/netsurf-*.patch; do
+    patch -d "$TREE" -p1 -s -N < "$p"
+done
+
+# NetSurf's build options (Makefile.config): text through FreeType with the
+# DejaVu fonts of /usr/share/fonts/dejavu; no JavaScript yet; no formats or
+# features without a port (WebP, JPEG XL, PDF export, RISC OS sprites); curl
+# does TLS (Mbed TLS), so no OpenSSL; iconv is the C library's.
+cat > "$TREE/netsurf/Makefile.config" <<'CFG'
+override NETSURF_FB_FONTLIB := freetype
+override NETSURF_FB_FONTPATH := /usr/share/fonts/dejavu
+override NETSURF_USE_DUKTAPE := NO
+override NETSURF_USE_WEBP := NO
+override NETSURF_USE_JPEGXL := NO
+override NETSURF_USE_HARU_PDF := NO
+override NETSURF_USE_ROSPRITE := NO
+override NETSURF_USE_VIDEO := NO
+override NETSURF_USE_OPENSSL := NO
+override NETSURF_USE_LIBICONV_PLUG := YES
+override NETSURF_FB_FONT_CURSIVE := DejaVuSans.ttf
+override NETSURF_FB_FONT_FANTASY := DejaVuSans.ttf
+CFG

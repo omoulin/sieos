@@ -111,6 +111,7 @@ void app_clock(void);
 void app_about(void);
 void app_message(const char *title, const char *line1, const char *line2);
 void app_network(void);
+void app_browser(void);
 void app_installer(void);
 void app_power(void);             /* Power and Temperature */         /* Install SIEOS (on a disk) */
 void wm_reboot(void);             /* end the session: reboot */

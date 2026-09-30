@@ -1,0 +1,111 @@
+--- a/netsurf/content/fetchers/curl.c
++++ b/netsurf/content/fetchers/curl.c
+@@ -38,6 +38,10 @@
+ #include <strings.h>
+ #include <time.h>
+ #include <sys/stat.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <unistd.h>
+ 
+ #include <libwapcaplet/libwapcaplet.h>
+ #include <nsutils/time.h>
+@@ -1243,7 +1247,7 @@
+ 	}
+ 
+ 	/* Force-enable SSL session ID caching, as some distros are odd. */
+-	SETOPT(CURLOPT_SSL_SESSIONID_CACHE, 1);
++	SETOPT(CURLOPT_SSL_SESSIONID_CACHE, 1L);
+ 
+ 	if (urldb_get_cert_permissions(f->url)) {
+ 		/* Disable certificate verification */
+@@ -1948,6 +1952,43 @@
+ 
+ 
+ 
++/**
++ * Whether this host has a global IPv6 address to reach the Internet with.
++ *
++ * The kernel is asked which source address it would use for a public IPv6
++ * destination (a UDP socket connected to it: nothing is sent).  Without a
++ * global one (none at all, or only link-local, site-local fec0::/10 or unique
++ * local fc00::/7 ones, as on QEMU's user network) IPv6 connections cannot
++ * succeed, and curl would first try, then wait, for every dual-stack host:
++ * the fetcher then resolves IPv4 addresses only.
++ */
++static bool fetch_curl_ipv6_global(void)
++{
++	struct sockaddr_in6 dst, src;
++	socklen_t len = sizeof(src);
++	bool global = false;
++	int s = socket(AF_INET6, SOCK_DGRAM, 0);
++
++	if (s < 0)
++		return false;
++	memset(&dst, 0, sizeof(dst));
++	dst.sin6_family = AF_INET6;
++	dst.sin6_port = htons(53);
++	inet_pton(AF_INET6, "2001:4860:4860::8888", &dst.sin6_addr);
++	if (connect(s, (struct sockaddr *)&dst, sizeof(dst)) == 0 &&
++	    getsockname(s, (struct sockaddr *)&src, &len) == 0 &&
++	    src.sin6_family == AF_INET6) {
++		const uint8_t *a = src.sin6_addr.s6_addr;
++		global = !IN6_IS_ADDR_UNSPECIFIED(&src.sin6_addr) &&
++			!IN6_IS_ADDR_LOOPBACK(&src.sin6_addr) &&
++			!IN6_IS_ADDR_V4MAPPED(&src.sin6_addr) &&
++			!(a[0] == 0xfe && (a[1] & 0x80)) &&	/* fe80::/10, fec0::/10 */
++			(a[0] & 0xfe) != 0xfc;			/* fc00::/7 */
++	}
++	close(s);
++	return global;
++}
++
+ /* exported function documented in content/fetchers/curl.h */
+ nserror fetch_curl_register(void)
+ {
+@@ -2008,9 +2049,9 @@
+ 		goto curl_multi_setopt_failed;				\
+ 	}
+ 
+-		SETOPT(CURLMOPT_MAXCONNECTS, maxconnects);
+-		SETOPT(CURLMOPT_MAX_TOTAL_CONNECTIONS, maxconnects);
+-		SETOPT(CURLMOPT_MAX_HOST_CONNECTIONS, nsoption_int(max_fetchers_per_host));
++		SETOPT(CURLMOPT_MAXCONNECTS, (long)maxconnects);
++		SETOPT(CURLMOPT_MAX_TOTAL_CONNECTIONS, (long)maxconnects);
++		SETOPT(CURLMOPT_MAX_HOST_CONNECTIONS, (long)nsoption_int(max_fetchers_per_host));
+ 	}
+ #endif
+ 
+@@ -2034,9 +2075,9 @@
+ 	SETOPT(CURLOPT_ERRORBUFFER, fetch_error_buffer);
+ 	SETOPT(CURLOPT_DEBUGFUNCTION, fetch_curl_debug);
+ 	if (nsoption_bool(suppress_curl_debug)) {
+-		SETOPT(CURLOPT_VERBOSE, 0);
++		SETOPT(CURLOPT_VERBOSE, 0L);
+ 	} else {
+-		SETOPT(CURLOPT_VERBOSE, 1);
++		SETOPT(CURLOPT_VERBOSE, 1L);
+ 	}
+ 
+ 	/* Currently we explode if curl uses HTTP2, so force 1.1. */
+@@ -2045,13 +2086,17 @@
+ 	SETOPT(CURLOPT_WRITEFUNCTION, fetch_curl_data);
+ 	SETOPT(CURLOPT_HEADERFUNCTION, fetch_curl_header);
+ 	SETOPT(NSCURLOPT_PROGRESS_FUNCTION, fetch_curl_progress);
+-	SETOPT(CURLOPT_NOPROGRESS, 0);
++	SETOPT(CURLOPT_NOPROGRESS, 0L);
+ 	SETOPT(CURLOPT_USERAGENT, user_agent_string());
+ 	SETOPT(CURLOPT_ENCODING, "gzip");
+ 	SETOPT(CURLOPT_LOW_SPEED_LIMIT, 1L);
+ 	SETOPT(CURLOPT_LOW_SPEED_TIME, 180L);
+ 	SETOPT(CURLOPT_NOSIGNAL, 1L);
+-	SETOPT(CURLOPT_CONNECTTIMEOUT, nsoption_uint(curl_fetch_timeout));
++	SETOPT(CURLOPT_CONNECTTIMEOUT, (long)nsoption_uint(curl_fetch_timeout));
++	if (!fetch_curl_ipv6_global()) {
++		NSLOG(netsurf, INFO, "no global IPv6 address: IPv4 only");
++		SETOPT(CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
++	}
+ 
+ 	if (nsoption_charp(ca_bundle) &&
+ 	    strcmp(nsoption_charp(ca_bundle), "")) {

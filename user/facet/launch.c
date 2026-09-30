@@ -78,6 +78,8 @@ pid_t app_launch(const char *app, const char *arg)
         return spawn("facet-network", NULL, NULL, NULL, false);
     if (!strcmp(app, "clock"))
         return spawn("facet-clock", NULL, NULL, NULL, false);
+    if (!strcmp(app, "browser"))                         /* NetSurf, on the disk (not the ISO's root) */
+        return spawn("netsurf", arg && *arg ? arg : NULL, NULL, NULL, false);
     if (!strcmp(app, "about"))
         return spawn("facet-about", NULL, NULL, NULL, false);
     if (!strcmp(app, "power"))
@@ -97,6 +99,7 @@ void app_monitor(void) { app_launch("monitor", NULL); }
 void app_clock(void) { app_launch("clock", NULL); }
 void app_about(void) { app_launch("about", NULL); }
 void app_network(void) { app_launch("network", NULL); }
+void app_browser(void) { app_launch("browser", NULL); }
 void app_installer(void) { app_launch("installer", NULL); }
 void app_power(void) { app_launch("power", NULL); }
 void app_settings(void) { app_launch("settings", NULL); }

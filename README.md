@@ -27,7 +27,7 @@ Requirements (Debian 13 or Ubuntu):
 
 ```sh
 sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-amd64-bin \
-                 xorriso e2fsprogs qemu-system-x86 ovmf
+                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl
 ```
 
 - **KVM:** the build boots SIEOS in QEMU once, to compile ksh93 on SIEOS itself. With
@@ -36,7 +36,8 @@ sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-am
 - **Wi-Fi firmware** (optional): the AX201 firmware is copied from the build host's
   `/lib/firmware`: `firmware-iwlwifi` on Debian (from `non-free-firmware`),
   `linux-firmware` on Ubuntu.
-- **Web browser libraries** (optional, `make netsurf-libs`): `bison flex gperf pkg-config`.
+- `gperf`, `pkg-config` and `perl` are for the web browser's libraries (NetSurf's own
+  build generates code with them).
 - `mkfs.ext4`, `debugfs` and `e2fsck` are in `/usr/sbin`, which a Debian user's `PATH`
   lacks; the Makefile adds it, so `make` needs no root and no `PATH` change.
 
@@ -49,9 +50,11 @@ tarballs, each checked against its SHA-256 (`ports/SHA256SUMS`, and
 1. the cross toolchain, into `build/cross`;
 2. the C library, libsieos, libfacet, libsia, the programs and the drivers;
 3. the GNU utilities, dash and e2fsprogs, cross-compiled;
-4. the native toolchain (binutils and GCC hosted on SIEOS, into `build/native`);
-5. ksh93, compiled on SIEOS itself under QEMU (`tools/nativebuild.py`);
-6. the ISO, the root file system and the disk.
+4. the web browser: its libraries (zlib, libpng, libjpeg, expat, FreeType, Mbed TLS,
+   curl, NetSurf's own) and NetSurf;
+5. the native toolchain (binutils and GCC hosted on SIEOS, into `build/native`);
+6. ksh93, compiled on SIEOS itself under QEMU (`tools/nativebuild.py`);
+7. the ISO, the root file system and the disk.
 
 A clean build took about 20 minutes on a 28-core machine with KVM, most of it
 compiling GCC (twice: cross and native), so expect longer on fewer cores; later builds
@@ -158,8 +161,8 @@ The programs are C programs on the C library, linked dynamically; `libsieos`
 - **Users and permissions:** `su` and `passwd` (both set-user-ID root), `useradd`, `id`, `whoami`, `groups`, `chmod` (octal and symbolic), `chown`, `chgrp`.
 - **Files and text:** `ls -lad`, `cat`, `cp`, `mv` (rename), `tail`, `rm -rf`, `mkdir -p`, `rmdir`, `touch`, `grep`, `head`, `wc`, `hexdump`, `stat`, `tty`, `yes`, `true`, `false`.
 - **Network:** `ifconfig`, `ping` (setuid root), `host`, `nc` (TCP/UDP client and server),
-  `wget`, `httpd` (web server with directory listings), `netstat`. The resolver uses
-  `/etc/hosts` and then DNS.
+  `wget`, `httpd` (web server with directory listings), `netstat`, `netsurf` (the web
+  browser, on the disk). The resolver uses `/etc/hosts` and then DNS.
 - **System:** `ps` (with CPU column), `lscpu`, `nproc`, `kill`, `free`, `df`, `mount`, `umount`,
   `lofiadm`, `priocntl`, `getconf`, `uname`, `date`, `uptime`, `sleep`, `sync`, `clear`, `sifetch`,
   `dmesg`, `poweradm` (power policy, temperatures, fans), `halt`, `reboot`.
@@ -243,7 +246,8 @@ installed for the cross compiler and for SIEOS's own `cc`, with examples in
   - Alt+Tab: next window;
   - Alt+F4: close.
 - **Applications:** Terminal (sia, or the plain shell), Files and Viewer, System Monitor,
-  **Network Status** (addresses, a live traffic graph and open sockets), **Power and
+  **Network Status** (addresses, a live traffic graph and open sockets), **Web Browser**
+  (NetSurf, see below), **Power and
   Temperature**, **Settings** (display resolution, appearance and the other desktop
   settings, one page per section), **Install SIEOS**, Clock and About. All of them follow
   the current skin.
@@ -334,24 +338,38 @@ user@sieos:~$ jobs
 user@sieos:~$ bg %2 ; kill %1 ; fg %2
 ```
 
-## Web browser (in progress)
+## Web browser
 
-SIEOS is getting a web browser: [NetSurf](https://www.netsurf-browser.org/) 3.11 on its
-framebuffer library (libnsfb), which will draw into a Facet window. Built so far, into a
-staging root (`build/ports/netlibs/usr`) and not yet on the disk:
+**Web Browser** in the Spine and the SIEOS menu opens [NetSurf](https://www.netsurf-browser.org/)
+3.11 in a Facet window; from a shell, `netsurf [URL]`; sia opens it too ("open
+example.com in the browser"). It renders HTML and CSS (CSS 2.1 and parts of CSS 3) with
+PNG, JPEG, GIF, BMP and SVG images, in the DejaVu fonts, and fetches over HTTP and HTTPS
+through curl and Mbed TLS (certificates checked against `/etc/ssl/certs.pem`). It is on
+the disk and the USB image, not in the ISO's small root.
+
+- **Address bar:** click it, **Ctrl+U** clears it, type the address, Enter. Home/End and
+  Ctrl+Left/Right move the caret. (NetSurf's address bar has no select-all.)
+- **Pages:** click links; scroll with the scroll bar (its trough moves a page, its
+  arrows a line); Back, Forward, Stop and Reload are on the toolbar.
+- **Not yet:** JavaScript (NetSurf's Duktape is not built), and, until Facet has them,
+  the mouse wheel, hover (link highlighting, the link's address in the status bar),
+  right-click menus, non-ASCII typing and the clipboard. The window's title stays
+  "NetSurf".
+
+How it is built (`make netsurf`, part of `make`), into `build/ports`:
 
 ```sh
 make netlibs        # zlib, libpng, libjpeg, expat, FreeType, Mbed TLS and curl (ports/netlibs.py)
-make netsurf-libs   # NetSurf's own libraries (libcss, libdom, libhubbub, libnsfb, ...) and nsgenbind
+make netsurf-libs   # NetSurf's own libraries (libcss, libdom, libhubbub, libnsfb, ...)
+make netsurf        # NetSurf's framebuffer front end: build/ports/netsurf-root/usr/bin/netsurf-fb
 ```
 
-curl fetches over HTTP and HTTPS on SIEOS (certificates checked against
-`/etc/ssl/certs.pem`), and the HTML parser and libnsfb behave as on Linux. libnsfb has a
-Facet surface (`ports/netsurf/nsfb-facet.c`, NetSurf's default): a Facet window whose
-shared buffer libnsfb draws into directly, with keys, clicks, resizing and closing
-turned into libnsfb's events. Still to come: NetSurf itself, and in Facet the mouse
-wheel, pointer moves without a button held (hover), the right and middle buttons in
-windows, Unicode text input and a clipboard.
+`ports/netsurf/` holds the SIEOS parts: `nsfb-facet.c`, libnsfb's Facet surface (a
+Facet window whose shared buffer libnsfb draws into directly, with keys, clicks, resizing
+and closing turned into libnsfb's events), and `netsurf-curl.patch`, with which the
+fetcher resolves IPv4 addresses only when the machine has no global IPv6 address (as on
+QEMU's user network), instead of waiting on IPv6 for every dual-stack site.
+`prepare.sh` applies both and sets the build options (`Makefile.config`).
 
 ## Limitations
 
@@ -363,7 +381,7 @@ windows, Unicode text input and a clipboard.
   curl (below) uses Mbed TLS, which also speaks TLS 1.2.
 - The C library has `eventfd()`, but the kernel has no `eventfd2` system call yet: it
   fails with `ENOSYS` (ports must be configured without it, as curl is).
-- No web browser yet (see below).
+- The web browser has no JavaScript (see Web browser).
 - SMP uses a big kernel lock. User code, page faults and simple system calls run in
   parallel across CPUs, and disk I/O releases the lock while it waits; the rest of the
   kernel does not run in parallel. Device interrupts go to the
@@ -377,7 +395,8 @@ drv/             the loadable drivers, one directory each (built into build/drv/
 abi/include/     the system-call ABI v2 headers (sieos/*.h), shared by the kernel and libc
 libc/            musl 1.2.5 and its port to SIEOS (sieos-port.py), with libc-test
 toolchain/       the x86_64-pc-sieos GCC/binutils target (cross and native) and its tests
-ports/           third-party software: build scripts, SHA256SUMS, Wi-Fi firmware licence
+ports/           third-party software: build scripts, SHA256SUMS, Wi-Fi firmware licence,
+                 netsurf/ (the web browser's Facet surface, patch and build options)
 docs/            ABI v2 specification, SDK guide, logo
 user/libsieos/   SIEOS extensions and helpers over the C library (user/include/sieos.h)
 user/bin/        user programs
@@ -413,7 +432,8 @@ Third-party components:
 - **Ported software**, built from unmodified release tarballs (with patches applied at
   build time where SIEOS needs them): the C library (musl), GCC and binutils, ksh93, dash,
   the GNU utilities, e2fsprogs, and for the browser zlib, libpng, libjpeg, expat, FreeType,
-  Mbed TLS, curl and NetSurf's libraries. Each keeps its own licence.
+  Mbed TLS, curl, NetSurf and its libraries. Each keeps its own licence.
+- **Fonts:** DejaVu (`rootfs/usr/share/fonts/dejavu`, with its licence).
 - **Intel's Wi-Fi firmware** is copied from the build host's linux-firmware, under its
   licence (`ports/firmware/LICENCE.iwlwifi_firmware`).
 - **Font:** `kernel/font8x16.c` is generated by `tools/psf2c.py` from

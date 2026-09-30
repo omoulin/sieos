@@ -189,6 +189,7 @@ static struct tile tiles[] = {
     { "Files", ICON_FOLDER, open_home, "Files", RGB(0x7F, 0xA3, 0xC8), RGB(0x4F, 0x72, 0x99) },
     { "System Monitor", ICON_MONITOR, app_monitor, "System Monitor", RGB(0x9A, 0xAB, 0x8C), RGB(0x6C, 0x7C, 0x60) },
     { "Network Status", ICON_NETWORK, app_network, "Network Status", RGB(0xD6, 0xBF, 0x96), RGB(0xA8, 0x8F, 0x66) },
+    { "Web Browser", ICON_NETWORK, app_browser, "NetSurf", RGB(0x8C, 0xB8, 0xB0), RGB(0x5A, 0x86, 0x7E) },
     { "Clock", ICON_CLOCK, app_clock, "Clock", RGB(0xB3, 0x9C, 0xC0), RGB(0x7F, 0x6A, 0x8F) },
 };
 #define NTILES (int)(sizeof(tiles) / sizeof(tiles[0]))
@@ -1956,6 +1957,7 @@ static void open_gem_menu(void)
     items[n++] = (struct menu_item){ "Files", call_action, (void *)open_home, ICON_FOLDER, NULL, 0 };
     items[n++] = (struct menu_item){ "System Monitor", call_action, (void *)app_monitor, ICON_MONITOR, NULL, 0 };
     items[n++] = (struct menu_item){ "Network Status", call_action, (void *)app_network, ICON_NETWORK, NULL, 0 };
+    items[n++] = (struct menu_item){ "Web Browser", call_action, (void *)app_browser, ICON_NETWORK, NULL, 0 };
     items[n++] = (struct menu_item){ "Clock", call_action, (void *)app_clock, ICON_CLOCK, NULL, 0 };
     items[n++] = (struct menu_item){ "Power and Temperature", call_action, (void *)app_power, ICON_MONITOR, NULL, 0 };
     items[n++] = (struct menu_item){ "Settings", call_action, (void *)app_settings, ICON_PROGRAM, NULL, 0 };

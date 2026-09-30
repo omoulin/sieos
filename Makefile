@@ -395,7 +395,8 @@ $(ISO): $(KERNEL) $(BOOTARCH) $(ROOTIMG) iso/boot/grub/grub.cfg tools/mkiso.sh t
 DISKROOT := $(BUILD)/diskroot
 DEVROOT  := $(BUILD)/.devroot
 DISKIMG  := $(BUILD)/diskroot.img
-$(DEVROOT): $(ROOTIMG) $(LIBSIEOS) $(SDK_STAMP) $(GNU_DONE) $(NATIVE_DONE) $(wildcard abi/include/sieos/*.h) user/include/sieos.h
+$(DEVROOT): $(ROOTIMG) $(LIBSIEOS) $(SDK_STAMP) $(GNU_DONE) $(NATIVE_DONE) $(PORTS)/.netsurf $(wildcard abi/include/sieos/*.h) \
+             user/include/sieos.h
 	rm -rf $(DISKROOT) && cp -a $(ROOTFS) $(DISKROOT)
 	mkdir -p $(DISKROOT)/usr/bin && cp -a $(PORTS)/root/usr/gnu $(DISKROOT)/usr/ && rm -rf $(DISKROOT)/usr/gnu/share
 	for f in $(DISKROOT)/usr/gnu/bin/* $$(find $(DISKROOT)/usr/gnu/libexec -type f 2>/dev/null); do \
@@ -418,6 +419,11 @@ $(DEVROOT): $(ROOTIMG) $(LIBSIEOS) $(SDK_STAMP) $(GNU_DONE) $(NATIVE_DONE) $(wil
 		for f in $(DISKROOT)/usr/lib/*.so*; do [ -L $$f ] || $(CROSS)/bin/$(TARGET)-strip --strip-unneeded $$f; done; \
 		find $(DISKROOT)/usr -name '*.la' -delete; \
 		chmod -R go-w,a+rX $(DISKROOT)/usr; fi
+	@# the web browser: NetSurf, as /bin/netsurf (Facet's Web Browser)
+	cp -a $(NS_ROOT)/usr/. $(DISKROOT)/usr/
+	$(CROSS)/bin/$(TARGET)-strip $(DISKROOT)/usr/bin/netsurf-fb
+	ln -sf ../usr/bin/netsurf-fb $(DISKROOT)/bin/netsurf
+	chmod -R go-w,a+rX $(DISKROOT)/usr/share/netsurf
 	touch $@
 
 # ksh93 (the Solaris shell): built on SIEOS, from the dev root, by tools/nativebuild.py
@@ -784,8 +790,8 @@ netlibs: $(NETLIB_DONE)
 # with the Facet surface: ports/netsurf/), from the release bundle, static, in the
 # same staging root (their -I$(PREFIX)/include
 # must not name the build host's /usr/include: PREFIX is the staging root itself);
-# pkg-config sees only the staging root.  nsgenbind (JavaScript binding generator)
-# is a build-host tool, in $(NSHOST).
+# pkg-config sees only the staging root.  (nsgenbind, the JavaScript binding
+# generator, is not built: JavaScript is off.)
 NS_ALL     := netsurf-all-3.11
 NS_SRC     := $(PORTS)/$(NS_ALL)
 NSHOST     := $(PORTS)/nshost
@@ -800,13 +806,37 @@ $(PORTS)/.lib-netsurf: $(PORTS_DL)/$(NS_ALL).tar.gz $(NETLIB_DONE) $(wildcard po
 	for l in $(NS_LIBS); do \
 		echo "netsurf: $$l"; $(NS_MAKE) -C $(NS_SRC)/$$l install >$(PORTS)/ns-$$l.log 2>&1 || \
 			{ tail -20 $(PORTS)/ns-$$l.log; exit 1; }; done
-	$(MAKE) -C $(NS_SRC)/buildsystem install PREFIX=$(NSHOST) DESTDIR= Q= >$(PORTS)/ns-nsgenbind.log 2>&1
-	$(MAKE) -C $(NS_SRC)/nsgenbind install PREFIX=$(NSHOST) DESTDIR= Q= >>$(PORTS)/ns-nsgenbind.log 2>&1 || \
-		{ tail -20 $(PORTS)/ns-nsgenbind.log; exit 1; }
 	touch $@
 
 .PHONY: netsurf-libs
 netsurf-libs: $(PORTS)/.lib-netsurf
+
+# NetSurf's build runs two tools of its own on the build host, which need the
+# host's zlib and libpng: built here from the same tarballs, static, in $(NSHOST).
+$(PORTS)/.host-png: $(PORTS_DL)/zlib-1.3.2.tar.xz $(PORTS_DL)/libpng-1.6.58.tar.xz
+	rm -rf $(PORTS)/host && mkdir -p $(PORTS)/host
+	tar xf $(PORTS_DL)/zlib-1.3.2.tar.xz -C $(PORTS)/host
+	cd $(PORTS)/host/zlib-1.3.2 && ./configure --static --prefix=$(NSHOST) >../zlib.log && \
+		$(MAKE) install >>../zlib.log
+	tar xf $(PORTS_DL)/libpng-1.6.58.tar.xz -C $(PORTS)/host
+	cd $(PORTS)/host/libpng-1.6.58 && ./configure --prefix=$(NSHOST) --disable-shared \
+		CPPFLAGS=-I$(NSHOST)/include LDFLAGS=-L$(NSHOST)/lib >../libpng.log && $(MAKE) install >>../libpng.log
+	touch $@
+
+# NetSurf (the framebuffer front end, on libnsfb's Facet surface), installed with
+# prefix /usr into $(NS_ROOT): /usr/bin/netsurf-fb and /usr/share/netsurf
+NS_ROOT := $(PORTS)/netsurf-root
+NS_FB    = $(MAKE) -C $(NS_SRC)/netsurf TARGET=framebuffer CC=$(SIEOS_CC) Q= VQ= \
+           PKG_CONFIG="PKG_CONFIG_LIBDIR=$(NETLIBS)/usr/lib/pkgconfig pkg-config" \
+           BUILD_CC=cc BUILD_CFLAGS="-O2 -I$(NSHOST)/include" BUILD_LDFLAGS=-L$(NSHOST)/lib \
+           BUILD_LIBPNG_CFLAGS=-I$(NSHOST)/include BUILD_LIBPNG_LDFLAGS="-lpng16 -lz -lm" PREFIX=/usr
+$(PORTS)/.netsurf: $(PORTS)/.lib-netsurf $(PORTS)/.host-png
+	$(NS_FB) >$(PORTS)/netsurf.log 2>&1 || { tail -30 $(PORTS)/netsurf.log; exit 1; }
+	rm -rf $(NS_ROOT) && $(NS_FB) install DESTDIR=$(NS_ROOT) >>$(PORTS)/netsurf.log 2>&1
+	touch $@
+
+.PHONY: netsurf
+netsurf: $(PORTS)/.netsurf
 
 # a self-hosting check: GNU make configured and built on SIEOS, then rebuilt by itself
 .PHONY: native-make-test
