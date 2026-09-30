@@ -5,7 +5,16 @@ Software added to it is managed as **packages**: installed under `/usr/pkg`
 (never over a base file), updated and removed with `pkg`, from signed
 repositories.
 
-## Using pkg (on SIEOS, as root)
+## SiPM
+
+**SiPM** (SIEOS Package Manager, *SiPM (packages)* in the SIEOS menu) is pkg in a
+window: the packages the repositories offer and the installed ones, filtered
+(All, Installed, Updates) and searched; the selected one's details (versions,
+size, what it needs) with Install, Upgrade or Remove; Refresh (`pkg update`)
+and Upgrade all. When the session is not root's, a change asks for root's
+password first. sia opens it too ("open SiPM").
+
+## Using pkg (on SIEOS)
 
 ```sh
 pkg update                  # fetch the repositories' signed indexes
@@ -16,7 +25,15 @@ pkg upgrade [NAME...]       # newer versions of the installed packages
 pkg remove [-f] NAME...     # remove (refused while another package needs it; -f forces)
 pkg list                    # the installed packages
 pkg files NAME              # an installed package's files
+pkg query                   # every package, a tab-separated line each (for programs: SiPM)
 ```
+
+Anyone can look (`search`, `info`, `list`, `files`, `query`). Changing the
+system (`update`, `install`, `upgrade`, `remove`, `add`) needs root: pkg is
+set-user-ID root and, for another user, asks for root's password (on the
+terminal, or with `-P` the first line of standard input, which is how SiPM
+hands it over), as the installer does. `create` runs with the caller's own
+rights.
 
 Programs land in `/usr/pkg/bin`, which is on every user's `PATH`; shared
 libraries in `/usr/pkg/lib`, which the dynamic linker searches
@@ -120,3 +137,6 @@ the key (and a backup): systems built with it accept only indexes it signed.
   a package's files and its empty directories (`/usr/pkg` and its first level
   stay).
 - `pkg` takes a lock (`/var/lib/pkg/.lock`): one change at a time.
+- For a user other than root, a change needs root's password (a second's delay
+  after a wrong one), and `PKG_ROOT` (installing into another tree, for tests)
+  is ignored.

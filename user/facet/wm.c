@@ -1964,6 +1964,7 @@ static void open_gem_menu(void)
     items[n++] = (struct menu_item){ "Clock", call_action, (void *)app_clock, ICON_CLOCK, NULL, 0 };
     items[n++] = (struct menu_item){ "Power and Temperature", call_action, (void *)app_power, ICON_MONITOR, NULL, 0 };
     items[n++] = (struct menu_item){ "Settings", call_action, (void *)app_settings, ICON_PROGRAM, NULL, 0 };
+    items[n++] = (struct menu_item){ "SiPM (packages)", call_action, (void *)app_sipm, ICON_PROGRAM, NULL, 0 };
     items[n++] = (struct menu_item){ "Install SIEOS", call_action, (void *)app_installer, ICON_DISK, NULL, 0 };
     items[n++] = (struct menu_item){ "About SIEOS", call_action, (void *)app_about, ICON_INFO, NULL, 0 };
     int listed = 0;

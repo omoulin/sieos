@@ -13,6 +13,15 @@
  *   pkg add [-u] FILE.spkg...  install package files (-u: not in a signed index)
  *   pkg create -n NAME -v VERSION [-s SUMMARY] [-d "DEPS"] -o FILE.spkg DIR
  *                              package software installed (DESTDIR) under DIR/usr/pkg
+ *   pkg query                  every package known, a line each, for programs (SiPM):
+ *                              name, available version, installed version, size,
+ *                              dependencies, summary, separated by tabs ("-": none)
+ *
+ * pkg is set-user-ID root.  Looking (search, info, list, files, query) and
+ * create run with the caller's own rights; changing the system (update,
+ * install, upgrade, remove, add) needs root, or root's password: asked on the
+ * terminal, or with -P the first line of standard input (SiPM's way), as
+ * sieinstall does.
  *
  * A package (.spkg) is a gzip-compressed ustar archive: +MANIFEST first
  * (name, version, summary, depends, size), then its files, all under
@@ -28,6 +37,7 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include <dirent.h>
+#include <shadow.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -53,7 +63,9 @@
 #define DB         "/var/lib/pkg"
 #define TIMEOUT_MS 60000
 
-static const char *root = "/";           /* PKG_ROOT: install into another tree (tests) */
+static const char *root = "/";           /* PKG_ROOT: install into another tree (root only) */
+
+bool check_password(const char *password, const char *hash);   /* libsieos */
 
 /* ---------------------------------------------------------------- utilities */
 
@@ -1139,6 +1151,30 @@ static int cmd_info(const char *name)
     return 0;
 }
 
+static void query_f(const struct rec *r, void *vc)
+{
+    (void)vc;
+    if (!index_find(r->name))                    /* (installed, in no index) */
+        printf("%s\t-\t%s\t%lu\t%s\t%s\n", r->name, r->version, r->size, r->depends[0] ? r->depends : "-",
+               r->summary);
+}
+
+static int cmd_query(void)
+{
+    load_indexes();
+    for (int i = 0; i < nidx; i++) {
+        const struct rec *r = &idx[i];
+        if (index_find(r->name) != r)
+            continue;
+        struct rec have;
+        bool inst = installed(r->name, &have);
+        printf("%s\t%s\t%s\t%lu\t%s\t%s\n", r->name, r->version, inst ? have.version : "-", r->size,
+               r->depends[0] ? r->depends : "-", r->summary);
+    }
+    each_installed(query_f, NULL);
+    return 0;
+}
+
 static int cmd_files(const char *name)
 {
     char *s = files_of(name);
@@ -1319,10 +1355,40 @@ static int cmd_create(struct rec *r, const char *out, const char *dir)
 static void usage(void)
 {
     fputs("usage: pkg update | search [WORD] | info NAME | install NAME... | upgrade [NAME...]\n"
-          "           | remove [-f] NAME... | list | files NAME | add [-u] [-f] FILE.spkg...\n"
+          "           | remove [-f] NAME... | list | files NAME | query | add [-u] [-f] FILE.spkg...\n"
+          "       (update, install, upgrade, remove, add: -P reads root's password on standard input)\n"
           "           | create -n NAME -v VERSION [-s SUMMARY] [-d \"DEPS\"] -o FILE.spkg DIR\n",
           stderr);
     exit(2);
+}
+
+/* A change needs root: the caller is root, or gives root's password (the terminal,
+ * or with -P standard input's first line), as sieinstall asks it. */
+static void become_root(bool pass_stdin)
+{
+    if (geteuid() != 0)
+        die("changing packages needs root (pkg is set-user-ID root)");
+    if (getuid() == 0)
+        return;
+    char line[256], *pass = NULL;
+    if (pass_stdin) {
+        if (fgets(line, sizeof(line), stdin)) {
+            line[strcspn(line, "\n")] = 0;
+            pass = line;
+        }
+    } else {
+        pass = getpass("Root password: ");
+    }
+    struct spwd *sp = getspnam("root");
+    const char *hash = sp ? sp->sp_pwdp : "!";
+    bool ok = pass && hash[0] != '!' && hash[0] != '*' && check_password(pass, hash);
+    memset(line, 0, sizeof(line));
+    if (!ok) {
+        sleep(1);
+        die("wrong root password: nothing was changed");
+    }
+    if (setuid(0) < 0)
+        die("setuid: %s", strerror(errno));
 }
 
 static int lock_db(void)
@@ -1338,14 +1404,18 @@ static int lock_db(void)
 
 int main(int argc, char **argv)
 {
-    if (getenv("PKG_ROOT") && *getenv("PKG_ROOT"))
-        root = getenv("PKG_ROOT");
+    if (getuid() == 0 && getenv("PKG_ROOT") && *getenv("PKG_ROOT"))
+        root = getenv("PKG_ROOT");               /* (never for others: pkg is set-user-ID root) */
     if (argc < 2)
         usage();
     const char *cmd = argv[1];
+    bool changes = !strcmp(cmd, "update") || !strcmp(cmd, "install") || !strcmp(cmd, "upgrade") ||
+                   !strcmp(cmd, "remove") || !strcmp(cmd, "add");
+    if (!changes && geteuid() != getuid() && setuid(getuid()) < 0)
+        die("setuid: %s", strerror(errno));      /* looking, and create, with the caller's own rights */
     argc -= 2;
     argv += 2;
-    bool force = false, unsigned_ok = false;
+    bool force = false, unsigned_ok = false, pass_stdin = false;
     struct rec r;
     memset(&r, 0, sizeof(r));
     const char *out = NULL;
@@ -1356,6 +1426,8 @@ int main(int argc, char **argv)
             force = true;
         else if (!strcmp(o, "-u"))
             unsigned_ok = true;
+        else if (!strcmp(o, "-P") && changes)
+            pass_stdin = true;
         else if (i + 1 < argc && !strcmp(cmd, "create") && strchr("nvsdo", o[1]) && !o[2]) {
             const char *v = argv[++i];
             switch (o[1]) {
@@ -1383,6 +1455,10 @@ int main(int argc, char **argv)
         return cmd_files(argv[0]);
     if (!strcmp(cmd, "create") && argc == 1 && out)
         return cmd_create(&r, out, argv[0]);
+    if (!strcmp(cmd, "query") && !argc)
+        return cmd_query();
+    if (changes)
+        become_root(pass_stdin);
     int lk = -1;
     int rc = 2;
     if (!strcmp(cmd, "update") && !argc) {

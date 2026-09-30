@@ -148,10 +148,10 @@ bool sia_add_desktop_tools(struct sia_session *s)
     add(s, "open_app", "open",
         "Open an application window on the Facet desktop. app: terminal (the sia assistant terminal), shell "
         "(a plain shell terminal), files (file browser, optional path), monitor (system monitor), network "
-        "(network status), browser (the NetSurf web browser, optional path: a URL to open), clock, settings (the desktop's settings), display (settings, on the screen resolution), appearance (settings, on the skin), about. For terminal or shell, 'command' is typed into "
+        "(network status), browser (the NetSurf web browser, optional path: a URL to open), sipm (SiPM, the package manager: installs software), clock, settings (the desktop's settings), display (settings, on the screen resolution), appearance (settings, on the skin), about. For terminal or shell, 'command' is typed into "
         "it once it opens.",
         "{\"type\":\"object\",\"properties\":{\"app\":{\"type\":\"string\",\"enum\":[\"terminal\",\"shell\","
-        "\"files\",\"monitor\",\"network\",\"browser\",\"clock\",\"settings\",\"display\",\"appearance\",\"about\"]},\"path\":{\"type\":\"string\","
+        "\"files\",\"monitor\",\"network\",\"browser\",\"sipm\",\"clock\",\"settings\",\"display\",\"appearance\",\"about\"]},\"path\":{\"type\":\"string\","
         "\"description\":\"folder for files, URL for browser\"},\"command\":{\"type\":\"string\","
         "\"description\":\"command line to run in the new terminal\"}},\"required\":[\"app\"]}",
         true);

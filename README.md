@@ -249,7 +249,7 @@ installed for the cross compiler and for SIEOS's own `cc`, with examples in
   - Alt+F4: close.
 - **Applications:** Terminal (sia, or the plain shell), Files and Viewer, System Monitor,
   **Network Status** (addresses, a live traffic graph and open sockets), **Web Browser**
-  (NetSurf, see below), **Power and
+  (NetSurf, see below), **SiPM** (the packages, see Packages), **Power and
   Temperature**, **Settings** (display resolution, appearance and the other desktop
   settings, one page per section), **Install SIEOS**, Clock and About. All of them follow
   the current skin.
@@ -343,8 +343,9 @@ user@sieos:~$ bg %2 ; kill %1 ; fg %2
 ## Packages
 
 The base system stays in the images; software added to it is managed as
-packages with `pkg`, under `/usr/pkg`, from signed repositories
-(https://www.sieos.org/repo/ by default):
+packages, under `/usr/pkg`, from signed repositories (https://www.sieos.org/repo/
+by default): with **SiPM**, the package manager's window (*SiPM (packages)* in the
+SIEOS menu), or with `pkg`:
 
 ```sh
 pkg update && pkg search          # what the repositories offer

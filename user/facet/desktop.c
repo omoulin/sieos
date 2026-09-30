@@ -143,16 +143,16 @@ static void handle(struct chan *c, const char *line, size_t len)
         const char *cmd = json_get_str(req, "command");
         struct window *w = NULL;
         if (!app) {
-            reply(c, false, "which app? terminal, shell, files, monitor, network, browser, clock, settings, display, appearance or about");
+            reply(c, false, "which app? terminal, shell, files, monitor, network, browser, sipm, clock, settings, display, appearance or about");
             goto out;
         }
-        static const char *const known[] = { "terminal", "shell", "files", "monitor", "network", "browser", "clock",
-                                             "settings", "display", "appearance", "about" };
+        static const char *const known[] = { "terminal", "shell", "files", "monitor", "network", "browser", "sipm",
+                                             "clock", "settings", "display", "appearance", "about" };
         bool ok = false;
         for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); i++)
             ok |= !strcmp(app, known[i]);
         if (!ok) {
-            snprintf(msg, sizeof(msg), "unknown app '%s' (terminal, shell, files, monitor, network, browser, clock, settings, display, appearance, about)",
+            snprintf(msg, sizeof(msg), "unknown app '%s' (terminal, shell, files, monitor, network, browser, sipm, clock, settings, display, appearance, about)",
                      app);
             reply(c, false, msg);
             goto out;
