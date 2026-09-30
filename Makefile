@@ -780,8 +780,9 @@ $(PORTS)/.lib-%: ports/netlibs.py ports/build.py | $(TC_DONE) $(SYSROOT)/usr/lib
 .PHONY: netlibs
 netlibs: $(NETLIB_DONE)
 
-# NetSurf's own libraries (HTML and CSS parsing, the DOM, image decoders, libnsfb),
-# from the release bundle, static, in the same staging root (their -I$(PREFIX)/include
+# NetSurf's own libraries (HTML and CSS parsing, the DOM, image decoders, libnsfb
+# with the Facet surface: ports/netsurf/), from the release bundle, static, in the
+# same staging root (their -I$(PREFIX)/include
 # must not name the build host's /usr/include: PREFIX is the staging root itself);
 # pkg-config sees only the staging root.  nsgenbind (JavaScript binding generator)
 # is a build-host tool, in $(NSHOST).
@@ -793,8 +794,9 @@ NS_LIBS    := buildsystem libwapcaplet libparserutils libcss libhubbub libdom li
 NS_MAKE     = CFLAGS=-fPIC PATH=$(CROSS)/bin:$$PATH $(MAKE) HOST=$(TARGET) PREFIX=$(NETLIBS)/usr DESTDIR= Q= \
               PKGCONFIG="PKG_CONFIG_LIBDIR=$(NETLIBS)/usr/lib/pkgconfig pkg-config" \
               WARNFLAGS='-Wall -W -Wno-error' WITH_HUBBUB_BINDING=yes WITH_EXPAT_BINDING=yes
-$(PORTS)/.lib-netsurf: $(PORTS_DL)/$(NS_ALL).tar.gz $(NETLIB_DONE)
+$(PORTS)/.lib-netsurf: $(PORTS_DL)/$(NS_ALL).tar.gz $(NETLIB_DONE) $(wildcard ports/netsurf/*) $(SDK_STAMP)
 	rm -rf $(NS_SRC) && tar xzf $< -C $(PORTS)
+	ports/netsurf/prepare.sh $(NS_SRC)
 	for l in $(NS_LIBS); do \
 		echo "netsurf: $$l"; $(NS_MAKE) -C $(NS_SRC)/$$l install >$(PORTS)/ns-$$l.log 2>&1 || \
 			{ tail -20 $(PORTS)/ns-$$l.log; exit 1; }; done

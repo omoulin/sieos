@@ -346,9 +346,12 @@ make netsurf-libs   # NetSurf's own libraries (libcss, libdom, libhubbub, libnsf
 ```
 
 curl fetches over HTTP and HTTPS on SIEOS (certificates checked against
-`/etc/ssl/certs.pem`), and the HTML parser and libnsfb behave as on Linux. Still to come:
-libnsfb's Facet surface, NetSurf itself, and the mouse wheel, Unicode text input and a
-clipboard in Facet.
+`/etc/ssl/certs.pem`), and the HTML parser and libnsfb behave as on Linux. libnsfb has a
+Facet surface (`ports/netsurf/nsfb-facet.c`, NetSurf's default): a Facet window whose
+shared buffer libnsfb draws into directly, with keys, clicks, resizing and closing
+turned into libnsfb's events. Still to come: NetSurf itself, and in Facet the mouse
+wheel, pointer moves without a button held (hover), the right and middle buttons in
+windows, Unicode text input and a clipboard.
 
 ## Limitations
 
