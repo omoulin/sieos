@@ -364,7 +364,7 @@ static void start_session(struct passwd *pw)
     setenv("USER", pw->pw_name, 1);
     setenv("LOGNAME", pw->pw_name, 1);
     setenv("SHELL", pw->pw_shell, 1);
-    setenv("PATH", pw->pw_uid == 0 ? "/sbin:/bin:/usr/bin:/usr/gnu/bin" : "/bin:/usr/bin:/usr/gnu/bin:/sbin", 1);
+    setenv("PATH", pw->pw_uid == 0 ? "/sbin:/bin:/usr/bin:/usr/gnu/bin:/usr/pkg/bin" : "/bin:/usr/bin:/usr/gnu/bin:/usr/pkg/bin:/sbin", 1);
     setenv("TERM", "sieos", 1);
     setenv("ENV", "/etc/shrc", 1);           /* interactive /bin/sh: the prompt */
     signal(SIGINT, SIG_DFL);

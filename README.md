@@ -27,7 +27,7 @@ Requirements (Debian 13 or Ubuntu):
 
 ```sh
 sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-amd64-bin \
-                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl
+                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl
 ```
 
 - **KVM:** the build boots SIEOS in QEMU once, to compile ksh93 on SIEOS itself. With
@@ -37,7 +37,8 @@ sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-am
   `/lib/firmware`: `firmware-iwlwifi` on Debian (from `non-free-firmware`),
   `linux-firmware` on Ubuntu.
 - `gperf`, `pkg-config` and `perl` are for the web browser's libraries (NetSurf's own
-  build generates code with them).
+  build generates code with them); `openssl` makes the package signing key and signs
+  package indexes (see Packages).
 - `mkfs.ext4`, `debugfs` and `e2fsck` are in `/usr/sbin`, which a Debian user's `PATH`
   lacks; the Makefile adds it, so `make` needs no root and no `PATH` change.
 
@@ -170,6 +171,7 @@ The programs are C programs on the C library, linked dynamically; `libsieos`
   `dladm` (`show-link`, `scan-wifi`, `connect-wifi`; the WPA2 passphrase is kept in the
   root-only `/etc/wifi.conf` and the network rejoined at boot), `fbset`.
 - **Installation:** `sieinstall` (the installer, also in Facet).
+- **Packages:** `pkg` (see Packages).
 - **GNU utilities** in `/usr/gnu/bin`, as on Solaris 11: coreutils, sed, grep, diffutils,
   findutils, gawk, make (also `/usr/bin/make`), tar and gzip.
 - **Development** (with `make native`): `gcc`, `g++`, `cpp`, `as`, `ld`, `ar`, `nm`, `objdump`, `readelf`, `strip` and the other binutils.
@@ -338,6 +340,25 @@ user@sieos:~$ jobs
 user@sieos:~$ bg %2 ; kill %1 ; fg %2
 ```
 
+## Packages
+
+The base system stays in the images; software added to it is managed as
+packages with `pkg`, under `/usr/pkg`, from signed repositories
+(https://www.sieos.org/repo/ by default):
+
+```sh
+pkg update && pkg search          # what the repositories offer
+pkg install lua                   # with its dependencies
+pkg list; pkg upgrade; pkg remove lua
+```
+
+Packages are built on the build machine from recipes in `ports/pkgs/` (`make pkgs`,
+`make repo`), or on SIEOS itself from software built there (`pkg create`, `pkg add`).
+Indexes are signed with a key kept outside the source tree
+(`~/.config/sieos/pkg-signing-key.pem`), whose public half the images carry.
+[docs/pkg.md](docs/pkg.md) has the details: recipes, formats, publishing and what
+`pkg` checks.
+
 ## Web browser
 
 **Web Browser** in the Spine and the SIEOS menu opens [NetSurf](https://www.netsurf-browser.org/)
@@ -398,7 +419,9 @@ abi/include/     the system-call ABI v2 headers (sieos/*.h), shared by the kerne
 libc/            musl 1.2.5 and its port to SIEOS (sieos-port.py), with libc-test
 toolchain/       the x86_64-pc-sieos GCC/binutils target (cross and native) and its tests
 ports/           third-party software: build scripts, SHA256SUMS, Wi-Fi firmware licence,
-                 netsurf/ (the web browser's Facet surface, patch and build options)
+                 netsurf/ (the web browser's Facet surface, patch and build options),
+                 pkgs/ (package recipes)
+user/pkg/        pkg, the package manager
 docs/            ABI v2 specification, SDK guide, logo
 user/libsieos/   SIEOS extensions and helpers over the C library (user/include/sieos.h)
 user/bin/        user programs

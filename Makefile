@@ -126,6 +126,12 @@ LIBSIA      := $(BUILD)/user/libsia.a
 LIBSIA_SO   := $(BUILD)/user/libsia.so.1
 SIA_HDRS    := $(wildcard user/libsia/include/sia/*.h)
 SIA_PROGS   := $(BUILD)/user/bin/sia $(BUILD)/user/bin/sia-agent
+# pkg, the package manager (user/pkg): libsia's HTTP(S) client, libtls's SHA-256
+# and ECDSA, and zlib (the port, static); and the public half of the key that
+# signs this build's packages (see Packages)
+PKG_BIN     := $(BUILD)/user/bin/pkg
+PKG_KEY     ?= $(or $(HOME),/root)/.config/sieos/pkg-signing-key.pem
+PKG_PUB     := $(BUILD)/pkg-key.pub
 
 # sdm (graphical login) shares Facet's drawing code and widgets.
 SDM_OBJS := $(BUILD)/user/sdm/sdm.o
@@ -264,6 +270,14 @@ $(BUILD)/user/sia/%.o: user/sia/%.c $(wildcard user/libsia/*.h) user/include/sie
 	@mkdir -p $(dir $@)
 	$(UCC) $(UCFLAGS) -Iuser/libsia -c $< -o $@
 
+$(PKG_BIN): user/pkg/pkg.c $(LIBSIA) $(LIBTLS) $(LIBSIEOS) $(PORTS)/.lib-zlib | $(TC_DONE)
+	@mkdir -p $(dir $@)
+	$(UCC) $(UCFLAGS) -Iuser/libsia -Iuser/tls -I$(NETLIBS)/usr/include $(ULDFLAGS) -o $@ $< \
+		$(LIBSIA) $(LIBTLS) $(LIBSIEOS) $(NETLIBS)/usr/lib/libz.a
+
+$(PKG_PUB): tools/pkgrepo.py
+	python3 tools/pkgrepo.py key $(PKG_KEY) $@
+
 $(BUILD)/user/bin/sia $(BUILD)/user/bin/sia-agent: $(BUILD)/user/bin/%: $(BUILD)/user/sia/%.o $(LIBSIA) $(LIBTLS) $(LIBSIEOS)
 	@mkdir -p $(dir $@)
 	$(UCC) $(ULDFLAGS) -o $@ $< $(LIBSIA) $(LIBTLS) $(LIBSIEOS)
@@ -331,7 +345,7 @@ $(ESPIMG): $(KERNEL) $(BOOTARCH) iso/boot/grub/installed.cfg tools/mkfat.py
 # rootfs.img: pristine ext4 image built from rootfs/ + the user programs.
 # It is embedded in the ISO (loaded by GRUB as a RAM disk) and is the
 # template for disk.img.
-$(ROOTIMG): $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(ABI2TEST) $(TCDEP) $(DASH_BIN) $(E2FS_BINS) $(ESPIMG) $(shell find rootfs -type f 2>/dev/null) tools/rootfs.perms tools/mkperms.sh tools/mkshadow.py
+$(ROOTIMG): $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(PKG_BIN) $(PKG_PUB) $(ABI2TEST) $(TCDEP) $(DASH_BIN) $(E2FS_BINS) $(ESPIMG) $(shell find rootfs -type f 2>/dev/null) tools/rootfs.perms tools/mkperms.sh tools/mkshadow.py
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/sbin $(ROOTFS)/tmp $(ROOTFS)/proc $(ROOTFS)/dev/pts $(ROOTFS)/dev/shm $(ROOTFS)/mnt
 	cp -r rootfs/. $(ROOTFS)/
 	for p in $(UPROGS); do cp $(BUILD)/user/bin/$$p $(ROOTFS)/bin/$$p; done
@@ -347,6 +361,10 @@ $(ROOTIMG): $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(
 	if [ -f $(PCI_IDS) ]; then mkdir -p $(ROOTFS)/usr/share/misc && cp $(PCI_IDS) $(ROOTFS)/usr/share/misc/pci.ids; fi
 	cp $(SDM) $(ROOTFS)/sbin/sdm
 	cp $(SIA_PROGS) $(ROOTFS)/bin/
+	@# pkg: its program, directories and the key its indexes must be signed with
+	cp $(PKG_BIN) $(ROOTFS)/bin/
+	mkdir -p $(ROOTFS)/usr/pkg/bin $(ROOTFS)/usr/pkg/lib $(ROOTFS)/var/lib/pkg $(ROOTFS)/var/cache/pkg $(ROOTFS)/etc/pkg/keys
+	cp $(PKG_PUB) $(ROOTFS)/etc/pkg/keys/build.pub
 	cp $(ABI2TEST) $(ROOTFS)/bin/abi2test
 	cp $(DASH_BIN) $(ROOTFS)/bin/sh
 	@# Intel's Wi-Fi firmware (AX201: Qu/QuZ with the Hr radio), from the build host's linux-firmware
@@ -837,6 +855,37 @@ $(PORTS)/.netsurf: $(PORTS)/.lib-netsurf $(PORTS)/.host-png
 
 .PHONY: netsurf
 netsurf: $(PORTS)/.netsurf
+
+# ---------------------------------------------------------------- packages
+#
+# Software added to SIEOS as packages (pkg, /usr/pkg): a recipe per package in
+# ports/pkgs/NAME (tools/pkgbuild.py says what it holds), built with the cross
+# toolchain into build/repo/NAME-VERSION.spkg, after the packages it depends
+# on.  make repo writes build/repo/INDEX and signs it (INDEX.sig) with
+# $(PKG_KEY), made on first use and kept outside the source tree; the images
+# carry its public half (/etc/pkg/keys/build.pub).  The published repository
+# is https://www.sieos.org/repo/ (build/repo's files, uploaded); make repo-serve
+# serves build/repo on port 8000, for SIEOS in QEMU to test it
+# (http://10.0.2.2:8000/ in /etc/pkg/repos).
+REPO     := $(BUILD)/repo
+PKGWORK  := $(BUILD)/pkgwork
+PKG_NAMES := $(notdir $(wildcard ports/pkgs/*))
+pkg_deps = $(shell sed -n 's/^depends *= *//p' ports/pkgs/$(1)/recipe)
+define PKG_RULE
+$(PKGWORK)/.built-$(1): ports/pkgs/$(1)/recipe $(wildcard ports/pkgs/$(1)/*.patch) tools/pkgbuild.py \
+		$(foreach d,$(call pkg_deps,$(1)),$(PKGWORK)/.built-$(d)) | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
+	python3 tools/pkgbuild.py ports/pkgs/$(1) $(REPO) $(PKGWORK)
+	@touch $$@
+endef
+$(foreach p,$(PKG_NAMES),$(eval $(call PKG_RULE,$(p))))
+
+.PHONY: pkgs repo repo-serve
+pkgs: $(PKG_NAMES:%=$(PKGWORK)/.built-%)
+repo: pkgs $(PKG_PUB)
+	python3 tools/pkgrepo.py index $(REPO) $(PKG_KEY)
+repo-serve: repo
+	@echo "serving $(REPO) at http://127.0.0.1:8000/ (SIEOS in QEMU: http://10.0.2.2:8000/)"
+	python3 -m http.server 8000 --bind 127.0.0.1 --directory $(REPO)
 
 # a self-hosting check: GNU make configured and built on SIEOS, then rebuilt by itself
 .PHONY: native-make-test

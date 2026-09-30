@@ -56,7 +56,7 @@ int main(int argc, char **argv)
         strlcpy(termbuf, term ? term : "sieos", sizeof(termbuf));
         clearenv();
         setenv("TERM", termbuf, 1);
-        setenv("PATH", pw.pw_uid == 0 ? "/sbin:/bin:/usr/bin:/usr/gnu/bin" : "/bin:/usr/bin:/usr/gnu/bin:/sbin", 1);
+        setenv("PATH", pw.pw_uid == 0 ? "/sbin:/bin:/usr/bin:/usr/gnu/bin:/usr/pkg/bin" : "/bin:/usr/bin:/usr/gnu/bin:/usr/pkg/bin:/sbin", 1);
     }
     setenv("HOME", dir, 1);
     setenv("SHELL", shell, 1);

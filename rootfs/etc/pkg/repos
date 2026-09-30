@@ -1,0 +1,7 @@
+# pkg's repositories: one base URL a line (it serves INDEX, INDEX.sig and the
+# .spkg files).  An index is only used when its signature matches a key in
+# /etc/pkg/keys.
+https://www.sieos.org/repo/
+# A repository being built ("make repo-serve" on the build machine serves
+# build/repo on port 8000), as QEMU's user network sees it:
+#http://10.0.2.2:8000/

@@ -1,0 +1,8 @@
+# Lua: the interpreter (lua), the compiler (luac), and liblua.a with its headers
+name     = lua
+version  = 5.4.7-1
+summary  = Lua, a small, fast scripting language
+source   = https://www.lua.org/ftp/lua-5.4.7.tar.gz
+sha256   = 9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30
+build    = make -j$JOBS -C src all CC="$CC" AR="$AR rcu" RANLIB="$RANLIB" SYSCFLAGS="-DLUA_USE_POSIX" MYCFLAGS="-O2"
+install  = make install INSTALL_TOP=$DESTDIR$PREFIX
