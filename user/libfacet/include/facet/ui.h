@@ -17,7 +17,7 @@ void ui_meter(struct surface *s, struct rect r, int percent, color_t fill);
 
 /* ---------------- icons ---------------- */
 enum { ICON_TERMINAL, ICON_FOLDER, ICON_FILE, ICON_PROGRAM, ICON_MONITOR, ICON_CLOCK,
-       ICON_INFO, ICON_LOGOUT, ICON_HOME, ICON_NETWORK, ICON_DISK };
+       ICON_INFO, ICON_LOGOUT, ICON_HOME, ICON_NETWORK, ICON_DISK, ICON_BROWSER };
 void icon_draw(struct surface *s, int kind, int x, int y, int size);
 
 /* The SIEOS logo (Orbit Node), centred on (cx, cy), size pixels across. */

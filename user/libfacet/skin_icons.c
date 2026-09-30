@@ -57,6 +57,36 @@ static void oval(struct surface *s, int x, int y, int size, float cx, float cy, 
 #define SHAPE(top, bot, out, ow, ...) do { static const float d_[] = { __VA_ARGS__ }; \
         shape(s, x, y, size, top, bot, out, ow, (int)(sizeof(d_) / sizeof(d_[0]) / 2), d_); } while (0)
 
+/* The web browser (NetSurf): a globe with dashed meridian and equator and a
+ * six-pointed star, after NetSurf's own icon; each skin gives its colours. */
+void icon_browser_paint(struct surface *s, int x, int y, int size, color_t top, color_t bottom, color_t outline,
+                        float ow, color_t star)
+{
+    oval(s, x, y, size, 24, 25, 19, 19, top, bottom, outline, ow);
+    float w = size >= 32 ? 1.6f : 1.0f;
+    for (int arc = 0; arc < 2; arc++)            /* dashes: every other tenth of each arc */
+        for (int seg = 0; seg < 10; seg += 2) {
+            float xy[2 * 4];
+            for (int j = 0; j < 4; j++) {
+                float t = (seg + j / 3.0f) / 10.0f;
+                float a = arc == 0 ? -1.5708f + t * 3.1416f : t * 3.1416f;
+                float dx = arc == 0 ? 24 + 9 * cosf(a) : 24 + 19 * cosf(a);
+                float dy = arc == 0 ? 25 + 19 * sinf(a) : 27 + 7 * sinf(a);
+                xy[2 * j] = x + dx * size / 48.0f;
+                xy[2 * j + 1] = y + dy * size / 48.0f;
+            }
+            gfx_stroke(s, xy, 4, false, w, outline == NONE ? bottom : outline);
+        }
+    float st[2 * 12];                            /* the star, upper right */
+    for (int i = 0; i < 12; i++) {
+        float a = -1.5708f + i * 3.1416f / 6, r = i & 1 ? 3.4f : 8.0f;
+        st[2 * i] = x + (33 + r * cosf(a)) * size / 48.0f;
+        st[2 * i + 1] = y + (15 + r * sinf(a)) * size / 48.0f;
+    }
+    gfx_poly(s, st, 12, star);
+    gfx_stroke(s, st, 12, true, w, outline == NONE ? bottom : outline);
+}
+
 /* ================= BeOS style ================= */
 
 #define BO RGB(0x1C, 0x1C, 0x1C)                   /* the bold outline */
@@ -280,5 +310,11 @@ void skin_icon_draw(int skin, struct surface *s, int kind, int x, int y, int siz
     case ICON_LOGOUT:   be ? be_logout(s, x, y, size) : ix_logout(s, x, y, size); break;
     case ICON_DISK:     be ? be_disk(s, x, y, size) : ix_disk(s, x, y, size); break;
     case ICON_NETWORK:  be ? be_network(s, x, y, size) : ix_network(s, x, y, size); break;
+    case ICON_BROWSER:
+        if (be)
+            icon_browser_paint(s, x, y, size, RGB(0x78, 0xC8, 0xFF), RGB(0x18, 0x60, 0xD0), BO, BW, RGB(0xFF, 0xFF, 0xFF));
+        else
+            icon_browser_paint(s, x, y, size, RGB(0xA8, 0xD8, 0xF0), RGB(0x4C, 0x80, 0xB8), IO, IW, RGB(0xF4, 0xF4, 0xF0));
+        break;
     }
 }

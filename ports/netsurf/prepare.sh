@@ -10,8 +10,9 @@
 # window; and libfacet (shared, /usr/lib/libfacet.so.1) in libnsfb's link.
 # NetSurf: netsurf-curl.patch (the fetcher resolves IPv4 only when the host has
 # no global IPv6 address; curl's long options given longs), netsurf-title.patch
-# (the page's title to the surface: nsfb_set_parameters "title="), and
-# Makefile.config.
+# (the page's title to the surface: nsfb_set_parameters "title="),
+# netsurf-clip.patch (a page's plotting kept inside its widget: nothing drawn
+# over the toolbar, scroll bars or status bar), and Makefile.config.
 set -e
 TREE=$1
 HERE=$(cd "$(dirname "$0")" && pwd)

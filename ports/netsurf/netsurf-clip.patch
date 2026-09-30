@@ -1,0 +1,70 @@
+--- a/netsurf/frontends/framebuffer/framebuffer.c
++++ b/netsurf/frontends/framebuffer/framebuffer.c
+@@ -53,6 +53,22 @@
+  *              operations within.
+  * \return NSERROR_OK on success else error code.
+  */
++/* While a browser widget redraws, the area its plotting must stay in (the part
++ * of the widget being redrawn): a clip the core sets is cut to it, since
++ * nsfb_plot_set_clip replaces the widget's clip rather than narrowing it, and
++ * content reaching past the widget would otherwise draw over the toolbar,
++ * the scroll bars or the status bar. */
++static nsfb_bbox_t plot_limit;
++static bool plot_limited;
++
++void
++framebuffer_plot_limit(const nsfb_bbox_t *limit)
++{
++	plot_limited = limit != NULL;
++	if (limit != NULL)
++		plot_limit = *limit;
++}
++
+ static nserror
+ framebuffer_plot_clip(const struct redraw_context *ctx, const struct rect *clip)
+ {
+@@ -62,6 +78,18 @@
+ 	nsfb_clip.x1 = clip->x1;
+ 	nsfb_clip.y1 = clip->y1;
+ 
++	if (plot_limited) {
++		if (nsfb_clip.x0 < plot_limit.x0) nsfb_clip.x0 = plot_limit.x0;
++		if (nsfb_clip.y0 < plot_limit.y0) nsfb_clip.y0 = plot_limit.y0;
++		if (nsfb_clip.x1 > plot_limit.x1) nsfb_clip.x1 = plot_limit.x1;
++		if (nsfb_clip.y1 > plot_limit.y1) nsfb_clip.y1 = plot_limit.y1;
++		if (nsfb_clip.x1 <= nsfb_clip.x0 || nsfb_clip.y1 <= nsfb_clip.y0) {
++			/* nothing of it is visible: an empty clip at the limit's corner */
++			nsfb_clip.x0 = nsfb_clip.x1 = plot_limit.x0;
++			nsfb_clip.y0 = nsfb_clip.y1 = plot_limit.y0;
++		}
++	}
++
+ 	if (!nsfb_plot_set_clip(nsfb, &nsfb_clip)) {
+ 		return NSERROR_INVALID;
+ 	}
+--- a/netsurf/frontends/framebuffer/framebuffer.h
++++ b/netsurf/frontends/framebuffer/framebuffer.h
+@@ -37,4 +37,7 @@
+  */
+ nsfb_t *framebuffer_set_surface(nsfb_t *new_nsfb);
+ 
++/** Keep the plotters' clips inside limit (NULL: no limit). */
++void framebuffer_plot_limit(const nsfb_bbox_t *limit);
++
+ #endif
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -376,10 +376,13 @@
+ 	clip.x1 = bwidget->redraw_box.x1;
+ 	clip.y1 = bwidget->redraw_box.y1;
+ 
++	framebuffer_plot_limit(&bwidget->redraw_box);
+ 	browser_window_redraw(bw,
+ 			x - bwidget->scrollx,
+ 			y - bwidget->scrolly,
+ 			&clip, &ctx);
++	framebuffer_plot_limit(NULL);
++	nsfb_plot_set_clip(nsfb, &bwidget->redraw_box);	/* (for the caret) */
+ 
+ 	if (fbtk_get_caret(widget, &caret_x, &caret_y, &caret_h)) {
+ 		/* This widget has caret, so render it */

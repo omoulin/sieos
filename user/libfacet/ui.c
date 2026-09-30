@@ -195,6 +195,9 @@ static void icon_network(struct surface *s, int x, int y, int size)
     gfx_circle(s, cx, cy, r, RGB(0x16, 0x34, 0x66));
 }
 
+void icon_browser_paint(struct surface *s, int x, int y, int size, color_t top, color_t bottom, color_t outline,
+                        float ow, color_t star);   /* skin_icons.c */
+
 void icon_draw(struct surface *s, int kind, int x, int y, int size)
 {
     if (fct_skin->id != FCT_SKIN_STRATA) {
@@ -213,6 +216,10 @@ void icon_draw(struct surface *s, int kind, int x, int y, int size)
     case ICON_LOGOUT:   icon_logout(s, x, y, size); break;
     case ICON_DISK:     icon_disk(s, x, y, size); break;
     case ICON_NETWORK:  icon_network(s, x, y, size); break;
+    case ICON_BROWSER:
+        icon_browser_paint(s, x, y, size, RGB(0x8C, 0xD4, 0xFF), RGB(0x1C, 0x6C, 0xD4), RGB(0x10, 0x12, 0x18),
+                           size >= 32 ? 1.4f : 1.0f, RGB(0xFF, 0xFF, 0xFF));
+        break;
     }
 }
 

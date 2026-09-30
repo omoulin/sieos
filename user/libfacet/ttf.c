@@ -492,14 +492,17 @@ static void acc_line(float *a, int w, int h, float x0, float y0, float x1, float
         float *row = a + y * w;
         float dy = fminf(y + 1, y1) - fmaxf(y, y0), xn = x + dxdy * dy, d = dy * dir;
         float xa = fminf(x, xn), xb = fmaxf(x, xn);
+        /* The bitmap starts at the polygon's leftmost point and has a margin on
+         * the right, so an edge only leaves it by rounding (x = -1e-7): clamped,
+         * not dropped.  (A dropped part of an edge left its row's coverage
+         * uncancelled, and the running sum carried it into every row below: a
+         * pale band down the rest of the shape, depending on where it was drawn.) */
+        xa = fminf(fmaxf(xa, 0), (float)w - 1);
+        xb = fminf(fmaxf(xb, xa), (float)w - 1);
         float xaf = floorf(xa);
         int xai = (int)xaf, xbi = (int)ceilf(xb);
-        if (xai < 0 || xbi > w) {                      /* (the bitmap has a margin: not expected) */
-            x = xn;
-            continue;
-        }
         if (xbi <= xai + 1) {
-            float xm = 0.5f * (x + xn) - xaf;
+            float xm = 0.5f * (xa + xb) - xaf;
             row[xai] += d - d * xm;
             row[xai + 1] += d * xm;
         } else {

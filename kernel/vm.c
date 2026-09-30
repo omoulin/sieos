@@ -62,6 +62,34 @@ static void insert_area(struct proc *p, struct vm_area *n)
     *pp = n;
 }
 
+/* Private anonymous memory with the same protection, end to end: one area.
+ * (musl's malloc maps many small groups, each just below the last: merged,
+ * they keep the list, and every lookup in it, short.) */
+static bool mergeable(const struct vm_area *x, const struct vm_area *y)
+{
+    return x->end == y->start && x->prot == y->prot && x->flags == y->flags && !x->ip && !y->ip &&
+           !x->shm && !y->shm && (x->flags & SIEOS_MAP_ANON) &&
+           (x->flags & SIEOS_MAP_TYPE) == SIEOS_MAP_PRIVATE;
+}
+
+static void merge_area(struct proc *p, struct vm_area *a)
+{
+    struct vm_area *prev = NULL;
+    for (struct vm_area *x = p->areas; x && x != a; x = x->next)
+        prev = x;
+    struct vm_area *next = a->next;
+    if (next && mergeable(a, next)) {
+        a->end = next->end;
+        a->next = next->next;
+        kfree(next);
+    }
+    if (prev && mergeable(prev, a)) {
+        prev->end = a->end;
+        prev->next = a->next;
+        kfree(a);
+    }
+}
+
 /* An area's references: the mapped file and the System V segment. */
 static void area_hold(struct vm_area *a)
 {
@@ -422,24 +450,28 @@ static bool range_free(struct proc *p, uint64_t start, uint64_t end)
     return next_mapped(p->pml4, start, end) == end;
 }
 
-/* Highest free range of len bytes (aligned) above floor, below USER_MMAP_TOP. */
+/* Highest free range of len bytes (aligned) above floor, below USER_MMAP_TOP:
+ * one pass over the areas (sorted by address), keeping the highest gap that
+ * fits.  (Placing each mapping by rescanning every area below the last one
+ * tried made each mmap quadratic in the number of areas.) */
 static uint64_t find_space_above(struct proc *p, uint64_t len, uint64_t align, uint64_t floor)
 {
-    uint64_t end = USER_MMAP_TOP;
-    for (;;) {
-        if (end < floor + len)
-            return 0;
-        uint64_t start = (end - len) & ~(align - 1);
-        if (start < floor)
-            return 0;
-        struct vm_area *hit = NULL;
-        for (struct vm_area *a = p->areas; a; a = a->next)
-            if (a->start < start + len && a->end > start && (!hit || a->start < hit->start))
-                hit = a;
-        if (!hit)
-            return start;
-        end = hit->start;
+    uint64_t best = 0, gap_start = floor;
+    for (struct vm_area *a = p->areas;; a = a->next) {
+        uint64_t gap_end = a ? MIN(a->start, USER_MMAP_TOP) : USER_MMAP_TOP;
+        if (gap_end >= gap_start && gap_end - gap_start >= len) {
+            uint64_t start = (gap_end - len) & ~(align - 1);
+            if (start >= gap_start)
+                best = start;                    /* (the areas ascend: later gaps are higher) */
+        }
+        if (!a)
+            break;
+        if (a->end > gap_start)
+            gap_start = a->end;
+        if (gap_start >= USER_MMAP_TOP)
+            break;
     }
+    return best;
 }
 
 /* Leave room for the brk heap to grow, unless the address space is full. */
@@ -555,6 +587,9 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
     a->shm = NULL;
     vm_space_lock(p);
     insert_area(p, a);
+    bool merge = anon && type == SIEOS_MAP_PRIVATE;
+    if (merge)
+        merge_area(p, a);                        /* (a may be gone: private anonymous memory is not filled below) */
     vm_space_unlock(p);
 
     /*
