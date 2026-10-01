@@ -8,7 +8,9 @@
 # i386-pc) and UEFI (El Torito EFI system partition, GRUB x86_64-efi).
 # The GRUB images embed every module they need plus an early config that
 # locates the ISO file system and loads /boot/grub/grub.cfg.  PARTITION.img,
-# if given, is appended as one more GPT partition (the brain image's packages).
+# if given, is appended as partition 3 of an MBR table (the brain image's packages),
+# with the EFI system partition as partition 2 (UEFI firmware boots from it: with a
+# partition table it no longer looks at the El Torito image).
 set -e
 OUT=$1
 ISODIR=$2
@@ -41,5 +43,5 @@ xorriso -as mkisofs -quiet -o "$OUT" -R -J -V SIEOS \
     -b boot/grub/bios.img -no-emul-boot -boot-load-size 4 -boot-info-table \
     --grub2-boot-info --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
     -eltorito-alt-boot -e boot/efi.img -no-emul-boot -isohybrid-gpt-basdat \
-    ${APPEND:+-append_partition 3 0x83 "$APPEND" -appended_part_as_gpt} \
+    ${APPEND:+-append_partition 2 0xef "$ISODIR/boot/efi.img" -append_partition 3 0x83 "$APPEND"} \
     "$ISODIR"
