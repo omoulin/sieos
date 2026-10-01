@@ -1,0 +1,87 @@
+--- a/include/vulkan/vk_icd.h
++++ b/include/vulkan/vk_icd.h
+@@ -118,6 +118,7 @@
+     VK_ICD_WSI_PLATFORM_GGP,
+     VK_ICD_WSI_PLATFORM_SCREEN,
+     VK_ICD_WSI_PLATFORM_FUCHSIA,
++    VK_ICD_WSI_PLATFORM_FACET,     /* SIEOS's Facet desktop (VK_SIEOS_facet_surface) */
+ } VkIcdWsiPlatform;
+ 
+ typedef struct {
+@@ -215,6 +216,13 @@
+     VkIcdSurfaceBase base;
+ } VkIcdSurfaceHeadless;
+ 
++#ifdef VK_USE_PLATFORM_FACET_SIEOS
++typedef struct {
++    VkIcdSurfaceBase base;
++    struct fct_window *window;
++} VkIcdSurfaceFacet;
++#endif
++
+ #ifdef VK_USE_PLATFORM_METAL_EXT
+ typedef struct {
+     VkIcdSurfaceBase base;
+--- a/include/vulkan/vulkan_facet.h
++++ b/include/vulkan/vulkan_facet.h
+@@ -0,0 +1,47 @@
++#ifndef VULKAN_FACET_H_
++#define VULKAN_FACET_H_ 1
++
++/*
++ * VK_SIEOS_facet_surface: Vulkan surfaces on SIEOS's Facet desktop.
++ * A SIEOS extension (not a Khronos one): a VkSurfaceKHR made from a Facet
++ * window (libfacet's fct_window *, <facet/facet.h>), for swapchains whose
++ * images are shown in it.  Its structure type is in a range Khronos does not
++ * use (extension number 9001).
++ *
++ * Copyright 2026 Olivier Moulin
++ * SPDX-License-Identifier: Apache-2.0 OR MIT
++ */
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define VK_SIEOS_facet_surface 1
++#define VK_SIEOS_FACET_SURFACE_SPEC_VERSION   1
++#define VK_SIEOS_FACET_SURFACE_EXTENSION_NAME "VK_SIEOS_facet_surface"
++#define VK_STRUCTURE_TYPE_FACET_SURFACE_CREATE_INFO_SIEOS ((VkStructureType)1009000000)
++
++struct fct_window;
++typedef VkFlags VkFacetSurfaceCreateFlagsSIEOS;
++typedef struct VkFacetSurfaceCreateInfoSIEOS {
++    VkStructureType                 sType;
++    const void*                     pNext;
++    VkFacetSurfaceCreateFlagsSIEOS  flags;
++    struct fct_window*              window;
++} VkFacetSurfaceCreateInfoSIEOS;
++
++typedef VkResult (VKAPI_PTR *PFN_vkCreateFacetSurfaceSIEOS)(VkInstance instance, const VkFacetSurfaceCreateInfoSIEOS* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface);
++
++#ifndef VK_NO_PROTOTYPES
++VKAPI_ATTR VkResult VKAPI_CALL vkCreateFacetSurfaceSIEOS(
++    VkInstance                                  instance,
++    const VkFacetSurfaceCreateInfoSIEOS*        pCreateInfo,
++    const VkAllocationCallbacks*                pAllocator,
++    VkSurfaceKHR*                               pSurface);
++#endif
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+--- a/include/vulkan/vulkan.h
++++ b/include/vulkan/vulkan.h
+@@ -18,6 +18,10 @@
+ #include "vulkan_fuchsia.h"
+ #endif
+ 
++#ifdef VK_USE_PLATFORM_FACET_SIEOS
++#include "vulkan_facet.h"
++#endif
++
+ #ifdef VK_USE_PLATFORM_IOS_MVK
+ #include "vulkan_ios.h"
+ #endif

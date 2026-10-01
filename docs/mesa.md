@@ -14,6 +14,7 @@ milestone.
 ```sh
 pkg install mesa          # with zlib and vulkan-loader
 glcube --info             # OpenGL ES in a window (also in the SIEOS menu: OpenGL cube)
+vklogo --info             # Vulkan in a window: the SIEOS logo turning (SIEOS menu: Vulkan logo)
 vkcompute                 # a Vulkan compute test
 ```
 
@@ -69,13 +70,41 @@ before `eglCreateContext`, and its functions from `eglGetProcAddress` (there is 
 
 `vulkan-loader` installs `libvulkan.so` and the Vulkan headers. The loader finds
 the drivers in `/usr/pkg/share/vulkan/icd.d`, where mesa puts lavapipe's. lavapipe
-does compute, and rendering into images. Showing them in a Facet window (a
-`VkSurfaceKHR` for Facet) is not done yet: a program copies an image into its
-window itself.
+does compute, and rendering; its images are shown in Facet windows through
+**`VK_SIEOS_facet_surface`**, SIEOS's own instance extension (not a Khronos one):
+- `vkCreateFacetSurfaceSIEOS` makes a `VkSurfaceKHR` from a `fct_window *`
+  (`VkFacetSurfaceCreateInfoSIEOS`). Its header is `<vulkan/vulkan_facet.h>`, which
+  `<vulkan/vulkan.h>` includes when `VK_USE_PLATFORM_FACET_SIEOS` is defined.
+- Enable `VK_KHR_surface` and `VK_SIEOS_facet_surface` on the instance, and get the
+  function with `vkGetInstanceProcAddr`, as for any extension.
+- **The surface:** its current extent is the window's size; formats
+  `B8G8R8A8_UNORM` and `B8G8R8A8_SRGB` (the window's XRGB pixels); present modes FIFO,
+  mailbox and immediate; 2 to 8 images.
+- **Presenting** copies the image into the window and shows it. After the window
+  changes size, acquiring and presenting return `VK_SUBOPTIMAL_KHR`: make the swapchain
+  again at the new extent.
+
+```c
+#define VK_USE_PLATFORM_FACET_SIEOS
+#include <vulkan/vulkan.h>
+
+const char *exts[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_SIEOS_FACET_SURFACE_EXTENSION_NAME };
+/* vkCreateInstance with exts, then: */
+PFN_vkCreateFacetSurfaceSIEOS create =
+    (PFN_vkCreateFacetSurfaceSIEOS)vkGetInstanceProcAddr(instance, "vkCreateFacetSurfaceSIEOS");
+VkFacetSurfaceCreateInfoSIEOS ci = { .sType = VK_STRUCTURE_TYPE_FACET_SURFACE_CREATE_INFO_SIEOS,
+                                     .window = win };      /* a fct_window * */
+VkSurfaceKHR surface;
+create(instance, &ci, NULL, &surface);
+/* then a device with VK_KHR_swapchain and a swapchain on the surface, as on any system */
+```
 
 ```sh
-gcc prog.c -lvulkan
+gcc prog.c -lvulkan -lfacet
 ```
+
+`user/mesa-demos/vklogo.c` is a whole program: the logo's mesh, a depth buffer, a
+pipeline with push constants, and the swapchain made again when the window is resized.
 
 ## How it is built
 
@@ -89,5 +118,11 @@ gcc prog.c -lvulkan
     software rasteriser loader (the frames it presents are copied into the window);
   - SIEOS's EGL native types (`EGL/eglplatform.h`).
 - **The Vulkan loader** (`ports/pkgs/vulkan-loader`, `sieos.patch`): SIEOS is a Unix
-  platform; the program's path comes from `getexecname()`.
+  platform; the program's path comes from `getexecname()`; `VK_SIEOS_facet_surface` is
+  among the instance extensions it knows, and it makes the drivers' surfaces from the
+  ones it gives programs (asking each driver for `vkCreateFacetSurfaceSIEOS` by name).
+- **The extension** is in the Vulkan headers (`ports/vulkan-headers/sieos.patch`:
+  `vulkan_facet.h`, and the surface's platform in `vk_icd.h`) and in Mesa's `vk.xml`;
+  Mesa's window-system code shows the swapchain's images in the window
+  (`src/vulkan/wsi/wsi_common_facet.c`), and lavapipe offers the extension.
 - The build host needs `cmake`, `meson`, `ninja` and `glslangValidator` (README).

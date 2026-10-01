@@ -1,3 +1,15 @@
+--- a/loader/generated/vk_loader_extensions.c
++++ b/loader/generated/vk_loader_extensions.c
+@@ -18963,6 +18963,9 @@
+ #endif // VK_USE_PLATFORM_METAL_EXT
+                                                   VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME,
+                                                   VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME,
++#if defined(VK_USE_PLATFORM_FACET_SIEOS)
++                                                  VK_SIEOS_FACET_SURFACE_EXTENSION_NAME,
++#endif // VK_USE_PLATFORM_FACET_SIEOS
+                                                   VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME,
+                                                   VK_EXT_ACQUIRE_DRM_DISPLAY_EXTENSION_NAME,
+ #if defined(VK_USE_PLATFORM_DIRECTFB_EXT)
 --- a/loader/vk_loader_platform.h
 +++ b/loader/vk_loader_platform.h
 @@ -44,7 +44,8 @@
@@ -25,3 +37,106 @@
  #elif defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__)
  #include <sys/sysctl.h>
  static inline char *loader_platform_executable_path(char *buffer, size_t size) {
+--- a/loader/wsi.c
++++ b/loader/wsi.c
+@@ -167,6 +167,21 @@
+                     }
+                     break;
+ 
++#if defined(VK_USE_PLATFORM_FACET_SIEOS)
++                case VK_ICD_WSI_PLATFORM_FACET: {
++                    // (SIEOS's extension: not in the generated dispatch tables, asked of the driver)
++                    PFN_vkCreateFacetSurfaceSIEOS create = (PFN_vkCreateFacetSurfaceSIEOS)
++                        icd_term->scanned_icd->GetInstanceProcAddr(icd_term->instance, "vkCreateFacetSurfaceSIEOS");
++                    if (NULL != create) {
++                        result = create(icd_term->instance, (const VkFacetSurfaceCreateInfoSIEOS *)icd_surface->create_info,
++                                        pAllocator, &icd_term->surface_list.list[icd_surface->surface_index]);
++                    } else {
++                        result = VK_ERROR_EXTENSION_NOT_PRESENT;
++                    }
++                    break;
++                }
++#endif  // VK_USE_PLATFORM_FACET_SIEOS
++
+                 case VK_ICD_WSI_PLATFORM_HEADLESS:
+                     if (NULL != icd_term->dispatch.CreateHeadlessSurfaceEXT &&
+                         icd_term->enabled_instance_extensions.ext_headless_surface) {
+@@ -1420,6 +1435,53 @@
+     return loader_inst->disp->layer_inst_disp.CreateHeadlessSurfaceEXT(loader_inst->instance, pCreateInfo, pAllocator, pSurface);
+ }
+ 
++#if defined(VK_USE_PLATFORM_FACET_SIEOS)
++// VK_SIEOS_facet_surface: a surface on a Facet window (SIEOS).  Made here directly (no layer
++// sees it): the drivers' surfaces are made from it when a device function needs them.
++LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateFacetSurfaceSIEOS(VkInstance instance,
++                                                                       const VkFacetSurfaceCreateInfoSIEOS *pCreateInfo,
++                                                                       const VkAllocationCallbacks *pAllocator,
++                                                                       VkSurfaceKHR *pSurface) {
++    VkResult result = VK_SUCCESS;
++    VkIcdSurface *icd_surface = NULL;
++    loader_platform_thread_lock_mutex(&loader_lock);
++
++    struct loader_instance *loader_inst = loader_get_instance(instance);
++    if (NULL == loader_inst) {
++        loader_log(NULL, VULKAN_LOADER_FATAL_ERROR_BIT | VULKAN_LOADER_ERROR_BIT | VULKAN_LOADER_VALIDATION_BIT, 0,
++                   "vkCreateFacetSurfaceSIEOS: Invalid instance");
++        loader_platform_thread_unlock_mutex(&loader_lock);
++        abort(); /* Intentionally fail so user can correct issue. */
++    }
++
++    result = allocate_icd_surface_struct(loader_inst, sizeof(icd_surface->facet_surf.base), sizeof(icd_surface->facet_surf),
++                                         pAllocator, &icd_surface);
++    if (VK_SUCCESS != result) {
++        goto out;
++    }
++
++    icd_surface->facet_surf.base.platform = VK_ICD_WSI_PLATFORM_FACET;
++    icd_surface->facet_surf.window = pCreateInfo->window;
++
++    const struct loader_struct_type_info ci_types[] = {
++        {VK_STRUCTURE_TYPE_FACET_SURFACE_CREATE_INFO_SIEOS, sizeof(VkFacetSurfaceCreateInfoSIEOS)},
++    };
++    result = copy_surface_create_info(loader_inst, icd_surface, pCreateInfo, sizeof(ci_types) / sizeof(ci_types[0]), ci_types,
++                                      "VkFacetSurfaceCreateInfoSIEOS", pAllocator);
++    if (VK_SUCCESS != result) {
++        goto out;
++    }
++
++    *pSurface = wrap_surface_handle(icd_surface);
++
++out:
++    cleanup_surface_creation(loader_inst, result, icd_surface, pAllocator);
++    loader_platform_thread_unlock_mutex(&loader_lock);
++
++    return result;
++}
++#endif  // VK_USE_PLATFORM_FACET_SIEOS
++
+ VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateHeadlessSurfaceEXT(VkInstance instance,
+                                                                    const VkHeadlessSurfaceCreateInfoEXT *pCreateInfo,
+                                                                    const VkAllocationCallbacks *pAllocator,
+@@ -3063,6 +3125,12 @@
+ #endif  // VK_USE_PLATFORM_FUCHSIA
+ 
+     // Functions for the VK_EXT_headless_surface extension:
++#if defined(VK_USE_PLATFORM_FACET_SIEOS)
++    if (!strcmp("vkCreateFacetSurfaceSIEOS", name)) {
++        *addr = (void *)vkCreateFacetSurfaceSIEOS;
++        return true;
++    }
++#endif  // VK_USE_PLATFORM_FACET_SIEOS
+     if (!strcmp("vkCreateHeadlessSurfaceEXT", name)) {
+         *addr = loader_inst->enabled_extensions.ext_headless_surface ? (void *)vkCreateHeadlessSurfaceEXT : NULL;
+         return true;
+--- a/loader/wsi.h
++++ b/loader/wsi.h
+@@ -65,6 +65,9 @@
+ #endif  // VK_USE_PLATFORM_VI_NN
+         VkIcdSurfaceDisplay display_surf;
+         VkIcdSurfaceHeadless headless_surf;
++#if defined(VK_USE_PLATFORM_FACET_SIEOS)
++        VkIcdSurfaceFacet facet_surf;
++#endif
+ 
+         // All of the specific ICD surface structures start with the base structure
+         VkIcdSurfaceBase base;

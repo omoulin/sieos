@@ -3,28 +3,37 @@
 # in) compiles the shaders to x86 code, AVX2/AVX-512 when it has them.
 # EGL draws into Facet windows (its platform "facet", sieos.patch's
 # platform_facet.c): an EGLNativeWindowType is a fct_window *; also
-# pbuffers and surfaceless contexts.  Vulkan through vulkan-loader (no
-# window presentation yet: compute and off-screen images).  The demos:
-# glcube (OpenGL ES in a window, in the SIEOS menu) and vkcompute (a
-# Vulkan compute test).
+# pbuffers and surfaceless contexts.  Vulkan through vulkan-loader, shown in
+# Facet windows too: VK_SIEOS_facet_surface (wsi_common_facet.c: a
+# swapchain's images are copied into the window when presented).  The
+# demos: glcube (OpenGL ES in a window) and vklogo (Vulkan: the SIEOS logo
+# turning in a window), both in the SIEOS menu, and vkcompute (a Vulkan
+# compute test).
 # sieos.patch: SIEOS ("sieos" in Meson, __sieos__) beside the other
 # systems, a DRI system without kernel GPU drivers as GNU/Hurd; the EGL
-# platform facet; SIEOS's EGL native types.
-# The build host needs meson, ninja and glslangValidator.
+# platform facet; SIEOS's EGL native types; VK_SIEOS_facet_surface (in
+# vk.xml, the Vulkan headers and lavapipe).
+# The build host needs meson, ninja, glslangValidator and a Python 3 with
+# mako and yaml (the first python3 on the PATH that has them, else
+# /usr/bin/python3: a conda or venv python3 first on the PATH may not).
 name     = mesa
-version  = 26.2.4-1
+version  = 26.2.4-2
 summary  = Mesa: OpenGL, OpenGL ES, EGL and Vulkan, drawn by the processor (llvmpipe, lavapipe), in Facet windows
 source   = https://archive.mesa3d.org/mesa-26.2.4.tar.xz
 sha256   = bce5f7fbebb934373b86c999a064d52fb5065878dc57f287f95346648ec832e9
 depends  = zlib vulkan-loader
 build    = for t in meson ninja glslangValidator; do command -v $t > /dev/null || \
                { echo "mesa: $t is needed on the build host (meson ninja-build glslang-tools)"; exit 1; }; done
+           PY=; for p in python3 /usr/bin/python3; do $p -c 'import mako, yaml' 2>/dev/null && PY=$(command -v $p) && break; done
+           [ -n "$PY" ] || { echo "mesa: a Python 3 with mako and yaml is needed (python3-mako python3-yaml)"; exit 1; }
+           { echo "[binaries]"; for v in 3.16 3.15 3.14 3.13 3.12 3.11 3.10 3 ''; do echo "python$v = '$PY'"; done; } \
+               > sieos-native.ini
            printf '%s\n' "[binaries]" "c = '$CC'" "cpp = '$CXX'" "ar = '$AR'" "strip = '$STRIP'" \
                "pkg-config = 'pkg-config'" "llvm-config = '$TREE/build/ports/llvm-sieos/bin/llvm-config'" \
                "[host_machine]" "system = 'sieos'" "cpu_family = 'x86_64'" "cpu = 'x86_64'" "endian = 'little'" \
                "[built-in options]" "c_args = ['-D_GNU_SOURCE']" "cpp_args = ['-D_GNU_SOURCE']" \
                "[properties]" "needs_exe_wrapper = true" > sieos-cross.ini
-           meson setup b . --cross-file sieos-cross.ini --prefix=$PREFIX -Dbuildtype=release -Dcpp_rtti=false \
+           meson setup b . --cross-file sieos-cross.ini --native-file sieos-native.ini --prefix=$PREFIX -Dbuildtype=release -Dcpp_rtti=false \
                -Dplatforms=facet -Degl-native-platform=facet -Dgallium-drivers=llvmpipe -Dvulkan-drivers=swrast \
                -Dglx=disabled -Dgbm=disabled -Degl=enabled -Dgles1=disabled -Dgles2=enabled -Dopengl=true \
                -Dllvm=enabled -Dshared-llvm=disabled -Dshader-cache=disabled -Dxmlconfig=disabled \
@@ -38,7 +47,12 @@ install  = DESTDIR=$DESTDIR meson install -C b > /dev/null
            $CC -O2 -Wall -o $DESTDIR$PREFIX/bin/glcube $D/glcube.c -I$DESTDIR$PREFIX/include $CPPFLAGS -L$L \
                -lEGL -lGLESv2 -lfacet -lm -Wl,-rpath-link,$L -Wl,-rpath-link,$R $LDFLAGS
            $CC -O2 -Wall -o $DESTDIR$PREFIX/bin/vkcompute $D/vkcompute.c -Ib $CPPFLAGS $LDFLAGS -lvulkan
+           glslangValidator -V --vn logo_vert_spv -o b/logo_vert_spv.h $D/logo.vert > /dev/null
+           glslangValidator -V --vn logo_frag_spv -o b/logo_frag_spv.h $D/logo.frag > /dev/null
+           $CC -O2 -Wall -o $DESTDIR$PREFIX/bin/vklogo $D/vklogo.c -Ib $CPPFLAGS $LDFLAGS -lvulkan -lfacet -lm
            mkdir -p $DESTDIR$PREFIX/share/facet/apps $DESTDIR$PREFIX/share/doc/mesa
            printf '%s\n' '# The SIEOS menu: an OpenGL ES demo (mesa)' 'title=OpenGL cube' \
                'exec=/usr/pkg/bin/glcube' 'icon=program' > $DESTDIR$PREFIX/share/facet/apps/glcube.app
+           printf '%s\n' '# The SIEOS menu: a Vulkan demo (mesa)' 'title=Vulkan logo' \
+               'exec=/usr/pkg/bin/vklogo' 'icon=program' > $DESTDIR$PREFIX/share/facet/apps/vklogo.app
            cp docs/license.rst $DESTDIR$PREFIX/share/doc/mesa/

@@ -944,7 +944,8 @@ brain-imatrix: $(PORTS_DL)/$(BRAIN_SRC) $(LLAMA_HOST)/.built
 # llvm-tblgen and llvm-min-tblgen (the cross build runs them) and llvm-config,
 # put beside the SIEOS libraries for Mesa's build to run (it reports them).
 # ports/llvm/sieos.patch: SIEOS beside the other systems in two places.
-# The Vulkan headers (build/ports/vulkan-headers) are the Vulkan loader's.
+# The Vulkan headers (build/ports/vulkan-headers) are the Vulkan loader's, with SIEOS's
+# extension VK_SIEOS_facet_surface (ports/vulkan-headers/sieos.patch: vulkan_facet.h).
 LLVM_VER    := 22.1.8
 LLVM_TXZ    := llvm-project-$(LLVM_VER).src.tar.xz
 LLVM_WORK   := $(PORTS)/llvm
@@ -995,9 +996,10 @@ $(PORTS_DL)/Vulkan-Headers-$(VK_SDK).tar.gz:
 		https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-$(VK_SDK).tar.gz $(notdir $@)
 	cd $(PORTS_DL) && grep " $(notdir $@)$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
 
-$(VK_HEADERS)/.built: $(PORTS_DL)/Vulkan-Headers-$(VK_SDK).tar.gz
+$(VK_HEADERS)/.built: $(PORTS_DL)/Vulkan-Headers-$(VK_SDK).tar.gz ports/vulkan-headers/sieos.patch
 	rm -rf $(VK_HEADERS) $(VK_HEADERS)-src && mkdir -p $(VK_HEADERS)-src
 	tar xzf $< -C $(VK_HEADERS)-src --strip-components=1
+	patch -p1 -s -d $(VK_HEADERS)-src < ports/vulkan-headers/sieos.patch
 	cmake -S $(VK_HEADERS)-src -B $(VK_HEADERS)-src/b -DCMAKE_INSTALL_PREFIX=$(VK_HEADERS) >/dev/null
 	cmake --install $(VK_HEADERS)-src/b >/dev/null
 	rm -rf $(VK_HEADERS)-src

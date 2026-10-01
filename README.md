@@ -28,7 +28,7 @@ Requirements (Debian 13 or Ubuntu):
 ```sh
 sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-amd64-bin \
                  xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl flex bison cmake \
-                 meson ninja-build glslang-tools
+                 meson ninja-build glslang-tools python3-mako python3-yaml
 ```
 
 - **KVM:** the build boots SIEOS in QEMU once, to compile ksh93 on SIEOS itself. With
@@ -39,7 +39,8 @@ sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-am
   `linux-firmware` on Ubuntu.
 - `cmake` builds llama.cpp, for the local model (`make brain`, the `llama-cpp` and
   `sia-brain` packages and `make usb-brain`), and LLVM and the Vulkan loader; `meson`,
-  `ninja` and `glslangValidator` (glslang-tools) build Mesa (the `mesa` package).
+  `ninja`, `glslangValidator` (glslang-tools) and Python's mako and yaml modules build Mesa
+  (the `mesa` package).
 - `gperf`, `pkg-config` and `perl` are for the web browser's libraries (NetSurf's own
   build generates code with them); `openssl` makes the package signing key and signs
   package indexes (see Packages).
@@ -411,7 +412,10 @@ loader, package **vulkan-loader**).
   and AVX-512 used).
 - **Windows:** EGL draws into Facet windows, through its own platform: a program gives
   `eglCreateWindowSurface` its `fct_window *`.
-- **Demos:** `glcube` (*OpenGL cube* in the SIEOS menu) and `vkcompute`.
+- **Vulkan in windows:** through SIEOS's own extension, `VK_SIEOS_facet_surface`
+  (`vkCreateFacetSurfaceSIEOS`: a surface on a `fct_window *`).
+- **Demos:** `glcube` (*OpenGL cube* in the SIEOS menu), `vklogo` (*Vulkan logo*: the
+  SIEOS logo turning) and `vkcompute`.
 
 [docs/mesa.md](docs/mesa.md) has the details: writing an EGL program, Vulkan, how it is built.
 
@@ -464,7 +468,7 @@ nsgenbind (built for the build machine, with flex and bison) generates from WebI
 - ext4 journaling covers metadata (data=ordered). Changes are committed within five
   seconds and at `sync`, so a power cut loses at most those seconds, never consistency.
 - The desktop renders in software (no GPU acceleration); so do OpenGL and Vulkan (the
-  mesa package: llvmpipe, lavapipe). Vulkan images are not shown in windows yet.
+  mesa package: llvmpipe, lavapipe).
 - Network: no IPv6 privacy addresses or path MTU discovery, and no TCP SACK or timestamps.
 - TLS: `libtls` speaks TLS 1.3 only (a server limited to TLS 1.2 is refused); the ported
   curl (below) uses Mbed TLS, which also speaks TLS 1.2.

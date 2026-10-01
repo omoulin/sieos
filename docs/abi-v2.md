@@ -2831,6 +2831,9 @@ Milestone 34 (done): Facet skins.
 - **EGL's platform `facet`**: an `EGLNativeWindowType` is a `fct_window *`; the frames the
   software rasteriser presents are copied into the window's buffer and shown.
 - **The Vulkan loader** (package `vulkan-loader`, `libvulkan.so`), with the Vulkan headers.
+- **`VK_SIEOS_facet_surface`** (extension number 9001, structure type 1009000000):
+  Vulkan surfaces on Facet windows (`vkCreateFacetSurfaceSIEOS`, `VkIcdSurfaceFacet`,
+  `VK_ICD_WSI_PLATFORM_FACET`); presenting copies the image into the window.
 - The GNU utilities' configure knows that `fchownat(AT_SYMLINK_NOFOLLOW)` works: `cp -a` keeps
   symbolic links' owners.
 
