@@ -10,7 +10,7 @@
 #                 GPU=intel passes the host's Intel GPU to it (tools/vfio-gpu.sh)
 #   make run-iso  boot the ISO alone (root fs is a RAM disk from the ISO)
 #   make usb      build/sieos-usb.img, to write to a USB drive and boot a real PC
-#   make usb-brain  build/sieos-usb-brain.img: the same, with sia-brain (the local model, 2.5 GB)
+#   make usb-brain  build/sieos-usb-brain.img: the same, with sia-brain (the local model, 2.7 GB)
 #   make run-usb  boot that image in QEMU (UEFI) as a USB drive
 #   make newdisk  reset build/disk.img to the pristine root file system
 #   make toolchain  the x86_64-pc-sieos cross compiler (build/cross)
@@ -532,7 +532,8 @@ run-uefi: all
 # The root file system is a RAM disk loaded from the drive (by GRUB: the boot
 # loader's modules must sit below 4 GiB), so changes are lost at power-off.  It is the hard disk's
 # root, native toolchain included (USB_ROOT_MB large), which the installer
-# copies to the disk.
+# copies to the disk.  The packages are on a partition of their own, kept: see
+# "USB drives: their packages" below (sieos-usb-brain.img: the same with sia-brain).
 # It has no model connection: sia asks for one on first use (or Settings > Assistant).
 USB_ROOT_MB ?= 384
 USBIMG  := $(BUILD)/sieos-usb.img
@@ -547,13 +548,21 @@ $(USBROOT): $(DISKIMG) tools/rootfs.perms
 	debugfs -w -f $(BUILD)/usbperms.debugfs $@ >/dev/null 2>&1
 	e2fsck -fyD $@ >/dev/null 2>&1; [ $$? -le 1 ]
 
-$(USBIMG): $(KERNEL) $(BOOTARCH) $(USBROOT) iso/boot/grub/grub.cfg tools/mkiso.sh tools/mkfat.py
-	rm -rf $(BUILD)/usbdir $(BUILD)/usbwork && mkdir -p $(BUILD)/usbdir/boot/grub $(BUILD)/usbwork
+# the USB images' boot files; their root says it has a package partition (/etc/sieos-usb-pkg:
+# rc waits for the drive, which may connect a moment after boot)
+USBDIR := $(BUILD)/usbdir/.made
+$(USBDIR): $(KERNEL) $(BOOTARCH) $(USBROOT) iso/boot/grub/grub.cfg
+	rm -rf $(BUILD)/usbdir && mkdir -p $(BUILD)/usbdir/boot/grub
 	cp $(KERNEL) $(BUILD)/usbdir/boot/kernel.elf
 	cp $(BOOTARCH) $(BUILD)/usbdir/boot/bootarch.tar
 	cp $(USBROOT) $(BUILD)/usbdir/boot/rootfs.img
 	cp iso/boot/grub/grub.cfg $(BUILD)/usbdir/boot/grub/grub.cfg
-	tools/mkiso.sh $@ $(BUILD)/usbdir $(BUILD)/usbwork
+	echo "/usr/pkg is the USB drive's partition labelled sieos-pkg" > $(BUILD)/usbdir.marker
+	printf 'write %s /etc/sieos-usb-pkg\nsif /etc/sieos-usb-pkg uid 0\nsif /etc/sieos-usb-pkg gid 0\n' \
+		$(BUILD)/usbdir.marker > $(BUILD)/usbdir.debugfs
+	debugfs -w -f $(BUILD)/usbdir.debugfs $(BUILD)/usbdir/boot/rootfs.img >/dev/null 2>&1
+	rm -f $(BUILD)/usbdir.marker $(BUILD)/usbdir.debugfs
+	touch $@
 
 .PHONY: usb run-usb
 usb: $(USBIMG)
@@ -961,37 +970,58 @@ repo-serve: repo
 	@echo "serving $(REPO) at http://127.0.0.1:8000/ (SIEOS in QEMU: http://10.0.2.2:8000/)"
 	python3 -m http.server 8000 --bind 127.0.0.1 --directory $(REPO)
 
-# ---------------------------------------------------------------- USB drive with the local model
+# ---------------------------------------------------------------- USB drives: their packages
 #
-# sieos-usb-brain.img: sieos-usb.img (the same boot partitions and root) with a
-# third partition, ext4 labelled sieos-pkg, holding /usr/pkg with sia-brain
-# (the local model) and llama-cpp installed, and their database (.pkgdb).  A
-# live system started from it mounts that partition on /usr/pkg (rootfs/etc/rc,
-# through the USB storage driver), so these packages, and those installed
-# later, stay on the drive; the installer copies them to the disk.
+# Both USB images carry the packages (ports/pkgs, the versions of the recipes)
+# installed on a partition of their own after the boot partitions: ext4
+# labelled sieos-pkg, holding /usr/pkg and the database (.pkgdb), installed on
+# the build host (tools/pkgstage.py, as pkg would).  A live system started from
+# the drive mounts it on /usr/pkg (rootfs/etc/rc, through the USB storage
+# driver), so packages installed later, downloaded from the repository, stay
+# on the drive too; the installer copies them to the disk.
+#   sieos-usb.img        every package but sia-brain (the model, 2 GB) and llama-cpp (its engine)
+#   sieos-usb-brain.img  every package: sia-brain, the local model, too
 #     sudo dd if=build/sieos-usb-brain.img of=/dev/sdX bs=4M conv=fsync status=progress
 USBBRAIN      := $(BUILD)/sieos-usb-brain.img
+USBPART       := $(BUILD)/usbpkg.img
 BRAINPART     := $(BUILD)/brainpkg.img
-BRAIN_PKGS    := llama-cpp sia-brain
-BRAIN_FREE_MB ?= 256                              # room left for packages installed later
+USB_PKGS      := $(filter-out sia-brain llama-cpp,$(PKG_NAMES))
+BRAIN_PKGS    := $(PKG_NAMES)
+PKG_FREE_MB   ?= 256                              # room left for packages installed later
 pkg_file = $(REPO)/$(1)-$(shell sed -n 's/^version *= *//p' ports/pkgs/$(1)/recipe).spkg
-$(BRAINPART): $(BRAIN_PKGS:%=$(PKGWORK)/.built-%) tools/pkgstage.py tools/mkperms.sh
-	rm -rf $(BUILD)/brainpkg $@
-	python3 tools/pkgstage.py $(BUILD)/brainpkg $(foreach p,$(BRAIN_PKGS),$(call pkg_file,$(p)))
-	mkfs.ext4 -q -F -b 4096 -L sieos-pkg -E root_owner=0:0 -d $(BUILD)/brainpkg $@ \
-		$$(( $$(du -sm $(BUILD)/brainpkg | cut -f1) * 103 / 100 + $(BRAIN_FREE_MB) ))M
-	tools/mkperms.sh $(BUILD)/brainpkg /dev/null > $(BUILD)/brainpkg.debugfs
-	debugfs -w -f $(BUILD)/brainpkg.debugfs $@ >/dev/null 2>&1
-	e2fsck -fy $@ >/dev/null 2>&1; [ $$? -le 1 ]
-	rm -rf $(BUILD)/brainpkg
+# $(1) the partition image, $(2) the packages
+define PKGPART_RULE
+$(1): $(2:%=$(PKGWORK)/.built-%) tools/pkgstage.py tools/mkperms.sh
+	rm -rf $(1).d $(1)
+	python3 tools/pkgstage.py $(1).d $(foreach p,$(2),$(call pkg_file,$(p)))
+	mkfs.ext4 -q -F -b 4096 -L sieos-pkg -E root_owner=0:0 -d $(1).d $(1) \
+		$$$$(( $$$$(du -sm $(1).d | cut -f1) * 103 / 100 + $(PKG_FREE_MB) ))M
+	tools/mkperms.sh $(1).d /dev/null > $(1).debugfs
+	debugfs -w -f $(1).debugfs $(1) >/dev/null 2>&1
+	e2fsck -fy $(1) >/dev/null 2>&1; [ $$$$? -le 1 ]
+	rm -rf $(1).d $(1).debugfs
+endef
+$(eval $(call PKGPART_RULE,$(USBPART),$(USB_PKGS)))
+$(eval $(call PKGPART_RULE,$(BRAINPART),$(BRAIN_PKGS)))
 
-$(USBBRAIN): $(USBIMG) $(BRAINPART)
-	tools/mkiso.sh $@ $(BUILD)/usbdir $(BUILD)/usbwork $(BRAINPART)
+# (one after the other: mkiso.sh writes its boot images into usbdir)
+$(USBIMG): $(USBDIR) $(USBPART) tools/mkiso.sh tools/mkfat.py
+	rm -rf $(BUILD)/usbwork && mkdir -p $(BUILD)/usbwork
+	tools/mkiso.sh $@ $(BUILD)/usbdir $(BUILD)/usbwork $(USBPART)
+$(USBBRAIN): $(USBDIR) $(BRAINPART) tools/mkiso.sh tools/mkfat.py | $(USBIMG)
+	rm -rf $(BUILD)/usbbrainwork && mkdir -p $(BUILD)/usbbrainwork
+	tools/mkiso.sh $@ $(BUILD)/usbdir $(BUILD)/usbbrainwork $(BRAINPART)
 
-.PHONY: usb-brain
+.PHONY: usb-brain run-usb-brain
 usb-brain: $(USBBRAIN)
 	@echo "Write $(USBBRAIN) to a USB drive (all its data is lost) with"
 	@echo "    sudo dd if=$(USBBRAIN) of=/dev/sdX bs=4M conv=fsync status=progress"
+
+run-usb-brain: $(USBBRAIN)
+	cp $(OVMF_VARS) $(BUILD)/ovmf_vars.fd
+	$(QEMU) -machine pc -accel kvm -accel tcg $(UEFI_FW) -smp $(SMP) -m 8G -nic $(NET) -device qemu-xhci \
+		-drive if=none,id=usb,format=raw,file=$(USBBRAIN) -device usb-storage,drive=usb,bootindex=0 \
+		-serial stdio -no-reboot
 
 # a self-hosting check: GNU make configured and built on SIEOS, then rebuilt by itself
 .PHONY: native-make-test

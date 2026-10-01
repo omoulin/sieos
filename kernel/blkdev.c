@@ -37,6 +37,7 @@ struct blkdev {
     int parent;                       /* BK_PART: the disk, and where on it */
     uint64_t start;
     uint32_t lbsize;                  /* the disk's block size (0: 512) */
+    bool late;                        /* BK_DRV registered after blk_init: partitions not read yet */
     char name[24];                    /* under /dev/dsk */
     char desc[64];
 };
@@ -58,6 +59,8 @@ static bool valid(int dev)
 }
 
 static int next_disk = BLK_DISK0;           /* (above every device in use) */
+static bool blk_started;                     /* blk_init has run: later disks are read by blk_scan_late */
+volatile bool blk_late_pending;
 
 /* A free device number from BLK_DISK0; -1 if none. */
 static int slot_alloc(void)
@@ -88,6 +91,10 @@ int blk_register_at(int dev, const char *name, uint64_t sectors, const struct bl
     d->ops = ops;
     d->drv = drv;
     strlcpy(d->name, name, sizeof(d->name));
+    if (blk_started) {                       /* (a USB drive plugged in, or slow to connect: from the tick) */
+        d->late = true;
+        blk_late_pending = true;
+    }
     return dev;
 }
 
@@ -105,6 +112,12 @@ void blk_set_desc(int dev, const char *desc)
 {
     if (valid(dev))
         strlcpy(devs[dev].desc, desc, sizeof(devs[dev].desc));
+}
+
+void blk_set_readonly(int dev)
+{
+    if (valid(dev))
+        devs[dev].ro = true;                     /* (its partitions inherit it when read) */
 }
 
 void blk_set_lbsize(int dev, uint32_t bytes)
@@ -198,6 +211,7 @@ static bool has_ext4(int dev)
 
 const char *blk_init(const char *cmdline)
 {
+    blk_started = true;
     if (ramdisk) {
         devs[BLK_RAMDISK].kind = BK_RAM;
         devs[BLK_RAMDISK].sectors = ramdisk_sectors;
@@ -487,6 +501,31 @@ int blk_info(int dev, struct sieos_dk_info *di)
     if (d->kind == BK_RAM || d->kind == BK_LOFI)
         di->dki_flags |= SIEOS_DK_VIRTUAL;
     return 0;
+}
+
+/*
+ * Disks registered after blk_init (a USB drive that connected late, or was
+ * plugged in): their partitions and /dev/dsk nodes.  Their driver registers
+ * them from the timer tick, where no disk can be read; this runs at the end
+ * of the next system call, with the kernel lock.
+ */
+void blk_scan_late(void)
+{
+    blk_late_pending = false;
+    bool any = false;
+    for (int dev = 0; dev < NBLKDEV; dev++) {
+        if (devs[dev].kind != BK_DRV || !devs[dev].late)
+            continue;
+        devs[dev].late = false;
+        any = true;
+        kprintf("disk: %s: %s\n", devs[dev].name, devs[dev].desc[0] ? devs[dev].desc : "a new disk");
+        scan_partitions(dev);
+        for (int i = 0; i < NBLKDEV; i++)
+            if (devs[i].kind == BK_PART && devs[i].parent == dev)
+                kprintf("disk: %s: partition of %s, %lu MiB\n", devs[i].name, devs[dev].name, devs[i].sectors / 2048);
+    }
+    if (any)
+        vfs_blk_nodes();
 }
 
 int blk_reread(int dev)

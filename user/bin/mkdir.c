@@ -7,19 +7,31 @@
  */
 #include "sieos.h"
 
+/* A directory that cannot be made but is there already is fine (-p). */
+static int mkdir_there(const char *path)
+{
+    if (mkdir(path, 0755) == 0 || errno == EEXIST)
+        return 0;
+    int e = errno;
+    struct stat st;
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
+        return 0;
+    errno = e;
+    return -1;
+}
+
 static int mkdir_p(char *path)
 {
     for (char *p = path + 1; *p; p++) {
         if (*p != '/')
             continue;
         *p = 0;
-        if (mkdir(path, 0755) < 0 && errno != EEXIST)
-            return -1;
+        int r = mkdir_there(path);
         *p = '/';
+        if (r < 0)
+            return -1;
     }
-    if (mkdir(path, 0755) < 0 && errno != EEXIST)
-        return -1;
-    return 0;
+    return mkdir_there(path);
 }
 
 int main(int argc, char **argv)

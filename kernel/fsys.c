@@ -390,7 +390,13 @@ long fsys_mkdir(int dirfd, const char *upath, int mode)
     struct inode *dir = resolve_parent(dirfd, upath, name, &err);
     if (!dir)
         return err;
-    if ((r = inode_permission(dir, W_OK | X_OK)) == 0) {
+    r = inode_permission(dir, W_OK | X_OK);
+    struct inode *ip;
+    if (r < 0 && inode_permission(dir, X_OK) == 0 && vfs_lookup(dir, name, strlen(name), &ip) == 0) {
+        iput(ip);
+        r = -EEXIST;                             /* (it exists: that first, as elsewhere; mkdir -p relies on it) */
+    }
+    if (r == 0) {
         mode = (mode & 07777) & ~current->umask;
         if (inode_mode(dir) & S_ISGID)
             mode |= S_ISGID;

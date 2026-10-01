@@ -2805,9 +2805,13 @@ Milestone 34 (done): Facet skins.
   AVX2 and AVX-512; their state is saved per LWP and carried in signal frames
   (`SIEOS_UC_XSAVE`, see section 5).
 - **USB drives.** The xHCI driver drives mass storage (bulk-only transport, SCSI READ/WRITE
-  (10) and (16), 512-byte blocks): `c8tNd0p0`, partitions `c8tNd0sM`, for drives present at
-  boot. GPT tables with more than 128 entries (xorriso's 248) are read. `mount -L LABEL DIR`
+  (10) and (16), 512-byte blocks): `c8tNd0p0`, partitions `c8tNd0sM`. The boot waits until
+  USB connections settle (2 s at most); a drive that connects later is registered from the
+  tick and its partitions read at the end of the next system call (`blk_scan_late`). GPT tables with more than 128 entries (xorriso's 248) are read. `mount -L LABEL DIR`
   mounts the ext4 file system with that label; `/etc/mnttab` is a link to `/proc/mnttab`.
+- **virtio disks** (`drv/virtio_blk`, virtio 1.0 PCI, polled): `c9tNd0p0`; a read-only
+  device (`VIRTIO_BLK_F_RO`) is a read-only disk (`blk_set_readonly`), its file systems
+  mounted read-only.
 - **Disk writes.** ext4 writes whole contiguous blocks in runs (up to 1 MiB) without reading
   them first. The ATA driver's DMA memory is taken below 4 GiB (`pmm_alloc_contig` serves
   the lowest memory first, one page too). Before, a machine with more than 4 GiB fell back to PIO, and

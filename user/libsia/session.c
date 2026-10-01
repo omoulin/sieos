@@ -286,7 +286,8 @@ static void system_prompt(struct sia_session *s, struct sbuf *b)
                                : "- Only the commands available as tools exist on this system (there is no editor or "
                                  "Python). Use write_file to create files and cd to change directory.");
         if (s->compact) {                              /* a local model: the programs through sh */
-            sb_puts(&p, " Run programs with the sh tool; they are:");
+            sb_puts(&p, " Facts about this computer (memory, disks, files, processes, network) come from "
+                        "running a program: never guess them. Run programs with the sh tool; they are:");
             for (int i = 0; i < s->ntools; i++)
                 if (s->tools[i].path[0])
                     sb_printf(&p, " %s", s->tools[i].name);

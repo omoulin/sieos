@@ -12,8 +12,9 @@ name for this build.
 
 ## Getting it
 
-- **The USB image with the model:** `sieos-usb-brain.img` (2.7 GB) has it installed (see
-  below). `sieos-usb.img` (400 MB) does not.
+- **The USB image with the model:** `sieos-usb-brain.img` (2.8 GB) has it installed, with
+  every other package (see below). `sieos-usb.img` (710 MB) has every package but
+  sia-brain and llama-cpp.
 - **On an installed system:** `pkg install sia-brain` (with SiPM or in a terminal). It
   pulls in `llama-cpp`. The download is 2 GB.
 
@@ -49,18 +50,33 @@ Once it is installed:
 
 ## The USB image with the model
 
-`sieos-usb-brain.img` is `sieos-usb.img` with one more partition: ext4, labelled
-`sieos-pkg`, holding `/usr/pkg` with `llama-cpp` and `sia-brain` installed, and their
-database in `/usr/pkg/.pkgdb`.
+Both USB images end with a partition of packages: ext4, labelled `sieos-pkg`, holding
+`/usr/pkg` with the packages installed and their database in `/usr/pkg/.pkgdb`. In
+`sieos-usb-brain.img` it has every package; in `sieos-usb.img`, every package but
+`sia-brain` and `llama-cpp`.
 
 - **On a live system** (started from the drive, its root in memory), `/etc/rc` mounts that
   partition on `/usr/pkg` (`mount -L sieos-pkg /usr/pkg`) and links `/var/lib/pkg` to its
   database. It reads it through the USB storage driver (xHCI, bulk-only mass storage).
+  The images' root has `/etc/sieos-usb-pkg`, so `rc` waits up to 10 seconds for a drive
+  that connects late. If the partition never shows, the boot messages say "the USB
+  drive's package partition (sieos-pkg) was not found", sia asks for a model as on
+  `sieos-usb.img`, and `dmesg | grep -i 'usb\|disk'` tells what the driver saw.
   Packages installed later go to the drive too and stay there; the rest of the live
   system is lost at power-off, as with `sieos-usb.img`. The partition has 256 MB free for
-  them (`BRAIN_FREE_MB`).
+  them (`PKG_FREE_MB`).
 - **The installer** (`sieinstall`, *Install SIEOS*) copies these packages to the disk,
   with their database in the installed system's `/var/lib/pkg`.
+
+In QEMU it runs as a USB drive, an IDE disk or a virtio disk, for example:
+
+```sh
+qemu-system-x86_64 -accel kvm -cpu host -m 8G -smp 4 -nic user,model=e1000 \
+    -drive file=build/sieos-usb-brain.img,format=raw,if=virtio,readonly=on
+```
+
+With `readonly=on` the package partition is mounted read-only: sia-brain works, but
+packages cannot be added or removed.
 
 Write it to a drive of 4 GB or more:
 
@@ -86,6 +102,6 @@ The packages are built from recipes, like the others:
 - **`ports/pkgs/sia-brain`** packs `user/sia-brain` (the `sia-brain` script, `LICENSE`,
   `NOTICE`) with the model.
 
-`make usb-brain` installs both into the partition on the build host
+`make usb` and `make usb-brain` install the packages into the partition on the build host
 (`tools/pkgstage.py`, as `pkg` would) and appends it to the USB image
 (`tools/mkiso.sh`).

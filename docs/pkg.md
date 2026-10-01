@@ -146,10 +146,10 @@ the key (and a backup): systems built with it accept only indexes it signed.
   hexadecimal.
 - **Database**: `/var/lib/pkg/NAME/MANIFEST` and `FILES` (`f`, `l` or `d` and
   a path, a line each); indexes and downloads in `/var/cache/pkg`.
-- **Packages installed in advance** (the USB image with sia-brain): `tools/pkgstage.py
+- **Packages installed in advance** (the USB images): `tools/pkgstage.py
   DIR PACKAGE.spkg...` installs packages on the build host into DIR as `pkg` would,
   the files of `usr/pkg/X` in `DIR/X` and the database in `DIR/.pkgdb`. DIR becomes
-  a partition labelled `sieos-pkg`, which a live system mounts on `/usr/pkg`, with
+  a partition labelled `sieos-pkg` (both USB images have one), which a live system mounts on `/usr/pkg`, with
   `/var/lib/pkg` linked to its `.pkgdb` (see [sia-brain.md](sia-brain.md)).
 
 ## What pkg checks

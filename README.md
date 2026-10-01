@@ -73,7 +73,7 @@ make run-uefi   # the same through UEFI firmware (OVMF)
 make run-nox    # serial console only (no window)
 make run-iso    # the ISO alone: root fs is a RAM disk shipped on the ISO
 make usb        # build/sieos-usb.img, to write to a USB drive for a real PC
-make usb-brain  # build/sieos-usb-brain.img: the same with sia-brain, the local model (2.7 GB)
+make usb-brain  # build/sieos-usb-brain.img: the same with sia-brain, the local model (2.8 GB)
 make run-usb    # boot sieos-usb.img in QEMU (UEFI) as a USB drive
 make fsck       # check build/disk.img with e2fsck
 make newdisk    # reset build/disk.img to the pristine root file system
@@ -88,9 +88,12 @@ see `lsblk`, not a partition):
 sudo dd if=build/sieos-usb.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
-`sieos-usb-brain.img` (a drive of 4 GB or more) adds a partition with the local model,
-sia-brain, installed; packages installed later on a live system started from it stay on
-the drive (see [sia-brain](#sia-brain-the-local-model)).
+Both USB images have every package installed (see Packages) on a partition of their own,
+which a live system started from the drive mounts on `/usr/pkg`: packages installed later
+from the repository stay on the drive, and the installer copies them all to the disk.
+`sieos-usb.img` (710 MB) has every package except the local model; `sieos-usb-brain.img`
+(2.8 GB, a drive of 4 GB or more) has the local model too, sia-brain (see
+[sia-brain](#sia-brain-the-local-model)). `make run-usb-brain` boots it in QEMU.
 
 The guest gets 1 GiB of memory (`make run MEM=2G` for more). The disk carries `gcc`,
 `g++`, `as`, `ld` and the other binutils, the C and C++ headers and libraries, and
@@ -151,7 +154,7 @@ so it can be written to a USB stick.
 | Permissions | Owner/group/other `rwx` checks on every open, exec and directory search. Creating or removing files needs write+search on the directory. Sticky directories (`/tmp`) restrict deletion. The superuser bypasses checks. `chown` is restricted to root, as in Solaris's `rstchown`, and a non-root `chown` clears the set-ID bits. |
 | Network     | PCI enumeration; interrupt-driven Intel e1000 and virtio-net drivers, USB Ethernet adapters (CDC ECM and NCM, such as the Realtek RTL8153 ones, plugged in at any time), with any number of cards as eth0, eth1, ... (each with its own addresses, DHCP and IPv6, and routes chosen per destination). Ethernet, ARP (with a queue for packets awaiting resolution), IPv4 routing through a gateway, loopback (127.0.0.0/8), ICMP echo, UDP, **TCP** and a **DHCP** client at boot. **IPv6**: neighbor discovery, stateless address autoconfiguration from router advertisements (with MTU and RDNSS), ICMPv6 echo, `::1`, and TCP and UDP over IPv6; `AF_INET6` sockets are dual-stack (IPv4-mapped peers) unless `IPV6_V6ONLY`. TCP covers the three-way handshake, MSS and window scaling, flow control, out-of-order reassembly, NewReno congestion control, RTT-based retransmission with backoff, zero-window probes, FIN/RST, TIME_WAIT and listen/accept backlogs. The **BSD sockets** API integrates with `read`/`write`/`poll`, including non-blocking `connect` (`EINPROGRESS`, then `poll` and `SO_ERROR`). Ports below 1024 and raw sockets require root. **Wi-Fi**: Intel Wi-Fi 6 AX201 (Intel's firmware), scanning and WPA2-Personal, with `dladm`. |
 | Power       | ACPI power-off (S5) and restart (reset register, 0xCF9), the power button; MWAIT idle states, Intel HWP or P-states with performance/balanced/power-saver policies, per-core and package temperatures (Intel DTS, AMD), passive cooling and a critical shutdown, desktop fan speeds (Nuvoton, ITE); `poweradm` and the Power and Temperature window. |
-| Disks       | ATA (bus-master DMA) and NVMe disks, USB drives present at boot (mass storage, bulk-only: `c8t0d0p0`), GPT and MBR partitions (`/dev/dsk/c4t0d0s1`), a RAM disk from the ISO, lofi devices; `root=` on the boot command line picks the root partition; `mount -L LABEL DIR`. |
+| Disks       | ATA (bus-master DMA), NVMe and virtio disks (`if=virtio` in QEMU, read-only images too), USB drives, plugged in at any time (mass storage, bulk-only: `c8t0d0p0`), GPT and MBR partitions (`/dev/dsk/c4t0d0s1`), a RAM disk from the ISO, lofi devices; `root=` on the boot command line picks the root partition; `mount -L LABEL DIR`. |
 | Files       | ext4 read/write (see below), tmpfs (`/tmp`, `/dev/shm`), pipes and named FIFOs, `AF_UNIX` sockets (with descriptor passing), pseudo-terminals, `poll()`, record locks, and device nodes `/dev/console`, `/dev/tty`, `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/fb0` and `/dev/events` stored as real ext4 character-special inodes. |
 | Random      | `/dev/random` and `/dev/urandom` never block. They output a ChaCha20 keystream that is rekeyed after every read, from a pool fed by interrupt timing, the RTC and RDSEED/RDRAND when the CPU has them. |
 | TLS         | A TLS 1.3 client in user space (`user/tls`): X25519 and P-256 key exchange, AES-128/256-GCM, RSA-PSS/PKCS #1 and ECDSA (P-256, P-384) signatures, X.509 chain and host-name validation against `/etc/ssl/certs.pem` (the Mozilla roots), plus optional site roots in `/etc/ssl/local.pem`, and session resumption with tickets. |

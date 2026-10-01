@@ -25,8 +25,9 @@
  * partitions c8tNd0sM): blk_init reads their partition tables.  The
  * transfers are synchronous, from the reader's or writer's context: it
  * takes the controller from the tick (busy) for each command, 64 KiB at
- * most.  A drive plugged in later is registered, but its partitions are
- * only read at the next boot.
+ * most.  A drive that connects later (plugged in, or slow to train its
+ * link) is read at the next system call (blk_scan_late): its partitions
+ * and /dev/dsk nodes.
  *
  * Of the other devices only the HID interfaces with an interrupt IN endpoint are
  * used: boot keyboards and mice in the boot protocol (fixed reports),
@@ -1793,8 +1794,29 @@ void usb_init(const char *cmdline)
                 hc->max_slots, hc->ac64 ? "" : ", 32-bit");
         nhc++;
     }
-    if (nhc)
-        mdelay(200);                             /* connections show, USB 3 links train */
+    /* connections show and USB 3 links train: 200 ms, then until the connected
+     * ports have not changed for 300 ms and none is still training (2 s at most:
+     * a USB drive the firmware booted from takes a moment after the reset) */
+    uint64_t start = hrtime(), stable = start;
+    uint32_t last = ~0U;
+    while (nhc && hrtime() - start < 2000000000UL) {
+        uint32_t conn = 0;
+        bool training = false;
+        for (int i = 0; i < nhc; i++)
+            for (int p = 1; p <= hcs[i].max_ports; p++) {
+                uint32_t v = rd32(hcs[i].op, PORTSC(p));
+                if (v & PORT_CCS)
+                    conn += (uint32_t)(i * 64 + p) * 2654435761U;   /* (a sum: which ports) */
+                training |= ((v >> 5) & 0xF) == 7;                  /* PLS Polling */
+            }
+        if (conn != last) {
+            last = conn;
+            stable = hrtime();
+        }
+        if (hrtime() - start >= 200000000UL && !training && hrtime() - stable >= 300000000UL)
+            break;
+        mdelay(20);
+    }
     for (int i = 0; i < nhc; i++) {
         struct xhci *hc = &hcs[i];
         for (int p = 1; p <= hc->max_ports; p++) {

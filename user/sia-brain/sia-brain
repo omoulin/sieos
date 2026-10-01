@@ -22,9 +22,11 @@ start)
     mkdir -p "$DIR" && chmod 700 "$DIR"
     # 16K tokens of context (sia's instructions and tools, and the
     # conversation); one request at a time; the prompt's start reused
-    nohup /usr/pkg/bin/llama-server -m "$MODEL" --host 127.0.0.1 --port "$PORT" --alias sia-brain \
-        --jinja --ctx-size 16384 --parallel 1 --cache-reuse 256 --no-webui \
-        > "$DIR/brain.log" 2>&1 < /dev/null &
+    # (the hang-up of the terminal that started it does not stop it: no nohup, which is not on every PATH)
+    ( trap '' HUP
+      exec /usr/pkg/bin/llama-server -m "$MODEL" --host 127.0.0.1 --port "$PORT" --alias sia-brain \
+          --jinja --ctx-size 16384 --parallel 1 --cache-reuse 256 --no-webui \
+          > "$DIR/brain.log" 2>&1 < /dev/null ) &
     echo $! > "$PIDFILE"
     ;;
 stop)

@@ -31,13 +31,16 @@ const char *blk_name(int dev);
 /* A description: "NVMe KXG60ZNV256G, 238 GiB". */
 const char *blk_desc(int dev);
 void blk_set_desc(int dev, const char *desc);
-void blk_set_lbsize(int dev, uint32_t bytes);   /* the disk's own block size (default 512) */
+void blk_set_lbsize(int dev, uint32_t bytes);
+void blk_set_readonly(int dev);          /* a disk that refuses writes (write-protected, read-only image) */   /* the disk's own block size (default 512) */
 /* A block device opened as a file (root): bytes at off; writes refused while in use. */
 long blk_file_io(int dev, uint64_t off, void *buf, size_t n, bool write);
 int  blk_file_open(int dev, bool write);
 struct sieos_dk_info;
 int  blk_info(int dev, struct sieos_dk_info *di);
 int  blk_reread(int dev);             /* a whole disk's partitions again (none may be in use) */
+extern volatile bool blk_late_pending;   /* a disk registered after blk_init: blk_scan_late reads it */
+void blk_scan_late(void);
 
 struct inode;
 

@@ -15,6 +15,7 @@
 #include "vm.h"
 #include "jbd2.h"
 #include "net.h"
+#include "blkdev.h"
 #include "sieos/syscall.h"
 #include "sieos/time.h"
 
@@ -296,6 +297,8 @@ void trap_handler(struct trapframe *tf)
             ext4_journal_tick(false);        /* an old ext4 transaction: commit it */
         if (net_loop_pending)
             net_loop_drain();                /* packets this call sent to ourselves */
+        if (blk_late_pending)
+            blk_scan_late();                 /* a disk that came after boot: its partitions */
     } else if (tf->int_no >= IRQ_BASE && tf->int_no < IRQ_BASE + 16) {
         int irq = tf->int_no - IRQ_BASE;
         if (!ioapic_ok)
