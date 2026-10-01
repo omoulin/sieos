@@ -1,0 +1,27 @@
+# The Khronos Vulkan loader (libvulkan.so) and the Vulkan headers: programs
+# call Vulkan through it, and it finds the drivers this system has, from
+# /usr/pkg/share/vulkan/icd.d/*.json (mesa's lavapipe).  The headers come
+# from the build (build/ports/vulkan-headers, the same SDK version).  No
+# window system of its own (X11, Wayland): showing Vulkan images in Facet
+# windows is not done yet.
+# sieos.patch: SIEOS among the Unix platforms; the program's path from
+# getexecname(), as on Solaris.
+name     = vulkan-loader
+version  = 1.4.363.0-1
+summary  = Vulkan loader and headers: libvulkan, how programs reach Vulkan drivers (mesa's lavapipe)
+source   = https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz
+sha256   = 941eff558fc74f248745fb7df367640cf89a8457f216dae498a74ae14b6ba6f7
+build    = printf '%s\n' "set(CMAKE_SYSTEM_NAME Linux)" "set(CMAKE_SYSTEM_PROCESSOR x86_64)" \
+               "set(CMAKE_C_COMPILER $(command -v $CC))" "set(CMAKE_CXX_COMPILER $(command -v $CXX))" \
+               "set(CMAKE_FIND_ROOT_PATH $TREE/build/sysroot)" "set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)" \
+               "set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)" "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)" \
+               "set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)" 'set(CMAKE_C_FLAGS_INIT "-D_GNU_SOURCE")' > sieos.cmake
+           cmake -S . -B b -DCMAKE_TOOLCHAIN_FILE=$PWD/sieos.cmake -DCMAKE_BUILD_TYPE=Release \
+               -DCMAKE_INSTALL_PREFIX=$PREFIX -DVULKAN_HEADERS_INSTALL_DIR=$TREE/build/ports/vulkan-headers \
+               -DCMAKE_PREFIX_PATH=$TREE/build/ports/vulkan-headers -DBUILD_WSI_XCB_SUPPORT=OFF \
+               -DBUILD_WSI_XLIB_SUPPORT=OFF -DBUILD_WSI_WAYLAND_SUPPORT=OFF -DBUILD_WSI_DIRECTFB_SUPPORT=OFF \
+               -DBUILD_TESTS=OFF -DFALLBACK_DATA_DIRS=/usr/pkg/share:/usr/share -DFALLBACK_CONFIG_DIRS=/etc/xdg > /dev/null
+           cmake --build b -j$JOBS
+install  = DESTDIR=$DESTDIR cmake --install b
+           cp -R $TREE/build/ports/vulkan-headers/include/. $DESTDIR$PREFIX/include/
+           mkdir -p $DESTDIR$PREFIX/share/doc/vulkan-loader && cp LICENSE.txt $DESTDIR$PREFIX/share/doc/vulkan-loader/

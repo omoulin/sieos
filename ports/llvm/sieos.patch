@@ -1,0 +1,33 @@
+--- a/llvm/include/llvm/ADT/bit.h
++++ b/llvm/include/llvm/ADT/bit.h
+@@ -30,7 +30,8 @@
+ 
+ #if defined(__linux__) || defined(__GNU__) || defined(__HAIKU__) ||            \
+     defined(__Fuchsia__) || defined(__EMSCRIPTEN__) || defined(__NetBSD__) ||  \
+-    defined(__OpenBSD__) || defined(__DragonFly__) || defined(__managarm__)
++    defined(__OpenBSD__) || defined(__DragonFly__) || defined(__managarm__) || \
++    defined(__sieos__)
+ #include <endian.h>
+ #elif defined(_AIX)
+ #include <sys/machine.h>
+--- a/llvm/lib/Support/Unix/Path.inc
++++ b/llvm/lib/Support/Unix/Path.inc
+@@ -111,7 +111,7 @@
+ #endif
+ 
+ #if defined(__NetBSD__) || defined(__DragonFly__) || defined(__GNU__) ||       \
+-    defined(__MVS__)
++    defined(__MVS__) || defined(__sieos__)
+ #define STATVFS_F_FLAG(vfs) (vfs).f_flag
+ #else
+ #define STATVFS_F_FLAG(vfs) (vfs).f_flags
+@@ -520,6 +520,9 @@
+ #elif defined(__HAIKU__)
+   // Haiku doesn't expose this information.
+   return false;
++#elif defined(__sieos__)
++  // SIEOS has no network file systems.
++  return true;
+ #elif defined(__sun)
+   // statvfs::f_basetype contains a null-terminated FSType name of the mounted
+   // target

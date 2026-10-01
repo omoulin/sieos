@@ -23,7 +23,10 @@ GNU = ['--prefix=/usr/gnu', '--disable-nls']
 # configure results that would need to run a target program
 CROSS_CACHE = ['gl_cv_func_getcwd_path_max=yes', 'gl_cv_func_realpath_works=yes',
                'gl_cv_func_working_mkstemp=yes', 'ac_cv_func_malloc_0_nonnull=yes',
-               'ac_cv_func_realloc_0_nonnull=yes', 'gl_cv_func_malloc_0_nonnull=yes']
+               'ac_cv_func_realloc_0_nonnull=yes', 'gl_cv_func_malloc_0_nonnull=yes',
+               # (else gnulib replaces fchownat(AT_SYMLINK_NOFOLLOW) by a fchdir dance that failed:
+               # cp -a could not keep a symbolic link's owner)
+               'gl_cv_func_fchownat_nofollow_works=yes', 'gl_cv_func_chown_ctime_works=yes']
 PORTS = {
     'coreutils': ('coreutils-9.5.tar.xz', GNU + ['--without-selinux', '--disable-libcap', '--without-openssl',
                                                  '--disable-acl', '--disable-xattr', '--without-gmp',

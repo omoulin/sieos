@@ -1,0 +1,513 @@
+--- a/meson.build
++++ b/meson.build
+@@ -361,7 +361,7 @@
+ ].contains(true)
+ 
+ with_dri = false
+-if with_gallium and (system_has_kms_drm or (with_gallium_zink and (freedreno_kmds.contains('kgsl') or host_machine.system() == 'darwin')))
++if with_gallium and (system_has_kms_drm or host_machine.system() == 'sieos' or (with_gallium_zink and (freedreno_kmds.contains('kgsl') or host_machine.system() == 'darwin')))
+   _glx = get_option('glx')
+   _egl = get_option('egl')
+   if _glx == 'dri' or _egl.enabled() or (_glx == 'disabled' and _egl.allowed())
+@@ -422,7 +422,7 @@
+   with_dri_platform = 'windows'
+ elif system_has_kms_drm
+   with_dri_platform = 'drm'
+-elif host_machine.system() == 'gnu' or (freedreno_kmds.contains('kgsl') and with_gallium_zink)
++elif ['gnu', 'sieos'].contains(host_machine.system()) or (freedreno_kmds.contains('kgsl') and with_gallium_zink)
+   with_dri_platform = 'pseudo-drm'
+ else
+   # FIXME: haiku doesn't use dri, and xlib doesn't use dri, probably should
+@@ -487,6 +487,7 @@
+ with_platform_haiku = _platforms.contains('haiku')
+ with_platform_windows = _platforms.contains('windows')
+ with_platform_macos = _platforms.contains('macos')
++with_platform_facet = _platforms.contains('facet')
+ 
+ with_gfxstream_emulated_android = with_gfxstream_vk and with_platform_android and host_machine.system() == 'linux'
+ if with_gfxstream_emulated_android
+@@ -575,7 +576,7 @@
+   endif
+ 
+   # All the other platforms can be detected and cannot reach the native platform code
+-  _undetectable_platforms = ['x11', 'haiku', 'android', 'surfaceless']
++  _undetectable_platforms = ['x11', 'haiku', 'android', 'surfaceless', 'facet']
+ 
+   # Don't enforce the native platform if none of the undetectable platforms are enabled
+   _undetectable_platforms_enabled = []
+--- a/meson.options
++++ b/meson.options
+@@ -12,7 +12,7 @@
+   type : 'array',
+   value : ['auto'],
+   choices : [
+-    'auto', 'x11', 'wayland', 'haiku', 'android', 'windows', 'macos',
++    'auto', 'x11', 'wayland', 'haiku', 'android', 'windows', 'macos', 'facet',
+   ],
+   description : 'window systems to support. If this is set to `auto`, all ' +
+                 'platforms applicable will be enabled.'
+@@ -23,7 +23,7 @@
+   type : 'combo',
+   value : 'auto',
+   choices : [
+-    'auto', 'x11', 'haiku', 'android', 'surfaceless',
++    'auto', 'x11', 'haiku', 'android', 'surfaceless', 'facet',
+   ],
+   description : 'the window system EGL assumes for EGL_DEFAULT_DISPLAY',
+ )
+--- a/src/egl/meson.build
++++ b/src/egl/meson.build
+@@ -133,6 +133,10 @@
+       ]
+     endif
+   endif
++  if with_platform_facet
++    files_egl += files('drivers/dri2/platform_facet.c')
++    deps_for_egl += cc.find_library('facet')
++  endif
+   if with_platform_android
+     deps_for_egl += [dep_android, idep_u_gralloc]
+     files_egl += files('drivers/dri2/platform_android.c')
+--- a/src/egl/main/egldisplay.h
++++ b/src/egl/main/egldisplay.h
+@@ -55,6 +55,7 @@
+    _EGL_PLATFORM_SURFACELESS,
+    _EGL_PLATFORM_DEVICE,
+    _EGL_PLATFORM_WINDOWS,
++   _EGL_PLATFORM_FACET,
+ 
+    _EGL_NUM_PLATFORMS,
+    _EGL_INVALID_PLATFORM = -1
+--- a/src/egl/main/egldisplay.c
++++ b/src/egl/main/egldisplay.c
+@@ -84,6 +84,7 @@
+    {_EGL_PLATFORM_SURFACELESS, "surfaceless"},
+    {_EGL_PLATFORM_DEVICE, "device"},
+    {_EGL_PLATFORM_WINDOWS, "windows"},
++   {_EGL_PLATFORM_FACET, "facet"},
+ };
+ 
+ /**
+--- a/src/egl/drivers/dri2/egl_dri2.h
++++ b/src/egl/drivers/dri2/egl_dri2.h
+@@ -311,6 +311,10 @@
+    __DRIbuffer buffers[5];
+    bool have_fake_front;
+ 
++#ifdef HAVE_FACET_PLATFORM
++   void *facet_window;                /* fct_window * (window surfaces) */
++#endif
++
+ #ifdef HAVE_X11_PLATFORM
+    xcb_drawable_t drawable;
+    xcb_xfixes_region_t region;
+@@ -574,6 +578,9 @@
+ dri2_initialize_surfaceless(_EGLDisplay *disp);
+ 
+ EGLBoolean
++dri2_initialize_facet(_EGLDisplay *disp);
++
++EGLBoolean
+ dri2_initialize_device(_EGLDisplay *disp);
+ static inline void
+ dri2_teardown_device(struct dri2_egl_display *dri2_dpy)
+--- a/src/egl/drivers/dri2/egl_dri2.c
++++ b/src/egl/drivers/dri2/egl_dri2.c
+@@ -897,6 +897,11 @@
+    case _EGL_PLATFORM_SURFACELESS:
+       ret = dri2_initialize_surfaceless(disp);
+       break;
++#ifdef HAVE_FACET_PLATFORM
++   case _EGL_PLATFORM_FACET:
++      ret = dri2_initialize_facet(disp);
++      break;
++#endif
+    case _EGL_PLATFORM_DEVICE:
+       ret = dri2_initialize_device(disp);
+       break;
+@@ -1006,6 +1011,8 @@
+       break;
+    case _EGL_PLATFORM_DEVICE:
+       break;
++   case _EGL_PLATFORM_FACET:
++      break;
+    default:
+       UNREACHABLE("Platform teardown is not properly hooked.");
+       break;
+--- a/include/EGL/eglplatform.h
++++ b/include/EGL/eglplatform.h
+@@ -119,6 +119,13 @@
+ typedef Pixmap   EGLNativePixmapType;
+ typedef Window   EGLNativeWindowType;
+ 
++#elif defined(__sieos__)
++
++/* SIEOS: the Facet desktop's (libfacet, <facet/facet.h>) */
++typedef struct fct_display *EGLNativeDisplayType;
++typedef void               *EGLNativePixmapType;
++typedef struct fct_window  *EGLNativeWindowType;
++
+ #elif defined(__unix__)
+ 
+ typedef void             *EGLNativeDisplayType;
+--- a/src/util/detect_os.h
++++ b/src/util/detect_os.h
+@@ -91,6 +91,11 @@
+ #define DETECT_OS_POSIX 1
+ #endif
+ 
++#if defined(__sieos__)
++#define DETECT_OS_SIEOS 1
++#define DETECT_OS_POSIX 1
++#endif
++
+ 
+ /*
+  * Make sure DETECT_OS_* are always defined, so that they can be used with #if
+@@ -122,6 +127,9 @@
+ #ifndef DETECT_OS_HURD
+ #define DETECT_OS_HURD 0
+ #endif
++#ifndef DETECT_OS_SIEOS
++#define DETECT_OS_SIEOS 0
++#endif
+ #ifndef DETECT_OS_LINUX
+ #define DETECT_OS_LINUX 0
+ #endif
+--- a/include/drm-uapi/drm.h
++++ b/include/drm-uapi/drm.h
+@@ -45,7 +45,7 @@
+ 
+ #include <stdint.h>
+ #include <sys/types.h>
+-#if defined(__GNU__)
++#if defined(__GNU__) || defined(__sieos__)
+ #include <sys/ioctl.h>
+ #else
+ #include <sys/ioccom.h>
+--- a/src/util/os_misc.c
++++ b/src/util/os_misc.c
+@@ -60,7 +60,7 @@
+ #  include <unistd.h>
+ #  include <android/log.h>
+ #  include <sys/system_properties.h>
+-#elif DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD || DETECT_OS_MANAGARM
++#elif DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD || DETECT_OS_MANAGARM || DETECT_OS_SIEOS
+ #  include <unistd.h>
+ #elif DETECT_OS_OPENBSD || DETECT_OS_FREEBSD
+ #  include <sys/resource.h>
+--- /dev/null
++++ b/src/egl/drivers/dri2/platform_facet.c
+@@ -0,0 +1,312 @@
++/*
++ * Copyright © 2026 Olivier Moulin
++ * SPDX-License-Identifier: MIT
++ *
++ * EGL on SIEOS's Facet desktop: window surfaces are Facet windows
++ * (EGLNativeWindowType: a fct_window *, from libfacet's fct_window_create).
++ * Rendering is software (llvmpipe, through the swrast loader): each frame
++ * the driver presents (eglSwapBuffers) is copied into the window's buffer,
++ * 32-bit XRGB as Facet keeps it (the B8G8R8X8 / B8G8R8A8 configs), and that
++ * part of the window is shown (fct_window_damage).  The surface follows the
++ * window's size: the driver asks it at every frame (getDrawableInfo).
++ * Pbuffers are in memory (egl_dri2.c's swrast pbuffer loader).
++ *
++ * The program keeps its window and reads its events (fct_next_event) as
++ * any Facet program does; EGL only draws into it.  The native display is
++ * EGL_DEFAULT_DISPLAY (or the program's fct_display *: not used, the
++ * windows say which desktop they are on).
++ */
++
++#include <stdlib.h>
++#include <string.h>
++
++#include <facet/facet.h>
++#include <facet/gfx.h>
++
++#include "egl_dri2.h"
++#include "eglglobals.h"
++#include "loader.h"
++#include "dri_util.h"
++#include "dri_screen.h"
++
++static bool
++facet_is_window(struct dri2_egl_surface *dri2_surf)
++{
++   return dri2_surf->base.Type == EGL_WINDOW_BIT && dri2_surf->facet_window;
++}
++
++static void
++facet_get_drawable_info(struct dri_drawable *draw, int *x, int *y, int *w,
++                        int *h, void *loaderPrivate)
++{
++   struct dri2_egl_surface *dri2_surf = loaderPrivate;
++
++   *x = *y = 0;
++   if (facet_is_window(dri2_surf)) {
++      fct_window_size(dri2_surf->facet_window, w, h);
++      dri2_surf->base.Width = *w;
++      dri2_surf->base.Height = *h;
++   } else {
++      *w = dri2_surf->base.Width;
++      *h = dri2_surf->base.Height;
++   }
++}
++
++static void
++facet_put_image2(struct dri_drawable *draw, int op, int x, int y, int w, int h,
++                 int stride, char *data, void *loaderPrivate)
++{
++   struct dri2_egl_surface *dri2_surf = loaderPrivate;
++
++   if (!facet_is_window(dri2_surf)) {
++      swrast_pbuffer_loader_extension.putImage(draw, op, x, y, w, h, data,
++                                               loaderPrivate);
++      return;
++   }
++   if (op != __DRI_SWRAST_IMAGE_OP_DRAW && op != __DRI_SWRAST_IMAGE_OP_SWAP)
++      return;
++
++   struct surface *s = fct_window_surface(dri2_surf->facet_window);
++   if (!s || !s->px)
++      return;
++   /* the window may have shrunk since the frame was drawn: clip */
++   if (x < 0 || y < 0 || x >= s->w || y >= s->h)
++      return;
++   if (x + w > s->w)
++      w = s->w - x;
++   if (y + h > s->h)
++      h = s->h - y;
++   for (int i = 0; i < h; i++)
++      memcpy(s->px + (size_t)(y + i) * s->stride + x, data + (size_t)i * stride,
++             (size_t)w * 4);
++   fct_window_damage(dri2_surf->facet_window, (struct rect){ x, y, w, h });
++}
++
++static void
++facet_put_image(struct dri_drawable *draw, int op, int x, int y, int w, int h,
++                char *data, void *loaderPrivate)
++{
++   facet_put_image2(draw, op, x, y, w, h, w * 4, data, loaderPrivate);
++}
++
++static void
++facet_get_image2(struct dri_drawable *read, int x, int y, int w, int h,
++                 int stride, char *data, void *loaderPrivate)
++{
++   struct dri2_egl_surface *dri2_surf = loaderPrivate;
++
++   if (!facet_is_window(dri2_surf)) {
++      swrast_pbuffer_loader_extension.getImage(read, x, y, w, h, data,
++                                               loaderPrivate);
++      return;
++   }
++   struct surface *s = fct_window_surface(dri2_surf->facet_window);
++   for (int i = 0; i < h; i++) {
++      char *dst = data + (size_t)i * stride;
++      if (!s || !s->px || y + i < 0 || y + i >= s->h || x < 0 || x >= s->w) {
++         memset(dst, 0, (size_t)w * 4);
++         continue;
++      }
++      int n = x + w > s->w ? s->w - x : w;
++      memcpy(dst, s->px + (size_t)(y + i) * s->stride + x, (size_t)n * 4);
++      if (n < w)
++         memset(dst + (size_t)n * 4, 0, (size_t)(w - n) * 4);
++   }
++}
++
++static void
++facet_get_image(struct dri_drawable *read, int x, int y, int w, int h,
++                char *data, void *loaderPrivate)
++{
++   facet_get_image2(read, x, y, w, h, w * 4, data, loaderPrivate);
++}
++
++static const __DRIswrastLoaderExtension facet_swrast_loader_extension = {
++   .base = {__DRI_SWRAST_LOADER, 2},
++   .getDrawableInfo = facet_get_drawable_info,
++   .putImage = facet_put_image,
++   .getImage = facet_get_image,
++   .putImage2 = facet_put_image2,
++   .getImage2 = facet_get_image2,
++};
++
++static const __DRIextension *facet_loader_extensions[] = {
++   &facet_swrast_loader_extension.base,
++   &image_lookup_extension.base,
++   NULL,
++};
++
++static _EGLSurface *
++facet_create_surface(_EGLDisplay *disp, EGLint type, _EGLConfig *conf,
++                     void *native_window, const EGLint *attrib_list)
++{
++   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
++   struct dri2_egl_config *dri2_conf = dri2_egl_config(conf);
++   struct dri2_egl_surface *dri2_surf;
++   const struct dri_config *config;
++
++   dri2_surf = calloc(1, sizeof *dri2_surf);
++   if (!dri2_surf) {
++      _eglError(EGL_BAD_ALLOC, "facet: create surface");
++      return NULL;
++   }
++
++   if (!dri2_init_surface(&dri2_surf->base, disp, type, conf, attrib_list,
++                          false, native_window))
++      goto cleanup;
++
++   if (type == EGL_WINDOW_BIT) {
++      if (!native_window) {
++         _eglError(EGL_BAD_NATIVE_WINDOW, "facet: no window");
++         goto cleanup;
++      }
++      dri2_surf->facet_window = native_window;
++      int w = 0, h = 0;
++      fct_window_size(dri2_surf->facet_window, &w, &h);
++      dri2_surf->base.Width = w;
++      dri2_surf->base.Height = h;
++   }
++
++   config = dri2_get_dri_config(dri2_conf, type, dri2_surf->base.GLColorspace);
++   if (!config) {
++      _eglError(EGL_BAD_MATCH, "facet: unsupported surface type or colorspace");
++      goto cleanup;
++   }
++
++   if (!dri2_create_drawable(dri2_dpy, config, dri2_surf, dri2_surf))
++      goto cleanup;
++
++   return &dri2_surf->base;
++
++cleanup:
++   free(dri2_surf);
++   return NULL;
++}
++
++static _EGLSurface *
++facet_create_window_surface(_EGLDisplay *disp, _EGLConfig *conf,
++                            void *native_window, const EGLint *attrib_list)
++{
++   _EGLSurface *surf = facet_create_surface(disp, EGL_WINDOW_BIT, conf,
++                                            native_window, attrib_list);
++   if (surf)
++      surf->SwapInterval = 0;   /* (no vertical blank to wait for) */
++   return surf;
++}
++
++static _EGLSurface *
++facet_create_pbuffer_surface(_EGLDisplay *disp, _EGLConfig *conf,
++                             const EGLint *attrib_list)
++{
++   return facet_create_surface(disp, EGL_PBUFFER_BIT, conf, NULL, attrib_list);
++}
++
++static EGLBoolean
++facet_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
++{
++   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
++
++   driDestroyDrawable(dri2_surf->dri_drawable);
++   free(dri2_surf->swrast_device_buffer);
++   dri2_fini_surface(surf);
++   free(dri2_surf);
++   return EGL_TRUE;
++}
++
++static EGLBoolean
++facet_swap_buffers(_EGLDisplay *disp, _EGLSurface *draw)
++{
++   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
++
++   if (draw->Type != EGL_WINDOW_BIT)
++      return EGL_TRUE;
++   driSwapBuffers(dri2_surf->dri_drawable);   /* (the driver presents: putImage) */
++   return EGL_TRUE;
++}
++
++static EGLint
++facet_query_buffer_age(_EGLDisplay *disp, _EGLSurface *surf)
++{
++   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
++
++   return driSWRastQueryBufferAge(dri2_surf->dri_drawable);
++}
++
++static EGLBoolean
++facet_swap_interval(_EGLDisplay *disp, _EGLSurface *surf, EGLint interval)
++{
++   return EGL_TRUE;   /* (frames are shown as they come) */
++}
++
++static const struct dri2_egl_display_vtbl facet_display_vtbl = {
++   .create_window_surface = facet_create_window_surface,
++   .create_pbuffer_surface = facet_create_pbuffer_surface,
++   .destroy_surface = facet_destroy_surface,
++   .create_image = dri2_create_image_khr,
++   .swap_interval = facet_swap_interval,
++   .swap_buffers = facet_swap_buffers,
++   .query_buffer_age = facet_query_buffer_age,
++   .get_dri_drawable = dri2_surface_get_dri_drawable,
++};
++
++/* Configs for windows and pbuffers: the formats a Facet window keeps (XRGB, ARGB). */
++static void
++facet_add_configs(_EGLDisplay *disp)
++{
++   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
++   unsigned count = 0;
++
++   for (unsigned i = 0; dri2_dpy->driver_configs[i] != NULL; i++) {
++      const struct gl_config *gl_config =
++         (const struct gl_config *)dri2_dpy->driver_configs[i];
++      EGLint surface_type = EGL_PBUFFER_BIT;
++
++      if (gl_config->color_format == PIPE_FORMAT_B8G8R8X8_UNORM ||
++          gl_config->color_format == PIPE_FORMAT_B8G8R8A8_UNORM)
++         surface_type |= EGL_WINDOW_BIT;
++      else if (gl_config->color_format != PIPE_FORMAT_R8G8B8A8_UNORM &&
++               gl_config->color_format != PIPE_FORMAT_R8G8B8X8_UNORM &&
++               gl_config->color_format != PIPE_FORMAT_B5G6R5_UNORM)
++         continue;
++
++      if (dri2_add_config(disp, dri2_dpy->driver_configs[i], surface_type, NULL))
++         count++;
++   }
++   if (!count)
++      _eglLog(_EGL_WARNING, "facet: no usable config");
++}
++
++EGLBoolean
++dri2_initialize_facet(_EGLDisplay *disp)
++{
++   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
++   struct _egl_device *device;
++
++   dri2_dpy->fd_render_gpu = -1;
++   dri2_dpy->fd_display_gpu = -1;
++   device = _eglFindDevice(-1, true);   /* (the software device) */
++   if (!device)
++      return _eglError(EGL_NOT_INITIALIZED, "facet: no software device");
++   disp->Device = device;
++
++   dri2_dpy->driver_name = strdup("swrast");
++   if (!dri2_dpy->driver_name)
++      return _eglError(EGL_BAD_ALLOC, "facet");
++   dri2_detect_swrast_kopper(disp);   /* (swrast, not KMS: a DRI_SCREEN_SWRAST screen) */
++   dri2_dpy->loader_extensions = facet_loader_extensions;
++
++   if (!dri2_create_screen(disp))
++      return _eglError(EGL_NOT_INITIALIZED, "facet: cannot create the screen");
++
++   dri2_setup_screen(disp);
++   facet_add_configs(disp);
++
++   disp->Extensions.EXT_buffer_age = EGL_TRUE;
++   disp->Extensions.EXT_swap_buffers_with_damage = EGL_FALSE;
++
++   /* Fill vtbl last to prevent accidentally calling virtual function during
++    * initialization.
++    */
++   dri2_dpy->vtbl = &facet_display_vtbl;
++   return EGL_TRUE;
++}

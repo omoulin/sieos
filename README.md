@@ -27,7 +27,8 @@ Requirements (Debian 13 or Ubuntu):
 
 ```sh
 sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-amd64-bin \
-                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl flex bison cmake
+                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl flex bison cmake \
+                 meson ninja-build glslang-tools
 ```
 
 - **KVM:** the build boots SIEOS in QEMU once, to compile ksh93 on SIEOS itself. With
@@ -37,7 +38,8 @@ sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-am
   `/lib/firmware`: `firmware-iwlwifi` on Debian (from `non-free-firmware`),
   `linux-firmware` on Ubuntu.
 - `cmake` builds llama.cpp, for the local model (`make brain`, the `llama-cpp` and
-  `sia-brain` packages and `make usb-brain`).
+  `sia-brain` packages and `make usb-brain`), and LLVM and the Vulkan loader; `meson`,
+  `ninja` and `glslangValidator` (glslang-tools) build Mesa (the `mesa` package).
 - `gperf`, `pkg-config` and `perl` are for the web browser's libraries (NetSurf's own
   build generates code with them); `openssl` makes the package signing key and signs
   package indexes (see Packages).
@@ -381,7 +383,8 @@ pkg install git                   # with its dependencies (curl, openssl, zlib)
 pkg list; pkg upgrade; pkg remove git
 ```
 
-Available: **sia-brain** (the local model, see below) and **llama-cpp**, **git**, **rsync**, **openssh** (the ssh client: `ssh`, `scp`, `sftp`,
+Available: **sia-brain** (the local model, see below) and **llama-cpp**, **mesa** and
+**vulkan-loader** (OpenGL, EGL and Vulkan, see Graphics), **git**, **rsync**, **openssh** (the ssh client: `ssh`, `scp`, `sftp`,
 `ssh-keygen`, `ssh-agent`), **curl**, **openssl**, **zlib**, **lua**, **pigz**, **mir** and
 **facet-git**. **Git** (`facet-git`) is a window for git:
 - repositories: add, clone, new;
@@ -398,6 +401,19 @@ Indexes are signed with a key kept outside the source tree
 (`~/.config/sieos/pkg-signing-key.pem`), whose public half the images carry.
 [docs/pkg.md](docs/pkg.md) has the details: recipes, formats, publishing and what
 `pkg` checks.
+
+## Graphics: OpenGL, EGL and Vulkan
+
+The **mesa** package (`pkg install mesa`) gives programs **OpenGL ES 3.2**, **OpenGL 4.6**
+and **EGL 1.5** (Mesa's llvmpipe) and **Vulkan 1.4** (lavapipe, through the Khronos
+loader, package **vulkan-loader**).
+- **Drawing:** done by the processor, with shaders compiled to x86 code by LLVM (AVX2
+  and AVX-512 used).
+- **Windows:** EGL draws into Facet windows, through its own platform: a program gives
+  `eglCreateWindowSurface` its `fct_window *`.
+- **Demos:** `glcube` (*OpenGL cube* in the SIEOS menu) and `vkcompute`.
+
+[docs/mesa.md](docs/mesa.md) has the details: writing an EGL program, Vulkan, how it is built.
 
 ## Web browser
 
@@ -447,7 +463,8 @@ nsgenbind (built for the build machine, with flex and bison) generates from WebI
 
 - ext4 journaling covers metadata (data=ordered). Changes are committed within five
   seconds and at `sync`, so a power cut loses at most those seconds, never consistency.
-- The desktop renders in software (no GPU acceleration).
+- The desktop renders in software (no GPU acceleration); so do OpenGL and Vulkan (the
+  mesa package: llvmpipe, lavapipe). Vulkan images are not shown in windows yet.
 - Network: no IPv6 privacy addresses or path MTU discovery, and no TCP SACK or timestamps.
 - TLS: `libtls` speaks TLS 1.3 only (a server limited to TLS 1.2 is refused); the ported
   curl (below) uses Mbed TLS, which also speaks TLS 1.2.

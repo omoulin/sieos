@@ -935,6 +935,77 @@ brain-imatrix: $(PORTS_DL)/$(BRAIN_SRC) $(LLAMA_HOST)/.built
 
 # ---------------------------------------------------------------- packages
 #
+# ---------------------------------------------------------------- LLVM and the Vulkan headers, for Mesa
+#
+# Mesa's llvmpipe (OpenGL) and lavapipe (Vulkan) compile shaders to x86 code
+# with LLVM: its libraries (the X86 target only) are cross-built for SIEOS
+# into build/ports/llvm-sieos, and linked into Mesa's libraries (statically).
+# LLVM's own tools for the build host come first, from the same sources:
+# llvm-tblgen and llvm-min-tblgen (the cross build runs them) and llvm-config,
+# put beside the SIEOS libraries for Mesa's build to run (it reports them).
+# ports/llvm/sieos.patch: SIEOS beside the other systems in two places.
+# The Vulkan headers (build/ports/vulkan-headers) are the Vulkan loader's.
+LLVM_VER    := 22.1.8
+LLVM_TXZ    := llvm-project-$(LLVM_VER).src.tar.xz
+LLVM_WORK   := $(PORTS)/llvm
+LLVM_SIEOS  := $(PORTS)/llvm-sieos
+VK_SDK      := 1.4.363.0
+VK_HEADERS  := $(PORTS)/vulkan-headers
+PORT_URLS   += https://github.com/llvm/llvm-project/releases/download/llvmorg-$(LLVM_VER)/$(LLVM_TXZ)
+LLVM_SRC    := $(LLVM_WORK)/llvm-project-$(LLVM_VER).src/llvm
+LLVM_COMMON := -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_INCLUDE_TESTS=OFF \
+	-DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_DOCS=OFF -DLLVM_ENABLE_ZLIB=OFF \
+	-DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_ENABLE_LIBEDIT=OFF \
+	-DLLVM_ENABLE_LIBPFM=OFF -DLLVM_ENABLE_CURL=OFF -DLLVM_ENABLE_HTTPLIB=OFF -DLLVM_ENABLE_RTTI=OFF
+
+$(LLVM_SIEOS)/.built: $(PORTS_DL)/$(LLVM_TXZ) ports/llvm/sieos.patch | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
+	rm -rf $(LLVM_WORK) $(LLVM_SIEOS) && mkdir -p $(LLVM_WORK)
+	tar xf $< -C $(LLVM_WORK)
+	patch -p1 -s -d $(LLVM_WORK)/llvm-project-$(LLVM_VER).src < ports/llvm/sieos.patch
+	@# the build host's tools
+	cmake -S $(LLVM_SRC) -B $(LLVM_WORK)/host $(LLVM_COMMON) -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+		>$(LLVM_WORK)/host.log 2>&1
+	$(MAKE) -C $(LLVM_WORK)/host -j$(JOBS) llvm-tblgen llvm-min-tblgen llvm-config >>$(LLVM_WORK)/host.log 2>&1 || \
+		{ tail -20 $(LLVM_WORK)/host.log; exit 1; }
+	@# SIEOS's libraries (-D_GNU_SOURCE: SIEOS's g++ does not define it, as Linux's does, and LLVM
+	@# builds in strict C++17, where the C library would hide POSIX)
+	printf '%s\n' "set(CMAKE_SYSTEM_NAME Linux)" "set(CMAKE_SYSTEM_PROCESSOR x86_64)" \
+		"set(CMAKE_C_COMPILER $(CROSS)/bin/$(TARGET)-gcc)" "set(CMAKE_CXX_COMPILER $(CROSS)/bin/$(TARGET)-g++)" \
+		"set(CMAKE_AR $(CROSS)/bin/$(TARGET)-ar)" "set(CMAKE_RANLIB $(CROSS)/bin/$(TARGET)-ranlib)" \
+		"set(CMAKE_FIND_ROOT_PATH $(abspath $(SYSROOT)))" "set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)" \
+		"set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)" "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)" \
+		"set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)" 'set(CMAKE_C_FLAGS_INIT "-D_GNU_SOURCE")' \
+		'set(CMAKE_CXX_FLAGS_INIT "-D_GNU_SOURCE")' > $(LLVM_WORK)/sieos.cmake
+	cmake -S $(LLVM_SRC) -B $(LLVM_WORK)/cross $(LLVM_COMMON) -DCMAKE_TOOLCHAIN_FILE=$(LLVM_WORK)/sieos.cmake \
+		-DCMAKE_INSTALL_PREFIX=$(LLVM_SIEOS) -DLLVM_TARGET_ARCH=X86 -DLLVM_HOST_TRIPLE=x86_64-unknown-linux-musl \
+		-DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-unknown-linux-musl -DLLVM_TABLEGEN=$(LLVM_WORK)/host/bin/llvm-tblgen \
+		-DLLVM_NATIVE_TOOL_DIR=$(LLVM_WORK)/host/bin -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_BUILD_TOOLS=OFF \
+		-DLLVM_INCLUDE_UTILS=OFF -DLLVM_BUILD_UTILS=OFF -DLLVM_ENABLE_THREADS=ON -DLLVM_ENABLE_PIC=ON \
+		-DBUILD_SHARED_LIBS=OFF -DLLVM_BUILD_LLVM_DYLIB=OFF -DLLVM_ENABLE_BINDINGS=OFF >$(LLVM_WORK)/cross.log 2>&1
+	$(MAKE) -C $(LLVM_WORK)/cross -j$(JOBS) install >>$(LLVM_WORK)/cross.log 2>&1 || \
+		{ grep -m5 'error:' $(LLVM_WORK)/cross.log; tail -20 $(LLVM_WORK)/cross.log; exit 1; }
+	@# (llvm-config finds the libraries beside it)
+	mkdir -p $(LLVM_SIEOS)/bin && cp $(LLVM_WORK)/host/bin/llvm-config $(LLVM_SIEOS)/bin/
+	rm -rf $(LLVM_WORK)
+	touch $@
+
+$(PORTS_DL)/Vulkan-Headers-$(VK_SDK).tar.gz:
+	@mkdir -p $(PORTS_DL)
+	cd $(PORTS_DL) && $(abspath tools/fetch.sh) \
+		https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-$(VK_SDK).tar.gz $(notdir $@)
+	cd $(PORTS_DL) && grep " $(notdir $@)$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
+
+$(VK_HEADERS)/.built: $(PORTS_DL)/Vulkan-Headers-$(VK_SDK).tar.gz
+	rm -rf $(VK_HEADERS) $(VK_HEADERS)-src && mkdir -p $(VK_HEADERS)-src
+	tar xzf $< -C $(VK_HEADERS)-src --strip-components=1
+	cmake -S $(VK_HEADERS)-src -B $(VK_HEADERS)-src/b -DCMAKE_INSTALL_PREFIX=$(VK_HEADERS) >/dev/null
+	cmake --install $(VK_HEADERS)-src/b >/dev/null
+	rm -rf $(VK_HEADERS)-src
+	touch $@
+
+.PHONY: llvm-sieos
+llvm-sieos: $(LLVM_SIEOS)/.built
+
 # Software added to SIEOS as packages (pkg, /usr/pkg): a recipe per package in
 # ports/pkgs/NAME (tools/pkgbuild.py says what it holds), built with the cross
 # toolchain into build/repo/NAME-VERSION.spkg, after the packages it depends
@@ -951,6 +1022,8 @@ pkg_deps = $(shell sed -n 's/^depends *= *//p' ports/pkgs/$(1)/recipe)
 # (SIEOS's own software, "source = tree:DIR": rebuilt when DIR changes, on the SDK and libsia's headers)
 pkg_tree = $(shell sed -n 's/^source *= *tree://p' ports/pkgs/$(1)/recipe)
 PKG_EXTRA_sia-brain := $(BRAIN_GGUF)               # (what a package's build takes from the build)
+PKG_EXTRA_vulkan-loader := $(VK_HEADERS)/.built
+PKG_EXTRA_mesa := $(LLVM_SIEOS)/.built $(wildcard user/mesa-demos/*)
 pkg_tree_deps = $(if $(call pkg_tree,$(1)),$(shell find $(call pkg_tree,$(1)) -type f) $(SDK_STAMP) \
 		$(wildcard user/libsia/*.h) $(wildcard user/facet-apps/common.*))
 define PKG_RULE

@@ -2823,6 +2823,17 @@ Milestone 34 (done): Facet skins.
 - **sia-brain**: llama.cpp (package `llama-cpp`) and the model (package `sia-brain`), see
   the README.
 
+### Milestone 71: OpenGL, EGL and Vulkan (Mesa, in software)
+
+- **Mesa 26.2** (package `mesa`, see [mesa.md](mesa.md)): llvmpipe (OpenGL 4.6, OpenGL ES 3.2,
+  EGL 1.5) and lavapipe (Vulkan 1.4), on LLVM 22 cross-built for SIEOS (`make llvm-sieos`).
+  Meson knows SIEOS as `sieos`: a DRI system without kernel GPU drivers.
+- **EGL's platform `facet`**: an `EGLNativeWindowType` is a `fct_window *`; the frames the
+  software rasteriser presents are copied into the window's buffer and shown.
+- **The Vulkan loader** (package `vulkan-loader`, `libvulkan.so`), with the Vulkan headers.
+- The GNU utilities' configure knows that `fchownat(AT_SYMLINK_NOFOLLOW)` works: `cp -a` keeps
+  symbolic links' owners.
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -2889,6 +2900,7 @@ Milestone 34 (done): Facet skins.
 | 60 | the AX201's start for the integrated 22000 family: persistence bit, forced power gating, boot LTR, ALIVE handshake (done; ALIVE confirmed on the Surface) |
 | 61 | Wi-Fi stage 2: receive processing, the command queue, INIT/NVM commands, the NVM's information, the MAC address (done) |
 | 62 | Wi-Fi stage 3: the runtime configuration (antennas, SoC, power, regulatory domain), UMAC scans, the wifi() call, dladm, the Settings Wi-Fi page (done) |
+| 71 | OpenGL, EGL and Vulkan in software (Mesa: llvmpipe, lavapipe; LLVM 22), EGL's Facet platform, the Vulkan loader (done) |
 | 70 | the local model (sia-brain, llama.cpp); AVX (XSAVE) in programs and signal frames; USB drives (mass storage); faster disk writes; `mount -L` (done) |
 | 69 | NetSurf (the web browser); the mouse wheel (`EV_WHEEL`); `FCT_WIN_POINTER`; pressed buttons; non-blocking connect (done) |
 | 68 | Wi-Fi 802.11n/ac (HT/VHT, 40/80 MHz, 2x2, QoS), Wi-Fi power save (powermode), no boot pause (done) |
