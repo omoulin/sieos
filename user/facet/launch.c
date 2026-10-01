@@ -109,6 +109,9 @@ void app_mir(void) { app_launch("mir", NULL); }
 
 /* An application the user made with MiR (~/apps/bin/NAME) */
 void app_user(const char *path) { spawn(path, NULL, NULL, NULL, false); }
+
+/* A package's application (/usr/pkg/share/facet/apps), with the desktop channel if it asks */
+void app_package(const char *path, bool channel) { spawn(path, NULL, NULL, NULL, channel); }
 void app_installer(void) { app_launch("installer", NULL); }
 void app_power(void) { app_launch("power", NULL); }
 void app_settings(void) { app_launch("settings", NULL); }

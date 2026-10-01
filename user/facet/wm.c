@@ -2311,6 +2311,71 @@ static int my_apps(void)
     return n;
 }
 
+/* The applications of packages: /usr/pkg/share/facet/apps/NAME.app ("title=",
+ * "exec=" an absolute path, "icon=" a name, "channel=yes" for the desktop channel) */
+#define PKG_APPS_DIR "/usr/pkg/share/facet/apps"
+#define MAX_PKG_APPS 16
+static char pkg_app_exec[MAX_PKG_APPS][256], pkg_app_title[MAX_PKG_APPS][48];
+static bool pkg_app_chan[MAX_PKG_APPS];
+
+static void launch_pkg_app(void *a)
+{
+    int i = (int)(intptr_t)a;
+    app_package(pkg_app_exec[i], pkg_app_chan[i]);
+}
+
+static int icon_named(const char *n)
+{
+    static const struct { const char *name; int icon; } icons[] = {
+        { "git", ICON_GIT }, { "mir", ICON_MIR }, { "browser", ICON_BROWSER }, { "terminal", ICON_TERMINAL },
+        { "folder", ICON_FOLDER }, { "monitor", ICON_MONITOR }, { "clock", ICON_CLOCK }, { "network", ICON_NETWORK },
+        { "disk", ICON_DISK }, { "info", ICON_INFO },
+    };
+    for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++)
+        if (!strcmp(n, icons[i].name))
+            return icons[i].icon;
+    return ICON_PROGRAM;
+}
+
+static int pkg_apps(struct menu_item *items, int max)
+{
+    DIR *d = opendir(PKG_APPS_DIR);
+    struct dirent *e;
+    int n = 0;
+    while (d && (e = readdir(d)) && n < MIN(max, MAX_PKG_APPS)) {
+        size_t l = strlen(e->d_name);
+        if (l < 5 || strcmp(e->d_name + l - 4, ".app"))
+            continue;
+        char p[320], line[300], icon[32] = "";
+        snprintf(p, sizeof(p), PKG_APPS_DIR "/%s", e->d_name);
+        FILE *f = fopen(p, "r");
+        if (!f)
+            continue;
+        pkg_app_exec[n][0] = pkg_app_title[n][0] = 0;
+        pkg_app_chan[n] = false;
+        while (fgets(line, sizeof(line), f)) {
+            line[strcspn(line, "\n")] = 0;
+            if (!strncmp(line, "title=", 6))
+                snprintf(pkg_app_title[n], sizeof(pkg_app_title[n]), "%s", line + 6);
+            else if (!strncmp(line, "exec=", 5))
+                snprintf(pkg_app_exec[n], sizeof(pkg_app_exec[n]), "%s", line + 5);
+            else if (!strncmp(line, "icon=", 5))
+                snprintf(icon, sizeof(icon), "%s", line + 5);
+            else if (!strcmp(line, "channel=yes"))
+                pkg_app_chan[n] = true;
+        }
+        fclose(f);
+        /* (a program of a package: under /usr/pkg, there) */
+        if (!pkg_app_title[n][0] || strncmp(pkg_app_exec[n], "/usr/pkg/", 9) || access(pkg_app_exec[n], X_OK) < 0)
+            continue;
+        items[n] = (struct menu_item){ pkg_app_title[n], launch_pkg_app, (void *)(intptr_t)n, icon_named(icon), NULL, 0 };
+        n++;
+    }
+    if (d)
+        closedir(d);
+    return n;
+}
+
 static void open_gem_menu(void)
 {
     struct menu_item items[MENU_MAX];
@@ -2325,8 +2390,7 @@ static void open_gem_menu(void)
     items[n++] = (struct menu_item){ "Power and Temperature", call_action, (void *)app_power, ICON_MONITOR, NULL, 0 };
     items[n++] = (struct menu_item){ "Settings", call_action, (void *)app_settings, ICON_PROGRAM, NULL, 0 };
     items[n++] = (struct menu_item){ "SiPM (packages)", call_action, (void *)app_sipm, ICON_PROGRAM, NULL, 0 };
-    if (access(MIR_PROGRAM, X_OK) == 0)                 /* (the package mir) */
-        items[n++] = (struct menu_item){ "MiR (make an app)", call_action, (void *)app_mir, ICON_MIR, NULL, 0 };
+    n += pkg_apps(items + n, 6);                         /* (the packages' applications: MiR, Git, ...) */
     int napps = my_apps();
     if (napps)
         items[n++] = (struct menu_item){ "My apps", NULL, NULL, ICON_FOLDER, my_app_items, napps };

@@ -124,6 +124,7 @@ void app_sipm(void);
 void app_mir(void);
 #define MIR_PROGRAM "/usr/pkg/bin/facet-mir"      /* MiR (Make it Real): the package mir, when installed */
 void app_user(const char *path);   /* a program by its absolute path (My apps) */
+void app_package(const char *path, bool channel);   /* a package's application (its .app) */
 void app_installer(void);
 void app_power(void);             /* Power and Temperature */         /* Install SIEOS (on a disk) */
 void wm_reboot(void);             /* end the session: reboot */

@@ -21,7 +21,7 @@ void ui_meter(struct surface *s, struct rect r, int percent, color_t fill);
 
 /* ---------------- icons ---------------- */
 enum { ICON_TERMINAL, ICON_FOLDER, ICON_FILE, ICON_PROGRAM, ICON_MONITOR, ICON_CLOCK,
-       ICON_INFO, ICON_LOGOUT, ICON_HOME, ICON_NETWORK, ICON_DISK, ICON_BROWSER, ICON_MIR };
+       ICON_INFO, ICON_LOGOUT, ICON_HOME, ICON_NETWORK, ICON_DISK, ICON_BROWSER, ICON_MIR, ICON_GIT };
 void icon_draw(struct surface *s, int kind, int x, int y, int size);
 
 /* The SIEOS logo (the Facet cube), centred on (cx, cy), size pixels across. */

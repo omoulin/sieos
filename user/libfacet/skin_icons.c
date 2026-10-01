@@ -111,6 +111,21 @@ void icon_mir_paint(struct surface *s, int x, int y, int size, color_t wand, col
     sparkle(s, x, y, size, 41, 32, 5, spark, outline, ow);
 }
 
+/* Version control (the Git application): a branch leaving a line and merging
+ * back, three commits as nodes, on a rounded tile; each skin gives its colours. */
+void icon_git_paint(struct surface *s, int x, int y, int size, color_t tile, color_t stroke, color_t node,
+                    color_t outline, float ow)
+{
+    SHAPE(tile, color_shade(tile, -30), outline, ow, 6, 10, 10, 6, 38, 6, 42, 10, 42, 38, 38, 42, 10, 42, 6, 38);
+    float lw = 3.2f;
+    line(s, x, y, size, 17, 12, 17, 36, lw, stroke);                 /* the main line */
+    line(s, x, y, size, 17, 30, 31, 22, lw, stroke);                 /* the branch */
+    line(s, x, y, size, 31, 22, 31, 14, lw, stroke);
+    oval(s, x, y, size, 17, 13, 4.2f, 4.2f, node, node, outline, ow);
+    oval(s, x, y, size, 17, 35, 4.2f, 4.2f, node, node, outline, ow);
+    oval(s, x, y, size, 31, 15, 4.2f, 4.2f, node, node, outline, ow);
+}
+
 /* ================= BeOS style ================= */
 
 #define BO RGB(0x1C, 0x1C, 0x1C)                   /* the bold outline */
@@ -339,6 +354,12 @@ void skin_icon_draw(int skin, struct surface *s, int kind, int x, int y, int siz
             icon_browser_paint(s, x, y, size, RGB(0x78, 0xC8, 0xFF), RGB(0x18, 0x60, 0xD0), BO, BW, RGB(0xFF, 0xFF, 0xFF));
         else
             icon_browser_paint(s, x, y, size, RGB(0xA8, 0xD8, 0xF0), RGB(0x4C, 0x80, 0xB8), IO, IW, RGB(0xF4, 0xF4, 0xF0));
+        break;
+    case ICON_GIT:
+        if (be)
+            icon_git_paint(s, x, y, size, RGB(0xF0, 0x6A, 0x3A), RGB(0xFF, 0xFF, 0xFF), RGB(0xFF, 0xE0, 0x60), BO, BW);
+        else
+            icon_git_paint(s, x, y, size, RGB(0xD8, 0x84, 0x64), RGB(0xF8, 0xF4, 0xEE), RGB(0xF4, 0xE0, 0x9C), IO, IW);
         break;
     case ICON_MIR:
         if (be)

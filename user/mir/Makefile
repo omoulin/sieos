@@ -22,6 +22,8 @@ install: all
 	cp facet-mir $(DESTDIR)$(PREFIX)/bin/
 	cp mir-agent $(DESTDIR)$(PREFIX)/libexec/
 	cp -r share/. $(DESTDIR)$(PREFIX)/share/mir/
+	mkdir -p $(DESTDIR)$(PREFIX)/share/facet/apps
+	cp mir.app $(DESTDIR)$(PREFIX)/share/facet/apps/
 
 clean:
 	rm -f facet-mir mir-agent

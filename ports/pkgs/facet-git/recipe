@@ -1,0 +1,10 @@
+# Git, a window for git: repositories, changes, commits, history, branches,
+# fetch, pull and push, and settings (the name and email of commits, a
+# token).  SIEOS's own (user/facet-git); it runs the package git.
+name     = facet-git
+version  = 1.0-1
+summary  = Git: manage git repositories in a window (changes, commits, history, branches, push and pull)
+source   = tree:user/facet-git
+depends  = git
+build    = make -j$JOBS CC="$CC" TREE="$TREE"
+install  = make install DESTDIR=$DESTDIR PREFIX=$PREFIX TREE="$TREE"

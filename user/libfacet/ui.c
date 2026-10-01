@@ -202,6 +202,8 @@ void icon_browser_paint(struct surface *s, int x, int y, int size, color_t top, 
                         float ow, color_t star);   /* skin_icons.c */
 void icon_mir_paint(struct surface *s, int x, int y, int size, color_t wand, color_t tip, color_t spark,
                     color_t outline, float ow);
+void icon_git_paint(struct surface *s, int x, int y, int size, color_t tile, color_t line, color_t node,
+                    color_t outline, float ow);
 
 void icon_draw(struct surface *s, int kind, int x, int y, int size)
 {
@@ -224,6 +226,10 @@ void icon_draw(struct surface *s, int kind, int x, int y, int size)
     case ICON_BROWSER:
         icon_browser_paint(s, x, y, size, RGB(0x8C, 0xD4, 0xFF), RGB(0x1C, 0x6C, 0xD4), RGB(0x10, 0x12, 0x18),
                            size >= 32 ? 1.4f : 1.0f, RGB(0xFF, 0xFF, 0xFF));
+        break;
+    case ICON_GIT:
+        icon_git_paint(s, x, y, size, RGB(0xC8, 0x6A, 0x4A), RGB(0xF0, 0xEC, 0xE4), RGB(0xD9, 0xA1, 0x5F),
+                       RGB(0x10, 0x12, 0x18), size >= 32 ? 1.4f : 1.0f);
         break;
     case ICON_MIR:
         icon_mir_paint(s, x, y, size, RGB(0x44, 0x4A, 0x58), RGB(0xE4, 0xE0, 0xD8), RGB(0xD9, 0xA1, 0x5F),

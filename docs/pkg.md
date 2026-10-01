@@ -66,6 +66,12 @@ It is then managed like any other package (`pkg list`, `pkg files`, `pkg remove`
 | `git` | git (https, http, ssh and local remotes). SIEOS has no pager or editor: output is not paged, and `git commit` needs `-m` (or `core.editor` set) |
 | `lua`, `pigz` | Lua 5.4; parallel gzip |
 | `mir` | MiR (Make it Real): sia makes applications ([mir.md](mir.md)) |
+| `facet-git` | **Git**, a window for git: repositories (add, clone, new), changes (stage with a tick, see the diff, commit), history, branches (checkout, merge, delete, new), fetch, pull and push, and Settings (the name and email of commits; a host's username and token, kept in `~/.git-credentials`) |
+
+A package's application appears in the SIEOS menu through a file it installs in
+`/usr/pkg/share/facet/apps/NAME.app`: `title=`, `exec=` (a program under `/usr/pkg`),
+`icon=` (`git`, `mir`, `browser`, `terminal`, `folder`, ...) and `channel=yes` when it
+needs the desktop channel.
 
 ## Building packages (on the build machine)
 

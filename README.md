@@ -372,7 +372,15 @@ pkg list; pkg upgrade; pkg remove git
 ```
 
 Available: **git**, **rsync**, **openssh** (the ssh client: `ssh`, `scp`, `sftp`,
-`ssh-keygen`, `ssh-agent`), **curl**, **openssl**, **zlib**, **lua**, **pigz** and **mir**.
+`ssh-keygen`, `ssh-agent`), **curl**, **openssl**, **zlib**, **lua**, **pigz**, **mir** and
+**facet-git**. **Git** (`facet-git`) is a window for git:
+- repositories: add, clone, new;
+- changes: tick to stage, the diff, commit;
+- history, and branches;
+- fetch, pull and push;
+- a Settings screen for the name and email of commits, and a token for HTTPS.
+
+Packages with a window appear in the SIEOS menu.
 
 Packages are built on the build machine from recipes in `ports/pkgs/` (`make pkgs`,
 `make repo`), or on SIEOS itself from software built there (`pkg create`, `pkg add`).
