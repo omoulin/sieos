@@ -12,7 +12,10 @@
 # no global IPv6 address; curl's long options given longs), netsurf-title.patch
 # (the page's title to the surface: nsfb_set_parameters "title="),
 # netsurf-clip.patch (a page's plotting kept inside its widget: nothing drawn
-# over the toolbar, scroll bars or status bar), and Makefile.config.
+# over the toolbar, scroll bars or status bar), netsurf-clipboard.patch (copy
+# and paste through the desktop's clipboard, libfacet's), netsurf-textcopy.patch
+# (the address bar: Ctrl+C and Ctrl+X copy it, Ctrl+V pastes), and
+# Makefile.config.
 set -e
 TREE=$1
 HERE=$(cd "$(dirname "$0")" && pwd)

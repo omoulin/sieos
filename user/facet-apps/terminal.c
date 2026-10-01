@@ -40,6 +40,10 @@ struct term {
     int px;                              /* font size */
     struct fct_face *face;               /* NULL: the bitmap font */
     int cw, chh;                         /* the character cell */
+    /* the selection (mouse): from the cell where the button went down to the
+     * one under the pointer, row by row; Ctrl+Shift+C copies it */
+    bool sel_on, selecting;
+    int sax, say, sbx, sby;
 };
 
 #define DEFAULT_PX 13
@@ -74,6 +78,30 @@ static void scroll_up(struct term *t)
 {
     memmove(t->cell[0], t->cell[1], sizeof(t->cell[0]) * (t->rows - 1));
     clear_row(t, t->rows - 1, 0);
+    if (t->sel_on || t->selecting) {             /* the selection goes up with its text */
+        t->say--, t->sby--;
+        if (t->say < 0 || t->sby < 0)
+            t->sel_on = t->selecting = false;
+    }
+}
+
+/* The selection's ends in reading order: (x0, y0) before (x1, y1). */
+static void sel_range(const struct term *t, int *x0, int *y0, int *x1, int *y1)
+{
+    bool fwd = t->say < t->sby || (t->say == t->sby && t->sax <= t->sbx);
+    *x0 = fwd ? t->sax : t->sbx, *y0 = fwd ? t->say : t->sby;
+    *x1 = fwd ? t->sbx : t->sax, *y1 = fwd ? t->sby : t->say;
+}
+
+static bool selected(const struct term *t, int x, int y)
+{
+    if (!t->sel_on)
+        return false;
+    int x0, y0, x1, y1;
+    sel_range(t, &x0, &y0, &x1, &y1);
+    if (y < y0 || y > y1)
+        return false;
+    return !(y == y0 && x < x0) && !(y == y1 && x > x1);
 }
 
 static void newline(struct term *t)
@@ -237,13 +265,16 @@ static void term_draw(struct fct_view *w, struct surface *s, struct rect c)
             uint8_t attr = cell >> 8;
             unsigned char ch = cell & 255;
             int px = c.x + PAD + x * t->cw;
-            bool cursor = x == t->cx && y == t->cy && !t->exited;
+            bool cursor = x == t->cx && y == t->cy && !t->exited, sel = selected(t, x, y);
             color_t fg = fg_color(attr), bgc = bg_color(attr);
             if (cursor) {
                 fg = TERM_BG;
                 bgc = TERM_FG;
+            } else if (sel) {
+                fg = TERM_FG;
+                bgc = RGB(0x34, 0x5C, 0x8C);
             }
-            if (bgc != TERM_BG || cursor)
+            if (bgc != TERM_BG || cursor || sel)
                 gfx_fill(s, px, py, t->cw, t->chh, bgc);
             if (ch == ' ')
                 continue;
@@ -293,6 +324,81 @@ static bool term_zoom(struct fct_view *w, const struct fct_key *ev)
     return true;
 }
 
+/* Ctrl+Shift+C: the selection to the clipboard (each row's trailing blanks dropped, rows
+ * joined with newlines; the cells' ISO 8859-1 as UTF-8). */
+static void term_copy(struct term *t)
+{
+    if (!t->sel_on)
+        return;
+    int x0, y0, x1, y1;
+    sel_range(t, &x0, &y0, &x1, &y1);
+    char *buf = malloc((size_t)(y1 - y0 + 1) * (MAX_COLS * 2 + 1) + 1);
+    if (!buf)
+        return;
+    size_t n = 0;
+    for (int y = y0; y <= y1; y++) {
+        int a = y == y0 ? x0 : 0, b = y == y1 ? x1 : t->cols - 1;
+        size_t start = n;
+        for (int x = a; x <= b && x < t->cols; x++) {
+            unsigned char ch = t->cell[y][x] & 255;
+            if (ch < 0x80) {
+                buf[n++] = ch < ' ' ? ' ' : (char)ch;
+            } else {
+                buf[n++] = (char)(0xC0 | ch >> 6);
+                buf[n++] = (char)(0x80 | (ch & 0x3F));
+            }
+        }
+        while (n > start && buf[n - 1] == ' ')
+            n--;
+        if (y < y1)
+            buf[n++] = '\n';
+    }
+    fct_clipboard_set(buf, n);
+    free(buf);
+}
+
+static void term_cell_at(const struct term *t, int x, int y, int *cx, int *cy)
+{
+    *cx = (x - PAD) / t->cw;
+    *cy = (y - PAD) / t->chh;
+    *cx = *cx < 0 ? 0 : *cx >= t->cols ? t->cols - 1 : *cx;
+    *cy = *cy < 0 ? 0 : *cy >= t->rows ? t->rows - 1 : *cy;
+}
+
+static void term_mouse(struct fct_view *w, int x, int y, int kind, int buttons)
+{
+    (void)buttons;
+    struct term *t = w->app;
+    int cx, cy;
+    term_cell_at(t, x, y, &cx, &cy);
+    if (kind == FCT_MOUSE_DOWN) {
+        t->sax = t->sbx = cx;
+        t->say = t->sby = cy;
+        t->selecting = true;
+        t->sel_on = false;
+    } else if (kind == FCT_MOUSE_MOVE && t->selecting) {
+        t->sbx = cx;
+        t->sby = cy;
+        t->sel_on = t->sbx != t->sax || t->sby != t->say;
+    } else if (kind == FCT_MOUSE_UP) {
+        t->selecting = false;
+    } else if (kind == FCT_MOUSE_DOUBLE) {       /* the word under the pointer */
+        int a = cx, b = cx;
+        while (a > 0 && (t->cell[cy][a - 1] & 255) > ' ')
+            a--;
+        while (b < t->cols - 1 && (t->cell[cy][b + 1] & 255) > ' ')
+            b++;
+        if ((t->cell[cy][cx] & 255) > ' ') {
+            t->sax = a, t->sbx = b, t->say = t->sby = cy;
+            t->sel_on = true;
+        }
+        t->selecting = false;
+    } else {
+        return;
+    }
+    fct_view_invalidate(w);
+}
+
 static void term_key(struct fct_view *w, const struct fct_key *ev)
 {
     struct term *t = w->app;
@@ -300,6 +406,27 @@ static void term_key(struct fct_view *w, const struct fct_key *ev)
         return;
     if (term_zoom(w, ev))
         return;
+    if (ev->code == 0x2E && (ev->mods & FCT_MOD_CTRL) && (ev->mods & FCT_MOD_SHIFT)) {   /* Ctrl+Shift+C: copy */
+        term_copy(t);
+        return;
+    }
+    bool ctrl_shift = (ev->mods & FCT_MOD_SHIFT) && (ev->mods & FCT_MOD_CTRL);
+    if (t->sel_on && ev->ascii && !ctrl_shift) {   /* typing drops the selection (not Ctrl, Shift themselves) */
+        t->sel_on = false;
+        fct_view_invalidate(w);
+    }
+    if (ev->code == 0x2F && (ev->mods & FCT_MOD_CTRL) && (ev->mods & FCT_MOD_SHIFT)) {   /* Ctrl+Shift+V: paste */
+        size_t n;
+        char *clip = fct_clipboard_get(&n);
+        if (clip) {
+            for (size_t i = 0; i < n; i++)
+                if (clip[i] == '\n')
+                    clip[i] = '\r';             /* (as Enter types it) */
+            term_send(t, clip, n);
+            free(clip);
+        }
+        return;
+    }
     switch (ev->code) {
     case FCT_KEY_UP:    term_send(t, "\033[A", 3); return;
     case FCT_KEY_DOWN:  term_send(t, "\033[B", 3); return;
@@ -446,6 +573,7 @@ int main(int argc, char **argv)
     w->app = t;
     w->draw = term_draw;
     w->key = term_key;
+    w->mouse = term_mouse;
     w->readable = term_readable;
     w->pollfd = term_pollfd;
     w->resized = term_resized;

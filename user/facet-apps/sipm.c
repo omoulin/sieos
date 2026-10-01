@@ -41,12 +41,12 @@ static struct {
     int npk;
     int view[MAXPK], nview;                      /* the filtered list: indexes into pk */
     int filter, first, sel;                      /* sel: an index into pk, -1 */
-    char search[48];
+    struct fct_field search;
     bool search_focus;
     char repo[160];
     int state;
     bool is_root;
-    char pass[64];
+    struct fct_field pass;                       /* (masked) */
     char op[16], opname[64];                     /* what runs, or waits for the password */
     pid_t pid;
     int out;
@@ -83,7 +83,7 @@ static void filter(void)
             continue;
         if (m.filter == F_UPDATES && !has_update(p))
             continue;
-        if (m.search[0] && !contains_nocase(p->name, m.search) && !contains_nocase(p->summary, m.search))
+        if (m.search.text[0] && !contains_nocase(p->name, m.search.text) && !contains_nocase(p->summary, m.search.text))
             continue;
         m.view[m.nview++] = i;
     }
@@ -260,19 +260,6 @@ static int text_wrapped(struct surface *s, int x, int y, int w, const char *t, c
     return n * (FONT_H + 3);
 }
 
-static void field(struct surface *s, struct rect f, const char *text, bool focus, const char *hint)
-{
-    gfx_fill(s, f.x, f.y, f.w, f.h, C_CONTENT);
-    gfx_bevel(s, f.x, f.y, f.w, f.h, 1, false, focus ? C_ACCENT : C_LINE, C_FACE_DARK);
-    int tw = 0;
-    if (text[0])
-        tw = gfx_text(s, f.x + 6, f.y + (f.h - FONT_H) / 2, text, C_TEXT);
-    else if (hint && !focus)
-        gfx_text(s, f.x + 6, f.y + (f.h - FONT_H) / 2, hint, C_DIM);
-    if (focus)
-        gfx_vline(s, f.x + 7 + tw, f.y + (f.h - FONT_H) / 2, FONT_H, C_ACCENT);
-}
-
 static void draw(struct fct_view *w, struct surface *s, struct rect c)
 {
     gfx_fill(s, c.x, c.y, c.w, c.h, C_FACE);
@@ -297,7 +284,7 @@ static void draw(struct fct_view *w, struct surface *s, struct rect c)
             snprintf(b, sizeof(b), "%s", tabs[i]);
         ui_button(s, tab_rect(c, i), b, m.filter == i);
     }
-    field(s, search_rect(c), m.search, m.search_focus, "Search");
+    fct_field_draw(s, search_rect(c), &m.search, m.search_focus, "Search");
     ui_button(s, tool_rect(c, 0), "Refresh", false);
     ui_button(s, tool_rect(c, 1), "Upgrade all", false);
     if (m.state != S_IDLE || !updates) {
@@ -376,11 +363,7 @@ static void draw(struct fct_view *w, struct surface *s, struct rect c)
     if (m.state == S_PASS) {
         struct rect f = pass_rect(c);
         gfx_text(s, c.x + PAD, f.y + 4, "Root password:", C_TEXT);
-        char dots[64];
-        size_t n = strlen(m.pass);
-        memset(dots, '*', n);
-        dots[n] = 0;
-        field(s, f, dots, true, NULL);
+        fct_field_draw(s, f, &m.pass, true, NULL);
         gfx_text(s, c.x + PAD, f.y + 30, "Changing the installed software needs the administrator (root).", C_DIM);
         ui_button(s, pass_btn(c, 1), "OK", false);
         ui_button(s, pass_btn(c, 0), "Cancel", false);
@@ -447,8 +430,9 @@ static void run(struct fct_view *w)
         return;
     }
     if (!m.is_root)
-        dprintf(to[1], "%s\n", m.pass);
-    memset(m.pass, 0, sizeof(m.pass));
+        dprintf(to[1], "%s\n", m.pass.text);
+    memset(m.pass.text, 0, sizeof(m.pass.text));
+    fct_field_set(&m.pass, "");
     close(to[1]);
     m.out = from[0];
     m.state = S_RUN;
@@ -473,7 +457,7 @@ static void request(struct fct_view *w, const char *op, const char *name)
     if (m.is_root) {
         run(w);
     } else {
-        m.pass[0] = 0;
+        fct_field_set(&m.pass, "");
         m.state = S_PASS;
     }
     fct_view_invalidate(w);
@@ -557,14 +541,25 @@ static void scroll_to_sel(struct fct_view *w)
 static void mouse(struct fct_view *w, int x, int y, int kind, int buttons)
 {
     (void)buttons;
+    struct rect c = fct_view_content(w);
+    if (m.state == S_PASS && fct_field_mouse(&m.pass, pass_rect(c), x, y, kind)) {
+        fct_view_invalidate(w);
+        return;
+    }
+    if (m.state != S_PASS && (m.search.dragging || kind != FCT_MOUSE_MOVE) &&
+        fct_field_mouse(&m.search, search_rect(c), x, y, kind)) {
+        m.search_focus = true;
+        fct_view_invalidate(w);
+        return;
+    }
     if (kind != FCT_MOUSE_DOWN && kind != FCT_MOUSE_DOUBLE)
         return;
-    struct rect c = fct_view_content(w);
     if (m.state == S_PASS) {
         if (rect_contains(pass_btn(c, 1), x, y))
             run(w);
         else if (rect_contains(pass_btn(c, 0), x, y)) {
-            memset(m.pass, 0, sizeof(m.pass));
+            memset(m.pass.text, 0, sizeof(m.pass.text));
+            fct_field_set(&m.pass, "");
             m.state = S_IDLE;
         }
         fct_view_invalidate(w);
@@ -576,7 +571,7 @@ static void mouse(struct fct_view *w, int x, int y, int kind, int buttons)
             m.first = 0;
             filter();
         }
-    m.search_focus = rect_contains(search_rect(c), x, y);
+    m.search_focus = false;
     if (m.state == S_IDLE && rect_contains(tool_rect(c, 0), x, y))
         request(w, "update", NULL);
     if (m.state == S_IDLE && rect_contains(tool_rect(c, 1), x, y)) {
@@ -614,40 +609,35 @@ static void key(struct fct_view *w, const struct fct_key *k)
 {
     if (!k->value)
         return;
-    bool bs = k->ascii == '\b' || k->code == 0x0E, enter = k->ascii == '\n' || k->ascii == '\r';
+    bool enter = k->ascii == '\n' || k->ascii == '\r';
     if (m.state == S_PASS) {
-        size_t n = strlen(m.pass);
-        if (bs) {
-            if (n)
-                m.pass[n - 1] = 0;
-        } else if (enter) {
+        if (enter) {
             run(w);
         } else if (k->ascii == 27) {
-            memset(m.pass, 0, sizeof(m.pass));
+            memset(m.pass.text, 0, sizeof(m.pass.text));
+            fct_field_set(&m.pass, "");
             m.state = S_IDLE;
-        } else if (k->ascii >= 32 && k->ascii < 127 && n + 1 < sizeof(m.pass)) {
-            m.pass[n] = k->ascii;
-            m.pass[n + 1] = 0;
+        } else {
+            fct_field_key(&m.pass, k);
         }
         fct_view_invalidate(w);
         return;
     }
-    if (m.search_focus && (bs || (k->ascii >= 32 && k->ascii < 127) || k->ascii == 27)) {
-        size_t n = strlen(m.search);
-        if (bs) {
-            if (n)
-                m.search[n - 1] = 0;
-        } else if (k->ascii == 27) {
-            m.search[0] = 0;
+    if (m.search_focus) {
+        int r = k->ascii == 27 ? FCT_FIELD_NONE : fct_field_key(&m.search, k);
+        if (k->ascii == 27) {                    /* Escape: clear the search */
+            fct_field_set(&m.search, "");
             m.search_focus = false;
-        } else if (n + 1 < sizeof(m.search)) {
-            m.search[n] = k->ascii;
-            m.search[n + 1] = 0;
+            r = FCT_FIELD_CHANGED;
         }
-        m.first = 0;
-        filter();
-        fct_view_invalidate(w);
-        return;
+        if (r == FCT_FIELD_CHANGED) {
+            m.first = 0;
+            filter();
+        }
+        if (r != FCT_FIELD_NONE) {
+            fct_view_invalidate(w);
+            return;
+        }
     }
     if ((k->code == FCT_KEY_DOWN || k->code == FCT_KEY_UP) && m.nview) {
         int pos = -1;
@@ -668,7 +658,7 @@ static void key(struct fct_view *w, const struct fct_key *k)
 static void destroy(struct fct_view *w)
 {
     (void)w;
-    memset(m.pass, 0, sizeof(m.pass));           /* (a running pkg finishes on its own) */
+    memset(m.pass.text, 0, sizeof(m.pass.text));   /* (a running pkg finishes on its own) */
 }
 
 int main(void)
@@ -677,6 +667,7 @@ int main(void)
         return 1;
     signal(SIGPIPE, SIG_IGN);
     m.is_root = getuid() == 0;
+    m.pass.masked = true;
     load_repo();
     load();
     struct fct_window_attr at = { "SiPM", FCT_POS_AUTO, FCT_POS_AUTO, 780, 500, 640, 400, 0 };

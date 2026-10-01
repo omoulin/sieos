@@ -107,11 +107,31 @@ static void ready(struct tty *t)
     poll_wakeup();
 }
 
+/* A control character (not newline or tab) echoed as ^X (ECHOCTL): the
+ * escape sequences of arrow keys typed to a line-mode program show as ^[[A
+ * instead of moving the cursor. */
+static bool shown_as_ctl(const struct tty *t, char c)
+{
+    return (t->t.c_lflag & ECHOCTL) && ((unsigned char)c < 32 || c == 127) && c != '\n' && c != '\t';
+}
+
+static void echo_input(struct tty *t, char c)
+{
+    if (shown_as_ctl(t, c)) {
+        char v[2] = { '^', (char)(c == 127 ? '?' : c + '@') };
+        echo(t, v, 2);
+    } else {
+        echo(t, &c, 1);
+    }
+}
+
 static void erase_char(struct tty *t)
 {
     if (t->line_len > 0) {
-        t->line_len--;
+        char c = t->line[--t->line_len];
         echo(t, "\b \b", 3);
+        if (shown_as_ctl(t, c))
+            echo(t, "\b \b", 3);               /* (its ^X took two columns) */
     }
 }
 
@@ -177,13 +197,16 @@ void tty_input(struct tty *t, char c)
     }
     if (c == 12) {                         /* ^L: clear screen, redraw line */
         t->output(t, "\f", 1);
-        echo(t, t->line, t->line_len);
+        for (size_t i = 0; i < t->line_len; i++)
+            echo_input(t, t->line[i]);
         return;
     }
     if (t->line_len < TTY_BUF - 1) {
         t->line[t->line_len++] = c;
-        if (c == '\n' ? (tm->c_lflag & (ECHO | ECHONL)) : (tm->c_lflag & ECHO))
-            t->output(t, &c, 1);
+        if (c == '\n' && (tm->c_lflag & (ECHO | ECHONL)))
+            t->output(t, &c, 1);             /* (ECHONL: the newline even without ECHO) */
+        else if (c != '\n')
+            echo_input(t, c);
     }
     if (c == '\n') {
         for (size_t i = 0; i < t->line_len; i++)

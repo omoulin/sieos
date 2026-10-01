@@ -36,7 +36,7 @@ static struct {
     struct disk disks[MAXDISKS];
     int ndisks, sel, hover;
     bool agree;
-    char pass[64];
+    struct fct_field pass;                       /* root's password (masked) */
     bool is_root;
     pid_t pid;
     int out;                                     /* sieinstall's output, -1 */
@@ -106,7 +106,7 @@ static int overall(void);
 
 static bool can_install(void)
 {
-    return in.agree && (in.is_root || in.pass[0]);
+    return in.agree && (in.is_root || in.pass.text[0]);
 }
 
 /* The buttons of the page: labels from the right, NULL for none; enabled. */
@@ -233,14 +233,7 @@ static void draw(struct fct_view *w, struct surface *s, struct rect c)
         if (!in.is_root) {
             struct rect f = pass_field(c);
             gfx_text(s, c.x + PAD, f.y + 4, "Root password:", C_TEXT);
-            gfx_fill(s, f.x, f.y, f.w, f.h, C_CONTENT);
-            gfx_bevel(s, f.x, f.y, f.w, f.h, 1, false, C_LINE, C_FACE_DARK);
-            char dots[64];
-            size_t n = strlen(in.pass);
-            memset(dots, '*', n);
-            dots[n] = 0;
-            int tw = gfx_text(s, f.x + 6, f.y + 4, dots, C_TEXT);
-            gfx_vline(s, f.x + 7 + tw, f.y + 4, FONT_H, C_ACCENT);
+            fct_field_draw(s, f, &in.pass, true, NULL);
             gfx_text(s, c.x + PAD, f.y + 34, "Installing changes the disks: it needs the administrator (root).", C_DIM);
         }
         break;
@@ -320,8 +313,9 @@ static void start(struct fct_view *w)
         return;
     }
     if (!in.is_root) {
-        dprintf(to[1], "%s\n", in.pass);
-        memset(in.pass, 0, sizeof(in.pass));
+        dprintf(to[1], "%s\n", in.pass.text);
+        memset(in.pass.text, 0, sizeof(in.pass.text));
+        fct_field_set(&in.pass, "");
     }
     close(to[1]);
     in.out = from[0];
@@ -446,6 +440,10 @@ static void mouse(struct fct_view *w, int x, int y, int kind, int buttons_)
 {
     (void)buttons_;
     struct rect c = fct_view_content(w);
+    if (in.page == P_CONFIRM && !in.is_root && fct_field_mouse(&in.pass, pass_field(c), x, y, kind)) {
+        fct_view_invalidate(w);
+        return;
+    }
     if (kind == FCT_MOUSE_MOVE) {
         int h = -1;
         if (in.page == P_DISK)
@@ -482,16 +480,11 @@ static void key(struct fct_view *w, const struct fct_key *k)
     if (!k->value)
         return;
     if (in.page == P_CONFIRM && !in.is_root) {
-        size_t n = strlen(in.pass);
-        if (k->ascii == '\b' || k->code == 0x0E) {
-            if (n)
-                in.pass[n - 1] = 0;
-        } else if (k->ascii == '\n' || k->ascii == '\r') {
+        if (k->ascii == '\n' || k->ascii == '\r') {
             if (can_install())
                 start(w);
-        } else if (k->ascii >= 32 && k->ascii < 127 && n + 1 < sizeof(in.pass)) {
-            in.pass[n] = k->ascii;
-            in.pass[n + 1] = 0;
+        } else {
+            fct_field_key(&in.pass, k);
         }
         fct_view_invalidate(w);
         return;
@@ -520,7 +513,7 @@ static void tick(struct fct_view *w)
 static void destroy(struct fct_view *w)
 {
     (void)w;
-    memset(in.pass, 0, sizeof(in.pass));         /* (a running install goes on: sieinstall ignores SIGPIPE) */
+    memset(in.pass.text, 0, sizeof(in.pass.text));   /* (a running install goes on: sieinstall ignores SIGPIPE) */
 }
 
 int main(void)
@@ -528,6 +521,7 @@ int main(void)
     if (fct_app_init() < 0)
         return 1;
     in.is_root = geteuid() == 0;
+    in.pass.masked = true;
     struct fct_window_attr at = { "Install SIEOS", FCT_POS_AUTO, FCT_POS_AUTO, 620, 400, 560, 360, 0 };
     struct fct_view *w = fct_view_create(&at);
     if (!w)

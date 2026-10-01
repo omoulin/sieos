@@ -79,6 +79,23 @@ the last view is gone. The callbacks:
 
 `fct_view_set_title` retitles a view.
 
+`fct_clipboard_set(text, len)` puts text on the desktop's clipboard and
+`fct_clipboard_get(&len)` returns a copy of it (NUL-terminated, to free; NULL when
+empty): the session's programs share it (the web browser's copy and paste, the
+terminals' Ctrl+Shift+C and Ctrl+Shift+V).
+
+A text field is a `struct fct_field` (its `text`, the cursor and the selection;
+`masked` for a password, shown as dots and never copied). `fct_field_set` fills
+it, `fct_field_draw(s, r, f, focus, hint)` draws it in `r` (the hint while empty
+and unfocused), `fct_field_mouse(f, r, x, y, kind)` handles every mouse event
+(a click places the cursor, a drag selects, a double-click selects the word;
+true when it took the event) and `fct_field_key(f, key)` the keys: Left, Right,
+Home, End (with Shift: selecting), Backspace, Delete, Ctrl+A, Ctrl+C, Ctrl+X,
+Ctrl+V and typed characters. It returns `FCT_FIELD_CHANGED` when the text
+changed, `FCT_FIELD_MOVED` when only the cursor or the selection did, and
+`FCT_FIELD_NONE` for a key it leaves to the application (Enter, Tab, Escape, Up,
+Down, other Ctrl keys).
+
 ### Drawing
 
 `<facet/gfx.h>` draws into a 32-bit surface (`0x00RRGGBB`, clipped to `s->clip`):

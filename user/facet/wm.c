@@ -1284,6 +1284,10 @@ static void strip_submit(void)
     invalidate_strip();
 }
 
+/* The desktop's clipboard (libfacet's clipboard.c) */
+bool fct_clipboard_set(const char *text, size_t len);
+char *fct_clipboard_get(size_t *len);
+
 static void strip_key(const struct input_event *ev)
 {
     if (ev->type != EV_KEY || !ev->value)
@@ -1327,6 +1331,17 @@ static void strip_key(const struct input_event *ev)
             strip_len--;
     } else if (c == 21) {                              /* ^U */
         strip_len = 0;
+    } else if ((key_mods & MOD_CTRL) && ev->code == 0x2E) {   /* Ctrl+C: the strip's text */
+        if (strip_len)
+            fct_clipboard_set(strip_buf, strip_len);
+        return;
+    } else if ((key_mods & MOD_CTRL) && ev->code == 0x2F) {   /* Ctrl+V: the clipboard's first line */
+        size_t n;
+        char *clip = fct_clipboard_get(&n);
+        for (size_t i = 0; clip && i < n && clip[i] != '\n' && clip[i] != '\r'; i++)
+            if ((unsigned char)clip[i] >= 32 && clip[i] != 127 && strip_len < (int)sizeof(strip_buf) - 1)
+                strip_buf[strip_len++] = clip[i];
+        free(clip);
     } else if (c >= 32 && c < 127 && strip_len < (int)sizeof(strip_buf) - 1) {
         strip_buf[strip_len++] = (char)c;
     } else {

@@ -8,5 +8,8 @@ case $- in
 	if [ "$(id -u)" = 0 ]; then _c=31 _s='#'; else _c=32 _s='$'; fi
 	PS1="${_e}[1;${_c}m${LOGNAME:-$(id -un)}@$(uname -n)${_e}[0m:${_e}[1;34m"'${PWD}'"${_e}[0m${_s} "
 	unset _e _c _s
+	# line editing with history (Up and Down recall commands; Left, Right, Home,
+	# End move along the line): ksh93's emacs mode (dash, the ISO's shell, has none)
+	if (set -o emacs) 2>/dev/null; then set -o emacs; HISTSIZE=1000; fi
 	;;
 esac

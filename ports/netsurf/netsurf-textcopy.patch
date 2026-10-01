@@ -1,0 +1,74 @@
+--- a/netsurf/frontends/framebuffer/fbtk/text.c
++++ b/netsurf/frontends/framebuffer/fbtk/text.c
+@@ -39,6 +39,46 @@
+ 
+ #include "widget.h"
+ 
++/* The desktop's clipboard (SIEOS's Facet, libfacet) */
++bool fct_clipboard_set(const char *text, size_t len);
++char *fct_clipboard_get(size_t *len);
++
++/* Ctrl+V: the clipboard's first line, its control characters dropped, at the
++ * caret.  Returns whether the text changed. */
++static bool
++text_paste(fbtk_widget_t *widget)
++{
++	size_t n, m = 0;
++	char *clip = fct_clipboard_get(&n);
++	char *temp;
++
++	if (clip == NULL)
++		return false;
++	for (size_t i = 0; i < n; i++) {
++		if (clip[i] == '\n' || clip[i] == '\r')
++			break;
++		if ((unsigned char)clip[i] >= 32 && clip[i] != 127)
++			clip[m++] = clip[i] == '\t' ? ' ' : clip[i];
++	}
++	while (m > 0 && clip[m - 1] == ' ')
++		m--;
++	temp = (m > 0) ? realloc(widget->u.text.text, widget->u.text.len + m + 1) : NULL;
++	if (temp == NULL) {
++		free(clip);
++		return false;
++	}
++	widget->u.text.text = temp;
++	memmove(widget->u.text.text + widget->u.text.idx + m,
++			widget->u.text.text + widget->u.text.idx,
++			widget->u.text.len - widget->u.text.idx);
++	memcpy(widget->u.text.text + widget->u.text.idx, clip, m);
++	widget->u.text.idx += m;
++	widget->u.text.len += m;
++	widget->u.text.text[widget->u.text.len] = '\0';
++	free(clip);
++	return true;
++}
++
+ //#define TEXT_WIDGET_BORDER 3 /**< The pixel border round a text widget. */
+ 
+ /* Lighten a colour by taking seven eights of each channel's intensity
+@@ -431,7 +471,23 @@
+ 	default:
+ 		if (modifier & FBTK_MOD_LCTRL || modifier & FBTK_MOD_RCTRL) {
+ 			/* CTRL pressed, don't enter any text */
+-			if (value == NSFB_KEY_u) {
++			if (value == NSFB_KEY_c || value == NSFB_KEY_x) {
++				/* CTRL+C, CTRL+X: the whole text to the clipboard */
++				if (widget->u.text.len > 0)
++					fct_clipboard_set(widget->u.text.text,
++							widget->u.text.len);
++				if (value == NSFB_KEY_c)
++					break;
++			}
++			if (value == NSFB_KEY_v) {
++				if (text_paste(widget)) {
++					fb_font_width(&font_style, widget->u.text.text,
++							widget->u.text.len, &widget->u.text.width);
++					caret_moved = true;
++				}
++				break;
++			}
++			if (value == NSFB_KEY_u || value == NSFB_KEY_x) {
+ 				/* CTRL+U: clear writable */
+ 				widget->u.text.idx = 0;
+ 				widget->u.text.len = 0;

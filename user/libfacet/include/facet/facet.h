@@ -125,6 +125,35 @@ void *fct_window_user(fct_window *w);
 /* Next event: 1, 0 after timeout_ms (-1 waits, 0 polls), -1 if the desktop is gone. */
 int  fct_next_event(fct_display *d, struct fct_event *ev, int timeout_ms);
 
+/* ---------------- the clipboard ---------------- */
+
+/* The desktop's clipboard (text, UTF-8), shared by the session's programs:
+ * set replaces it (true if done); get returns a copy, NUL-terminated, to
+ * free (NULL when empty), its length in *len. */
+bool  fct_clipboard_set(const char *text, size_t len);
+char *fct_clipboard_get(size_t *len);
+
+/* ---------------- the text field ---------------- */
+
+/* One line of text to type in (field.c): a click places the cursor, a drag
+ * selects, a double-click selects the word; Left, Right, Home, End (Shift
+ * extends), Backspace, Delete, Ctrl+A, Ctrl+C, Ctrl+X, Ctrl+V (the clipboard).
+ * masked: a password (dots, never copied).  The application draws it where
+ * it wants, gives it the keys and the mouse events, and keeps Enter, Tab,
+ * Escape, Up and Down (fct_field_key returns FCT_FIELD_NONE for them). */
+struct fct_field {
+    char text[512];
+    int cur, anchor;                /* byte offsets: the selection is between them */
+    int scroll;                     /* the first byte shown */
+    bool masked;
+    bool dragging;
+};
+enum { FCT_FIELD_NONE, FCT_FIELD_MOVED, FCT_FIELD_CHANGED };   /* fct_field_key: not its key, the cursor, the text */
+void fct_field_set(struct fct_field *f, const char *text);
+void fct_field_draw(struct surface *s, struct rect r, struct fct_field *f, bool focus, const char *hint);
+int  fct_field_key(struct fct_field *f, const struct fct_key *k);
+bool fct_field_mouse(struct fct_field *f, struct rect r, int x, int y, int kind);   /* true: it was the field's */
+
 /* ---------------- views ---------------- */
 
 struct fct_view {

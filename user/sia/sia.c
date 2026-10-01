@@ -54,6 +54,196 @@ static bool read_line(const char *prompt, char *buf, size_t n)
     return true;
 }
 
+/* ---- the prompt's line editor: history (Up, Down, kept in ~/.sia/history),
+ * Left, Right, Home/End (Ctrl-A, Ctrl-E), Backspace, Delete, Ctrl-U and
+ * Ctrl-K (delete before, after the cursor), Ctrl-L (clear), Ctrl-C (drop the
+ * line), Ctrl-D (end, on an empty line).  The terminal is raw while it runs,
+ * so nothing typed is echoed by the kernel: an arrow never moves the cursor. */
+
+#define HIST 200
+static char *hist[HIST];
+static int nhist;
+static bool hist_loaded;
+
+static void hist_push(const char *l)
+{
+    if (nhist && !strcmp(hist[nhist - 1], l))
+        return;                                  /* (the same line again: once) */
+    if (nhist == HIST) {
+        free(hist[0]);
+        memmove(hist, hist + 1, (HIST - 1) * sizeof(char *));
+        nhist--;
+    }
+    hist[nhist++] = strdup(l);
+}
+
+static void hist_path(char *path, size_t n)
+{
+    snprintf(path, n, "%s/.sia/history", home);
+}
+
+static void hist_load(void)
+{
+    hist_loaded = true;
+    char path[256], l[1024];
+    hist_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    while (fgets(l, sizeof(l), f)) {
+        l[strcspn(l, "\n")] = 0;
+        if (l[0])
+            hist_push(l);
+    }
+    fclose(f);
+}
+
+static void hist_add(const char *l)
+{
+    if (!l[0] || (nhist && !strcmp(hist[nhist - 1], l)))
+        return;
+    hist_push(l);
+    char path[256];
+    hist_path(path, sizeof(path));
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
+    if (fd >= 0) {
+        dprintf(fd, "%s\n", l);
+        close(fd);
+    }
+}
+
+static void redraw(const char *prompt, const char *buf, size_t len, size_t cur)
+{
+    char mv[32];
+    out("\r");
+    out(prompt);
+    write(1, buf, len);
+    out("\033[K");
+    if (len > cur) {
+        snprintf(mv, sizeof(mv), "\033[%zuD", len - cur);
+        out(mv);
+    }
+}
+
+static bool edit_line(const char *prompt, char *buf, size_t n)
+{
+    if (!isatty(0))
+        return read_line(prompt, buf, n);
+    if (!hist_loaded)
+        hist_load();
+    struct termios old, raw;
+    tcgetattr(0, &old);
+    raw = old;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(0, TCSANOW, &raw);
+    size_t len = 0, cur = 0;
+    int hpos = nhist;
+    char saved[1024] = "";                       /* the line being typed, while browsing history */
+    bool ok = false;
+    buf[0] = 0;
+    out(prompt);
+    for (;;) {
+        unsigned char c;
+        ssize_t r = read(0, &c, 1);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r <= 0) {
+            errno = 0;
+            break;
+        }
+        int key = c;
+        if (c == 27) {                           /* an escape sequence: the arrows, Home, End, Delete */
+            unsigned char a = 0, b = 0;
+            if (read(0, &a, 1) != 1 || (a != '[' && a != 'O') || read(0, &b, 1) != 1)
+                continue;
+            if (b >= '0' && b <= '9') {
+                unsigned char t = 0;
+                if (read(0, &t, 1) != 1 || t != '~')
+                    continue;
+                key = b == '1' || b == '7' ? 1 : b == '4' || b == '8' ? 5 : b == '3' ? 0x7F00 : 0;
+            } else {
+                key = b == 'A' ? 0x4100 : b == 'B' ? 0x4200 : b == 'C' ? 6 : b == 'D' ? 2 : b == 'H' ? 1 : b == 'F' ? 5 : 0;
+            }
+        }
+        if (key == '\r' || key == '\n') {
+            out("\n");
+            buf[len] = 0;
+            ok = true;
+            break;
+        }
+        if (key == 3) {                          /* Ctrl-C: the caller starts a new line */
+            out("^C");
+            errno = EINTR;
+            break;
+        }
+        if (key == 4 && !len) {                  /* Ctrl-D on an empty line: the end */
+            errno = 0;
+            break;
+        }
+        if (key == 0x4100 || key == 0x4200) {    /* Up, Down: history */
+            if (key == 0x4100 && hpos > 0) {
+                if (hpos == nhist)
+                    snprintf(saved, sizeof(saved), "%.*s", (int)len, buf);
+                hpos--;
+                snprintf(buf, n, "%s", hist[hpos]);
+            } else if (key == 0x4200 && hpos < nhist) {
+                hpos++;
+                snprintf(buf, n, "%s", hpos == nhist ? saved : hist[hpos]);
+            } else {
+                continue;
+            }
+            len = cur = strlen(buf);
+        } else if (key == 2) {                   /* Left, Ctrl-B */
+            if (!cur)
+                continue;
+            cur--;
+        } else if (key == 6) {                   /* Right, Ctrl-F */
+            if (cur == len)
+                continue;
+            cur++;
+        } else if (key == 1) {                   /* Home, Ctrl-A */
+            cur = 0;
+        } else if (key == 5) {                   /* End, Ctrl-E */
+            cur = len;
+        } else if (key == 127 || key == 8) {     /* Backspace */
+            if (!cur)
+                continue;
+            memmove(buf + cur - 1, buf + cur, len - cur);
+            cur--, len--;
+        } else if (key == 0x7F00 || key == 4) {  /* Delete, Ctrl-D */
+            if (cur == len)
+                continue;
+            memmove(buf + cur, buf + cur + 1, len - cur - 1);
+            len--;
+        } else if (key == 21) {                  /* Ctrl-U: before the cursor */
+            memmove(buf, buf + cur, len - cur);
+            len -= cur;
+            cur = 0;
+        } else if (key == 11) {                  /* Ctrl-K: after the cursor */
+            len = cur;
+        } else if (key == 12) {                  /* Ctrl-L: clear the screen */
+            out("\033[H\033[J");
+        } else if (key >= 32 && key < 256 && len + 1 < n) {
+            memmove(buf + cur + 1, buf + cur, len - cur);
+            buf[cur++] = (char)key;
+            len++;
+        } else {
+            continue;
+        }
+        buf[len] = 0;
+        redraw(prompt, buf, len, cur);
+    }
+    tcsetattr(0, TCSANOW, &old);
+    buf[len] = 0;
+    if (!ok)
+        return false;
+    while (len && (buf[len - 1] == ' '))
+        buf[--len] = 0;
+    return true;
+}
+
 static bool read_secret(const char *prompt, char *buf, size_t n)
 {
     struct termios old, t;
@@ -447,7 +637,7 @@ int main(int argc, char **argv)
         }
         snprintf(prompt, sizeof(prompt), "\033[33msia\033[0m \033[1;32m%s@%s\033[0m:\033[1;34m%s\033[0m%s ", user,
                  host, shown, getuid() == 0 ? "#" : "$");
-        if (!read_line(prompt, line, sizeof(line))) {
+        if (!edit_line(prompt, line, sizeof(line))) {
             if (errno == EINTR) {                    /* Ctrl-C at the prompt */
                 out("\n");
                 continue;
@@ -460,6 +650,7 @@ int main(int argc, char **argv)
             l++;
         if (!*l)
             continue;
+        hist_add(l);
         if (!strcmp(l, "exit") || !strcmp(l, "logout"))
             break;
         if (!strncmp(l, "/sia", 4) && (l[4] == 0 || l[4] == ' ')) {

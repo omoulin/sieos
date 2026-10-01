@@ -1,0 +1,35 @@
+--- a/netsurf/frontends/framebuffer/clipboard.c
++++ b/netsurf/frontends/framebuffer/clipboard.c
+@@ -33,6 +33,11 @@
+ #include "framebuffer/clipboard.h"
+ 
+ 
++/* The desktop's clipboard (SIEOS's Facet, libfacet): shared with the
++ * session's other programs.  The one kept here serves when it has nothing. */
++bool fct_clipboard_set(const char *text, size_t len);
++char *fct_clipboard_get(size_t *len);
++
+ static struct gui_clipboard {
+ 	char *buffer;
+ 	size_t buffer_len;
+@@ -51,6 +56,11 @@
+ 	*buffer = NULL;
+ 	*length = 0;
+ 
++	*buffer = fct_clipboard_get(length);
++	if (*buffer != NULL)
++		return;
++	*length = 0;
++
+ 	if (gui_clipboard.length > 0) {
+ 		assert(gui_clipboard.buffer != NULL);
+ 		NSLOG(netsurf, INFO, "Pasting %zd bytes: \"%s\"\n",
+@@ -95,6 +105,8 @@
+ 	memcpy(gui_clipboard.buffer, buffer, length);
+ 	gui_clipboard.length = length;
+ 	gui_clipboard.buffer[gui_clipboard.length] = '\0';
++
++	fct_clipboard_set(buffer, length);
+ }
+ 
+ static struct gui_clipboard_table clipboard_table = {

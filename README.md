@@ -253,6 +253,12 @@ installed for the cross compiler and for SIEOS's own `cc`, with examples in
   Temperature**, **Settings** (display resolution, appearance and the other desktop
   settings, one page per section), **Install SIEOS**, Clock and About. All of them follow
   the current skin.
+- **Selection and clipboard:** text is selected with the mouse (a drag, or a
+  double-click for a word) and copied from one program to another: Ctrl+C and Ctrl+V in
+  the applications (text fields, the viewer, the web browser's page and address bar, the
+  strip), Ctrl+Shift+C and Ctrl+Shift+V in the terminals (libfacet's
+  `fct_clipboard_set`/`fct_clipboard_get`, a private file of the session; its text
+  fields, `fct_field`).
 - **Screen saver and lock:** after the idle time set in Settings (5 minutes by default,
   or never) the screen goes black; the lock then asks for the user's password (checked
   by `ckpw`).
@@ -293,6 +299,10 @@ programs use it:
     problem and lists the alternatives.
   - **Terminal commands:** `/help`, `/shell` (full shell with job control), `/clear`,
     `/auto on|off`, `/model`, `/setup` and `/tools`. Ctrl-C interrupts.
+  - **The line is edited in place:** Up and Down recall earlier commands (kept in
+    `~/.sia/history`), Left, Right, Home, End (Ctrl-A, Ctrl-E), Backspace, Delete,
+    Ctrl-U and Ctrl-K. The plain shell (ksh93) edits its line the same way (its
+    emacs mode, set in `/etc/shrc`).
 - **`/bin/sia-agent`** runs libsia without a terminal and speaks JSON lines on
   stdin/stdout. Facet's strip uses it.
 - **The Facet strip.**

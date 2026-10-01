@@ -34,6 +34,7 @@ struct page {
     void (*draw)(struct surface *s, struct rect c);
     void (*click)(struct rect c, int x, int y);
     void (*move)(struct rect c, int x, int y);
+    bool (*field_mouse)(struct rect c, int x, int y, int kind);   /* text fields: every mouse event first */
 };
 
 static int cur_page, side_hover = -1;
@@ -407,7 +408,7 @@ static void saver_click(struct rect c, int x, int y)
 
 enum { A_ENDPOINT, A_MODEL, A_KEY, NAFIELDS };
 static struct {
-    char field[NAFIELDS][512];
+    struct fct_field fld[NAFIELDS];             /* the key's is masked */
     bool have_key;                               /* a key is kept (not shown: typing one replaces it) */
     char old_key[512];
     bool auto_approve;
@@ -426,6 +427,7 @@ static void assistant_enter(void)
 {
     memset(&ai, 0, sizeof(ai));
     ai.focus = -1;
+    ai.fld[A_KEY].masked = true;
     FILE *f = fopen(sia_path(), "r");
     char line[1100];
     while (f && fgets(line, sizeof(line), f)) {
@@ -436,9 +438,9 @@ static void assistant_enter(void)
         *eq = 0;
         const char *v = eq + 1;
         if (!strcmp(line, "endpoint"))
-            snprintf(ai.field[A_ENDPOINT], sizeof(ai.field[0]), "%s", v);
+            fct_field_set(&ai.fld[A_ENDPOINT], v);
         else if (!strcmp(line, "model"))
-            snprintf(ai.field[A_MODEL], sizeof(ai.field[0]), "%s", v);
+            fct_field_set(&ai.fld[A_MODEL], v);
         else if (!strcmp(line, "api_key"))
             snprintf(ai.old_key, sizeof(ai.old_key), "%s", v), ai.have_key = v[0] != 0;
         else if (!strcmp(line, "auto_approve"))
@@ -460,29 +462,8 @@ static void assistant_draw(struct surface *s, struct rect c)
     for (int i = 0; i < NAFIELDS; i++) {
         struct rect r = ai_field(c, i);
         gfx_text(s, c.x + PAD, r.y + 4, labels[i], C_TEXT);
-        gfx_fill(s, r.x, r.y, r.w, r.h, C_CONTENT);
-        gfx_frame(s, r.x, r.y, r.w, r.h, i == ai.focus ? C_ACCENT : C_LINE);
-        char shown[512];
-        if (i == A_KEY) {
-            size_t k = strlen(ai.field[i]);
-            if (!k && ai.have_key && ai.focus != A_KEY) {
-                snprintf(shown, sizeof(shown), "(kept: type a new one to replace it)");
-            } else {
-                if (k > 60)
-                    k = 60;
-                memset(shown, '*', k);
-                shown[k] = 0;
-            }
-        } else {
-            const char *t = ai.field[i];
-            size_t max = (r.w - 16) / 8;                 /* (the end shown when it is too long) */
-            size_t l = strlen(t);
-            snprintf(shown, sizeof(shown), "%s", l > max ? t + (l - max) : t);
-        }
-        bool hint = i == A_KEY && !ai.field[i][0] && ai.have_key && ai.focus != A_KEY;
-        int tw = gfx_text(s, r.x + 6, r.y + 4, shown, hint ? C_DIM : C_TEXT);
-        if (i == ai.focus)
-            gfx_vline(s, r.x + 7 + (hint ? 0 : tw), r.y + 4, FONT_H, C_ACCENT);
+        fct_field_draw(s, r, &ai.fld[i], i == ai.focus,
+                       i == A_KEY && ai.have_key ? "(kept: type a new one to replace it)" : NULL);
     }
     gfx_text(s, c.x + PAD, c.y + 172, "Example: https://NAME.openai.azure.com, a deployment name, its key.", C_DIM);
     ui_button(s, ai_save_btn(c), "Save", false);
@@ -492,8 +473,17 @@ static void assistant_draw(struct surface *s, struct rect c)
 
 static void assistant_save(void)
 {
-    const char *ep = ai.field[A_ENDPOINT], *model = ai.field[A_MODEL];
-    const char *key = ai.field[A_KEY][0] ? ai.field[A_KEY] : ai.old_key;
+    for (int i = 0; i < NAFIELDS; i++) {          /* (none of the three has spaces) */
+        char *t = ai.fld[i].text, *b = t;
+        while (*b == ' ')
+            b++;
+        memmove(t, b, strlen(b) + 1);
+        size_t l = strlen(t);
+        while (l && t[l - 1] == ' ')
+            t[--l] = 0;
+    }
+    const char *ep = ai.fld[A_ENDPOINT].text, *model = ai.fld[A_MODEL].text;
+    const char *key = ai.fld[A_KEY].text[0] ? ai.fld[A_KEY].text : ai.old_key;
     if (!ep[0] || !model[0] || !key[0]) {
         snprintf(status, sizeof(status), "The endpoint, the model and the key are all needed.");
         return;
@@ -522,30 +512,31 @@ static void assistant_save(void)
 static void assistant_click(struct rect c, int x, int y)
 {
     ai.focus = -1;
-    for (int i = 0; i < NAFIELDS; i++)
-        if (rect_contains(ai_field(c, i), x, y))
-            ai.focus = i;
     if (rect_contains(ai_save_btn(c), x, y))
         assistant_save();
+}
+
+static bool assistant_field_mouse(struct rect c, int x, int y, int kind)
+{
+    for (int i = 0; i < NAFIELDS; i++)
+        if ((kind != FCT_MOUSE_MOVE || ai.fld[i].dragging) && fct_field_mouse(&ai.fld[i], ai_field(c, i), x, y, kind)) {
+            ai.focus = i;
+            return true;
+        }
+    return false;
 }
 
 static bool assistant_key(const struct fct_key *k)
 {
     if (ai.focus < 0 || !k->value)
         return false;
-    char *f = ai.field[ai.focus];
-    size_t n = strlen(f);
-    if (k->ascii == '\b' || k->code == 0x0E) {
-        if (n)
-            f[n - 1] = 0;
-    } else if (k->ascii == '\t') {
+    if (k->ascii == '\t') {
         ai.focus = (ai.focus + 1) % NAFIELDS;
     } else if (k->ascii == '\n' || k->ascii == '\r') {
         ai.focus = -1;
         assistant_save();
-    } else if (k->ascii > 32 && k->ascii < 127 && n + 1 < sizeof(ai.field[0])) {
-        f[n] = k->ascii;                             /* (no spaces: none of the three has any) */
-        f[n + 1] = 0;
+    } else {
+        fct_field_key(&ai.fld[ai.focus], k);
     }
     return true;
 }
@@ -557,7 +548,7 @@ static struct {
     struct netinfo ni[4];
     int n, cur;
     bool dhcp;
-    char field[NFIELDS][40];
+    struct fct_field nf[NFIELDS];               /* the password's is masked */
     int focus;                                   /* the field typed into, -1 none */
     char wifi[96];
 } net = { .focus = -1 };
@@ -566,11 +557,12 @@ static void net_load_fields(void)
 {
     struct netinfo *ni = &net.ni[net.cur];
     net.dhcp = ni->dhcp || !ni->up;
-    ip_to_str(ni->ip, net.field[F_IP]);
-    ip_to_str(ni->netmask, net.field[F_MASK]);
-    ip_to_str(ni->gateway, net.field[F_GW]);
-    ip_to_str(ni->dns, net.field[F_DNS]);
-    net.field[F_PASS][0] = 0;
+    { char t_[40]; ip_to_str(ni->ip, t_); fct_field_set(&net.nf[F_IP], t_); }
+    { char t_[40]; ip_to_str(ni->netmask, t_); fct_field_set(&net.nf[F_MASK], t_); }
+    { char t_[40]; ip_to_str(ni->gateway, t_); fct_field_set(&net.nf[F_GW], t_); }
+    { char t_[40]; ip_to_str(ni->dns, t_); fct_field_set(&net.nf[F_DNS], t_); }
+    fct_field_set(&net.nf[F_PASS], "");
+    net.nf[F_PASS].masked = true;
 }
 
 static void network_enter(void)
@@ -640,19 +632,13 @@ static void network_draw(struct surface *s, struct rect c)
             struct rect r = field_rect(c, i);
             bool off = i != F_PASS && net.dhcp;
             gfx_text(s, c.x + PAD, r.y + 3, labels[i], off ? C_DIM : C_TEXT);
-            gfx_fill(s, r.x, r.y, r.w, r.h, off ? C_FACE : C_CONTENT);
-            gfx_frame(s, r.x, r.y, r.w, r.h, i == net.focus ? C_ACCENT : C_LINE);
-            char shown[40];
-            if (i == F_PASS) {
-                size_t k = strlen(net.field[i]);
-                memset(shown, '*', k);
-                shown[k] = 0;
+            if (off) {
+                gfx_fill(s, r.x, r.y, r.w, r.h, C_FACE);
+                gfx_frame(s, r.x, r.y, r.w, r.h, C_LINE);
+                gfx_text(s, r.x + 6, r.y + 3, net.nf[i].text, C_DIM);
             } else {
-                snprintf(shown, sizeof(shown), "%s", net.field[i]);
+                fct_field_draw(s, r, &net.nf[i], i == net.focus, NULL);
             }
-            int tw = gfx_text(s, r.x + 6, r.y + 3, shown, off ? C_DIM : C_TEXT);
-            if (i == net.focus)
-                gfx_vline(s, r.x + 7 + tw, r.y + 3, FONT_H, C_ACCENT);
         }
         struct rect b = apply_btn(c);
         ui_button(s, b, "Apply", false);
@@ -675,12 +661,12 @@ static void network_apply(void)
     if (net.dhcp) {
         argv[n++] = "dhcp";
     } else {
-        argv[n++] = "inet", argv[n++] = net.field[F_IP];
-        argv[n++] = "netmask", argv[n++] = net.field[F_MASK];
-        if (net.field[F_GW][0] && strcmp(net.field[F_GW], "0.0.0.0"))
-            argv[n++] = "gateway", argv[n++] = net.field[F_GW];
-        if (net.field[F_DNS][0] && strcmp(net.field[F_DNS], "0.0.0.0"))
-            argv[n++] = "dns", argv[n++] = net.field[F_DNS];
+        argv[n++] = "inet", argv[n++] = net.nf[F_IP].text;
+        argv[n++] = "netmask", argv[n++] = net.nf[F_MASK].text;
+        if (net.nf[F_GW].text[0] && strcmp(net.nf[F_GW].text, "0.0.0.0"))
+            argv[n++] = "gateway", argv[n++] = net.nf[F_GW].text;
+        if (net.nf[F_DNS].text[0] && strcmp(net.nf[F_DNS].text, "0.0.0.0"))
+            argv[n++] = "dns", argv[n++] = net.nf[F_DNS].text;
     }
     argv[n] = NULL;
     int to[2], from[2];
@@ -698,9 +684,10 @@ static void network_apply(void)
     }
     close(to[0]);
     close(from[1]);
-    dprintf(to[1], "%s\n", net.field[F_PASS]);
+    dprintf(to[1], "%s\n", net.nf[F_PASS].text);
     close(to[1]);
-    memset(net.field[F_PASS], 0, sizeof(net.field[F_PASS]));
+    memset(net.nf[F_PASS].text, 0, sizeof(net.nf[F_PASS].text));
+    fct_field_set(&net.nf[F_PASS], "");
     char out[200] = "";
     ssize_t k = read(from[0], out, sizeof(out) - 1);
     out[k > 0 ? k : 0] = 0;
@@ -730,11 +717,19 @@ static void network_click(struct rect c, int x, int y)
     for (int i = 0; i < 2; i++)
         if (rect_contains(mode_btn(c, i), x, y))
             net.dhcp = i == 0;
-    for (int i = 0; i < NFIELDS; i++)
-        if (rect_contains(field_rect(c, i), x, y) && (i == F_PASS ? geteuid() != 0 : !net.dhcp))
-            net.focus = i;
     if (net.n && rect_contains(apply_btn(c), x, y))
         network_apply();
+}
+
+static bool network_field_mouse(struct rect c, int x, int y, int kind)
+{
+    for (int i = 0; i < NFIELDS; i++)
+        if ((i == F_PASS ? geteuid() != 0 : !net.dhcp) && (kind != FCT_MOUSE_MOVE || net.nf[i].dragging) &&
+            fct_field_mouse(&net.nf[i], field_rect(c, i), x, y, kind)) {
+            net.focus = i;
+            return true;
+        }
+    return false;
 }
 
 /* Typing into the focused field; true if the key was taken. */
@@ -742,22 +737,16 @@ static bool network_key(const struct fct_key *k)
 {
     if (net.focus < 0 || !k->value)
         return false;
-    char *f = net.field[net.focus];
-    size_t n = strlen(f);
-    if (k->ascii == '\b' || k->code == 0x0E) {
-        if (n)
-            f[n - 1] = 0;
-    } else if (k->ascii == '\t') {
+    if (k->ascii == '\t') {
         do
             net.focus = (net.focus + 1) % NFIELDS;
         while ((net.focus == F_PASS && geteuid() == 0) || (net.focus != F_PASS && net.dhcp));
     } else if (k->ascii == '\n' || k->ascii == '\r') {
         net.focus = -1;
         network_apply();
-    } else if (k->ascii >= 32 && k->ascii < 127 && n + 1 < sizeof(net.field[0]) &&
-               (net.focus == F_PASS || (k->ascii >= '0' && k->ascii <= '9') || k->ascii == '.')) {
-        f[n] = k->ascii;
-        f[n + 1] = 0;
+    } else if (net.focus == F_PASS || !(k->ascii >= 32 && k->ascii < 127) || (k->mods & FCT_MOD_CTRL) ||
+               (k->ascii >= '0' && k->ascii <= '9') || k->ascii == '.') {
+        fct_field_key(&net.nf[net.focus], k);    /* (an address: digits and dots typed) */
     }
     return true;
 }
@@ -770,7 +759,7 @@ static struct {
     struct sieos_wifi_bss b[64];
     int n, sel, ticks;
     unsigned last_scans;
-    char pass[66];
+    struct fct_field pass;                      /* (masked) */
     bool pass_focus;
     pid_t job;                                   /* dladm connect-wifi running */
     struct sieos_wifi_bss chosen;
@@ -809,6 +798,7 @@ static void wifi_scan(void)
 
 static void wifi_enter(void)
 {
+    wl.pass.masked = true;
     wl.sel = -1;
     wl.ticks = 0;
     wifi_refresh();
@@ -904,17 +894,18 @@ static void wifi_connect(void)
         int dn = open("/dev/null", O_WRONLY);
         if (dn >= 0)
             dup2(dn, 1), dup2(dn, 2);
-        if (wl.pass[0])
+        if (wl.pass.text[0])
             execl("/bin/dladm", "dladm", "connect-wifi", "-e", wl.chosen.wb_ssid, "-k", "-", (char *)NULL);
         else
             execl("/bin/dladm", "dladm", "connect-wifi", "-e", wl.chosen.wb_ssid, (char *)NULL);
         _exit(127);
     }
     close(p[0]);
-    if (pid > 0 && wl.pass[0])
-        dprintf(p[1], "%s\n", wl.pass);
+    if (pid > 0 && wl.pass.text[0])
+        dprintf(p[1], "%s\n", wl.pass.text);
     close(p[1]);
-    memset(wl.pass, 0, sizeof(wl.pass));
+    memset(wl.pass.text, 0, sizeof(wl.pass.text));
+    fct_field_set(&wl.pass, "");
     wl.pass_focus = false;
     wl.job = pid;
     snprintf(status, sizeof(status), "Connecting to %s...", wl.chosen.wb_ssid);
@@ -960,15 +951,7 @@ static void wifi_join_draw(struct surface *s, struct rect c)
     if (b->wb_sec) {
         gfx_text(s, c.x + PAD, y + 27, "Password", C_TEXT);
         struct rect r = pass_rect(c);
-        gfx_fill(s, r.x, r.y, r.w, r.h, C_CONTENT);
-        gfx_frame(s, r.x, r.y, r.w, r.h, wl.pass_focus ? C_ACCENT : C_LINE);
-        char shown[66];
-        size_t k = strlen(wl.pass);
-        memset(shown, '*', k);
-        shown[k] = 0;
-        int tw = gfx_text(s, r.x + 6, r.y + 3, shown, C_TEXT);
-        if (wl.pass_focus)
-            gfx_vline(s, r.x + 7 + tw, r.y + 3, FONT_H, C_ACCENT);
+        fct_field_draw(s, r, &wl.pass, wl.pass_focus, NULL);
     } else {
         gfx_text(s, c.x + PAD, y + 27, "An open network (not encrypted).", C_DIM);
     }
@@ -995,7 +978,7 @@ static void wifi_click(struct rect c, int x, int y)
     for (int i = 0; i < wl.n && i < WROWS; i++)
         if (rect_contains(wrow(c, i), x, y)) {
             if (wl.sel != i)
-                memset(wl.pass, 0, sizeof(wl.pass));
+                fct_field_set(&wl.pass, "");
             wl.sel = i;
             wl.pass_focus = wl.b[i].wb_sec != 0;
         }
@@ -1006,20 +989,26 @@ static bool wifi_key(const struct fct_key *k)
 {
     if (!wl.pass_focus || !k->value)
         return false;
-    size_t n = strlen(wl.pass);
-    if (k->ascii == '\b' || k->code == 0x0E) {
-        if (n)
-            wl.pass[n - 1] = 0;
-    } else if (k->ascii == '\n' || k->ascii == '\r') {
+    if (k->ascii == '\n' || k->ascii == '\r') {
         if (wl.sel >= 0 && wl.sel < wl.n && wl.b[wl.sel].wb_ssid[0]) {
             wl.chosen = wl.b[wl.sel];
             wifi_connect();
         }
-    } else if (k->ascii >= 32 && k->ascii < 127 && n + 1 < 64) {
-        wl.pass[n] = k->ascii;
-        wl.pass[n + 1] = 0;
+    } else if (strlen(wl.pass.text) < 63 || !(k->ascii >= 32 && k->ascii < 127)) {
+        fct_field_key(&wl.pass, k);              /* (a WPA2 passphrase: up to 63 characters) */
     }
     return true;
+}
+
+static bool wifi_field_mouse(struct rect c, int x, int y, int kind)
+{
+    if (!(wl.sel >= 0 && wl.sel < wl.n && wl.b[wl.sel].wb_sec))
+        return false;
+    if ((kind != FCT_MOUSE_MOVE || wl.pass.dragging) && fct_field_mouse(&wl.pass, pass_rect(c), x, y, kind)) {
+        wl.pass_focus = true;
+        return true;
+    }
+    return false;
 }
 
 /* About 4 times a second: the status; the list when a scan ends; a new scan every 30 seconds. */
@@ -1044,13 +1033,13 @@ static void wifi_tick(void)
 /* ---------------- the window ---------------- */
 
 static const struct page pages[] = {
-    { "display", "Display", ICON_MONITOR, display_enter, display_draw, display_click, display_move },
-    { "appearance", "Appearance", ICON_PROGRAM, NULL, appearance_draw, appearance_click, NULL },
-    { "pointer", "Pointer", ICON_PROGRAM, pointer_enter, pointer_draw, pointer_click, NULL },
-    { "saver", "Screen Saver", ICON_MONITOR, saver_enter, saver_draw, saver_click, NULL },
-    { "assistant", "Assistant", ICON_TERMINAL, assistant_enter, assistant_draw, assistant_click, NULL },
-    { "network", "Network", ICON_NETWORK, network_enter, network_draw, network_click, NULL },
-    { "wifi", "Wi-Fi", ICON_NETWORK, wifi_enter, wifi_draw, wifi_click, NULL },
+    { "display", "Display", ICON_MONITOR, display_enter, display_draw, display_click, display_move, NULL },
+    { "appearance", "Appearance", ICON_PROGRAM, NULL, appearance_draw, appearance_click, NULL, NULL },
+    { "pointer", "Pointer", ICON_PROGRAM, pointer_enter, pointer_draw, pointer_click, NULL, NULL },
+    { "saver", "Screen Saver", ICON_MONITOR, saver_enter, saver_draw, saver_click, NULL, NULL },
+    { "assistant", "Assistant", ICON_TERMINAL, assistant_enter, assistant_draw, assistant_click, NULL, assistant_field_mouse },
+    { "network", "Network", ICON_NETWORK, network_enter, network_draw, network_click, NULL, network_field_mouse },
+    { "wifi", "Wi-Fi", ICON_NETWORK, wifi_enter, wifi_draw, wifi_click, NULL, wifi_field_mouse },
 };
 #define NPAGES ((int)(sizeof(pages) / sizeof(pages[0])))
 
@@ -1101,6 +1090,10 @@ static void mouse(struct fct_view *v, int x, int y, int kind, int buttons)
     struct rect c = fct_view_content(v);
     x += c.x;
     y += c.y;
+    if (pages[cur_page].field_mouse && pages[cur_page].field_mouse(page_rect(c), x, y, kind)) {
+        fct_view_invalidate(v);
+        return;
+    }
     if (kind == FCT_MOUSE_MOVE) {
         int hit = -1;
         for (int i = 0; i < NPAGES; i++)
