@@ -27,7 +27,7 @@ Requirements (Debian 13 or Ubuntu):
 
 ```sh
 sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-amd64-bin \
-                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl
+                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl flex bison
 ```
 
 - **KVM:** the build boots SIEOS in QEMU once, to compile ksh93 on SIEOS itself. With
@@ -386,9 +386,10 @@ Indexes are signed with a key kept outside the source tree
 **Web Browser** in the Spine and the SIEOS menu opens [NetSurf](https://www.netsurf-browser.org/)
 3.11 in a Facet window; from a shell, `netsurf [URL]`; sia opens it too ("open
 example.com in the browser"). It renders HTML and CSS (CSS 2.1 and parts of CSS 3) with
-PNG, JPEG, GIF, BMP and SVG images, in the DejaVu fonts, and fetches over HTTP and HTTPS
-through curl and Mbed TLS (certificates checked against `/etc/ssl/certs.pem`). It is on
-the disk and the USB image, not in the ISO's small root.
+PNG, JPEG, GIF, BMP and SVG images, in the DejaVu fonts, runs **JavaScript** (Duktape,
+ECMAScript 5.1 with some later features), and fetches over HTTP and HTTPS through curl and
+Mbed TLS (certificates checked against `/etc/ssl/certs.pem`). It is on the disk and the
+USB image, not in the ISO's small root.
 
 - **Address bar:** click it, **Ctrl+U** clears it, type the address, Enter. Home/End and
   Ctrl+Left/Right move the caret. (NetSurf's address bar has no select-all.)
@@ -396,9 +397,14 @@ the disk and the USB image, not in the ISO's small root.
   moves a page, its arrows a line); the status bar shows the address of the link under
   the pointer; Back, Forward, Stop and Reload are on the toolbar. The window's title is
   the page's ("NetSurf: ...").
-- **Not yet:** JavaScript (NetSurf's Duktape is not built), non-ASCII typing (the
-  keyboard is US only) and the clipboard. NetSurf's framebuffer front end has no
-  right-click menu.
+- **JavaScript** is on (`enable_javascript:0` in `~/.netsurf/Choices` turns it off).
+  Scripts run as a page loads, and they can build and change the page then. They also
+  have the DOM, timers and events such as clicks. As in NetSurf 3.11 everywhere, a change
+  a script makes after the page has been laid out is not redrawn, except for the title
+  and form fields. So pages that build themselves while loading work, but interactive
+  updates do not show.
+- **Not yet:** non-ASCII typing (the keyboard is US only). NetSurf's framebuffer front end
+  has no right-click menu.
 
 How it is built (`make netsurf`, part of `make`), into `build/ports`:
 
@@ -413,8 +419,11 @@ Facet window whose shared buffer libnsfb draws into directly, with keys, clicks,
 and closing turned into libnsfb's events), `netsurf-curl.patch`, with which the
 fetcher resolves IPv4 addresses only when the machine has no global IPv6 address (as on
 QEMU's user network), instead of waiting on IPv6 for every dual-stack site, and
-`netsurf-title.patch`, which gives the page's title to the window.
-`prepare.sh` applies both and sets the build options (`Makefile.config`).
+`netsurf-title.patch`, which gives the page's title to the window, and the others listed
+in `prepare.sh`. One of these, `netsurf-dom-dispatch.patch`, fixes libdom: it delivered
+an event to its target twice, so a click handler ran twice. `prepare.sh` applies them and
+sets the build options (`Makefile.config`): JavaScript with Duktape, whose bindings
+nsgenbind (built for the build machine, with flex and bison) generates from WebIDL.
 
 ## Limitations
 

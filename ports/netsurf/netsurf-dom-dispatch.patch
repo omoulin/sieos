@@ -1,0 +1,15 @@
+--- a/libdom/src/core/node.c
++++ b/libdom/src/core/node.c
+@@ -2457,8 +2457,10 @@
+ 	ntargets_allocated = 0;
+ 	ntargets = 0;
+ 
+-	/* Add interested event listeners to array */
+-	for (; target != NULL; target = target->parent) {
++	/* Add interested event listeners to array: the target's ancestors
++	 * (the target itself has its own phase, AT_TARGET, below; listing it
++	 * here too delivered the event to it twice: at target and bubbling) */
++	for (target = target->parent; target != NULL; target = target->parent) {
+ 		struct listener_entry *le = target->eti.listeners;
+ 		bool target_has_listener = false;
+ 

@@ -14,7 +14,9 @@
 # netsurf-clip.patch (a page's plotting kept inside its widget: nothing drawn
 # over the toolbar, scroll bars or status bar), netsurf-clipboard.patch (copy
 # and paste through the desktop's clipboard, libfacet's), netsurf-textcopy.patch
-# (the address bar: Ctrl+C and Ctrl+X copy it, Ctrl+V pastes), and
+# (the address bar: Ctrl+C and Ctrl+X copy it, Ctrl+V pastes),
+# netsurf-dom-dispatch.patch (libdom: an event reached its target twice, at
+# target and again bubbling: a script's click handler ran twice), and
 # Makefile.config.
 set -e
 TREE=$1
@@ -36,19 +38,25 @@ grep -q 'facet\.c' "$NSFB/src/surface/Makefile"
 grep -q 'NSFB_SURFACE_FACET' "$NSFB/include/libnsfb.h"
 grep -q -- '-lfacet' "$NSFB/libnsfb.pc.in"
 
+# JavaScript on by default (NetSurf's default is off; ~/.netsurf/Choices can say
+# enable_javascript:0)
+sed -i 's/^NSOPTION_BOOL(enable_javascript, false)$/NSOPTION_BOOL(enable_javascript, true)/' "$TREE/netsurf/desktop/options.h"
+grep -q '^NSOPTION_BOOL(enable_javascript, true)$' "$TREE/netsurf/desktop/options.h"
+
 # NetSurf's patches (patch -p1 in TREE)
 for p in "$HERE"/netsurf-*.patch; do
     patch -d "$TREE" -p1 -s -N < "$p"
 done
 
 # NetSurf's build options (Makefile.config): text through FreeType with the
-# DejaVu fonts of /usr/share/fonts/dejavu; no JavaScript yet; no formats or
+# DejaVu fonts of /usr/share/fonts/dejavu; JavaScript with Duktape (its
+# bindings made by nsgenbind on the build host); no formats or
 # features without a port (WebP, JPEG XL, PDF export, RISC OS sprites); curl
 # does TLS (Mbed TLS), so no OpenSSL; iconv is the C library's.
 cat > "$TREE/netsurf/Makefile.config" <<'CFG'
 override NETSURF_FB_FONTLIB := freetype
 override NETSURF_FB_FONTPATH := /usr/share/fonts/dejavu
-override NETSURF_USE_DUKTAPE := NO
+override NETSURF_USE_DUKTAPE := YES
 override NETSURF_USE_WEBP := NO
 override NETSURF_USE_JPEGXL := NO
 override NETSURF_USE_HARU_PDF := NO

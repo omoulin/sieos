@@ -815,8 +815,7 @@ netlibs: $(NETLIB_DONE)
 # with the Facet surface: ports/netsurf/), from the release bundle, static, in the
 # same staging root (their -I$(PREFIX)/include
 # must not name the build host's /usr/include: PREFIX is the staging root itself);
-# pkg-config sees only the staging root.  (nsgenbind, the JavaScript binding
-# generator, is not built: JavaScript is off.)
+# pkg-config sees only the staging root.
 NS_ALL     := netsurf-all-3.11
 NS_SRC     := $(PORTS)/$(NS_ALL)
 NSHOST     := $(PORTS)/nshost
@@ -848,14 +847,23 @@ $(PORTS)/.host-png: $(PORTS_DL)/zlib-1.3.2.tar.xz $(PORTS_DL)/libpng-1.6.58.tar.
 		CPPFLAGS=-I$(NSHOST)/include LDFLAGS=-L$(NSHOST)/lib >../libpng.log && $(MAKE) install >>../libpng.log
 	touch $@
 
-# NetSurf (the framebuffer front end, on libnsfb's Facet surface), installed with
-# prefix /usr into $(NS_ROOT): /usr/bin/netsurf-fb and /usr/share/netsurf
+# nsgenbind, NetSurf's JavaScript binding generator (WebIDL to Duktape C), runs
+# on the build host while NetSurf is built: made with the host's compiler,
+# flex and bison into $(NSHOST)/bin.
+$(PORTS)/.host-nsgenbind: $(PORTS)/.lib-netsurf
+	env -u HOST $(MAKE) -C $(NS_SRC)/nsgenbind PREFIX=$(NSHOST) NSSHARED=$(NS_SRC)/buildsystem CC=cc Q= \
+		install >$(PORTS)/nsgenbind.log 2>&1 || { tail -20 $(PORTS)/nsgenbind.log; exit 1; }
+	touch $@
+
+# NetSurf (the framebuffer front end, on libnsfb's Facet surface, with JavaScript:
+# Duktape), installed with prefix /usr into $(NS_ROOT): /usr/bin/netsurf-fb and
+# /usr/share/netsurf
 NS_ROOT := $(PORTS)/netsurf-root
-NS_FB    = $(MAKE) -C $(NS_SRC)/netsurf TARGET=framebuffer CC=$(SIEOS_CC) Q= VQ= \
+NS_FB    = PATH=$(NSHOST)/bin:$$PATH $(MAKE) -C $(NS_SRC)/netsurf TARGET=framebuffer CC=$(SIEOS_CC) Q= VQ= \
            PKG_CONFIG="PKG_CONFIG_LIBDIR=$(NETLIBS)/usr/lib/pkgconfig pkg-config" \
            BUILD_CC=cc BUILD_CFLAGS="-O2 -I$(NSHOST)/include" BUILD_LDFLAGS=-L$(NSHOST)/lib \
            BUILD_LIBPNG_CFLAGS=-I$(NSHOST)/include BUILD_LIBPNG_LDFLAGS="-lpng16 -lz -lm" PREFIX=/usr
-$(PORTS)/.netsurf: $(PORTS)/.lib-netsurf $(PORTS)/.host-png
+$(PORTS)/.netsurf: $(PORTS)/.lib-netsurf $(PORTS)/.host-png $(PORTS)/.host-nsgenbind
 	$(NS_FB) >$(PORTS)/netsurf.log 2>&1 || { tail -30 $(PORTS)/netsurf.log; exit 1; }
 	rm -rf $(NS_ROOT) && $(NS_FB) install DESTDIR=$(NS_ROOT) >>$(PORTS)/netsurf.log 2>&1
 	touch $@
