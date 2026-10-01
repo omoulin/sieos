@@ -1,0 +1,15 @@
+# curl: the curl command and libcurl (shared), on OpenSSL: git's http and
+# https transport.  Its trusted roots are the system's (/etc/ssl/certs.pem).
+name     = curl
+version  = 8.22.0-1
+summary  = curl: transfers with URLs (HTTP, HTTPS, FTP...), and libcurl
+source   = https://curl.se/download/curl-8.22.0.tar.gz
+sha256   = d54dd598bf05927a726deb38df31c6a255ba83ff1de57c5d1464dac3ed8f44a1
+depends  = openssl zlib
+build    = $CONFIGURE --with-openssl --with-zlib --with-ca-bundle=/etc/ssl/certs.pem --without-ca-path \
+               --enable-threaded-resolver --without-libpsl --without-brotli --without-zstd --without-nghttp2 \
+               --without-libidn2 --without-librtmp --without-libssh2 --disable-ldap --disable-ldaps \
+               --disable-manual --disable-docs --disable-static \
+               ac_cv_func_eventfd=no
+           make -j$JOBS
+install  = make install DESTDIR=$DESTDIR

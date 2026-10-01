@@ -16,6 +16,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
@@ -103,5 +107,9 @@ void gfx_poly_vgradient(struct surface *s, const float *xy, int n, color_t top, 
 void gfx_stroke(struct surface *s, const float *xy, int n, bool closed, float width, color_t c);
 void gfx_ellipse_aa(struct surface *s, float cx, float cy, float rx, float ry, color_t top, color_t bottom);
 color_t color_shade(color_t c, int delta);            /* lighten (+) / darken (-) */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

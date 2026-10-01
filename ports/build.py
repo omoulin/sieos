@@ -50,6 +50,22 @@ def teach_config_sub(tree):
             sys.exit('%s: no place for sieos' % path)
         open(path, 'w').write(new)
 
+# libtool knows the systems whose shared libraries it can build; SIEOS's are
+# Linux's kind (ELF, sonames, ld.so searching LD_LIBRARY_PATH and the path
+# file), so the case patterns of libtool's code in configure scripts that
+# name linux* get sieos* too (without it: static libraries only).
+LINUX_CASE = re.compile(r'^(\s*)((?:[\w*.+-]+\s*\|\s*)*linux\*(?:\s*\|\s*[\w*.+-]+)*)\)(\s*)$')
+
+def teach_libtool(tree):
+    for path in glob.glob(os.path.join(tree, '**', 'configure'), recursive=True):
+        if not os.path.isfile(path):
+            continue
+        lines = open(path, errors='surrogateescape').read().split('\n')
+        if 'ltmain' not in '\n'.join(lines) or any('sieos*' in l for l in lines):
+            continue
+        lines = [LINUX_CASE.sub(lambda m: '%s%s | sieos*)%s' % (m.group(1), m.group(2), m.group(3)), l) for l in lines]
+        open(path, 'w', errors='surrogateescape').write('\n'.join(lines))
+
 def run(cmd, cwd, log):
     with open(log, 'a') as f:
         f.write('+ %s\n' % ' '.join(cmd))

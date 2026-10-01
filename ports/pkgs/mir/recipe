@@ -1,0 +1,9 @@
+# MiR (Make it Real): sia makes the applications its user describes (in C or
+# C++, built with SIEOS's own gcc and g++).  Its sources are SIEOS's own
+# (user/mir), so the version is SIEOS's.
+name     = mir
+version  = 1.0-1
+summary  = MiR (Make it Real): describe an application, sia writes, builds and tests it
+source   = tree:user/mir
+build    = make -j$JOBS CC="$CC" TREE="$TREE"
+install  = make install DESTDIR=$DESTDIR PREFIX=$PREFIX TREE="$TREE"

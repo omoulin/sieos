@@ -350,7 +350,7 @@ static void io_error(void *ctx, const char *msg)
         printf("\033[31msia: %s\033[0m\n", msg);
 }
 
-static const struct sia_io term_io = { NULL, io_text, io_tool, io_output, io_confirm, io_thinking, io_error, io_delta };
+static const struct sia_io term_io = { NULL, io_text, io_tool, io_output, io_confirm, io_thinking, io_error, io_delta, NULL };
 
 /* ---------------- setup ---------------- */
 

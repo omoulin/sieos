@@ -87,6 +87,30 @@ void icon_browser_paint(struct surface *s, int x, int y, int size, color_t top, 
     gfx_stroke(s, st, 12, true, w, outline == NONE ? bottom : outline);
 }
 
+/* A four-pointed sparkle centred on design point (cx, cy) */
+static void sparkle(struct surface *s, int x, int y, int size, float cx, float cy, float r, color_t c, color_t outline,
+                    float ow)
+{
+    float d[16];
+    for (int i = 0; i < 8; i++) {
+        float a = -1.5708f + i * 3.1416f / 4, rr = i & 1 ? r * 0.3f : r;
+        d[2 * i] = cx + rr * cosf(a);
+        d[2 * i + 1] = cy + rr * sinf(a);
+    }
+    shape(s, x, y, size, c, c, outline, ow, 8, d);
+}
+
+/* MiR (Make it Real): a wand with sparkles; each skin gives its colours. */
+void icon_mir_paint(struct surface *s, int x, int y, int size, color_t wand, color_t tip, color_t spark,
+                    color_t outline, float ow)
+{
+    SHAPE(wand, wand, outline, ow, 5, 39, 27, 17, 31, 21, 9, 43);
+    SHAPE(tip, tip, outline, ow, 27, 17, 30, 14, 34, 18, 31, 21);
+    sparkle(s, x, y, size, 34, 13, 11, spark, outline, ow);
+    sparkle(s, x, y, size, 12, 12, 6, spark, outline, ow);
+    sparkle(s, x, y, size, 41, 32, 5, spark, outline, ow);
+}
+
 /* ================= BeOS style ================= */
 
 #define BO RGB(0x1C, 0x1C, 0x1C)                   /* the bold outline */
@@ -315,6 +339,12 @@ void skin_icon_draw(int skin, struct surface *s, int kind, int x, int y, int siz
             icon_browser_paint(s, x, y, size, RGB(0x78, 0xC8, 0xFF), RGB(0x18, 0x60, 0xD0), BO, BW, RGB(0xFF, 0xFF, 0xFF));
         else
             icon_browser_paint(s, x, y, size, RGB(0xA8, 0xD8, 0xF0), RGB(0x4C, 0x80, 0xB8), IO, IW, RGB(0xF4, 0xF4, 0xF0));
+        break;
+    case ICON_MIR:
+        if (be)
+            icon_mir_paint(s, x, y, size, RGB(0x30, 0x30, 0x38), RGB(0xFF, 0xFF, 0xFF), RGB(0xFF, 0xC8, 0x20), BO, BW);
+        else
+            icon_mir_paint(s, x, y, size, RGB(0x5A, 0x5E, 0x70), RGB(0xF4, 0xF4, 0xF0), RGB(0xE8, 0xC0, 0x58), IO, IW);
         break;
     }
 }

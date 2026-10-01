@@ -42,6 +42,11 @@ struct sia_session *sia_session_new(const struct sia_config *cfg, enum sia_role 
     s->role = role;
     s->io = *io;
     s->auto_approve = cfg->auto_approve;
+    s->vision = cfg->vision;
+    s->max_steps = MAX_STEPS;
+    s->history_max = HISTORY_MAX;
+    s->img_hist = -1;
+    sb_init(&s->img);
     sb_init(&s->tooljson);
     s->tools_dirty = true;
     return s;
@@ -54,6 +59,7 @@ void sia_session_free(struct sia_session *s)
     sia_clear(s);
     free(s->hist);
     sb_free(&s->tooljson);
+    sb_free(&s->img);
     memset(s, 0, sizeof(*s));
     free(s);
 }
@@ -64,6 +70,25 @@ bool sia_ping(struct sia_session *s, char *err, size_t errlen)
 }
 
 void sia_set_auto_approve(struct sia_session *s, bool on) { s->auto_approve = on; }
+
+void sia_set_instructions(struct sia_session *s, void (*fn)(struct sia_session *s, struct sbuf *out, void *ctx),
+                          void *ctx)
+{
+    s->instructions = fn;
+    s->instructions_ctx = ctx;
+}
+
+void sia_set_limits(struct sia_session *s, int max_steps, size_t history_bytes, int silence_ms)
+{
+    if (max_steps > 0)
+        s->max_steps = max_steps;
+    if (history_bytes > 0)
+        s->history_max = history_bytes;
+    if (silence_ms > 0)
+        s->mdl.timeout_ms = silence_ms;
+}
+
+bool sia_was_interrupted(void) { return sia_interrupted; }
 bool sia_auto_approve(const struct sia_session *s) { return s->auto_approve; }
 const char *sia_model_name(const struct sia_session *s) { return s->mdl.cfg.model; }
 const char *sia_endpoint_kind(const struct sia_session *s) { return s->mdl.kind; }
@@ -134,6 +159,8 @@ void sia__output(struct sia_session *s, const char *buf, size_t n)
         s->io.output(s->io.ctx, buf, n);
 }
 
+void sia_output(struct sia_session *s, const char *buf, size_t n) { sia__output(s, buf, n); }
+
 void sia_emit(struct sia_session *s, const char *fmt, ...)
 {
     char tmp[512];
@@ -168,6 +195,7 @@ void sia_clear(struct sia_session *s)
     for (int i = 0; i < s->nhist; i++)
         sb_free(&s->hist[i]);
     s->nhist = 0;
+    s->img_hist = -1;
 }
 
 /* Drop the oldest exchanges (whole user turns) while the history is too big. */
@@ -176,8 +204,9 @@ static void hist_trim(struct sia_session *s)
     for (;;) {
         size_t total = 0;
         for (int i = 0; i < s->nhist; i++)
-            total += s->hist[i].len;
-        if (total <= HISTORY_MAX || s->nhist < 2)
+            if (i != s->img_hist)                       /* (an image is shown once, then dropped) */
+                total += s->hist[i].len;
+        if (total <= s->history_max || s->nhist < 2)
             return;
         int cut = 1;
         while (cut < s->nhist && strncmp(s->hist[cut].s, "{\"role\":\"user\"", 14))
@@ -188,6 +217,7 @@ static void hist_trim(struct sia_session *s)
             sb_free(&s->hist[i]);
         memmove(s->hist, s->hist + cut, (s->nhist - cut) * sizeof(*s->hist));
         s->nhist -= cut;
+        s->img_hist = s->img_hist >= cut ? s->img_hist - cut : -1;
     }
 }
 
@@ -204,11 +234,20 @@ static void system_prompt(struct sia_session *s, struct sbuf *b)
     gmtime_r(&now_t, &tm);
     struct sbuf p;
     sb_init(&p);
-    sb_printf(&p,
-              "You are sia, the assistant built into SIEOS (Synthetic Intelligence Enhanced Operating System), "
-              "a small Unix-like operating system (Solaris/BSD flavour, x86_64). The user is '%s' on host '%s'; "
-              "the current directory is %s; the date is %04d-%02d-%02d %02d:%02d UTC.\n",
-              pw ? pw->pw_name : "user", host, cwd, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    if (s->role == SIA_ROLE_APP) {                     /* a program's own instructions, then where it is */
+        if (s->instructions)
+            s->instructions(s, &p, s->instructions_ctx);
+        sb_printf(&p, "The user is '%s' on host '%s'; the date is %04d-%02d-%02d %02d:%02d UTC.\n",
+                  pw ? pw->pw_name : "user", host, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+                  tm.tm_min);
+    } else {
+        sb_printf(&p,
+                  "You are sia, the assistant built into SIEOS (Synthetic Intelligence Enhanced Operating System), "
+                  "a small Unix-like operating system (Solaris/BSD flavour, x86_64). The user is '%s' on host '%s'; "
+                  "the current directory is %s; the date is %04d-%02d-%02d %02d:%02d UTC.\n",
+                  pw ? pw->pw_name : "user", host, cwd, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+                  tm.tm_min);
+    }
     if (s->role == SIA_ROLE_TERMINAL)
         sb_puts(&p,
                 "You run inside a terminal. The user types commands directly; you receive either a request "
@@ -220,7 +259,7 @@ static void system_prompt(struct sia_session *s, struct sbuf *b)
                 "- Command output is shown to the user as it runs, so do not repeat it; summarise or answer the "
                 "question instead.\n"
                 "- Reply in plain ASCII text without Markdown: the terminal is 80 columns wide.\n");
-    else
+    else if (s->role == SIA_ROLE_DESKTOP)
         sb_puts(&p,
                 "You run in the command strip of the Facet desktop. Your replies appear in a small panel above "
                 "the strip, so keep them to one or two short sentences of plain ASCII text without Markdown.\n"
@@ -231,9 +270,14 @@ static void system_prompt(struct sia_session *s, struct sbuf *b)
                 "- Use the command tools to look things up or change files; their output is shown briefly in "
                 "the panel.\n"
                 "- Do not ask for confirmation for harmless actions; just do them and say what you did.\n");
-    sb_puts(&p,
-            "- Only the commands available as tools exist on this system; there is no package manager, compiler, "
-            "editor or Python. Use write_file to create files and cd to change directory.");
+    if (s->role != SIA_ROLE_APP) {
+        sb_puts(&p,
+                "- Only the commands available as tools exist on this system (there is no editor or Python). Use "
+                "write_file to create files and cd to change directory.");
+        if (sia_find_tool(s, "open_app") && access(SIA_MIR_PROGRAM, X_OK) == 0)   /* (MiR: a package) */
+            sb_puts(&p, " When the user wants an application made, open MiR (open_app with app mir and their "
+                        "request as path): it writes, builds and tests applications.");
+    }
     sb_puts(b, "{\"role\":\"system\",\"content\":");
     sb_json_str(b, p.s);
     sb_puts(b, "}");
@@ -397,7 +441,7 @@ bool sia_ask(struct sia_session *s, const char *request)
     sia_interrupted = false;
     const char *tools = tools_json(s);
 
-    for (int step = 0; step < MAX_STEPS; step++) {
+    for (int step = 0; step < s->max_steps; step++) {
         hist_trim(s);
         struct sbuf msgs;
         sb_init(&msgs);
@@ -408,6 +452,18 @@ bool sia_ask(struct sia_session *s, const char *request)
         struct json *reply = s->io.delta ? model_chat_stream(&s->mdl, msgs.s, tools, on_delta, &st, err, sizeof(err))
                                          : model_chat(&s->mdl, msgs.s, tools, err, sizeof(err));
         sb_free(&msgs);
+        if (s->img_hist >= 0 && s->img_hist < s->nhist) {   /* the image was seen: keep only its caption */
+            struct sbuf t;
+            sb_init(&t);
+            sb_puts(&t, "{\"role\":\"user\",\"content\":");
+            char cap[300];
+            snprintf(cap, sizeof(cap), "%s [the image was shown once and is no longer attached]", s->img_caption);
+            sb_json_str(&t, cap);
+            sb_puts(&t, "}");
+            sb_free(&s->hist[s->img_hist]);
+            s->hist[s->img_hist] = t;
+            s->img_hist = -1;
+        }
         if (st.any)
             s->io.delta(s->io.ctx, NULL);                /* the end of this reply */
         else
@@ -445,6 +501,12 @@ bool sia_ask(struct sia_session *s, const char *request)
         for (int i = 0; i < calls->n; i++)
             run_call(s, calls->items[i], request);
         json_free(reply);
+        if (s->img.len) {                                /* a tool attached an image: the model sees it next */
+            hist_add(s, s->img.s);
+            s->img_hist = s->nhist - 1;
+            sb_free(&s->img);
+            sb_init(&s->img);
+        }
         if (sia_interrupted) {
             report_error(s, "interrupted");
             return false;

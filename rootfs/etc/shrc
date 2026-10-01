@@ -13,3 +13,5 @@ case $- in
 	if (set -o emacs) 2>/dev/null; then set -o emacs; HISTSIZE=1000; fi
 	;;
 esac
+# applications made with MiR and installed (~/apps/bin)
+case ":$PATH:" in *":$HOME/apps/bin:"*) ;; *) [ -n "$HOME" ] && PATH=$PATH:$HOME/apps/bin ;; esac

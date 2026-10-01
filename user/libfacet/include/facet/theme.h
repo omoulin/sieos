@@ -13,6 +13,10 @@
 #include "facet/gfx.h"
 #include "facet/skin.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define C_FACE        (fct_skin->face)          /* raised surfaces, buttons */
 #define C_FACE_LIGHT  (fct_skin->face_light)    /* top highlights, separators */
 #define C_FACE_SHADOW (fct_skin->face_shadow)   /* secondary text, subtle marks */
@@ -37,5 +41,9 @@
 #define C_STRIP       (fct_skin->strip)
 #define C_GOOD        (fct_skin->good)
 #define C_BAD         (fct_skin->bad)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

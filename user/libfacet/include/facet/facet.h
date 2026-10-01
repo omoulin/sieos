@@ -162,7 +162,7 @@ struct fct_view {
     void *app;                                  /* the application's data */
     void (*draw)(struct fct_view *v, struct surface *s, struct rect content);
     void (*key)(struct fct_view *v, const struct fct_key *k);
-    void (*mouse)(struct fct_view *v, int x, int y, int kind, int buttons);
+    void (*mouse)(struct fct_view *v, int x, int y, int kind, int buttons);   /* FCT_MOUSE_WHEEL: buttons = notches (> 0 down) */
     void (*tick)(struct fct_view *v);           /* about 4 times a second */
     void (*resized)(struct fct_view *v);        /* before the redraw */
     void (*destroy)(struct fct_view *v);        /* the view is going away: free app */

@@ -197,6 +197,8 @@ static void icon_network(struct surface *s, int x, int y, int size)
 
 void icon_browser_paint(struct surface *s, int x, int y, int size, color_t top, color_t bottom, color_t outline,
                         float ow, color_t star);   /* skin_icons.c */
+void icon_mir_paint(struct surface *s, int x, int y, int size, color_t wand, color_t tip, color_t spark,
+                    color_t outline, float ow);
 
 void icon_draw(struct surface *s, int kind, int x, int y, int size)
 {
@@ -220,42 +222,54 @@ void icon_draw(struct surface *s, int kind, int x, int y, int size)
         icon_browser_paint(s, x, y, size, RGB(0x8C, 0xD4, 0xFF), RGB(0x1C, 0x6C, 0xD4), RGB(0x10, 0x12, 0x18),
                            size >= 32 ? 1.4f : 1.0f, RGB(0xFF, 0xFF, 0xFF));
         break;
+    case ICON_MIR:
+        icon_mir_paint(s, x, y, size, RGB(0x44, 0x4A, 0x58), RGB(0xE4, 0xE0, 0xD8), RGB(0xD9, 0xA1, 0x5F),
+                       RGB(0x10, 0x12, 0x18), size >= 32 ? 1.4f : 1.0f);
+        break;
     }
 }
 
-/* ---------------- the SIEOS logo: Orbit Node ---------------- */
+/* ---------------- the SIEOS logo: the Facet cube ---------------- */
 
 /*
- * A blue ring crossed by a light horizontal stratum, with an amber node
- * riding the ring at one o'clock.  Drawn from its 200-unit design with
- * antialiased edges; at 24 px and below the 16x16 pixel version is used.
+ * A three-faced blue cube seen from a corner (light top, middle left, deep
+ * right), its dark seams meeting at an amber node: the assistant.  Drawn
+ * from its 512-unit design (docs/logo.svg) with antialiased edges; at 24 px
+ * and below the 16x16 pixel version is used.
  */
 static const char *logo_px[16] = {
     "................",
-    ".....cccccc.....",
-    "...cc......caa..",
-    "..cc.......aaa..",
-    "..c.........ac..",
-    ".cc..........cc.",
-    ".c............c.",
-    "wwwwwwwwwwwwwwww",
-    ".c............c.",
-    ".cc..........cc.",
-    "..c.........dd..",
-    "..cc.......dd...",
-    "...cc....ddd....",
-    ".....dddddd.....",
-    "................",
+    ".......tt.......",
+    ".....tttttt.....",
+    "...tttttttttt...",
+    "..tttttttttttt..",
+    "..kkttttttttkk..",
+    "..llkktkktkkrr..",
+    "..llllkaakrrrr..",
+    "..llllkaakrrrr..",
+    "..lllllkkrrrrr..",
+    "..lllllkkrrrrr..",
+    "..lllllkkrrrrr..",
+    "...llllkkrrrr...",
+    ".....llkkrr.....",
+    ".......kk.......",
     "................",
 };
+
+#define LOGO_TOP   RGB(0x8F, 0xB8, 0xE6)
+#define LOGO_LEFT  RGB(0x6A, 0x95, 0xD2)
+#define LOGO_RIGHT RGB(0x4A, 0x78, 0xBC)
+#define LOGO_SEAM  RGB(0x1C, 0x1C, 0x1C)
+#define LOGO_NODE  RGB(0xD9, 0xA3, 0x5F)
 
 static color_t logo_px_color(char c)
 {
     switch (c) {
-    case 'a': return RGB(0xD9, 0xA1, 0x5F);
-    case 'c': return RGB(0x8F, 0xB4, 0xDC);
-    case 'd': return RGB(0x4F, 0x7F, 0xB8);
-    case 'w': return RGB(0xE4, 0xE0, 0xD8);
+    case 't': return LOGO_TOP;
+    case 'l': return LOGO_LEFT;
+    case 'r': return LOGO_RIGHT;
+    case 'k': return LOGO_SEAM;
+    case 'a': return LOGO_NODE;
     default:  return 0;
     }
 }
@@ -270,48 +284,15 @@ void logo_pixels(struct surface *s, int x, int y, int scale)
         }
 }
 
-static unsigned isqrt32(unsigned long v)
+/* A polygon of the design (n points, 512 units), placed at (ox, oy), k pixels a unit */
+static void logo_poly(struct surface *s, float ox, float oy, float k, const float *d, int n, color_t c)
 {
-    unsigned long r = 0, bit = 1UL << 40;
-    while (bit > v)
-        bit >>= 2;
-    while (bit) {
-        if (v >= r + bit) {
-            v -= r + bit;
-            r = (r >> 1) + bit;
-        } else {
-            r >>= 1;
-        }
-        bit >>= 2;
+    float xy[2 * 6];
+    for (int i = 0; i < n; i++) {
+        xy[2 * i] = ox + d[2 * i] * k;
+        xy[2 * i + 1] = oy + d[2 * i + 1] * k;
     }
-    return (unsigned)r;
-}
-
-/* Antialiased annulus (inner = 0: a disc); colour picked per pixel. */
-static void ring(struct surface *s, int cx16, int cy16, int r_out16, int r_in16,
-                 color_t (*pick)(int dx, int dy, void *arg), void *arg, color_t c, int alpha)
-{
-    int x0 = (cx16 - r_out16) / 16 - 1, x1 = (cx16 + r_out16) / 16 + 1;
-    int y0 = (cy16 - r_out16) / 16 - 1, y1 = (cy16 + r_out16) / 16 + 1;
-    for (int y = y0; y <= y1; y++)
-        for (int x = x0; x <= x1; x++) {
-            int dx = x * 16 + 8 - cx16, dy = y * 16 + 8 - cy16;
-            int d = (int)isqrt32((unsigned long)(dx * dx + dy * dy));     /* 1/16 px */
-            int cov_out = MAX(0, MIN(16, (r_out16 - d) + 8));
-            int cov_in = r_in16 ? MAX(0, MIN(16, (d - r_in16) + 8)) : 16;
-            int cov = MIN(cov_out, cov_in);
-            if (cov <= 0)
-                continue;
-            color_t col = pick ? pick(dx, dy, arg) : c;
-            gfx_blend_pixel(s, x, y, col, cov * alpha / 16);
-        }
-}
-
-static color_t ring_color(int dx, int dy, void *arg)
-{
-    (void)arg;
-    /* the lower-right quarter is the darker blue of the design */
-    return dx > 0 && dy > 0 ? RGB(0x4F, 0x7F, 0xB8) : RGB(0x8F, 0xB4, 0xDC);
+    gfx_poly(s, xy, n, c);
 }
 
 void logo_draw(struct surface *s, int cx, int cy, int size)
@@ -321,16 +302,20 @@ void logo_draw(struct surface *s, int cx, int cy, int size)
         logo_pixels(s, cx - 8 * scale, cy - 8 * scale, scale);
         return;
     }
-    /* design units: 200 across, centre (100,100); work in 1/16 px */
-    int k = size * 16;                                  /* 1/16 px per 200 units = k / 200 */
-#define U(v) ((v) * k / 200)
-    int ox = cx * 16 - U(100), oy = cy * 16 - U(100);
-    ring(s, ox + U(100), oy + U(100), U(71), U(53), ring_color, NULL, 0, 256);
-    /* the stratum: a rounded bar through the centre */
-    int bx = (ox + U(22)) / 16, bw = U(156) / 16, by = (oy + U(93)) / 16, bh = MAX(2, U(14) / 16);
-    gfx_round_rect(s, bx, by, bw, bh, bh / 2, RGB(0xE4, 0xE0, 0xD8));
-    /* the node and its halo */
-    ring(s, ox + U(146), oy + U(58), U(29), U(25), NULL, NULL, RGB(0xD9, 0xA1, 0x5F), 80);
-    ring(s, ox + U(146), oy + U(58), U(17), 0, NULL, NULL, RGB(0xD9, 0xA1, 0x5F), 256);
-#undef U
+    static const float top[] = { 256, 26, 456, 141, 256, 256, 56, 141 };
+    static const float left[] = { 56, 141, 256, 256, 256, 486, 56, 371 };
+    static const float right[] = { 456, 141, 456, 371, 256, 486, 256, 256 };
+    /* the seams, 16 units wide, cut where they meet the cube's outline */
+    static const float seam_l[] = { 260, 249.1f, 64, 136.4f, 56, 141, 56, 150.2f, 252, 262.9f };
+    static const float seam_r[] = { 260, 262.9f, 456, 150.2f, 456, 141, 448, 136.4f, 252, 249.1f };
+    static const float seam_b[] = { 248, 256, 248, 481.4f, 256, 486, 264, 481.4f, 264, 256 };
+    float k = size / 512.0f, ox = cx - 256 * k, oy = cy - 256 * k;
+    logo_poly(s, ox, oy, k, top, 4, LOGO_TOP);
+    logo_poly(s, ox, oy, k, left, 4, LOGO_LEFT);
+    logo_poly(s, ox, oy, k, right, 4, LOGO_RIGHT);
+    logo_poly(s, ox, oy, k, seam_l, 5, LOGO_SEAM);
+    logo_poly(s, ox, oy, k, seam_r, 5, LOGO_SEAM);
+    logo_poly(s, ox, oy, k, seam_b, 5, LOGO_SEAM);
+    gfx_ellipse_aa(s, cx, cy, 58 * k, 58 * k, LOGO_SEAM, LOGO_SEAM);   /* the node, ringed */
+    gfx_ellipse_aa(s, cx, cy, 42 * k, 42 * k, LOGO_NODE, LOGO_NODE);
 }

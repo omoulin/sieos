@@ -1,0 +1,23 @@
+# git: the version control system (the command line), with https and http
+# remotes (libcurl) and ssh ones (the package openssh).  No Perl, Python,
+# Tcl/Tk or translations (git's core is C).  Its commands are symbolic links
+# to git, not copies; the server's programs (daemon, http-backend, shell,
+# scalar, imap-send) are left out.  SIEOS has no pager (output is not paged) and no editor
+# in its base system: git commit -m MESSAGE, or set core.editor.
+name     = git
+version  = 2.56.0-1
+summary  = git: distributed version control (https, http, ssh and local remotes)
+source   = https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.0.tar.gz
+sha256   = 826817fd3671b8565586d6d49f688298de8354ab11db829c02720e5c74b9b39f
+depends  = curl openssl zlib
+build    = printf '%s\n' "prefix = $PREFIX" "CC = $CC" "AR = $AR" "uname_S = Linux" "uname_M = x86_64" \
+               "uname_O = GNU/Linux" "uname_R = 6.0" "uname_V = 1" "CFLAGS = -O2 $CPPFLAGS" "LDFLAGS = $LDFLAGS" \
+               "NO_PERL = YesPlease" "NO_PYTHON = YesPlease" "NO_TCLTK = YesPlease" "NO_GETTEXT = YesPlease" \
+               "NO_EXPAT = YesPlease" "NO_REGEX = NeedsStartEnd" "NO_INSTALL_HARDLINKS = YesPlease" \
+               "SKIP_DASHED_BUILT_INS = YesPlease" "INSTALL_SYMLINKS = YesPlease" "CURL_CONFIG = :" \
+               "CURL_LDFLAGS = -lcurl" "HAVE_SYSINFO =" "FSMONITOR_DAEMON_BACKEND =" "FSMONITOR_OS_SETTINGS =" \
+               "DEFAULT_PAGER = cat" "NO_RUST = YesPlease" > config.mak
+           make -j$JOBS all
+install  = make install DESTDIR=$DESTDIR
+           cd $DESTDIR$PREFIX && rm -rf bin/scalar bin/git-shell libexec/git-core/git-shell libexec/git-core/git-daemon \
+               libexec/git-core/git-http-backend libexec/git-core/git-imap-send share/bash-completion

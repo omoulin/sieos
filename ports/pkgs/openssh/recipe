@@ -1,0 +1,17 @@
+# OpenSSH, the client side: ssh, scp, sftp, ssh-keygen, ssh-agent, ssh-add
+# and ssh-keyscan (no server).  Its configuration is /usr/pkg/etc/ssh
+# (ssh_config); keys and known hosts are the user's (~/.ssh).
+name     = openssh
+version  = 10.5p1-1
+summary  = OpenSSH client: ssh, scp, sftp, ssh-keygen, ssh-agent
+source   = https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.5p1.tar.gz
+sha256   = d44d28a839ea9daf969cc69150fde59910b2b39361dad81a3bd6cbd19218db11
+depends  = openssl zlib
+build    = $CONFIGURE --sysconfdir=$PREFIX/etc/ssh --libexecdir=$PREFIX/libexec --without-pam \
+               --without-selinux --without-kerberos5 --without-libedit --disable-security-key --disable-pkcs11 \
+               --with-privsep-path=/var/empty --disable-strip --disable-lastlog --disable-utmp \
+               --disable-utmpx --disable-wtmp --disable-wtmpx --without-hardening
+           make -j$JOBS ssh scp sftp ssh-keygen ssh-agent ssh-add ssh-keyscan
+install  = mkdir -p $DESTDIR$PREFIX/bin $DESTDIR$PREFIX/etc/ssh
+           cp ssh scp sftp ssh-keygen ssh-agent ssh-add ssh-keyscan $DESTDIR$PREFIX/bin/
+           cp ssh_config $DESTDIR$PREFIX/etc/ssh/ssh_config

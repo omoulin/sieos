@@ -13,6 +13,8 @@
 #include "facet.h"
 #include "json.h"
 
+void sia_png(const uint32_t *px, int w, int h, int stride, struct sbuf *out);   /* (libsia) */
+
 #define MAXCHAN 32
 
 static struct chan {
@@ -126,6 +128,99 @@ static void reply(struct chan *c, bool ok, const char *text)
     sb_free(&b);
 }
 
+/* The first window of process pid */
+static struct window *window_of(pid_t pid)
+{
+    struct window *ws[32];
+    int n = wm_window_list(ws, 32);
+    for (int i = 0; i < n; i++)
+        if (pid > 0 && server_window_pid(ws[i]) == pid && !ws[i]->dead)
+            return ws[i];
+    return NULL;
+}
+
+/* The US keyboard (as the kernel's): an ASCII character's scan code, and whether Shift makes it */
+static const char keys_plain[] = "\0\0331234567890-=\b\tqwertyuiop[]\n\0asdfghjkl;'`\0\\zxcvbnm,./\0*\0 ";
+static const char keys_shift[] = "\0\033!@#$%^&*()_+\b\tQWERTYUIOP{}\n\0ASDFGHJKL:\"~\0|ZXCVBNM<>?\0*\0 ";
+
+static void type_char(struct window *w, char c)
+{
+    for (int i = 1; i < (int)sizeof(keys_plain) - 1; i++) {
+        if (keys_plain[i] == c) {
+            server_send_key(w, i, c, 0);
+            return;
+        }
+        if (keys_shift[i] == c) {
+            server_send_key(w, i, c, 1);
+            return;
+        }
+    }
+    if ((unsigned char)c >= 32)
+        server_send_key(w, 0, (unsigned char)c, 0);
+}
+
+/* MiR's tests: type, press a key or click in the window of a process */
+static bool app_input(const struct json *req, struct window *w, char *msg, size_t n)
+{
+    const char *text = json_get_str(req, "text"), *key = json_get_str(req, "key");
+    const struct json *click = json_get(req, "click");
+    if (click && click->type == JSON_ARRAY && click->n == 2) {
+        const char *b = json_get_str(req, "button");
+        int x = (int)json_at(click, 0)->num, y = (int)json_at(click, 1)->num;
+        struct rect c = wm_content(w);
+        if (x < 0 || y < 0 || x >= c.w || y >= c.h) {
+            snprintf(msg, n, "%d,%d is outside the window's content (%dx%d)", x, y, c.w, c.h);
+            return false;
+        }
+        server_send_click(w, x, y, b && !strcmp(b, "right") ? 2 : 1);
+        snprintf(msg, n, "clicked at %d,%d", x, y);
+        return true;
+    }
+    if (text) {
+        for (const char *c = text; *c; c++)
+            type_char(w, *c);
+        snprintf(msg, n, "typed %zu characters", strlen(text));
+        return true;
+    }
+    static const struct { const char *name; int code, ascii; } special[] = {
+        { "enter", 0x1C, '\n' }, { "return", 0x1C, '\n' }, { "tab", 0x0F, '\t' }, { "escape", 0x01, 27 },
+        { "backspace", 0x0E, '\b' }, { "space", 0x39, ' ' }, { "delete", 0x153, 0 }, { "up", 0x148, 0 },
+        { "down", 0x150, 0 }, { "left", 0x14B, 0 }, { "right", 0x14D, 0 }, { "home", 0x147, 0 }, { "end", 0x14F, 0 },
+        { "pageup", 0x149, 0 }, { "pagedown", 0x151, 0 },
+    };
+    for (size_t i = 0; key && i < sizeof(special) / sizeof(special[0]); i++)
+        if (!strcasecmp(key, special[i].name)) {
+            server_send_key(w, special[i].code, special[i].ascii, 0);
+            snprintf(msg, n, "pressed %s", special[i].name);
+            return true;
+        }
+    snprintf(msg, n, "text, key (enter, tab, escape, backspace, delete, space, arrows, home, end) or click");
+    return false;
+}
+
+/* A PNG of the window's content */
+static bool snapshot(struct window *w, const char *path, char *msg, size_t n)
+{
+    const uint32_t *px;
+    int bw, bh;
+    struct rect c = wm_content(w);
+    if (!path || !*path || !server_window_pixels(w, &px, &bw, &bh)) {
+        snprintf(msg, n, "no picture of that window");
+        return false;
+    }
+    int cw = MIN(c.w, bw), ch = MIN(c.h, bh);
+    struct sbuf png;
+    sb_init(&png);
+    sia_png(px, cw, ch, bw, &png);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    bool ok = fd >= 0 && write(fd, png.s, png.len) == (long)png.len;
+    if (fd >= 0)
+        close(fd);
+    sb_free(&png);
+    snprintf(msg, n, ok ? "%dx%d" : "cannot write the picture", cw, ch);
+    return ok;
+}
+
 static void describe(struct window *w, char *buf, size_t n)
 {
     snprintf(buf, n, "%s (window %d) on workspace %d", w->title, w->id, w->ws + 1);
@@ -143,18 +238,22 @@ static void handle(struct chan *c, const char *line, size_t len)
         const char *cmd = json_get_str(req, "command");
         struct window *w = NULL;
         if (!app) {
-            reply(c, false, "which app? terminal, shell, files, monitor, network, browser, sipm, clock, settings, display, appearance or about");
+            reply(c, false, "which app? terminal, shell, files, monitor, network, browser, sipm, mir, clock, settings, display, appearance or about");
             goto out;
         }
         static const char *const known[] = { "terminal", "shell", "files", "monitor", "network", "browser", "sipm",
-                                             "clock", "settings", "display", "appearance", "about" };
+                                             "mir", "clock", "settings", "display", "appearance", "about" };
         bool ok = false;
         for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); i++)
             ok |= !strcmp(app, known[i]);
         if (!ok) {
-            snprintf(msg, sizeof(msg), "unknown app '%s' (terminal, shell, files, monitor, network, browser, sipm, clock, settings, display, appearance, about)",
+            snprintf(msg, sizeof(msg), "unknown app '%s' (terminal, shell, files, monitor, network, browser, sipm, mir, clock, settings, display, appearance, about)",
                      app);
             reply(c, false, msg);
+            goto out;
+        }
+        if (!strcmp(app, "mir") && access(MIR_PROGRAM, X_OK) < 0) {
+            reply(c, false, "MiR is not installed: it is the package mir (SiPM installs it, or: pkg install mir)");
             goto out;
         }
         pid_t pid = app_launch(app, path);           /* a program: wait for its window */
@@ -170,6 +269,28 @@ static void handle(struct chan *c, const char *line, size_t len)
         describe(w, d, sizeof(d));
         snprintf(msg, sizeof(msg), "opened %s%s%s", d, cmd && *cmd ? ", running " : "", cmd && *cmd ? cmd : "");
         reply(c, true, msg);
+    } else if (!strcmp(op, "windows") && num_arg(req, "pid") > 0) {   /* a process's windows (MiR) */
+        struct window *ws[32];
+        int n = wm_window_list(ws, 32);
+        pid_t pid = (pid_t)num_arg(req, "pid");
+        struct sbuf b;
+        sb_init(&b);
+        for (int i = 0; i < n; i++)
+            if (server_window_pid(ws[i]) == pid && !ws[i]->dead) {
+                struct rect r = wm_content(ws[i]);
+                sb_printf(&b, "%swindow %d: \"%s\" %dx%d", b.len ? "\n" : "", ws[i]->id, ws[i]->title, r.w, r.h);
+            }
+        reply(c, true, b.len ? b.s : "no window");
+        sb_free(&b);
+    } else if (!strcmp(op, "snapshot") || !strcmp(op, "input")) {   /* MiR: look at or try an application */
+        struct window *w = window_of((pid_t)num_arg(req, "pid"));
+        if (!w) {
+            reply(c, false, "that program has no window");
+            goto out;
+        }
+        bool ok = !strcmp(op, "snapshot") ? snapshot(w, json_get_str(req, "path"), msg, sizeof(msg))
+                                          : app_input(req, w, msg, sizeof(msg));
+        reply(c, ok, msg);
     } else if (!strcmp(op, "windows")) {
         struct window *ws[32];
         int n = wm_window_list(ws, 32);

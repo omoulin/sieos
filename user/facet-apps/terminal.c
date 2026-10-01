@@ -505,11 +505,14 @@ int main(int argc, char **argv)
     if (!t)
         return 1;
     t->number = 1;
+    const char *first_line = NULL;               /* -e LINE: typed into the shell once it starts */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-s"))
             t->plain = true;
         else if (!strcmp(argv[i], "-n") && i + 1 < argc)
             t->number = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-e") && i + 1 < argc)
+            first_line = argv[++i];
     }
     signal(SIGPIPE, SIG_IGN);
     t->cols = 80;
@@ -549,6 +552,10 @@ int main(int argc, char **argv)
     close(fds[1]);
     t->master = fds[0];
     t->child = pid;
+    if (first_line) {
+        term_send(t, first_line, strlen(first_line));
+        term_send(t, "\n", 1);
+    }
     fcntl(t->master, F_SETFD, FD_CLOEXEC);
     if (getenv("SIEOS_DESKTOP")) {               /* the desktop channel (3, 4) is the child's now */
         close(3);

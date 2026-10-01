@@ -54,6 +54,19 @@ pkg add -u NAME-1.0-1.spkg  # -u: it is in no signed index
 
 It is then managed like any other package (`pkg list`, `pkg files`, `pkg remove`).
 
+## The packages
+
+| Package | What |
+|---------|------|
+| `zlib` | the zlib compression library (shared) |
+| `openssl` | OpenSSL 3.5 (LTS): libcrypto, libssl and the `openssl` command; trusts `/etc/ssl/certs.pem` |
+| `curl` | `curl` and libcurl (on OpenSSL) |
+| `openssh` | the OpenSSH client: `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-agent`, `ssh-add`, `ssh-keyscan` (configuration in `/usr/pkg/etc/ssh`) |
+| `rsync` | `rsync`, locally or over ssh |
+| `git` | git (https, http, ssh and local remotes). SIEOS has no pager or editor: output is not paged, and `git commit` needs `-m` (or `core.editor` set) |
+| `lua`, `pigz` | Lua 5.4; parallel gzip |
+| `mir` | MiR (Make it Real): sia makes applications ([mir.md](mir.md)) |
+
 ## Building packages (on the build machine)
 
 A package is a recipe, `ports/pkgs/NAME/recipe`:
@@ -78,9 +91,15 @@ install  = mkdir -p $DESTDIR$PREFIX/bin
   `build = $CONFIGURE && make -j$JOBS`, `install = make install
   DESTDIR=$DESTDIR`), and `CPPFLAGS`, `LDFLAGS` and `PKG_CONFIG_LIBDIR`
   pointing at the dependencies' files.
+- SIEOS's own software, kept in this repository, says `source = tree:PATH` (a folder of
+  the repository; no `sha256`), and its commands also have `TREE`, the repository's root
+  (MiR: `ports/pkgs/mir`, `source = tree:user/mir`).
 - `*.patch` files next to the recipe are applied first (`patch -p1`).
 - The installed tree is stripped, its libtool archives and documentation
   (man, info, doc) dropped. Everything must be under `$PREFIX`.
+- Downloaded sources are taught about SIEOS first: `config.sub` knows `x86_64-pc-sieos`,
+  and libtool, in `configure` scripts, builds shared libraries for it as for Linux
+  (ELF, sonames, `ld.so`). Without that, libtool would make static libraries only.
 
 ```sh
 make pkgs                   # build every recipe (dependencies first): build/repo/NAME-VERSION.spkg

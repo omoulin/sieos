@@ -16,7 +16,11 @@ RECIPE is a directory ports/pkgs/NAME with a file named recipe:
     build    = make -j$JOBS CC="$CC" ...  (shell commands, run in the source tree)
     install  = make install INSTALL_TOP=$DESTDIR$PREFIX
 
-and optionally *.patch files, applied (patch -p1) before building.  build and
+SIEOS's own software, kept in this repository, says "source = tree:PATH" (a
+folder of the repository, copied; no sha256) and is built with TREE (the
+repository's root) too.
+
+Optionally *.patch files are applied (patch -p1) before building.  build and
 install run with: HOST (x86_64-pc-sieos), CC, CXX, AR, RANLIB, STRIP, PREFIX
 (/usr/pkg), DESTDIR (the staging root), JOBS, CONFIGURE (./configure with
 --host and --prefix, and SIEOS's config.sub), and CPPFLAGS/LDFLAGS/
@@ -40,7 +44,7 @@ import sys
 import tarfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'ports'))
-from build import teach_config_sub                                # noqa: E402
+from build import teach_config_sub, teach_libtool                 # noqa: E402
 
 TARGET = 'x86_64-pc-sieos'
 PREFIX = '/usr/pkg'
@@ -61,7 +65,7 @@ def read_recipe(d):
             sys.exit('%s/recipe: bad line: %s' % (d, line.rstrip()))
         key = m.group(1)
         r[key] = m.group(2).strip()
-    for f in ('name', 'version', 'summary', 'source', 'sha256', 'install'):
+    for f in ('name', 'version', 'summary', 'source', 'install') + (() if r.get('source', '').startswith('tree:') else ('sha256',)):
         if not r.get(f):
             sys.exit('%s/recipe: no %s' % (d, f))
     if not re.fullmatch(r'[a-z0-9][a-z0-9._+-]*', r['name']):
@@ -182,11 +186,18 @@ def main():
     wdir = os.path.join(work, r['name'])
     shutil.rmtree(wdir, ignore_errors=True)
     os.makedirs(wdir)
-    tarball = fetch(r['source'], r['sha256'], os.path.join(work, 'dl'))
     src = os.path.join(wdir, 'src')
-    os.makedirs(src)
-    subprocess.run(['tar', 'xf', tarball, '-C', src, '--strip-components=1'], check=True)
-    teach_config_sub(src)
+    if r['source'].startswith('tree:'):                  # SIEOS's own: a folder of this repository
+        tree_dir = os.path.normpath(os.path.join(root, r['source'][5:]))
+        if not tree_dir.startswith(root + os.sep) or not os.path.isdir(tree_dir):
+            sys.exit('%s: no folder %s in the repository' % (r['name'], r['source'][5:]))
+        shutil.copytree(tree_dir, src, symlinks=True)
+    else:
+        tarball = fetch(r['source'], r['sha256'], os.path.join(work, 'dl'))
+        os.makedirs(src)
+        subprocess.run(['tar', 'xf', tarball, '-C', src, '--strip-components=1'], check=True)
+        teach_config_sub(src)
+        teach_libtool(src)
     for p in sorted(f for f in os.listdir(recipe) if f.endswith('.patch')):
         subprocess.run(['patch', '-p1', '-s', '-d', src, '-i', os.path.join(recipe, p)], check=True)
     deps = os.path.join(wdir, 'deps')
@@ -201,7 +212,7 @@ def main():
                CPPFLAGS='-I%s/include' % dp, LDFLAGS='-L%s/lib -Wl,-rpath-link,%s/lib' % (dp, dp),
                PKG_CONFIG_LIBDIR='%s/lib/pkgconfig:%s/share/pkgconfig' % (dp, dp),
                PKG_CONFIG_SYSROOT_DIR=deps,
-               CONFIGURE='./configure --host=%s --prefix=%s' % (TARGET, PREFIX))
+               CONFIGURE='./configure --host=%s --prefix=%s' % (TARGET, PREFIX), TREE=root)
     log = open(os.path.join(wdir, 'build.log'), 'w')
     for step in ('build', 'install'):
         if not r[step]:

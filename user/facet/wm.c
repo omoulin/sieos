@@ -427,7 +427,7 @@ struct menu_item {
 
 #define MENU_ITEM_H 24
 #define MENU_SEP_H  9
-#define MENU_MAX    28
+#define MENU_MAX    32
 
 /* A popup menu: the menu, and one level of submenu beside it. */
 struct popup {
@@ -619,6 +619,8 @@ static bool read_key(const char *path, const char *key, char *out, size_t outlen
     return found;
 }
 
+static void agent_send(const char *op, const char *key, const char *text, long num);
+
 static void sample_sia(void)
 {
     const char *home = getenv("HOME");
@@ -631,6 +633,14 @@ static void sample_sia(void)
     read_key(cfg, "model", sia_model, sizeof(sia_model));
     read_key(cfg, "endpoint", endpoint, sizeof(endpoint));
     sia_registered = sia_model[0] && endpoint[0];
+    char profile[64] = "";
+    read_key(cfg, "profile", profile, sizeof(profile));
+    if (profile[0] && sia_registered)                  /* (the name the user gave it, Settings) */
+        snprintf(sia_model, sizeof(sia_model), "%s", profile);
+    static char seen[sizeof(sia_model)] = "\x01";      /* another model chosen (Settings): the strip's sia follows */
+    if (seen[0] != 1 && strcmp(seen, sia_model))
+        agent_send("reload", NULL, NULL, 0);
+    snprintf(seen, sizeof(seen), "%s", sia_model);
     sia_state[0] = sia_last[0] = 0;
     read_key(st, "state", sia_state, sizeof(sia_state));
     read_key(st, "last", sia_last, sizeof(sia_last));
@@ -1966,6 +1976,48 @@ static const struct menu_item exit_items[] = {
     { "Shut Down", call_action, (void *)do_shutdown, ICON_LOGOUT, NULL, 0 },
 };
 
+/* "My apps": the applications the user made with MiR and installed (~/apps/NAME/mir.json, ~/apps/bin/NAME) */
+#define MAX_MY_APPS 24
+static char my_app_path[MAX_MY_APPS][300], my_app_title[MAX_MY_APPS][48];
+static struct menu_item my_app_items[MAX_MY_APPS];
+
+static void launch_my_app(void *a) { app_user((const char *)a); }
+
+static int my_apps(void)
+{
+    const char *home = getenv("HOME");
+    char dir[300];
+    snprintf(dir, sizeof(dir), "%s/apps", home ? home : "/");
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    int n = 0;
+    while (d && (e = readdir(d)) && n < MAX_MY_APPS) {
+        if (e->d_name[0] == '.' || !strcmp(e->d_name, "bin"))
+            continue;
+        char p[400], buf[4096];
+        snprintf(p, sizeof(p), "%s/%s/mir.json", dir, e->d_name);
+        int fd = open(p, O_RDONLY | O_NOFOLLOW);
+        if (fd < 0)
+            continue;
+        long k = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        buf[k > 0 ? k : 0] = 0;
+        struct json *j = json_parse(buf, strlen(buf));
+        const struct json *inst = json_get(j, "installed");
+        const char *kind = json_get_str(j, "kind"), *title = json_get_str(j, "title");
+        snprintf(my_app_path[n], sizeof(my_app_path[n]), "%s/bin/%s", dir, e->d_name);
+        if (inst && inst->type == JSON_TRUE && kind && !strcmp(kind, "window") && access(my_app_path[n], X_OK) == 0) {
+            snprintf(my_app_title[n], sizeof(my_app_title[n]), "%s", title && *title ? title : e->d_name);
+            my_app_items[n] = (struct menu_item){ my_app_title[n], launch_my_app, my_app_path[n], ICON_PROGRAM, NULL, 0 };
+            n++;
+        }
+        json_free(j);
+    }
+    if (d)
+        closedir(d);
+    return n;
+}
+
 static void open_gem_menu(void)
 {
     struct menu_item items[MENU_MAX];
@@ -1980,6 +2032,11 @@ static void open_gem_menu(void)
     items[n++] = (struct menu_item){ "Power and Temperature", call_action, (void *)app_power, ICON_MONITOR, NULL, 0 };
     items[n++] = (struct menu_item){ "Settings", call_action, (void *)app_settings, ICON_PROGRAM, NULL, 0 };
     items[n++] = (struct menu_item){ "SiPM (packages)", call_action, (void *)app_sipm, ICON_PROGRAM, NULL, 0 };
+    if (access(MIR_PROGRAM, X_OK) == 0)                 /* (the package mir) */
+        items[n++] = (struct menu_item){ "MiR (make an app)", call_action, (void *)app_mir, ICON_MIR, NULL, 0 };
+    int napps = my_apps();
+    if (napps)
+        items[n++] = (struct menu_item){ "My apps", NULL, NULL, ICON_FOLDER, my_app_items, napps };
     items[n++] = (struct menu_item){ "Install SIEOS", call_action, (void *)app_installer, ICON_DISK, NULL, 0 };
     items[n++] = (struct menu_item){ "About SIEOS", call_action, (void *)app_about, ICON_INFO, NULL, 0 };
     int listed = 0;

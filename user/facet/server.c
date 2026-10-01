@@ -504,6 +504,37 @@ void server_type_line(struct window *w, const char *text)
     }
 }
 
+bool server_window_pixels(struct window *w, const uint32_t **px, int *bw, int *bh)
+{
+    if (!server_window(w) || rw(w)->client_gone || !rw(w)->px)
+        return false;
+    *px = rw(w)->px;
+    *bw = rw(w)->bw;
+    *bh = rw(w)->bh;
+    return true;
+}
+
+void server_send_key(struct window *w, int code, int ascii, int mods)
+{
+    if (!server_window(w) || rw(w)->client_gone)
+        return;
+    struct rwin *r = rw(w);
+    for (int down = 1; down >= 0; down--) {
+        struct fct_msg m = { .type = FCT_EV_KEY, .window = r->id, .code = code, .value = down, .ascii = ascii,
+                             .mods = mods };
+        send_to(r->conn, &m);
+    }
+}
+
+void server_send_click(struct window *w, int x, int y, int button)
+{
+    if (!server_window(w) || rw(w)->client_gone)
+        return;
+    rwin_mouse(w, x, y, MOUSE_MOVE, 0);
+    rwin_mouse(w, x, y, MOUSE_DOWN, button);
+    rwin_mouse(w, x, y, MOUSE_UP, 0);
+}
+
 /* Serve clients (only) until a window of process pid appears, or timeout_ms passes. */
 struct window *server_wait_window(pid_t pid, int timeout_ms)
 {

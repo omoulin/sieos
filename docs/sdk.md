@@ -15,6 +15,9 @@ The ABI headers are there too (`<sieos/*.h>`). Everything is installed in two pl
 - **The hard disk**, for the native GCC: `cc app.c -lfacet -lsia` in a SIEOS terminal.
   The examples are in `/usr/src/examples`.
 
+The headers work from C and C++ (`c++ app.cpp -lfacet`). **MiR** writes applications
+on this SDK for its users ([mir.md](mir.md)).
+
 The shared libraries (`libfacet.so.1`, `libsia.so.1`) are in `/usr/lib` on every SIEOS
 root, and programs link them by default. For static programs use
 `-static -lfacet -lsia -ltls -lsieos`. `make sdk-test` builds the examples both ways
@@ -57,7 +60,7 @@ the last view is gone. The callbacks:
 |----------|------|
 | `draw(v, surface, content)` | the view needs redrawing: after `fct_view_invalidate(v)`, a resize, and when it first appears; `content` is `(0, 0, width, height)` |
 | `key(v, const struct fct_key *)` | a key went down (`value` 1) or up (0); `code` is the scan code (`FCT_KEY_UP` ...), `ascii` the character, `mods` `FCT_MOD_SHIFT`/`CTRL`/`ALT` |
-| `mouse(v, x, y, kind, buttons)` | `FCT_MOUSE_DOWN`, `UP`, `MOVE` (while dragging) or `DOUBLE`, in content coordinates; with the `FCT_WIN_POINTER` flag also moves without a button, the right and middle buttons, and `FCT_MOUSE_WHEEL` |
+| `mouse(v, x, y, kind, buttons)` | `FCT_MOUSE_DOWN`, `UP`, `MOVE` (while dragging) or `DOUBLE`, in content coordinates; with the `FCT_WIN_POINTER` flag also moves without a button, the right and middle buttons, and `FCT_MOUSE_WHEEL` (then `buttons` holds the notches, > 0 down) |
 | `tick(v)` | about four times a second |
 | `resized(v)` | the user resized the window (before the redraw) |
 | `pollfd(v)` / `readable(v)` | a descriptor the loop should watch, and "it is readable": terminals watch their pty, the chat example its sia request |

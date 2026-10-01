@@ -478,7 +478,8 @@ Milestone 6 (done):
     `getsockname`/`getpeername`.
   - `getsockopt`/`setsockopt`: `SO_TYPE`, `SO_ERROR`, `SO_ACCEPTCONN`,
     `SO_RCVTIMEO`/`SO_SNDTIMEO` as `timeval`, and `SO_RCVBUF`/`SO_SNDBUF`/`SO_LINGER`/
-    `TCP_NODELAY` (accepted).
+    `TCP_NODELAY`, `IP_TOS` (1, level `IPPROTO_IP`) and `IPV6_TCLASS` (`0x43`) (accepted,
+    not applied).
   - `O_NONBLOCK` applies to sockets. `sendmsg` and `recvmsg` take several buffers for
     streams only.
   - `AF_UNIX` and `so_socketpair` were reserved; they arrived with milestone 10.
@@ -2655,12 +2656,13 @@ Milestone 34 (done): Facet skins.
   - `screensaver`: `logo` (the default), `blank` or `none`.
   - `screensaver_timeout`: seconds, 300 (5 minutes) by default; 0 means never.
   - `screensaver_lock`: 1 by default.
-- **The logo:** the Orbit Node in 3D (the ring, its lower right quarter darker; the
-  stratum bar; the orange node with its halo), in the console logo's proportions, with
-  the SIEOS wordmark under it in extruded blocks. It turns about the vertical axis every
+- **The logo:** the Facet cube in 3D (a cube seen from a corner: the light face on top,
+  the middle one on the left, the deep one on the right; dark seams along its edges; the
+  amber node with its dark ring on the corner facing the viewer), with the SIEOS wordmark
+  under it in extruded blocks. It turns about the vertical axis every
   9 s with a slow nod, in the middle of the screen.
 - **The renderer** is a small software one:
-  - Triangle meshes: a torus, a capsule, spheres, the letters' visible faces.
+  - Triangle meshes: the cube's faces, a sphere, a torus, the letters' visible faces.
   - Rotation, perspective and a depth buffer.
   - Lighting per vertex (ambient, diffuse, a specular highlight), shaded smoothly.
   - About 30 frames a second. On large screens it renders at up to 720 lines and each

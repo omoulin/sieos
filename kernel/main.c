@@ -65,7 +65,7 @@ static void banner(void)
     kprintf("%s  %s %s - %s - x86_64\n", indent, OS_NAME, OS_RELEASE, OS_LONGNAME);
     kprintf("%s  Developed by %s - released under the %s\n\n", indent, OS_AUTHOR, OS_LICENSE);
     console_set_color(LGRAY, BLACK);
-    /* the Orbit Node logo beside the banner box (framebuffer consoles) */
+    /* the logo (the Facet cube) beside the banner box (framebuffer consoles) */
     int size = 132;
     int x = pad * 8 - size - 24, y = (9 * 16 - size) / 2;             /* 8x16 character cells */
     if (x >= 8)

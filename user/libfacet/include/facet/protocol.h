@@ -76,6 +76,10 @@ struct fct_msg {
     char title[FCT_TITLE_MAX];   /* FCT_CREATE, FCT_TITLE */
 };
 
+#ifdef __cplusplus
+static_assert(sizeof(struct fct_msg) == 112, "fct_msg size");
+#else
 _Static_assert(sizeof(struct fct_msg) == 112, "fct_msg size");
+#endif
 
 #endif

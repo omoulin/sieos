@@ -3,16 +3,17 @@
  *
  * After the idle time set in Settings (the "screensaver_timeout" setting,
  * in seconds: 300 by default, 0 never) the screen goes black and the
- * saver runs: the SIEOS logo in 3D (the Orbit Node: the ring, the stratum
- * bar and the node, with the SIEOS wordmark under it) turning in the middle
- * of the screen ("screensaver=logo", the default), or nothing ("blank").
+ * saver runs: the SIEOS logo in 3D (the Facet cube: a blue cube seen from a
+ * corner, dark seams on its edges, the amber node on the corner facing us,
+ * with the SIEOS wordmark under it) turning in the middle of the screen
+ * ("screensaver=logo", the default), or nothing ("blank").
  * A key or a move of the mouse then asks for the user's password
  * ("screensaver_lock=1", the default) before the desktop comes back; the
  * password is checked by ckpw (set-user-ID root: the shadow file is
  * root's), which checks only the password of whoever runs it.
  *
- * The logo is drawn by a small software renderer: triangle meshes (a
- * torus, a capsule, spheres, the letters as extruded blocks), rotated and
+ * The logo is drawn by a small software renderer: triangle meshes (the
+ * cube's faces, a sphere, a torus, the letters as extruded blocks), rotated and
  * projected in perspective, filled with a depth buffer, lit per vertex
  * (ambient, diffuse and a specular highlight) and shaded smoothly.
  *
@@ -115,29 +116,6 @@ static void sphere(float cx, float cy, float cz, float r, int nu, int nvv, color
     grid(nu, nvv, base, true, false);
 }
 
-/* The stratum bar: a cylinder along X with round ends (a capsule): rings from the left tip to the right one. */
-static void capsule(float x0, float x1, float r, int nu, color_t c)
-{
-    const int H = 6;
-    int base = nv, rings = 2 * (H + 1);
-    for (int k = 0; k < rings; k++) {
-        bool left = k <= H;
-        float a = left ? (float)M_PI / 2 * (1 - (float)k / H) : (float)M_PI / 2 * (float)(k - H - 1) / H;
-        float ax = left ? -sinf(a) : sinf(a), rad = cosf(a), cx = left ? x0 : x1;
-        for (int i = 0; i < nu; i++) {
-            float u = 2 * (float)M_PI * i / nu, cu = cosf(u), su = sinf(u);
-            vadd(cx + r * ax, r * rad * cu, r * rad * su, ax, rad * cu, rad * su, c);
-        }
-    }
-    for (int k = 0; k + 1 < rings; k++)
-        for (int i = 0; i < nu; i++) {
-            int i1 = (i + 1) % nu;
-            int q0 = base + k * nu + i, q1 = base + k * nu + i1, q2 = base + (k + 1) * nu + i, q3 = base + (k + 1) * nu + i1;
-            tadd(q0, q2, q3);
-            tadd(q0, q3, q1);
-        }
-}
-
 /* The wordmark: 5x7 letters, each lit cell a block (only the faces nothing covers). */
 static const uint8_t glyphs[5][7] = {
     { 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E },   /* S */
@@ -193,8 +171,27 @@ static void wordmark(float y_top, float cellsz, float depth, color_t c)
             }
 }
 
-/* The logo, in the console's proportions (a 200-unit box: the ring at 100,100 radius 62, the bar, the node at
- * 146,58), one unit = 1/100; the wordmark under it. */
+/* One face of the cube (in the cube's frame, half-size h): the square at
+ * axis = sign * d, inset by e from its edges, with its colour. */
+static void cube_face(int axis, float sign, float h, float d, float e, color_t c)
+{
+    float p[4][3];
+    static const float sq[4][2] = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
+    for (int i = 0; i < 4; i++) {
+        float u = sq[i][0] * (h - e), v = sq[i][1] * (h - e);
+        p[i][axis] = sign * d;
+        p[i][(axis + 1) % 3] = u;
+        p[i][(axis + 2) % 3] = v;
+    }
+    float n[3] = { 0, 0, 0 };
+    n[axis] = sign;
+    quad(p, n[0], n[1], n[2], c);
+}
+
+/* The logo (docs/logo.svg): a cube of half-size h seen from a corner (the
+ * light face on top, the middle one on the left, the deep one on the
+ * right), dark seams along its edges, the amber node with its dark ring on
+ * the corner facing the viewer; the wordmark under it. */
 static void build_model(void)
 {
     if (mv)
@@ -203,14 +200,36 @@ static void build_model(void)
     mt = malloc(sizeof(*mt) * MAXT);
     if (!mv || !mt)
         return;
-    const float up = 0.35f;                      /* (the emblem above the wordmark) */
-    torus(0, up, 0.62f, 0.09f, 96, 16, RGB(0x8F, 0xB4, 0xDC), RGB(0x4F, 0x7F, 0xB8));
+    const float up = 0.35f, h = 0.43f, e = 0.055f * 0.43f;   /* (the emblem above the wordmark) */
+    const color_t top = RGB(0x8F, 0xB8, 0xE6), mid = RGB(0x6A, 0x95, 0xD2), deep = RGB(0x4A, 0x78, 0xBC);
+    const color_t seam = RGB(0x1C, 0x1C, 0x1C);
     int b0 = nv;
-    capsule(-0.64f, 0.64f, 0.07f, 20, RGB(0xE4, 0xE0, 0xD8));
-    for (int i = b0; i < nv; i++)
-        mv[i].y += up;
-    sphere(0.46f, up + 0.42f, 0, 0.17f, 32, 16, RGB(0xD9, 0xA1, 0x5F));
-    torus(0.46f, up + 0.42f, 0.27f, 0.015f, 48, 6, RGB(0x8A, 0x66, 0x3C), RGB(0x8A, 0x66, 0x3C));   /* the halo */
+    for (int axis = 0; axis < 3; axis++)                 /* the dark cube: the seams */
+        for (int sg = -1; sg <= 1; sg += 2)
+            cube_face(axis, (float)sg, h, h, 0, seam);
+    /* its faces, inset, a hair outside: +Y top, +Z left, +X right (and the far ones) */
+    cube_face(1, 1, h, h * 1.004f, e, top);
+    cube_face(2, 1, h, h * 1.004f, e, mid);
+    cube_face(0, 1, h, h * 1.004f, e, deep);
+    cube_face(1, -1, h, h * 1.004f, e, deep);
+    cube_face(2, -1, h, h * 1.004f, e, deep);
+    cube_face(0, -1, h, h * 1.004f, e, mid);
+    /* turn the corner (1, 1, 1) towards the viewer: 45 degrees around Y, then 35.26 around X */
+    const float cb = cosf(-(float)M_PI / 4), sb = sinf(-(float)M_PI / 4), ca = sqrtf(2.0f / 3), sa = sqrtf(1.0f / 3);
+    for (int i = b0; i < nv; i++) {
+        struct vtx *v = &mv[i];
+        float x = v->x * cb + v->z * sb, z = -v->x * sb + v->z * cb, y = v->y;
+        float nx = v->nx * cb + v->nz * sb, nz = -v->nx * sb + v->nz * cb, ny = v->ny;
+        v->x = x, v->y = y * ca - z * sa + up, v->z = y * sa + z * ca;
+        v->nx = nx, v->ny = ny * ca - nz * sa, v->nz = ny * sa + nz * ca;
+    }
+    /* the node on the near corner, and its dark ring */
+    float corner = h * sqrtf(3);
+    sphere(0, up, corner, 0.36f * h, 32, 16, RGB(0xD9, 0xA3, 0x5F));
+    int t0 = nv;
+    torus(0, up, 0.40f * h, 0.06f * h, 48, 8, seam, seam);
+    for (int i = t0; i < nv; i++)
+        mv[i].z += corner;
     wordmark(-0.55f, 0.075f, 0.14f, RGB(0xEE, 0xEE, 0xF2));
 }
 

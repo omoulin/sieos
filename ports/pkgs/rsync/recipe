@@ -1,0 +1,14 @@
+# rsync: copies and synchronises files, locally or with another computer
+# (through ssh, the package openssh, or an rsync server).  Its own zlib and
+# popt; checksums without OpenSSL; no xxhash, zstd or lz4; no AVX2 rolling
+# checksum (SIEOS does not keep the AVX registers: the plain C one).
+name     = rsync
+version  = 3.5.1-1
+summary  = rsync: fast copies and synchronisation of files, locally or over ssh
+source   = https://download.samba.org/pub/rsync/src/rsync-3.5.1.tar.gz
+sha256   = c55f9c9dc10fb8bec397b399a0fdded53cc9a2d8e30891bb0d63724d25c37bef
+build    = $CONFIGURE --disable-openssl --disable-xxhash --disable-zstd --disable-lz4 --disable-md2man \
+               --with-included-zlib --with-included-popt --disable-roll-simd --disable-acl-support \
+               --disable-xattr-support --disable-idn
+           make -j$JOBS
+install  = make install DESTDIR=$DESTDIR

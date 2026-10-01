@@ -468,80 +468,63 @@ void console_write(const char *s, size_t n)
 }
 
 /*
- * The SIEOS logo (Orbit Node), drawn from its 200-unit vector design with
- * antialiased edges on the (black) boot screen: a blue ring (darker lower-right
- * quarter), a light horizontal stratum, an amber node with a faint halo.
+ * The SIEOS logo (the Facet cube: docs/logo.svg), drawn from its 512-unit
+ * design on the (black) boot screen: a three-faced blue cube seen from a
+ * corner, its dark seams meeting at an amber node.  Each pixel is sampled
+ * 4 x 4 times (integers only: no floating point in the kernel).
  */
-static unsigned isqrt(unsigned long v)
-{
-    unsigned long r = 0, bit = 1UL << 40;
-    while (bit > v)
-        bit >>= 2;
-    while (bit) {
-        if (v >= r + bit) {
-            v -= r + bit;
-            r = (r >> 1) + bit;
-        } else {
-            r >>= 1;
-        }
-        bit >>= 2;
-    }
-    return (unsigned)r;
-}
 
-/* coverage 0..16 of a pixel by an annulus (distances in 1/16 px) */
-static int annulus(int d, int r_out, int r_in)
+/* The design's colour at (X, Y), in 1/16 units; false outside the cube. */
+static bool logo_at(int X, int Y, uint32_t *rgb)
 {
-    int a = r_out - d + 8, b = r_in ? d - r_in + 8 : 16;
-    a = a < 0 ? 0 : a > 16 ? 16 : a;
-    b = b < 0 ? 0 : b > 16 ? 16 : b;
-    return a < b ? a : b;
+    int dx = X - 256 * 16, dy = Y - 256 * 16, adx = dx < 0 ? -dx : dx;
+    long d2 = (long)dx * dx + (long)dy * dy;
+    if (d2 <= 42L * 42 * 256) {                          /* the node */
+        *rgb = 0xD9A35F;
+        return true;
+    }
+    if (d2 <= 58L * 58 * 256) {                          /* its ring */
+        *rgb = 0x1C1C1C;
+        return true;
+    }
+    /* the hexagon: |dx| <= 200, between the slopes 115/200 of its top and bottom edges */
+    if (adx > 200 * 16 || dy * 200 < -230 * 16 * 200 + adx * 115 || dy * 200 > 230 * 16 * 200 - adx * 115)
+        return false;
+    /* the seams, 16 units wide: from the centre to the upper left, upper right and bottom corners */
+    long up = (long)adx * 115 + (long)dy * 200;          /* 0 on the upper seams */
+    if ((up < 0 ? -up : up) <= 8L * 16 * 231 || (adx <= 8 * 16 && dy >= 0)) {
+        *rgb = 0x1C1C1C;
+        return true;
+    }
+    *rgb = up < 0 ? 0x8FB8E6 : dx < 0 ? 0x6A95D2 : 0x4A78BC;   /* the top, left and right faces */
+    return true;
 }
 
 bool console_logo(int px, int py, int size)
 {
     if (scr != SCR_FB || suspended || px < 0 || py < 0 || px + size > (int)fb_width || py + size > (int)fb_height)
         return false;
-    int k = size * 16;
-#define U(v) ((v) * k / 200)
     for (int y = 0; y < size; y++) {
         uint8_t *row = fb + (uint64_t)(py + y) * fb_pitch;
         for (int x = 0; x < size; x++) {
-            int fx = x * 16 + 8, fy = y * 16 + 8;          /* pixel centre, 1/16 px */
             int r = 0, g = 0, b = 0;
-            /* ring */
-            int dx = fx - U(100), dy = fy - U(100);
-            int c = annulus((int)isqrt((unsigned long)(dx * dx + dy * dy)), U(71), U(53));
-            if (c) {
-                bool dark = dx > 0 && dy > 0;
-                r = (dark ? 0x4F : 0x8F) * c / 16;
-                g = (dark ? 0x7F : 0xB4) * c / 16;
-                b = (dark ? 0xB8 : 0xDC) * c / 16;
-            }
-            /* stratum: a bar from x 22..178, y 93..107 with round ends */
-            int bx0 = U(29), bx1 = U(171), by = U(100), bh = U(7);
-            int ex = fx < bx0 ? bx0 - fx : fx > bx1 ? fx - bx1 : 0, ey = fy - by;
-            c = annulus((int)isqrt((unsigned long)(ex * ex + ey * ey)), bh, 0);
-            if (c) {
-                r = (r * (16 - c) + 0xE4 * c) / 16;
-                g = (g * (16 - c) + 0xE0 * c) / 16;
-                b = (b * (16 - c) + 0xD8 * c) / 16;
-            }
-            /* halo and node */
-            dx = fx - U(146);
-            dy = fy - U(58);
-            int d = (int)isqrt((unsigned long)(dx * dx + dy * dy));
-            c = annulus(d, U(29), U(25)) * 5 / 16;
-            c = c > annulus(d, U(17), 0) ? c : annulus(d, U(17), 0);
-            if (c) {
-                r = (r * (16 - c) + 0xD9 * c) / 16;
-                g = (g * (16 - c) + 0xA1 * c) / 16;
-                b = (b * (16 - c) + 0x5F * c) / 16;
-            }
+            for (int sy = 0; sy < 4; sy++)
+                for (int sx = 0; sx < 4; sx++) {
+                    uint32_t c;
+                    int X = (int)(((long)(x * 8 + sx * 2 + 1)) * 512 * 16 / (size * 8));
+                    int Y = (int)(((long)(y * 8 + sy * 2 + 1)) * 512 * 16 / (size * 8));
+                    if (logo_at(X, Y, &c)) {
+                        r += c >> 16 & 0xFF;
+                        g += c >> 8 & 0xFF;
+                        b += c & 0xFF;
+                    }
+                }
+            r /= 16;
+            g /= 16;
+            b /= 16;
             if (r | g | b)
                 fb_put_pixel(row, px + x, ((uint32_t)r << fb_rpos) | ((uint32_t)g << fb_gpos) | ((uint32_t)b << fb_bpos));
         }
     }
-#undef U
     return true;
 }

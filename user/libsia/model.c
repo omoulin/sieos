@@ -17,7 +17,7 @@
 
 #define API_VERSION_OPENAI "2024-10-21"
 #define API_VERSION_FOUNDRY "2024-05-01-preview"
-#define TIMEOUT_MS 120000
+#define TIMEOUT_MS 300000              /* the model's silence allowed by default: 5 minutes */
 
 static bool ends_with(const char *s, const char *suffix)
 {
@@ -29,6 +29,7 @@ bool model_init(struct model *m, const struct model_cfg *cfg, char *err, size_t 
 {
     memset(m, 0, sizeof(*m));
     m->cfg = *cfg;
+    m->timeout_ms = TIMEOUT_MS;
     char base[512];
     snprintf(base, sizeof(base), "%s", cfg->endpoint);
     size_t n = strlen(base);
@@ -113,11 +114,16 @@ static bool request(struct model *m, const char *body, size_t bodylen, http_sink
         sb_init(resp);
         auth_header(m, &hdr);
         int status = http_request_stream("POST", &m->url, hdr.s, body, bodylen, sink, ctx, resp, err, errlen,
-                                         TIMEOUT_MS);
+                                         m->timeout_ms);
         memset(hdr.s, 0, hdr.len);
         sb_free(&hdr);
-        if (status < 0)
+        if (status < 0) {
+            if (strstr(err, "no answer within") || strstr(err, "nothing came for"))
+                snprintf(err + strlen(err), errlen - strlen(err),
+                         " (a model that reasons can think that long: try again, or choose a faster model in Settings, "
+                         "Assistant)");
             return false;
+        }
         if (status == 401 && attempt == 0) {             /* try the other way of passing the key */
             m->bearer = !m->bearer;
             continue;

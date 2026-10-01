@@ -10,6 +10,10 @@
 
 #include "facet/gfx.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ---------------- widgets (drawn in content coordinates) ---------------- */
 void ui_button(struct surface *s, struct rect r, const char *label, bool pressed);
 void ui_panel(struct surface *s, struct rect r, bool sunken);
@@ -17,11 +21,15 @@ void ui_meter(struct surface *s, struct rect r, int percent, color_t fill);
 
 /* ---------------- icons ---------------- */
 enum { ICON_TERMINAL, ICON_FOLDER, ICON_FILE, ICON_PROGRAM, ICON_MONITOR, ICON_CLOCK,
-       ICON_INFO, ICON_LOGOUT, ICON_HOME, ICON_NETWORK, ICON_DISK, ICON_BROWSER };
+       ICON_INFO, ICON_LOGOUT, ICON_HOME, ICON_NETWORK, ICON_DISK, ICON_BROWSER, ICON_MIR };
 void icon_draw(struct surface *s, int kind, int x, int y, int size);
 
-/* The SIEOS logo (Orbit Node), centred on (cx, cy), size pixels across. */
+/* The SIEOS logo (the Facet cube), centred on (cx, cy), size pixels across. */
 void logo_draw(struct surface *s, int cx, int cy, int size);
 void logo_pixels(struct surface *s, int x, int y, int scale);   /* 16x16 bitmap version */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

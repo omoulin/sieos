@@ -243,9 +243,16 @@ $(BUILD)/user/facet-apps/%.o: user/facet-apps/%.c user/facet-apps/common.h $(FAC
 	@mkdir -p $(dir $@)
 	$(UCC) $(UCFLAGS) -c $< -o $@
 
+# (Settings also uses libsia: the models and their test)
+FAPPS_SIA := settings
+$(patsubst %,$(BUILD)/user/facet-apps/%.o,$(FAPPS_SIA)): UCFLAGS += -Iuser/libsia
+$(patsubst %,$(BUILD)/user/facet-apps/%.o,$(FAPPS_SIA)): $(wildcard user/libsia/*.h)
+$(patsubst %,$(BUILD)/user/bin/facet-%,$(FAPPS_SIA)): $(LIBSIA) $(LIBTLS)
+
 $(BUILD)/user/bin/facet-%: $(BUILD)/user/facet-apps/%.o $(BUILD)/user/facet-apps/common.o $(LIBFACET_SO) $(LIBSIEOS)
 	@mkdir -p $(dir $@)
-	$(UCC) $(ULDFLAGS) -o $@ $< $(BUILD)/user/facet-apps/common.o -L$(BUILD)/user -lfacet $(LIBSIEOS) -lutil
+	$(UCC) $(ULDFLAGS) -o $@ $< $(BUILD)/user/facet-apps/common.o -L$(BUILD)/user -lfacet \
+		$(if $(filter $*,$(FAPPS_SIA)),$(LIBSIA) $(LIBTLS)) $(LIBSIEOS) -lutil
 
 $(BUILD)/user/tls/%.o: user/tls/%.c $(wildcard user/tls/*.h) user/include/sieos.h | $(TC_DONE)
 	@mkdir -p $(dir $@)
@@ -871,8 +878,13 @@ REPO     := $(BUILD)/repo
 PKGWORK  := $(BUILD)/pkgwork
 PKG_NAMES := $(notdir $(wildcard ports/pkgs/*))
 pkg_deps = $(shell sed -n 's/^depends *= *//p' ports/pkgs/$(1)/recipe)
+# (SIEOS's own software, "source = tree:DIR": rebuilt when DIR changes, on the SDK and libsia's headers)
+pkg_tree = $(shell sed -n 's/^source *= *tree://p' ports/pkgs/$(1)/recipe)
+pkg_tree_deps = $(if $(call pkg_tree,$(1)),$(shell find $(call pkg_tree,$(1)) -type f) $(SDK_STAMP) \
+		$(wildcard user/libsia/*.h) $(wildcard user/facet-apps/common.*))
 define PKG_RULE
 $(PKGWORK)/.built-$(1): ports/pkgs/$(1)/recipe $(wildcard ports/pkgs/$(1)/*.patch) tools/pkgbuild.py \
+		$(call pkg_tree_deps,$(1)) \
 		$(foreach d,$(call pkg_deps,$(1)),$(PKGWORK)/.built-$(d)) | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
 	python3 tools/pkgbuild.py ports/pkgs/$(1) $(REPO) $(PKGWORK)
 	@touch $$@

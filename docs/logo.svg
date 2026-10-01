@@ -1,9 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-  <title>SIEOS - Orbit Node</title>
-  <!-- A blue ring crossed by a light stratum; the amber node is the assistant. -->
-  <circle cx="100" cy="100" r="62" fill="none" stroke="#8fb4dc" stroke-width="18"/>
-  <circle cx="100" cy="100" r="62" fill="none" stroke="#4f7fb8" stroke-width="18" stroke-dasharray="97 292" stroke-dashoffset="-195"/>
-  <rect x="22" y="93" width="156" height="14" rx="7" fill="#e4e0d8"/>
-  <circle cx="146" cy="58" r="27" fill="none" stroke="#d9a15f" stroke-opacity=".3" stroke-width="4"/>
-  <circle cx="146" cy="58" r="17" fill="#d9a15f"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>SIEOS - Facet</title>
+  <!-- A three-faced blue cube; the seams meet at the amber node, the assistant. -->
+  <defs>
+    <clipPath id="hex"><path d="M256 26 456 141v230L256 486 56 371V141Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#hex)">
+    <path d="M256 26 456 141 256 256 56 141Z" fill="#8fb8e6"/>
+    <path d="M56 141 256 256v230L56 371Z" fill="#6a95d2"/>
+    <path d="M456 141 256 256v230l200-115Z" fill="#4a78bc"/>
+    <path d="M56 141 256 256 456 141M256 256v230" fill="none" stroke="#1c1c1c" stroke-width="16"/>
+  </g>
+  <circle cx="256" cy="256" r="50" fill="#d9a35f" stroke="#1c1c1c" stroke-width="16"/>
 </svg>

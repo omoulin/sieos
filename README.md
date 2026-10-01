@@ -1,6 +1,6 @@
 # SIEOS — Synthetic Intelligence Enhanced Operating System
 
-<img src="docs/logo.svg" width="120" alt="SIEOS logo: a blue ring crossed by a light stratum, with an amber node">
+<img src="docs/logo.svg" width="120" alt="SIEOS logo: a three-faced blue cube whose seams meet at an amber node">
 
 A small Unix-style 64-bit kernel for x86_64. It boots from a hybrid BIOS/UEFI
 ISO, runs on multiple CPUs (SMP) and supports multiple users with Unix
@@ -320,7 +320,9 @@ programs use it:
     (typed hidden), and stores them in `~/.sia/config` (mode 0600). Accepted endpoints are
     `https://NAME.openai.azure.com/`, `https://NAME.services.ai.azure.com/`, a serverless
     `https://X.REGION.models.ai.azure.com`, or a full `.../chat/completions` URL.
-    **Settings > Assistant** edits the same settings.
+  - **Settings > Assistant** records several models (`~/.sia/models`) and marks the one in
+    use: switching is one click, and the strip's sia follows. **Test** checks that a model
+    answers and whether it sees images (which MiR uses to look at the applications it makes).
   - No image carries a model connection or a key: every user enters their own in SIEOS.
   - Without a model, or if it can't be reached, terminals start the standard shell.
     `sia --setup` reconfigures and `sia --off` unregisters.
@@ -359,9 +361,12 @@ SIEOS menu), or with `pkg`:
 
 ```sh
 pkg update && pkg search          # what the repositories offer
-pkg install lua                   # with its dependencies
-pkg list; pkg upgrade; pkg remove lua
+pkg install git                   # with its dependencies (curl, openssl, zlib)
+pkg list; pkg upgrade; pkg remove git
 ```
+
+Available: **git**, **rsync**, **openssh** (the ssh client: `ssh`, `scp`, `sftp`,
+`ssh-keygen`, `ssh-agent`), **curl**, **openssl**, **zlib**, **lua**, **pigz** and **mir**.
 
 Packages are built on the build machine from recipes in `ports/pkgs/` (`make pkgs`,
 `make repo`), or on SIEOS itself from software built there (`pkg create`, `pkg add`).
@@ -421,6 +426,24 @@ QEMU's user network), instead of waiting on IPv6 for every dual-stack site, and
   kernel does not run in parallel. Device interrupts go to the
   boot CPU through the I/O APIC.
 
+## MiR: applications made by sia
+
+**MiR** (Make it Real) makes the applications its user describes. It is a package, not
+part of the base system: install **mir** with SiPM (or `pkg install mir`). Then ask sia
+"make me an app that…" in the strip or a terminal, or open *MiR (make an app)* in the
+SIEOS menu.
+
+- A tall window holds the conversation. sia asks what it needs to know, then writes the
+  program in C or C++ and builds it with SIEOS's own gcc and g++.
+- It runs and tests it, and fixes it until it works. With a model that sees images, it
+  also looks at the windows it makes; without one, MiR says the user has to look.
+- The user tries it (**Run**), asks for changes, and has it installed (**Install**: in the
+  SIEOS menu's **My apps**).
+- Projects are kept in `~/apps/NAME`. MiR needs SIEOS installed on a disk or a USB drive,
+  which has the compilers.
+
+[docs/mir.md](docs/mir.md) has the details: the tools sia uses, the limits, the image test.
+
 ## Layout
 
 ```
@@ -445,6 +468,7 @@ user/tls/        libtls: TLS 1.3 client and cryptography (SHA-2, HKDF, AES-GCM, 
 user/libsia/     libsia: the assistant library (JSON, HTTP, Azure AI Foundry client, engine, tools;
                  include/sia/sia.h is the interface for applications)
 user/sia/        sia (terminal) and sia-agent (headless, for the Facet strip) on libsia
+user/mir/        MiR (Make it Real), the package mir: its window, its agent and tools, its guide
 rootfs/          files copied into the root file system (/etc, /home, /root, /usr/share)
 tools/           build helpers: ISO, FAT, kernel symbols, shadow, permissions, downloads,
                  building on SIEOS under QEMU (nativebuild.py), host-side tests
@@ -476,9 +500,10 @@ Third-party components:
   `Lat15-VGA16.psf.gz` in the console-setup package. That package's copyright
   file states that the console fonts are in the public domain.
 - The ASCII-art banner uses the letter shapes of figlet's "standard" font.
-- The SIEOS logo ("Orbit Node", `docs/logo.svg`) is an original design: a blue ring crossed
-  by a light stratum, with an amber node for the assistant. The kernel draws it beside the
-  boot banner, and Facet draws it on the login screen, the spine and the About window.
+- The SIEOS logo ("Facet", `docs/logo.svg`) is an original design: a three-faced blue cube
+  whose seams meet at an amber node, the assistant. The kernel draws it beside the boot
+  banner, and Facet draws it on the login screen, the dock, the About window and, in 3D,
+  in the screen saver.
 - The Facet desktop's Strata design (colours, spine dock, frames, icons, cursor, layout)
   was created for SIEOS. It is inspired in general terms by modern docks and 1990s
   workstation desktops (workspaces, window menus), but uses no artwork, names, logos or

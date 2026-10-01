@@ -22,6 +22,7 @@ struct model {
     bool bearer;                 /* Authorization: Bearer instead of api-key */
     bool send_model;             /* put "model" in the request body */
     char kind[48];               /* description of the endpoint type */
+    int timeout_ms;              /* how long the model may stay silent (a reasoning model thinks first) */
 };
 
 /* Work out the request URL for the configured endpoint. */

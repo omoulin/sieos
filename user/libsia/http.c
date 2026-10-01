@@ -240,12 +240,19 @@ int http_request_stream(const char *method, const struct url *u, const char *ext
     char buf[4096];
     long n = 0;
     char *hend = NULL;
+    long sent = uptime_ms();
     while (!hend && (n = conn_read(&c, buf, sizeof(buf))) > 0) {
         sb_putn(&raw, buf, n);
         hend = strstr(raw.s, "\r\n\r\n");
     }
     if (!hend && raw.len == 0) {
-        snprintf(err, errlen, "%s", c.tls && tls_error(c.tls)[0] ? tls_error(c.tls) : "no response (timeout)");
+        long waited = uptime_ms() - sent;
+        if (c.tls && tls_error(c.tls)[0] && waited < timeout_ms - 1000)
+            snprintf(err, errlen, "%s", tls_error(c.tls));
+        else if (n < 0 || waited >= timeout_ms - 1000)
+            snprintf(err, errlen, "no answer within %d seconds", timeout_ms / 1000);
+        else
+            snprintf(err, errlen, "the server closed the connection without answering (after %ld s)", waited / 1000);
         sb_free(&raw);
         goto fail;
     }
@@ -292,7 +299,12 @@ int http_request_stream(const char *method, const struct url *u, const char *ext
                 break;
         }
         n = conn_read(&c, buf, sizeof(buf));
-        if (n <= 0)
+        if (n < 0) {                                   /* (nothing for timeout_ms: the answer stalled) */
+            sb_free(&raw);
+            snprintf(err, errlen, "the answer stopped: nothing came for %d seconds", timeout_ms / 1000);
+            goto fail;
+        }
+        if (n == 0)
             break;
         part = buf;
         plen = (size_t)n;

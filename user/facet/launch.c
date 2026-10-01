@@ -15,11 +15,11 @@
 static struct { pid_t pid; int chan; } kids[MAXKIDS];
 static int term_count;
 
-/* Start /bin/<prog> with up to three arguments; the child's pid, or -1. */
+/* Start /bin/<prog> (or the program at an absolute path) with up to three arguments; the child's pid, or -1. */
 static pid_t spawn(const char *prog, const char *a1, const char *a2, const char *a3, bool channel)
 {
-    char path[64];
-    snprintf(path, sizeof(path), "/bin/%s", prog);
+    char path[320];
+    snprintf(path, sizeof(path), prog[0] == '/' ? "%s" : "/bin/%s", prog);
     int chan = channel ? desktop_channel_new() : -1;
     pid_t pid = fork();
     if (pid < 0) {
@@ -80,6 +80,8 @@ pid_t app_launch(const char *app, const char *arg)
         return spawn("facet-clock", NULL, NULL, NULL, false);
     if (!strcmp(app, "sipm") || !strcmp(app, "packages"))    /* SiPM, the package manager */
         return spawn("facet-sipm", NULL, NULL, NULL, false);
+    if (!strcmp(app, "mir"))                             /* MiR, the package mir: makes applications (its sia: the channel) */
+        return access(MIR_PROGRAM, X_OK) == 0 ? spawn(MIR_PROGRAM, arg && *arg ? arg : NULL, NULL, NULL, true) : -1;
     if (!strcmp(app, "browser"))                         /* NetSurf, on the disk (not the ISO's root) */
         return spawn("netsurf", arg && *arg ? arg : NULL, NULL, NULL, false);
     if (!strcmp(app, "about"))
@@ -103,6 +105,10 @@ void app_about(void) { app_launch("about", NULL); }
 void app_network(void) { app_launch("network", NULL); }
 void app_browser(void) { app_launch("browser", NULL); }
 void app_sipm(void) { app_launch("sipm", NULL); }
+void app_mir(void) { app_launch("mir", NULL); }
+
+/* An application the user made with MiR (~/apps/bin/NAME) */
+void app_user(const char *path) { spawn(path, NULL, NULL, NULL, false); }
 void app_installer(void) { app_launch("installer", NULL); }
 void app_power(void) { app_launch("power", NULL); }
 void app_settings(void) { app_launch("settings", NULL); }

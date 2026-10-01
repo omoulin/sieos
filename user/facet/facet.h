@@ -85,6 +85,11 @@ bool server_window(struct window *w);
 pid_t server_window_pid(struct window *w);
 bool server_is_assistant(struct window *w);
 void server_type_line(struct window *w, const char *text);
+/* For MiR's tests of an application's window: its pixels (the content), a
+ * key (scan code, ASCII, modifiers: down and up), a click (content coordinates). */
+bool server_window_pixels(struct window *w, const uint32_t **px, int *bw, int *bh);
+void server_send_key(struct window *w, int code, int ascii, int mods);
+void server_send_click(struct window *w, int x, int y, int button);
 struct window *server_wait_window(pid_t pid, int timeout_ms);
 
 /* desktop.c: the control channel of programs Facet starts (libsia desktop tools) */
@@ -116,6 +121,9 @@ void app_message(const char *title, const char *line1, const char *line2);
 void app_network(void);
 void app_browser(void);
 void app_sipm(void);
+void app_mir(void);
+#define MIR_PROGRAM "/usr/pkg/bin/facet-mir"      /* MiR (Make it Real): the package mir, when installed */
+void app_user(const char *path);   /* a program by its absolute path (My apps) */
 void app_installer(void);
 void app_power(void);             /* Power and Temperature */         /* Install SIEOS (on a disk) */
 void wm_reboot(void);             /* end the session: reboot */

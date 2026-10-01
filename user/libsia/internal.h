@@ -25,6 +25,14 @@ struct sia_session {
     struct sbuf *hist;                 /* JSON message objects after the system prompt */
     int nhist, caphist;
     char last_action[96];
+    int vision;                        /* the model sees images: 1, 0, -1 not tested */
+    struct sbuf img;                   /* an image for the model's next turn (a user message), or empty */
+    char img_caption[200];
+    int img_hist;                      /* the history entry holding the image shown, -1 none */
+    void (*instructions)(struct sia_session *s, struct sbuf *out, void *ctx);   /* SIA_ROLE_APP */
+    void *instructions_ctx;
+    int max_steps;
+    size_t history_max;
 };
 
 extern volatile bool sia_interrupted;

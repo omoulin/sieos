@@ -1,0 +1,16 @@
+# OpenSSL: libcrypto and libssl (shared), and the openssl command: the
+# cryptography of the openssh, curl and git packages.  Its trusted roots
+# are the system's (/etc/ssl/certs.pem: SSL_CERT_FILE's default).
+name     = openssl
+version  = 3.5.9-1
+summary  = OpenSSL: TLS and cryptography libraries, and the openssl command
+source   = https://www.openssl.org/source/openssl-3.5.9.tar.gz
+sha256   = 603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+build    = ./Configure linux-x86_64 --cross-compile-prefix= --prefix=$PREFIX --libdir=lib --openssldir=/etc/ssl \
+               shared no-tests no-docs no-afalgeng no-devcryptoeng no-engine no-dso no-async \
+               CC="$CC" AR="$AR" RANLIB="$RANLIB"
+           sed -i 's|^#define X509_CERT_FILE OPENSSLDIR "/cert.pem"|#define X509_CERT_FILE OPENSSLDIR "/certs.pem"|' include/internal/common.h
+           grep -q '"/certs.pem"' include/internal/common.h
+           make -j$JOBS
+install  = make install_sw DESTDIR=$DESTDIR
+           rm -f $DESTDIR$PREFIX/lib/libcrypto.a $DESTDIR$PREFIX/lib/libssl.a

@@ -611,8 +611,8 @@ static void dispatch(const struct fct_event *ev)
         break;
     case FCT_MOUSE:
         press_mouse(v, ev->x, ev->y, ev->kind, ev->buttons);
-        if (v->mouse)
-            v->mouse(v, ev->x, ev->y, ev->kind, ev->buttons);
+        if (v->mouse)                            /* (the wheel: its notches as buttons, > 0 down) */
+            v->mouse(v, ev->x, ev->y, ev->kind, ev->kind == FCT_MOUSE_WHEEL ? ev->wheel : ev->buttons);
         break;
     case FCT_RESIZE:
         if (v->resized)

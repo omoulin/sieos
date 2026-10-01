@@ -3,7 +3,9 @@
  * in a sidebar (Display: the screen's resolution; Appearance: the skin;
  * Pointer: the mouse's and touchpad's speed and acceleration; Screen saver:
  * which one, after how long, whether it locks; Assistant: the model sia
- * uses (endpoint, model, API key: ~/.sia/config); Network: the
+ * can use (each an endpoint, a model and an API key: ~/.sia/models), the
+ * one in use (~/.sia/config), and their test (does it answer, does it see
+ * images); Network: the
  * interfaces' IPv4 settings, DHCP or static, through ifconfig; Wi-Fi: the
  * networks the Wi-Fi device hears, scanned again every 30 seconds).
  * Facet owns the display and the look, so changes go through the desktop
@@ -20,6 +22,7 @@
 #include <facet/settings.h>
 #include <sys/wait.h>
 #include "sieos/sysinfo.h"
+#include "libsia.h"
 
 #define SIDE_W 150
 #define PAD 14
@@ -404,116 +407,275 @@ static void saver_click(struct rect c, int x, int y)
         ss_request("{\"op\":\"screensaver\",\"lock_now\":1}");
 }
 
-/* ---------------- Assistant (sia's model: ~/.sia/config) ---------------- */
+/* ---------------- Assistant (the models sia can use: ~/.sia/models, the one in use: ~/.sia/config) ---------------- */
 
-enum { A_ENDPOINT, A_MODEL, A_KEY, NAFIELDS };
+enum { A_NAME, A_ENDPOINT, A_MODEL, A_KEY, NAFIELDS };
+#define AI_ROWS 6                                /* models listed (and recorded, here) */
 static struct {
-    struct fct_field fld[NAFIELDS];             /* the key's is masked */
-    bool have_key;                               /* a key is kept (not shown: typing one replaces it) */
-    char old_key[512];
-    bool auto_approve;
+    struct sia_profile p[SIA_MAX_PROFILES];
+    int n, sel;                                  /* the one being edited, -1 a new one */
+    char active[64];
+    struct fct_field fld[NAFIELDS];              /* the key's is masked */
     int focus;
-} ai = { .focus = -1 };
+    pid_t test_pid;                              /* a test running (Test): its result comes on test_fd */
+    int test_fd;
+    char test_name[64], test_buf[600];
+    size_t test_len;
+} ai = { .focus = -1, .sel = -1, .test_fd = -1 };
 
-static const char *sia_path(void)
+static void ai_edit(int i)
 {
-    static char p[300];
-    const char *home = getenv("HOME");
-    snprintf(p, sizeof(p), "%s/.sia/config", home && *home ? home : "");
-    return p;
+    ai.sel = i;
+    ai.focus = -1;
+    for (int k = 0; k < NAFIELDS; k++)
+        fct_field_set(&ai.fld[k], "");
+    ai.fld[A_KEY].masked = true;
+    if (i >= 0) {
+        fct_field_set(&ai.fld[A_NAME], ai.p[i].name);
+        fct_field_set(&ai.fld[A_ENDPOINT], ai.p[i].endpoint);
+        fct_field_set(&ai.fld[A_MODEL], ai.p[i].model);
+    }
 }
 
 static void assistant_enter(void)
 {
-    memset(&ai, 0, sizeof(ai));
-    ai.focus = -1;
-    ai.fld[A_KEY].masked = true;
-    FILE *f = fopen(sia_path(), "r");
-    char line[1100];
-    while (f && fgets(line, sizeof(line), f)) {
-        line[strcspn(line, "\r\n")] = 0;
-        char *eq = strchr(line, '=');
-        if (line[0] == '#' || !eq)
-            continue;
-        *eq = 0;
-        const char *v = eq + 1;
-        if (!strcmp(line, "endpoint"))
-            fct_field_set(&ai.fld[A_ENDPOINT], v);
-        else if (!strcmp(line, "model"))
-            fct_field_set(&ai.fld[A_MODEL], v);
-        else if (!strcmp(line, "api_key"))
-            snprintf(ai.old_key, sizeof(ai.old_key), "%s", v), ai.have_key = v[0] != 0;
-        else if (!strcmp(line, "auto_approve"))
-            ai.auto_approve = !strcmp(v, "yes");
-    }
-    if (f)
-        fclose(f);
+    ai.n = sia_profiles_load(ai.p, SIA_MAX_PROFILES, ai.active, sizeof(ai.active));
+    int sel = -1;
+    for (int i = 0; i < ai.n; i++)
+        if (!strcmp(ai.p[i].name, ai.active))
+            sel = i;
+    ai_edit(sel >= 0 ? sel : ai.n ? 0 : -1);
 }
 
-static struct rect ai_field(struct rect c, int i) { return rect_make(c.x + PAD + 100, c.y + 64 + i * 34, c.w - 2 * PAD - 100, 24); }
-static struct rect ai_save_btn(struct rect c) { return rect_make(c.x + c.w - PAD - 110, c.y + 200, 110, 24); }
+static struct rect ai_row(struct rect c, int i) { return rect_make(c.x + PAD, c.y + 56 + i * 24, c.w - 2 * PAD, 24); }
+static struct rect ai_btn(struct rect c, int i)
+{
+    static const int x[] = { 0, 76, 196, 284 }, w[] = { 70, 114, 82, 70 };
+    return rect_make(c.x + PAD + x[i], c.y + 56 + AI_ROWS * 24 + 6, w[i], 24);
+}
+static struct rect ai_field(struct rect c, int i) { return rect_make(c.x + PAD + 80, c.y + 56 + AI_ROWS * 24 + 40 + i * 30, c.w - 2 * PAD - 80, 24); }
+static struct rect ai_save_btn(struct rect c) { return rect_make(c.x + c.w - PAD - 110, ai_field(c, NAFIELDS - 1).y + 32, 110, 24); }
 
 static void assistant_draw(struct surface *s, struct rect c)
 {
     icon_draw(s, ICON_TERMINAL, c.x + PAD, c.y + 10, 32);
     gfx_text_bold(s, c.x + PAD + 42, c.y + 10, "Assistant", C_TEXT);
-    gfx_text(s, c.x + PAD + 42, c.y + 28, "The model the sia assistant talks to (an OpenAI-compatible endpoint)", C_DIM);
-    static const char *const labels[] = { "Endpoint", "Model", "API key" };
+    gfx_text(s, c.x + PAD + 42, c.y + 28, "The models sia can use; the dot marks the one in use", C_DIM);
+    struct rect box = rect_make(c.x + PAD, c.y + 56, c.w - 2 * PAD, AI_ROWS * 24);
+    gfx_fill(s, box.x, box.y, box.w, box.h, C_CONTENT);
+    for (int i = 0; i < ai.n && i < AI_ROWS; i++) {
+        struct rect r = ai_row(c, i);
+        if (i == ai.sel)
+            gfx_fill(s, r.x, r.y, r.w, r.h, C_SELECT);
+        bool on = !strcmp(ai.p[i].name, ai.active);
+        gfx_circle(s, r.x + 12, r.y + 12, 5, C_DIM);
+        if (on)
+            gfx_disc(s, r.x + 12, r.y + 12, 3, C_ACCENT);
+        int x = r.x + 26;
+        x += gfx_text_bold(s, x, r.y + 4, ai.p[i].name, C_TEXT) + 10;
+        char t[200];
+        snprintf(t, sizeof(t), "%s", ai.p[i].model);
+        gfx_text(s, x, r.y + 4, t, C_DIM);
+        const char *v = ai.test_pid > 0 && !strcmp(ai.test_name, ai.p[i].name) ? "testing..."
+                      : ai.p[i].vision > 0 ? "sees images" : ai.p[i].vision == 0 ? "no images" : "not tested";
+        gfx_text(s, r.x + r.w - 8 - text_width(v), r.y + 4, v, ai.p[i].vision > 0 ? C_GOOD : C_DIM);
+    }
+    if (!ai.n)
+        gfx_text(s, box.x + 10, box.y + 6, "No model yet: fill in the fields below and Save.", C_DIM);
+    gfx_bevel(s, box.x - 1, box.y - 1, box.w + 2, box.h + 2, 1, false, C_LINE, C_FACE_DARK);
+    static const char *const bl[] = { "New", "Use this one", "Remove", "Test" };
+    for (int i = 0; i < 4; i++)
+        ui_button(s, ai_btn(c, i), bl[i], false);
+    static const char *const labels[] = { "Name", "Endpoint", "Model", "API key" };
     for (int i = 0; i < NAFIELDS; i++) {
         struct rect r = ai_field(c, i);
         gfx_text(s, c.x + PAD, r.y + 4, labels[i], C_TEXT);
-        fct_field_draw(s, r, &ai.fld[i], i == ai.focus,
-                       i == A_KEY && ai.have_key ? "(kept: type a new one to replace it)" : NULL);
+        const char *hint = i == A_KEY && ai.sel >= 0 ? "(kept: type a new one to replace it)"
+                         : i == A_ENDPOINT ? "https://NAME.openai.azure.com" : i == A_NAME ? "(the model's name)" : NULL;
+        fct_field_draw(s, r, &ai.fld[i], i == ai.focus, hint);
     }
-    gfx_text(s, c.x + PAD, c.y + 172, "Example: https://NAME.openai.azure.com, a deployment name, its key.", C_DIM);
-    ui_button(s, ai_save_btn(c), "Save", false);
+    ui_button(s, ai_save_btn(c), ai.sel >= 0 ? "Save" : "Add", false);
     if (!status[0])
-        snprintf(status, sizeof(status), "Kept in %s (readable by you only); new sia sessions use it.", sia_path());
+        snprintf(status, sizeof(status), "Kept in ~/.sia (readable by you only). Test checks it, and whether it sees images.");
+}
+
+static void trim(char *t)
+{
+    char *b = t;
+    while (*b == ' ')
+        b++;
+    memmove(t, b, strlen(b) + 1);
+    size_t l = strlen(t);
+    while (l && t[l - 1] == ' ')
+        t[--l] = 0;
+}
+
+static void ai_store(void)
+{
+    char err[200] = "";
+    if (!sia_profiles_save(ai.p, ai.n, ai.active, err, sizeof(err)))
+        snprintf(status, sizeof(status), "Could not save: %s", err);
 }
 
 static void assistant_save(void)
 {
-    for (int i = 0; i < NAFIELDS; i++) {          /* (none of the three has spaces) */
-        char *t = ai.fld[i].text, *b = t;
-        while (*b == ' ')
-            b++;
-        memmove(t, b, strlen(b) + 1);
-        size_t l = strlen(t);
-        while (l && t[l - 1] == ' ')
-            t[--l] = 0;
-    }
+    for (int i = 0; i < NAFIELDS; i++)
+        trim(ai.fld[i].text);
     const char *ep = ai.fld[A_ENDPOINT].text, *model = ai.fld[A_MODEL].text;
-    const char *key = ai.fld[A_KEY].text[0] ? ai.fld[A_KEY].text : ai.old_key;
+    const char *key = ai.fld[A_KEY].text[0] ? ai.fld[A_KEY].text : ai.sel >= 0 ? ai.p[ai.sel].api_key : "";
+    char name[64];
+    snprintf(name, sizeof(name), "%s", ai.fld[A_NAME].text[0] ? ai.fld[A_NAME].text : model);
     if (!ep[0] || !model[0] || !key[0]) {
         snprintf(status, sizeof(status), "The endpoint, the model and the key are all needed.");
         return;
     }
-    char endpoint[520];
-    snprintf(endpoint, sizeof(endpoint), "%s%s", strncmp(ep, "http://", 7) && strncmp(ep, "https://", 8) ? "https://" : "", ep);
-    char dir[300];
-    snprintf(dir, sizeof(dir), "%s", sia_path());
-    *strrchr(dir, '/') = 0;
-    mkdir(dir, 0700);
-    chmod(dir, 0700);
-    int fd = open(sia_path(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) {
-        snprintf(status, sizeof(status), "Could not write %s: %s", sia_path(), strerror(errno));
+    for (int i = 0; i < ai.n; i++)
+        if (i != ai.sel && !strcmp(ai.p[i].name, name)) {
+            snprintf(status, sizeof(status), "There is a model named %s already: choose another name.", name);
+            return;
+        }
+    if (ai.sel < 0 && ai.n >= AI_ROWS) {
+        snprintf(status, sizeof(status), "Six models at most: remove one first.");
         return;
     }
-    fchmod(fd, 0600);
-    dprintf(fd, "# sia model connection. Keep this file private.\n");
-    dprintf(fd, "endpoint=%s\nmodel=%s\napi_key=%s\nauto_approve=%s\n", endpoint, model, key,
-            ai.auto_approve ? "yes" : "no");
-    close(fd);
-    snprintf(status, sizeof(status), "Saved. Open a new sia terminal to use it.");
-    assistant_enter();
+    int i = ai.sel >= 0 ? ai.sel : ai.n++;
+    struct sia_profile *p = &ai.p[i];
+    bool changed = ai.sel < 0 || strcmp(p->endpoint, ep) || strcmp(p->model, model) || strcmp(p->api_key, key);
+    char endpoint[520], keep_key[512];
+    snprintf(endpoint, sizeof(endpoint), "%s%s", strncmp(ep, "http://", 7) && strncmp(ep, "https://", 8) ? "https://" : "", ep);
+    snprintf(keep_key, sizeof(keep_key), "%s", key);
+    bool was_active = ai.sel >= 0 && !strcmp(p->name, ai.active);
+    snprintf(p->name, sizeof(p->name), "%s", name);
+    snprintf(p->endpoint, sizeof(p->endpoint), "%s", endpoint);
+    snprintf(p->model, sizeof(p->model), "%s", model);
+    snprintf(p->api_key, sizeof(p->api_key), "%s", keep_key);
+    memset(keep_key, 0, sizeof(keep_key));
+    if (changed)
+        p->vision = -1;                          /* (to be tested again) */
+    if (was_active || !ai.active[0])
+        snprintf(ai.active, sizeof(ai.active), "%s", name);
+    ai_store();
+    if (!status[0] || strncmp(status, "Could not", 9))
+        snprintf(status, sizeof(status), "Saved %s%s.", name, !strcmp(ai.active, name) ? " (in use: new sia sessions use it)" : "");
+    ai_edit(i);
+}
+
+/* Test (in a child process: it takes seconds): the connection, then whether the model sees images */
+static void ai_test(void)
+{
+    if (ai.sel < 0 || ai.test_pid > 0)
+        return;
+    int fds[2];
+    if (pipe(fds) < 0)
+        return;
+    struct sia_profile *p = &ai.p[ai.sel];
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(fds[0]);
+        struct sia_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        snprintf(cfg.endpoint, sizeof(cfg.endpoint), "%s", p->endpoint);
+        snprintf(cfg.model, sizeof(cfg.model), "%s", p->model);
+        snprintf(cfg.api_key, sizeof(cfg.api_key), "%s", p->api_key);
+        cfg.vision = -1;
+        char err[400] = "";
+        static const struct sia_io quiet;
+        struct sia_session *ses = sia_session_new(&cfg, SIA_ROLE_DESKTOP, &quiet, err, sizeof(err));
+        if (!ses || !sia_ping(ses, err, sizeof(err))) {
+            dprintf(fds[1], "x %s", err);
+            _exit(0);
+        }
+        int v = sia_vision_test(&cfg, err, sizeof(err));
+        dprintf(fds[1], "%d %s", v, err);
+        _exit(0);
+    }
+    close(fds[1]);
+    if (pid < 0) {
+        close(fds[0]);
+        return;
+    }
+    fcntl(fds[0], F_SETFL, O_NONBLOCK);
+    ai.test_pid = pid;
+    ai.test_fd = fds[0];
+    ai.test_len = 0;
+    snprintf(ai.test_name, sizeof(ai.test_name), "%s", p->name);
+    snprintf(status, sizeof(status), "Testing %s...", p->name);
+}
+
+static void assistant_tick(void)
+{
+    if (ai.test_pid <= 0)
+        return;
+    long n;
+    while (ai.test_len < sizeof(ai.test_buf) - 1 &&
+           (n = read(ai.test_fd, ai.test_buf + ai.test_len, sizeof(ai.test_buf) - 1 - ai.test_len)) > 0)
+        ai.test_len += n;
+    if (waitpid(ai.test_pid, NULL, WNOHANG) != ai.test_pid)
+        return;
+    while ((n = read(ai.test_fd, ai.test_buf + ai.test_len, sizeof(ai.test_buf) - 1 - ai.test_len)) > 0)
+        ai.test_len += n;
+    close(ai.test_fd);
+    ai.test_fd = -1;
+    ai.test_pid = 0;
+    ai.test_buf[ai.test_len] = 0;
+    const char *why = ai.test_len > 2 ? ai.test_buf + 2 : "";
+    if (ai.test_buf[0] == 'x' || !ai.test_len) {
+        snprintf(status, sizeof(status), "%s does not answer: %.150s", ai.test_name, ai.test_len ? why : "the test failed");
+        return;
+    }
+    int v = ai.test_buf[0] == '1' ? 1 : ai.test_buf[0] == '0' ? 0 : -1;
+    for (int i = 0; i < ai.n; i++)
+        if (!strcmp(ai.p[i].name, ai.test_name) && v >= 0)
+            ai.p[i].vision = v;
+    if (v >= 0)
+        ai_store();
+    if (v > 0)
+        snprintf(status, sizeof(status), "%s works, and it sees images (MiR can look at the applications it makes).", ai.test_name);
+    else if (v == 0)
+        snprintf(status, sizeof(status), "%s works, but it does not see images (%.80s).", ai.test_name, why);
+    else
+        snprintf(status, sizeof(status), "%s works; the image test failed: %.120s", ai.test_name, why);
 }
 
 static void assistant_click(struct rect c, int x, int y)
 {
     ai.focus = -1;
-    if (rect_contains(ai_save_btn(c), x, y))
+    for (int i = 0; i < ai.n && i < AI_ROWS; i++)
+        if (rect_contains(ai_row(c, i), x, y)) {
+            if (x < ai_row(c, i).x + 24 && strcmp(ai.p[i].name, ai.active)) {   /* the dot: use it */
+                snprintf(ai.active, sizeof(ai.active), "%s", ai.p[i].name);
+                ai_store();
+                snprintf(status, sizeof(status), "sia now uses %s (new sia sessions).", ai.p[i].name);
+            }
+            ai_edit(i);
+            return;
+        }
+    if (rect_contains(ai_btn(c, 0), x, y)) {                /* New */
+        ai_edit(-1);
+        ai.focus = A_NAME;
+        snprintf(status, sizeof(status), "A new model: its name, endpoint, model (deployment) and key, then Add.");
+    } else if (rect_contains(ai_btn(c, 1), x, y) && ai.sel >= 0) {   /* Use this one */
+        snprintf(ai.active, sizeof(ai.active), "%s", ai.p[ai.sel].name);
+        ai_store();
+        snprintf(status, sizeof(status), "sia now uses %s (new sia sessions).", ai.p[ai.sel].name);
+    } else if (rect_contains(ai_btn(c, 2), x, y) && ai.sel >= 0) {   /* Remove */
+        char gone[64];
+        snprintf(gone, sizeof(gone), "%s", ai.p[ai.sel].name);
+        memmove(&ai.p[ai.sel], &ai.p[ai.sel + 1], (ai.n - ai.sel - 1) * sizeof(ai.p[0]));
+        ai.n--;
+        if (!strcmp(gone, ai.active))
+            snprintf(ai.active, sizeof(ai.active), "%s", ai.n ? ai.p[0].name : "");
+        ai_store();
+        snprintf(status, sizeof(status), "Removed %s.%s%s", gone, ai.active[0] ? " In use: " : " No model in use now.", ai.active);
+        ai_edit(ai.n ? 0 : -1);
+    } else if (rect_contains(ai_btn(c, 3), x, y)) {         /* Test */
+        if (ai.sel < 0)
+            snprintf(status, sizeof(status), "Add the model first, then Test it.");
+        else
+            ai_test();
+    } else if (rect_contains(ai_save_btn(c), x, y)) {
         assistant_save();
+    }
 }
 
 static bool assistant_field_mouse(struct rect c, int x, int y, int kind)
@@ -1121,6 +1283,10 @@ static void mouse(struct fct_view *v, int x, int y, int kind, int buttons)
 
 static void tick(struct fct_view *v)
 {
+    if (ai.test_pid > 0) {                       /* (a model being tested, whatever the page) */
+        assistant_tick();
+        fct_view_invalidate(v);
+    }
     if (!strcmp(pages[cur_page].name, "wifi")) {
         wifi_tick();
         fct_view_invalidate(v);

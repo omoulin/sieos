@@ -145,16 +145,24 @@ bool sia_add_desktop_tools(struct sia_session *s)
 {
     if (!sia_desktop_connected())
         return false;
-    add(s, "open_app", "open",
-        "Open an application window on the Facet desktop. app: terminal (the sia assistant terminal), shell "
-        "(a plain shell terminal), files (file browser, optional path), monitor (system monitor), network "
-        "(network status), browser (the NetSurf web browser, optional path: a URL to open), sipm (SiPM, the package manager: installs software), clock, settings (the desktop's settings), display (settings, on the screen resolution), appearance (settings, on the skin), about. For terminal or shell, 'command' is typed into "
-        "it once it opens.",
-        "{\"type\":\"object\",\"properties\":{\"app\":{\"type\":\"string\",\"enum\":[\"terminal\",\"shell\","
-        "\"files\",\"monitor\",\"network\",\"browser\",\"sipm\",\"clock\",\"settings\",\"display\",\"appearance\",\"about\"]},\"path\":{\"type\":\"string\","
-        "\"description\":\"folder for files, URL for browser\"},\"command\":{\"type\":\"string\","
-        "\"description\":\"command line to run in the new terminal\"}},\"required\":[\"app\"]}",
-        true);
+    static char desc[900], params[700];
+    bool mir = access(SIA_MIR_PROGRAM, X_OK) == 0;         /* (MiR: the package mir, when installed) */
+    snprintf(desc, sizeof(desc),
+             "Open an application window on the Facet desktop. app: terminal (the sia assistant terminal), shell "
+             "(a plain shell terminal), files (file browser, optional path), monitor (system monitor), network "
+             "(network status), browser (the NetSurf web browser, optional path: a URL to open), sipm (SiPM, the "
+             "package manager: installs software), %sclock, settings (the desktop's settings), display (settings, on "
+             "the screen resolution), appearance (settings, on the skin), about. For terminal or shell, 'command' "
+             "is typed into it once it opens.",
+             mir ? "mir (MiR, Make it Real: makes a new application the user describes; path: their request), " : "");
+    snprintf(params, sizeof(params),
+             "{\"type\":\"object\",\"properties\":{\"app\":{\"type\":\"string\",\"enum\":[\"terminal\",\"shell\","
+             "\"files\",\"monitor\",\"network\",\"browser\",\"sipm\",%s\"clock\",\"settings\",\"display\","
+             "\"appearance\",\"about\"]},\"path\":{\"type\":\"string\",\"description\":\"folder for files, URL for "
+             "browser%s\"},\"command\":{\"type\":\"string\",\"description\":\"command line to run in the new "
+             "terminal\"}},\"required\":[\"app\"]}",
+             mir ? "\"mir\"," : "", mir ? ", the request for mir" : "");
+    add(s, "open_app", "open", desc, params, true);
     add(s, "list_windows", "windows",
         "List the open windows on the desktop: id, workspace, title, and whether hidden or focused.",
         "{\"type\":\"object\",\"properties\":{}}", true);

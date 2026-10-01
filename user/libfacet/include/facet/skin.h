@@ -26,6 +26,10 @@
 
 #include "facet/gfx.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum { FCT_SKIN_STRATA, FCT_SKIN_BEOS, FCT_SKIN_IRIX, FCT_NSKINS };
 
 struct fct_skin {
@@ -51,5 +55,9 @@ void fct_skin_use(const struct fct_skin *s);
 const struct fct_skin *fct_skin_load(void);
 const struct fct_skin *fct_skin_load_system(void);
 bool fct_skin_save(const struct fct_skin *s);       /* the user's "skin" setting */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

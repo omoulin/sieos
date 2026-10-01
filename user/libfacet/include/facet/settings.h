@@ -17,6 +17,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define FCT_SETTINGS_SYSTEM "/etc/facet/settings"
 
 /* The user's value, else the system's; false if neither has the key. */
@@ -26,5 +30,9 @@ bool fct_setting_get_system(const char *key, char *out, size_t n);
 bool fct_setting_set(const char *key, const char *value);
 /* The user's settings file ("~/.facet/settings"), for display. */
 const char *fct_settings_path(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

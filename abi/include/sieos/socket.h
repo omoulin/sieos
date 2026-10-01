@@ -37,6 +37,8 @@
 #define SIEOS_IPV6_JOIN_GROUP     0x09
 #define SIEOS_IPV6_LEAVE_GROUP    0x0a
 #define SIEOS_IPV6_V6ONLY         0x27   /* int: an AF_INET6 socket takes no IPv4 traffic */
+#define SIEOS_IPV6_TCLASS         0x43   /* int: traffic class (accepted, not applied) */
+#define SIEOS_IP_TOS              0x01   /* int, level IPPROTO_IP: type of service (accepted, not applied) */
 
 #define SIEOS_SOL_SOCKET    0xffff
 #define SIEOS_SO_DEBUG      0x0001

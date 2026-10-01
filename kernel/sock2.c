@@ -145,6 +145,8 @@ static long do_setsockopt(long fd, long level, long name, const void *val, long 
         return -ENOTSOCK;
     if (level == SIEOS_IPPROTO_TCP)
         return name == SIEOS_TCP_NODELAY ? 0 : -ENOPROTOOPT_K;
+    if (level == SIEOS_IPPROTO_IP)                   /* (the type of service: ssh, curl and git set it) */
+        return name == SIEOS_IP_TOS ? 0 : -ENOPROTOOPT_K;
     if (level == SIEOS_IPPROTO_IPV6) {
         int fam = 0;
         socket_kopt(fd, 5, false, &fam);
@@ -156,6 +158,8 @@ static long do_setsockopt(long fd, long level, long name, const void *val, long 
         switch (name) {
         case SIEOS_IPV6_V6ONLY:
             return socket_kopt(fd, 4, true, &v);
+        case SIEOS_IPV6_TCLASS:
+            return 0;
         case SIEOS_IPV6_UNICAST_HOPS:
         case SIEOS_IPV6_MULTICAST_HOPS:
         case SIEOS_IPV6_MULTICAST_LOOP:
