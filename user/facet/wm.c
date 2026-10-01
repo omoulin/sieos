@@ -59,14 +59,22 @@ const color_t ws_color[NWORKSPACES] = {
 #define ST_BAND_W  4
 #define BE_TAB_H   22                      /* BeOS style: the tab above a thin frame */
 #define BE_BORDER  5
-#define IX_BORDER  6                       /* IRIX style: a thick bevelled frame, the title inside */
+#define IX_BORDER  6                       /* IRIX and CDE styles (Motif): a thick bevelled frame, the title inside */
 #define IX_TITLE_H 22
+#define AM_TITLE_H 20                      /* AmigaOS style: the title bar with its gadgets, thin borders */
+#define AM_BORDER  4
+#define AM_GADGET  22
+
+/* The Motif skins (IRIX's 4Dwm, CDE's dtwm) share their frames' workings. */
+static bool motif(void) { return fct_skin->id == FCT_SKIN_IRIX || fct_skin->id == FCT_SKIN_CDE; }
 
 struct frame_insets wm_frame(void)
 {
     switch (fct_skin->id) {
     case FCT_SKIN_BEOS: return (struct frame_insets){ BE_TAB_H + BE_BORDER, BE_BORDER, BE_BORDER, BE_BORDER };
-    case FCT_SKIN_IRIX: return (struct frame_insets){ IX_BORDER + IX_TITLE_H, IX_BORDER, IX_BORDER, IX_BORDER };
+    case FCT_SKIN_IRIX:
+    case FCT_SKIN_CDE:  return (struct frame_insets){ IX_BORDER + IX_TITLE_H, IX_BORDER, IX_BORDER, IX_BORDER };
+    case FCT_SKIN_AMIGA: return (struct frame_insets){ AM_TITLE_H, AM_BORDER, AM_BORDER, AM_BORDER };
     }
     return (struct frame_insets){ ST_TITLE_H, 1 + ST_BAND_W, 1, 1 };
 }
@@ -76,7 +84,9 @@ static int title_zone(void)
 {
     switch (fct_skin->id) {
     case FCT_SKIN_BEOS: return BE_TAB_H;
-    case FCT_SKIN_IRIX: return IX_BORDER + IX_TITLE_H;
+    case FCT_SKIN_IRIX:
+    case FCT_SKIN_CDE:  return IX_BORDER + IX_TITLE_H;
+    case FCT_SKIN_AMIGA: return AM_TITLE_H;
     }
     return ST_TITLE_H;
 }
@@ -203,6 +213,10 @@ static struct tile tiles[] = {
  *           application, the workspaces
  *   IRIX    the Toolchest at the top left: title row (the menu), a row per
  *           application, the desks, the clock
+ *   CDE     the Front Panel along the bottom: the menu, an icon per
+ *           application, the four workspace buttons, the date and time
+ *   Amiga   Workbench icons down the right: the SIEOS disk (the menu), an
+ *           icon per application, the screens (workspaces), the clock
  */
 #define DB_W     196                      /* BeOS-style Deskbar */
 #define DB_MENU  30
@@ -214,11 +228,27 @@ static struct tile tiles[] = {
 #define TC_ROW   22
 #define TC_DESKS 26
 #define TC_CLOCK 22
+#define FP_H     70                       /* CDE-style Front Panel */
+#define FP_GEM   70
+#define FP_TILE  54
+#define FP_WS    66
+#define FP_CLOCK 80
+#define WB_W     112                      /* AmigaOS-style Workbench icons */
+#define WB_ICON  52
+#define WB_WS    24
+#define WB_CLOCK 40
 
 static struct rect dock_rect_skin(void)
 {
     if (fct_skin->id == FCT_SKIN_BEOS)
         return rect_make(screen_w - MARGIN - DB_W, MARGIN, DB_W, DB_MENU + DB_TRAY + NTILES * DB_ROW + DB_WS + 6);
+    if (fct_skin->id == FCT_SKIN_CDE) {
+        int w = 8 + FP_GEM + 8 + NTILES * FP_TILE + 8 + 2 * FP_WS + 4 + 8 + FP_CLOCK + 8;
+        return rect_make((screen_w - w) / 2, screen_h - FP_H - 4, w, FP_H);
+    }
+    if (fct_skin->id == FCT_SKIN_AMIGA)
+        return rect_make(screen_w - MARGIN - WB_W, MARGIN + STRIP_H + MARGIN, WB_W,
+                         (NTILES + 1) * WB_ICON + 8 + WB_WS * 2 + 6 + WB_CLOCK);
     return rect_make(MARGIN, MARGIN, TC_W, TC_TITLE + NTILES * TC_ROW + TC_DESKS + TC_CLOCK + 8);
 }
 
@@ -234,7 +264,7 @@ static struct rect strip_rect(void)
         int x = d.x + d.w + MARGIN;
         return rect_make(x, MARGIN, screen_w - x - MARGIN, STRIP_H);
     }
-    return rect_make(MARGIN, MARGIN, screen_w - 2 * MARGIN, STRIP_H);
+    return rect_make(MARGIN, MARGIN, screen_w - 2 * MARGIN, STRIP_H);   /* (Strata, CDE, the Amiga's screen bar) */
 }
 
 /* Below the strip: the spine and the windows. */
@@ -257,6 +287,10 @@ static struct rect spine_rect(void)
 static struct rect gem_rect(void)
 {
     struct rect sp = spine_rect();
+    if (fct_skin->id == FCT_SKIN_CDE)
+        return rect_make(sp.x + 8, sp.y + 6, FP_GEM, sp.h - 12);
+    if (fct_skin->id == FCT_SKIN_AMIGA)
+        return rect_make(sp.x, sp.y, sp.w, WB_ICON);
     if (fct_skin->id == FCT_SKIN_BEOS)
         return rect_make(sp.x + 2, sp.y + 2, sp.w - 4, DB_MENU - 2);
     if (fct_skin->id == FCT_SKIN_IRIX)
@@ -267,6 +301,10 @@ static struct rect gem_rect(void)
 static struct rect tile_rect(int i)
 {
     struct rect sp = spine_rect();
+    if (fct_skin->id == FCT_SKIN_CDE)
+        return rect_make(sp.x + 8 + FP_GEM + 8 + i * FP_TILE, sp.y + 6, FP_TILE, sp.h - 12);
+    if (fct_skin->id == FCT_SKIN_AMIGA)
+        return rect_make(sp.x, sp.y + (i + 1) * WB_ICON, sp.w, WB_ICON);
     if (fct_skin->id == FCT_SKIN_BEOS)
         return rect_make(sp.x + 3, sp.y + DB_MENU + DB_TRAY + i * DB_ROW, sp.w - 6, DB_ROW);
     if (fct_skin->id == FCT_SKIN_IRIX)
@@ -285,6 +323,14 @@ static int ws_top(void)
 static struct rect ws_rect(int i)
 {
     struct rect sp = spine_rect();
+    if (fct_skin->id == FCT_SKIN_CDE) {               /* two by two, in the middle of the panel's right part */
+        int x0 = sp.x + 8 + FP_GEM + 8 + NTILES * FP_TILE + 8, hh = (sp.h - 16) / 2;
+        return rect_make(x0 + (i % 2) * (FP_WS + 4), sp.y + 6 + (i / 2) * (hh + 4), FP_WS, hh);
+    }
+    if (fct_skin->id == FCT_SKIN_AMIGA) {
+        int y0 = sp.y + (NTILES + 1) * WB_ICON + 8, cw = (sp.w - 12) / 2;
+        return rect_make(sp.x + 4 + (i % 2) * (cw + 4), y0 + (i / 2) * (WB_WS + 2), cw, WB_WS);
+    }
     if (fct_skin->id == FCT_SKIN_BEOS) {
         int cw = (sp.w - 12 - 3 * 4) / 4;
         return rect_make(sp.x + 6 + i * (cw + 4), ws_top(), cw, DB_WS - 8);
@@ -300,6 +346,10 @@ static struct rect ws_rect(int i)
 static struct rect clock_rect(void)
 {
     struct rect sp = spine_rect();
+    if (fct_skin->id == FCT_SKIN_CDE)
+        return rect_make(sp.x + sp.w - 8 - FP_CLOCK, sp.y + 6, FP_CLOCK, sp.h - 12);
+    if (fct_skin->id == FCT_SKIN_AMIGA)
+        return rect_make(sp.x, sp.y + sp.h - WB_CLOCK, sp.w, WB_CLOCK);
     if (fct_skin->id == FCT_SKIN_BEOS)
         return rect_make(sp.x + 3, sp.y + DB_MENU, sp.w - 6, DB_TRAY - 2);
     if (fct_skin->id == FCT_SKIN_IRIX)
@@ -325,6 +375,14 @@ static struct rect work_area(void)
         struct rect d = dock_rect_skin();
         int x = d.x + d.w + MARGIN;
         return rect_make(x, y, screen_w - x - MARGIN, screen_h - y - MARGIN);
+    }
+    if (fct_skin->id == FCT_SKIN_CDE) {               /* above the Front Panel */
+        struct rect d = dock_rect_skin();
+        return rect_make(MARGIN, y, screen_w - 2 * MARGIN, d.y - y - MARGIN);
+    }
+    if (fct_skin->id == FCT_SKIN_AMIGA) {             /* beside the icons */
+        struct rect d = dock_rect_skin();
+        return rect_make(MARGIN, y, d.x - 2 * MARGIN, screen_h - y - MARGIN);
     }
     int x = SPINE_X + SPINE_W + MARGIN;
     return rect_make(x, y, screen_w - x - MARGIN, screen_h - y - MARGIN);
@@ -388,6 +446,20 @@ static void render_background(void)
     gfx_set_clip(&bg, rect_make(0, 0, bg.w, bg.h));
     if (fct_skin->id == FCT_SKIN_BEOS) {             /* a flat blue desktop */
         gfx_fill(&bg, 0, 0, bg.w, bg.h, C_DESK_TOP);
+        return;
+    }
+    if (fct_skin->id == FCT_SKIN_CDE) {              /* slate blue, a fine woven backdrop */
+        gfx_vgradient(&bg, 0, 0, bg.w, bg.h, C_DESK_TOP, C_DESK_BOT);
+        for (int y = 0; y < bg.h; y++)
+            for (int x = (y % 4 < 2 ? 0 : 2); x < bg.w; x += 4)
+                gfx_blend_pixel(&bg, x, y, (y / 2) % 2 ? RGB(0xFF, 0xFF, 0xFF) : RGB(0, 0, 0), 12);
+        return;
+    }
+    if (fct_skin->id == FCT_SKIN_AMIGA) {            /* the Workbench's grey */
+        gfx_fill(&bg, 0, 0, bg.w, bg.h, C_DESK_TOP);
+        for (int y = 0; y < bg.h; y += 2)
+            for (int x = (y / 2) % 2; x < bg.w; x += 2)
+                gfx_blend_pixel(&bg, x, y, RGB(0, 0, 0), 10);
         return;
     }
     if (fct_skin->id == FCT_SKIN_IRIX) {             /* indigo, with a faint diagonal weave */
@@ -484,6 +556,15 @@ static void menu_open(int x, int y, struct menu_item *items, int n)
     popup_open(&menu, x, y, items, n);
 }
 
+/* A menu whose bottom is at y (above the CDE Front Panel) */
+static void menu_open_above(int x, int y, struct menu_item *items, int n)
+{
+    menu_open(x, y, items, n);
+    wm_invalidate_rect(popup_bounds(&menu));
+    menu.r.y = MAX(0, y - menu.r.h);
+    wm_invalidate_rect(popup_bounds(&menu));
+}
+
 static void submenu_close(void)
 {
     if (submenu.open)
@@ -552,8 +633,7 @@ static void draw_popup(struct surface *s, struct popup *m)
         gfx_blend_fill(s, r.x + 3, r.y + 3, r.w, r.h, RGB(0, 0, 0), 70);
         gfx_fill(s, r.x, r.y, r.w, r.h, C_MENU);
         gfx_frame(s, r.x, r.y, r.w, r.h, C_FACE_DARK);
-        gfx_bevel(s, r.x + 1, r.y + 1, r.w - 2, r.h - 2, fct_skin->id == FCT_SKIN_IRIX ? 2 : 1, true, C_FACE_LIGHT,
-                  C_FACE_SHADOW);
+        gfx_bevel(s, r.x + 1, r.y + 1, r.w - 2, r.h - 2, motif() ? 2 : 1, true, C_FACE_LIGHT, C_FACE_SHADOW);
     } else {
         gfx_shadow(s, r, 8, SHADOW, SHADOW_DY, 170);
         gfx_round_rect(s, r.x, r.y, r.w, r.h, 8, C_MENU);
@@ -808,10 +888,122 @@ static void draw_toolchest(struct surface *s)
     gfx_text_bold(s, c.x + c.w - 6 - text_width_bold(hm), c.y + (c.h - FONT_H) / 2, hm, C_TEXT);
 }
 
+/* CDE style: the Front Panel along the bottom: bevelled sections, an icon
+ * button per application, the four workspace buttons in the middle. */
+static void draw_frontpanel(struct surface *s)
+{
+    struct rect d = spine_rect();
+    if (rect_empty(rect_intersect(rect_make(d.x - 4, d.y - 4, d.w + 8, d.h + 8), s->clip)))
+        return;
+    gfx_fill(s, d.x, d.y, d.w, d.h, C_SPINE);
+    gfx_frame(s, d.x, d.y, d.w, d.h, C_FACE_DARK);
+    gfx_bevel(s, d.x + 1, d.y + 1, d.w - 2, d.h - 2, 2, true, C_FACE_LIGHT, C_FACE_SHADOW);
+    /* the panel's grips at its two ends */
+    for (int side = 0; side < 2; side++) {
+        int gx = side ? d.x + d.w - 6 : d.x + 3;
+        for (int y = d.y + 8; y < d.y + d.h - 8; y += 4)
+            gfx_bevel(s, gx, y, 3, 2, 1, true, C_FACE_LIGHT, C_FACE_SHADOW);
+    }
+    /* the SIEOS menu */
+    struct rect g = gem_rect();
+    gfx_bevel(s, g.x, g.y, g.w, g.h, 2, !gem_menu_open, C_FACE_LIGHT, C_FACE_SHADOW);
+    logo_draw(s, g.x + g.w / 2, g.y + g.h / 2 - 6, 34);
+    gfx_text(s, g.x + (g.w - text_width("SIEOS")) / 2, g.y + g.h - FONT_H - 1, "SIEOS", C_TEXT);
+    /* an icon button per application */
+    for (int i = 0; i < NTILES; i++) {
+        struct rect t = tile_rect(i);
+        bool hot = i == hover_tile;
+        if (hot)
+            gfx_fill(s, t.x + 2, t.y + 2, t.w - 4, t.h - 4, C_MENU_HOT);
+        gfx_bevel(s, t.x, t.y, t.w, t.h, 1, true, C_FACE_LIGHT, C_FACE_SHADOW);
+        icon_draw(s, tiles[i].icon, t.x + (t.w - 32) / 2, t.y + (t.h - 32) / 2 - 2, 32);
+        if (tile_running(i))                           /* (a running application: a mark below) */
+            gfx_fill(s, t.x + t.w / 2 - 6, t.y + t.h - 6, 12, 3, C_ACCENT);
+    }
+    /* the workspaces: One, Two, Three, Four */
+    static const char *const names[NWORKSPACES] = { "One", "Two", "Three", "Four" };
+    static const color_t ws_cde[NWORKSPACES] = { RGB(0xC8, 0xA0, 0x70), RGB(0x88, 0xA6, 0xD0), RGB(0x9C, 0xB4, 0x8C),
+                                                 RGB(0xB8, 0x98, 0xC0) };
+    struct rect w0 = ws_rect(0), w3 = ws_rect(3);
+    gfx_bevel(s, w0.x - 3, w0.y - 3, w3.x + w3.w - w0.x + 6, w3.y + w3.h - w0.y + 6, 1, false, C_FACE_SHADOW,
+              C_FACE_LIGHT);
+    for (int i = 0; i < NWORKSPACES; i++) {
+        struct rect r = ws_rect(i);
+        bool cur = i == cur_ws;
+        color_t f = cur ? ws_cde[i] : i == hover_ws ? C_MENU_HOT : color_shade(ws_cde[i], 30);
+        gfx_fill(s, r.x, r.y, r.w, r.h, f);
+        gfx_bevel(s, r.x, r.y, r.w, r.h, cur ? 2 : 1, !cur, color_shade(f, 60), color_shade(f, -70));
+        gfx_text(s, r.x + (r.w - text_width(names[i])) / 2 + (cur ? 1 : 0), r.y + (r.h - FONT_H) / 2 + (cur ? 1 : 0),
+                 names[i], C_TEXT);
+    }
+    /* the date and the time */
+    struct rect c = clock_rect();
+    gfx_bevel(s, c.x, c.y, c.w, c.h, 1, false, C_FACE_SHADOW, C_FACE_LIGHT);
+    char hm[8], day[12];
+    clock_strings(hm, sizeof(hm), day, sizeof(day));
+    gfx_text_bold(s, c.x + (c.w - text_width_bold(hm)) / 2, c.y + c.h / 2 - FONT_H, hm, C_TEXT);
+    gfx_text(s, c.x + (c.w - text_width(day)) / 2, c.y + c.h / 2 + 1, day, C_DIM);
+}
+
+/* AmigaOS style: Workbench icons down the right side of the screen, each with
+ * its name under it; the SIEOS disk opens the menu. */
+static void wb_label(struct surface *s, struct rect r, const char *text, bool selected)
+{
+    int tw = text_width(text), x = r.x + (r.w - tw) / 2, y = r.y + r.h - FONT_H - 1;
+    if (selected)
+        gfx_fill(s, x - 2, y, tw + 4, FONT_H, RGB(0, 0, 0));
+    gfx_text(s, x, y, text, selected ? RGB(0xFF, 0xFF, 0xFF) : RGB(0, 0, 0));
+}
+
+static void draw_workbench(struct surface *s)
+{
+    struct rect d = spine_rect();
+    if (rect_empty(rect_intersect(rect_make(d.x - 4, d.y - 4, d.w + 8, d.h + 8), s->clip)))
+        return;
+    struct rect g = gem_rect();
+    if (gem_menu_open)                                 /* (a selected icon: its colours inverted) */
+        gfx_fill(s, g.x + g.w / 2 - 20, g.y + 1, 40, 34, C_ACCENT);
+    logo_draw(s, g.x + g.w / 2, g.y + 18, 32);
+    wb_label(s, g, "SIEOS", gem_menu_open);
+    for (int i = 0; i < NTILES; i++) {
+        struct rect t = tile_rect(i);
+        bool hot = i == hover_tile;
+        if (hot)
+            gfx_fill(s, t.x + t.w / 2 - 20, t.y + 1, 40, 34, C_ACCENT);
+        icon_draw(s, tiles[i].icon, t.x + (t.w - 32) / 2, t.y + 2, 32);
+        wb_label(s, t, tiles[i].label, hot || tile_running(i));
+    }
+    /* the screens (workspaces): depth-gadget buttons */
+    for (int i = 0; i < NWORKSPACES; i++) {
+        struct rect r = ws_rect(i);
+        bool cur = i == cur_ws;
+        gfx_fill(s, r.x, r.y, r.w, r.h, cur ? C_ACCENT : i == hover_ws ? RGB(0xC8, 0xC8, 0xC8) : C_FACE);
+        gfx_bevel(s, r.x, r.y, r.w, r.h, 1, !cur, RGB(0xFF, 0xFF, 0xFF), RGB(0, 0, 0));
+        char dg[10];
+        snprintf(dg, sizeof(dg), "Scr %d", i + 1);
+        gfx_text(s, r.x + (r.w - text_width(dg)) / 2, r.y + (r.h - FONT_H) / 2, dg, RGB(0, 0, 0));
+    }
+    struct rect c = clock_rect();
+    char hm[8], day[12];
+    clock_strings(hm, sizeof(hm), day, sizeof(day));
+    gfx_fill(s, c.x + 4, c.y + 4, c.w - 8, c.h - 6, C_FACE);
+    gfx_bevel(s, c.x + 4, c.y + 4, c.w - 8, c.h - 6, 1, true, RGB(0xFF, 0xFF, 0xFF), RGB(0, 0, 0));
+    gfx_text(s, c.x + (c.w - text_width(hm)) / 2, c.y + 6, hm, RGB(0, 0, 0));
+    gfx_text(s, c.x + (c.w - text_width(day)) / 2, c.y + 6 + FONT_H, day, C_DIM);
+}
+
 static void draw_spine(struct surface *s)
 {
     if (fct_skin->id == FCT_SKIN_BEOS) {
         draw_deskbar(s);
+        return;
+    }
+    if (fct_skin->id == FCT_SKIN_CDE) {
+        draw_frontpanel(s);
+        return;
+    }
+    if (fct_skin->id == FCT_SKIN_AMIGA) {
+        draw_workbench(s);
         return;
     }
     if (fct_skin->id == FCT_SKIN_IRIX) {
@@ -895,7 +1087,7 @@ static void draw_strip(struct surface *s)
         gfx_blend_fill(s, st.x + 3, st.y + 3, st.w, st.h, RGB(0, 0, 0), 60);
         gfx_fill(s, st.x, st.y, st.w, st.h, C_STRIP);
         gfx_frame(s, st.x, st.y, st.w, st.h, strip_focus ? C_ACCENT : C_FACE_DARK);
-        gfx_bevel(s, st.x + 1, st.y + 1, st.w - 2, st.h - 2, fct_skin->id == FCT_SKIN_IRIX ? 2 : 1, !strip_focus,
+        gfx_bevel(s, st.x + 1, st.y + 1, st.w - 2, st.h - 2, motif() ? 2 : 1, !strip_focus,
                   C_FACE_LIGHT, C_FACE_SHADOW);
     } else {
         gfx_shadow(s, st, 9, SHADOW, SHADOW_DY, 190);
@@ -1380,7 +1572,8 @@ static void focus_strip(void)
 /* Windows                                                             */
 /* ------------------------------------------------------------------ */
 
-enum { HIT_NONE, HIT_CLOSE, HIT_MENU, HIT_TITLE, HIT_RESIZE, HIT_CONTENT, HIT_BORDER, HIT_ZOOM, HIT_MINIMIZE };
+enum { HIT_NONE, HIT_CLOSE, HIT_MENU, HIT_TITLE, HIT_RESIZE, HIT_CONTENT, HIT_BORDER, HIT_ZOOM, HIT_MINIMIZE,
+       HIT_DEPTH };
 
 static struct rect none_rect(void) { return rect_make(-1000, -1000, 0, 0); }
 
@@ -1393,8 +1586,10 @@ static int be_tab_w(struct window *w)
 static struct rect menu_btn(struct window *w)
 {
     switch (fct_skin->id) {
-    case FCT_SKIN_BEOS: return none_rect();         /* (the window menu: right-click the tab) */
-    case FCT_SKIN_IRIX: return rect_make(w->r.x + IX_BORDER + 3, w->r.y + IX_BORDER + 3, 22, IX_TITLE_H - 6);
+    case FCT_SKIN_BEOS:
+    case FCT_SKIN_AMIGA: return none_rect();        /* (the window menu: right-click the title) */
+    case FCT_SKIN_IRIX:
+    case FCT_SKIN_CDE: return rect_make(w->r.x + IX_BORDER + 3, w->r.y + IX_BORDER + 3, 22, IX_TITLE_H - 6);
     }
     return rect_make(w->r.x + 6, w->r.y + (ST_TITLE_H - BTN_H) / 2, BTN_W, BTN_H);
 }
@@ -1403,7 +1598,9 @@ static struct rect close_btn(struct window *w)
 {
     switch (fct_skin->id) {
     case FCT_SKIN_BEOS: return rect_make(w->r.x + 6, w->r.y + 5, 13, 13);
-    case FCT_SKIN_IRIX: return none_rect();         /* (Close is in the window menu; double-click it) */
+    case FCT_SKIN_IRIX:
+    case FCT_SKIN_CDE: return none_rect();          /* (Close is in the window menu; double-click it) */
+    case FCT_SKIN_AMIGA: return rect_make(w->r.x, w->r.y, AM_GADGET, AM_TITLE_H);
     }
     return rect_make(w->r.x + w->r.w - 6 - BTN_W, w->r.y + (ST_TITLE_H - BTN_H) / 2, BTN_W, BTN_H);
 }
@@ -1412,16 +1609,32 @@ static struct rect zoom_btn(struct window *w)
 {
     switch (fct_skin->id) {
     case FCT_SKIN_BEOS: return rect_make(w->r.x + be_tab_w(w) - 19, w->r.y + 5, 13, 13);
-    case FCT_SKIN_IRIX: return rect_make(w->r.x + w->r.w - IX_BORDER - 25, w->r.y + IX_BORDER + 3, 22, IX_TITLE_H - 6);
+    case FCT_SKIN_IRIX:
+    case FCT_SKIN_CDE: return rect_make(w->r.x + w->r.w - IX_BORDER - 25, w->r.y + IX_BORDER + 3, 22, IX_TITLE_H - 6);
+    case FCT_SKIN_AMIGA: return rect_make(w->r.x + w->r.w - 2 * AM_GADGET, w->r.y, AM_GADGET, AM_TITLE_H);
     }
     return none_rect();
 }
 
 static struct rect min_btn(struct window *w)
 {
-    if (fct_skin->id == FCT_SKIN_IRIX)
+    if (motif())
         return rect_make(w->r.x + w->r.w - IX_BORDER - 50, w->r.y + IX_BORDER + 3, 22, IX_TITLE_H - 6);
     return none_rect();
+}
+
+/* AmigaOS style: the depth gadget (sends the window behind the others) */
+static struct rect depth_btn(struct window *w)
+{
+    if (fct_skin->id == FCT_SKIN_AMIGA)
+        return rect_make(w->r.x + w->r.w - AM_GADGET, w->r.y, AM_GADGET, AM_TITLE_H);
+    return none_rect();
+}
+
+/* AmigaOS style: the sizing gadget, in the lower-right corner */
+static struct rect size_gadget(struct window *w)
+{
+    return rect_make(w->r.x + w->r.w - 18, w->r.y + w->r.h - 18, 18, 18);
 }
 
 /* Is (x, y) part of the window (the area beside a BeOS tab is not)? */
@@ -1438,9 +1651,11 @@ static int hit_test(struct window *w, int x, int y)
 {
     if (!window_contains(w, x, y))
         return HIT_NONE;
-    if (y < w->r.y + title_zone() && (fct_skin->id != FCT_SKIN_IRIX || y >= w->r.y + IX_BORDER)) {
+    if (y < w->r.y + title_zone() && (!motif() || y >= w->r.y + IX_BORDER)) {
         if (rect_contains(close_btn(w), x, y))
             return HIT_CLOSE;
+        if (rect_contains(depth_btn(w), x, y))
+            return HIT_DEPTH;
         if (rect_contains(menu_btn(w), x, y))
             return HIT_MENU;
         if (rect_contains(zoom_btn(w), x, y))
@@ -1449,11 +1664,13 @@ static int hit_test(struct window *w, int x, int y)
             return HIT_MINIMIZE;
         return HIT_TITLE;
     }
-    if (fct_skin->id == FCT_SKIN_IRIX && !w->maximized &&
+    if (motif() && !w->maximized &&
         ((x >= w->r.x + w->r.w - 22 && y >= w->r.y + w->r.h - IX_BORDER) ||
          (y >= w->r.y + w->r.h - 22 && x >= w->r.x + w->r.w - IX_BORDER)))
         return HIT_RESIZE;                           /* the frame's lower-right corner piece */
     if (x >= w->r.x + w->r.w - 14 && y >= w->r.y + w->r.h - 14 && !w->maximized)
+        return HIT_RESIZE;
+    if (fct_skin->id == FCT_SKIN_AMIGA && rect_contains(size_gadget(w), x, y) && !w->maximized)
         return HIT_RESIZE;
     if (rect_contains(wm_content(w), x, y))
         return HIT_CONTENT;
@@ -1617,6 +1834,55 @@ static void frame_irix(struct surface *s, struct window *w, bool active)
     gfx_frame(s, c.x - 1, c.y - 1, c.w + 2, c.h + 2, color_shade(fc, -60));
 }
 
+/* An Amiga-style gadget: 0 close, 1 zoom, 2 depth; bevelled white and black. */
+static void am_gadget(struct surface *s, struct rect b, int kind, bool pressed, color_t base)
+{
+    const color_t white = RGB(0xFF, 0xFF, 0xFF), black = RGB(0, 0, 0);
+    gfx_fill(s, b.x, b.y, b.w, b.h, pressed ? color_shade(base, -30) : base);
+    gfx_bevel(s, b.x, b.y, b.w, b.h, 1, !pressed, white, black);
+    int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    if (kind == 0) {                                   /* a small box with a dot */
+        gfx_fill(s, cx - 4, cy - 4, 8, 8, white);
+        gfx_frame(s, cx - 4, cy - 4, 8, 8, black);
+        gfx_fill(s, cx - 1, cy - 1, 2, 2, black);
+    } else if (kind == 1) {                            /* a frame, a small one filled in its corner */
+        gfx_frame(s, cx - 6, cy - 5, 12, 10, black);
+        gfx_fill(s, cx - 5, cy - 4, 5, 4, white);
+        gfx_frame(s, cx - 6, cy - 5, 6, 5, black);
+    } else {                                           /* two overlapping frames: the back one, the front one */
+        gfx_frame(s, cx - 6, cy - 5, 9, 7, black);
+        gfx_fill(s, cx - 2, cy - 2, 9, 7, white);
+        gfx_frame(s, cx - 2, cy - 2, 9, 7, black);
+    }
+}
+
+/* AmigaOS style: a title bar (blue when active) with its gadgets, thin bevelled borders. */
+static void frame_amiga(struct surface *s, struct window *w, bool active)
+{
+    struct rect r = w->r, clip = s->clip;
+    const color_t white = RGB(0xFF, 0xFF, 0xFF), black = RGB(0, 0, 0);
+    color_t tb = active ? C_TITLEBAR : C_TITLEBAR_I;
+    gfx_fill(s, r.x, r.y, r.w, r.h, active ? tb : C_FACE);
+    gfx_bevel(s, r.x, r.y, r.w, r.h, 1, true, white, black);
+    gfx_hline(s, r.x + 1, r.y + AM_TITLE_H - 1, r.w - 2, black);
+    bool pc = drag_mode == DRAG_BUTTON && drag_win == w && pressed_button == HIT_CLOSE &&
+              rect_contains(close_btn(w), mouse_x, mouse_y);
+    bool pz = drag_mode == DRAG_BUTTON && drag_win == w && pressed_button == HIT_ZOOM &&
+              rect_contains(zoom_btn(w), mouse_x, mouse_y);
+    bool pd = drag_mode == DRAG_BUTTON && drag_win == w && pressed_button == HIT_DEPTH &&
+              rect_contains(depth_btn(w), mouse_x, mouse_y);
+    am_gadget(s, close_btn(w), 0, pc, tb);
+    am_gadget(s, zoom_btn(w), 1, pz, tb);
+    am_gadget(s, depth_btn(w), 2, pd, tb);
+    struct rect zb = zoom_btn(w);
+    int tx = r.x + AM_GADGET + 6;
+    gfx_set_clip(s, rect_intersect(clip, rect_make(tx, r.y, MAX(0, zb.x - tx - 4), AM_TITLE_H)));
+    gfx_text(s, tx, r.y + (AM_TITLE_H - FONT_H) / 2, w->title, active ? fct_skin->title_text : fct_skin->title_text_i);
+    gfx_set_clip(s, clip);
+    struct rect c = wm_content(w);                     /* the content, set in */
+    gfx_bevel(s, c.x - 1, c.y - 1, c.w + 2, c.h + 2, 1, false, white, black);
+}
+
 static void draw_window(struct surface *s, struct window *w)
 {
     struct rect r = w->r;
@@ -1625,9 +1891,11 @@ static void draw_window(struct surface *s, struct window *w)
     bool active = w == focus;
     struct rect clip = s->clip;
     switch (fct_skin->id) {
-    case FCT_SKIN_BEOS: frame_beos(s, w, active); break;
-    case FCT_SKIN_IRIX: frame_irix(s, w, active); break;
-    default:            frame_strata(s, w, active); break;
+    case FCT_SKIN_BEOS:  frame_beos(s, w, active); break;
+    case FCT_SKIN_IRIX:
+    case FCT_SKIN_CDE:   frame_irix(s, w, active); break;
+    case FCT_SKIN_AMIGA: frame_amiga(s, w, active); break;
+    default:             frame_strata(s, w, active); break;
     }
 
     /* content, then the resize grip on top of it */
@@ -1637,7 +1905,13 @@ static void draw_window(struct surface *s, struct window *w)
         w->draw(w, s, c);
     else
         gfx_fill(s, c.x, c.y, c.w, c.h, C_CONTENT);
-    if (!w->maximized && fct_skin->id != FCT_SKIN_IRIX) {
+    if (!w->maximized && fct_skin->id == FCT_SKIN_AMIGA) {   /* the sizing gadget */
+        struct rect g = size_gadget(w);
+        gfx_fill(s, g.x, g.y, g.w, g.h, C_FACE);
+        gfx_bevel(s, g.x, g.y, g.w, g.h, 1, true, RGB(0xFF, 0xFF, 0xFF), RGB(0, 0, 0));
+        gfx_frame(s, g.x + 4, g.y + 4, 10, 10, RGB(0, 0, 0));
+        gfx_frame(s, g.x + 4, g.y + 4, 6, 6, RGB(0, 0, 0));
+    } else if (!w->maximized && !motif()) {
         int gx = r.x + r.w - 3 - (fct_skin->id == FCT_SKIN_BEOS ? BE_BORDER : 0);
         int gy = r.y + r.h - 3 - (fct_skin->id == FCT_SKIN_BEOS ? BE_BORDER : 0);
         for (int i = 0; i < 3; i++)
@@ -1753,6 +2027,25 @@ static void reap_windows(void)
         free(w);
         if (was_focus)
             wm_focus(topmost_visible());
+    }
+}
+
+/* Behind the others (the Amiga's depth gadget); the focus goes to the one now on top. */
+static void lower_window(struct window *w)
+{
+    int i = 0;
+    while (i < nwin && zorder[i] != w)
+        i++;
+    if (i == nwin)
+        return;
+    for (; i > 0; i--)
+        zorder[i] = zorder[i - 1];
+    zorder[0] = w;
+    invalidate_all();
+    struct window *top = topmost_visible();
+    if (top && top != w) {
+        focus = NULL;
+        wm_focus(top);
     }
 }
 
@@ -2054,7 +2347,11 @@ static void open_gem_menu(void)
     items[n++] = (struct menu_item){ NULL, NULL, NULL, -1, NULL, 0 };
     items[n++] = (struct menu_item){ "Exit...", NULL, NULL, ICON_LOGOUT, exit_items, 3 };
     struct rect g = gem_rect();
-    if (fct_skin->id == FCT_SKIN_BEOS)
+    if (fct_skin->id == FCT_SKIN_CDE)
+        menu_open_above(g.x, spine_rect().y - 4, items, n);     /* rises from the Front Panel */
+    else if (fct_skin->id == FCT_SKIN_AMIGA)
+        menu_open(spine_rect().x - 236, g.y, items, n);         /* beside the SIEOS disk */
+    else if (fct_skin->id == FCT_SKIN_BEOS)
         menu_open(g.x + g.w - 230, g.y + g.h + 3, items, n);    /* drops down from the Deskbar's menu */
     else if (fct_skin->id == FCT_SKIN_IRIX)
         menu_open(spine_rect().x + spine_rect().w + 4, g.y, items, n);
@@ -2201,9 +2498,12 @@ static void draw_cursor(struct surface *s)
     /* the arrow's edge (X) and body (O): Strata light on dark, BeOS style black
      * with a white edge, IRIX style the red arrow */
     color_t edge = RGB(0x10, 0x11, 0x13), body = RGB(0xF2, 0xEE, 0xE6);
-    if (fct_skin->id == FCT_SKIN_BEOS) {
+    if (fct_skin->id == FCT_SKIN_BEOS || fct_skin->id == FCT_SKIN_CDE) {
         edge = RGB(0xFF, 0xFF, 0xFF);
         body = RGB(0x00, 0x00, 0x00);
+    } else if (fct_skin->id == FCT_SKIN_AMIGA) {    /* the Workbench's red pointer */
+        edge = RGB(0x00, 0x00, 0x00);
+        body = RGB(0xE8, 0x44, 0x22);
     } else if (fct_skin->id == FCT_SKIN_IRIX) {
         edge = RGB(0x00, 0x00, 0x00);
         body = RGB(0xE8, 0x1C, 0x1C);
@@ -2382,13 +2682,14 @@ static void press_left(bool dbl)
         case HIT_CLOSE:
         case HIT_ZOOM:
         case HIT_MINIMIZE:
+        case HIT_DEPTH:
             drag_mode = DRAG_BUTTON;
             drag_win = w;
             pressed_button = hit;
             wm_invalidate(w);
             break;
         case HIT_MENU: {
-            if (dbl && fct_skin->id == FCT_SKIN_IRIX) {   /* Motif: double-click the menu button closes */
+            if (dbl && motif()) {                    /* Motif: double-click the menu button closes */
                 wm_close(w);
                 break;
             }
@@ -2449,6 +2750,8 @@ static void release_left(void)
             toggle_zoom(w);
         else if (b == HIT_MINIMIZE && rect_contains(min_btn(w), mouse_x, mouse_y))
             minimize(w);
+        else if (b == HIT_DEPTH && rect_contains(depth_btn(w), mouse_x, mouse_y))
+            lower_window(w);
     }
     if (drag_mode == DRAG_CONTENT && drag_win)
         content_mouse(drag_win, MOUSE_UP);
@@ -2585,8 +2888,11 @@ static void handle_event(const struct input_event *ev)
             int t = tile_at(mouse_x, mouse_y);
             if (w)
                 window_menu(w, mouse_x, mouse_y);
+            else if (t >= 0 && fct_skin->id == FCT_SKIN_CDE)
+                tile_menu(t, tile_rect(t).x, MAX(0, spine_rect().y - 4 - 3 * MENU_ITEM_H - 16));
             else if (t >= 0)
-                tile_menu(t, fct_skin->id == FCT_SKIN_BEOS ? tile_rect(t).x - 180 : tile_rect(t).x + tile_rect(t).w + 10,
+                tile_menu(t, fct_skin->id == FCT_SKIN_BEOS || fct_skin->id == FCT_SKIN_AMIGA ? tile_rect(t).x - 180
+                                                                                         : tile_rect(t).x + tile_rect(t).w + 10,
                           tile_rect(t).y);
             else if (!rect_contains(spine_rect(), mouse_x, mouse_y) && !rect_contains(strip_rect(), mouse_x, mouse_y))
                 desktop_menu(mouse_x, mouse_y);

@@ -204,10 +204,16 @@ The desktop starts when you log in on the graphical login screen. From a text co
 run `facet` to start it, and use **Log Out** to return. Its look is called **Strata**: a
 dark, layered-stone desktop with graphite surfaces, warm light text and one amber accent.
 It borrows the calm surfaces of a modern dock and the working habits of a Solaris-era
-workstation. All artwork is original. **Appearance** switches the whole desktop between Strata and two other skins, a
-BeOS-style one (yellow title tabs, Deskbar, blue desktop) and an IRIX-style one (4Dwm-like
-frames, Toolchest, indigo desktop, red pointer), with their own icons, while programs
-run. Text is set in DejaVu Sans and DejaVu Sans Mono,
+workstation. All artwork is original. **Appearance** switches the whole desktop, while
+programs run, between Strata and four other skins:
+- **BeOS style:** yellow title tabs, the Deskbar, a blue desktop.
+- **IRIX style:** 4Dwm-like frames, the Toolchest, an indigo desktop, a red pointer.
+- **CDE style:** Solaris-like Motif frames, plum for the active window, and the Front
+  Panel along the bottom with its four workspace buttons.
+- **AmigaOS style:** Workbench-like blue title bars with close, zoom and depth gadgets,
+  icons down the desktop's right side, a white screen bar, a red pointer.
+
+Each skin has its own icons. Text is set in DejaVu Sans and DejaVu Sans Mono,
 TrueType fonts rendered anti-aliased by libfacet at any size. The terminal zooms with
 Ctrl and + or -.
 

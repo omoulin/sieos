@@ -27,10 +27,13 @@ void ui_button(struct surface *s, struct rect r, const char *label, bool pressed
         gfx_round_rect_vgradient(s, r.x, r.y, r.w, r.h, 4, pressed ? RGB(0xB8, 0xB8, 0xB8) : RGB(0xFA, 0xFA, 0xFA),
                                  pressed ? RGB(0xD0, 0xD0, 0xD0) : RGB(0xD4, 0xD4, 0xD4));
         gfx_round_frame(s, r.x, r.y, r.w, r.h, 4, RGB(0x70, 0x70, 0x70));
-    } else if (fct_skin->id == FCT_SKIN_IRIX) {    /* square, a two-pixel bevel */
+    } else if (fct_skin->id == FCT_SKIN_IRIX || fct_skin->id == FCT_SKIN_CDE) {   /* Motif: square, a two-pixel bevel */
         gfx_fill(s, r.x, r.y, r.w, r.h, pressed ? color_shade(C_FACE, -14) : C_FACE);
         gfx_frame(s, r.x, r.y, r.w, r.h, C_FACE_DARK);
         bevel(s, rect_make(r.x + 1, r.y + 1, r.w - 2, r.h - 2), !pressed, 2);
+    } else if (fct_skin->id == FCT_SKIN_AMIGA) {   /* grey, white over black (inverted when pressed) */
+        gfx_fill(s, r.x, r.y, r.w, r.h, pressed ? C_ACCENT : C_FACE);
+        gfx_bevel(s, r.x, r.y, r.w, r.h, 1, !pressed, RGB(0xFF, 0xFF, 0xFF), RGB(0, 0, 0));
     }
     if (fct_skin->light) {
         if (label) {
@@ -55,7 +58,7 @@ void ui_panel(struct surface *s, struct rect r, bool sunken)
 {
     if (fct_skin->light) {
         gfx_fill(s, r.x, r.y, r.w, r.h, sunken ? C_CONTENT : C_FACE);
-        bevel(s, r, !sunken, fct_skin->id == FCT_SKIN_IRIX ? 2 : 1);
+        bevel(s, r, !sunken, fct_skin->id == FCT_SKIN_IRIX || fct_skin->id == FCT_SKIN_CDE ? 2 : 1);
         return;
     }
     gfx_fill(s, r.x, r.y, r.w, r.h, sunken ? C_CONTENT : C_FACE);

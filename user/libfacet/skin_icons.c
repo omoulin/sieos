@@ -321,7 +321,7 @@ static void ix_network(struct surface *s, int x, int y, int size)
 
 void skin_icon_draw(int skin, struct surface *s, int kind, int x, int y, int size)
 {
-    bool be = skin == FCT_SKIN_BEOS;
+    bool be = skin == FCT_SKIN_BEOS || skin == FCT_SKIN_AMIGA;   /* (bold outlines; CDE: IRIX's fine ones) */
     switch (kind) {
     case ICON_TERMINAL: be ? be_terminal(s, x, y, size) : ix_terminal(s, x, y, size); break;
     case ICON_FOLDER:   be ? be_folder(s, x, y, size, false) : ix_folder(s, x, y, size, false); break;

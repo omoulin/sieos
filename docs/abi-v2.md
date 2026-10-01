@@ -1595,6 +1595,22 @@ Milestone 34 (done): Facet skins.
       the clock;
     - an indigo desktop with a faint weave, and the red pointer;
     - Indigo Magic-like pastel icons.
+  - **CDE style** (added later, with AmigaOS style):
+    - the Motif frames of IRIX style in CDE's colours: lavender grey, plum for the
+      active window;
+    - the Front Panel along the bottom: the SIEOS menu (it opens upward), an icon
+      button per application, the four workspace buttons (One, Two, Three, Four, each
+      its colour), the date and time;
+    - a slate-blue woven backdrop and a black pointer.
+  - **AmigaOS style:**
+    - Workbench-like frames: a title bar, blue when active, with the close gadget on the
+      left and the zoom and depth gadgets on the right (depth sends the window behind
+      the others), thin white-and-black bevels, a sizing gadget in the lower-right
+      corner;
+    - icons with their names down the desktop's right side: the SIEOS disk (the menu),
+      the applications (their names inverted when running), the screens (workspaces),
+      the clock;
+    - a white screen bar (the strip), a grey desktop and the red pointer.
 - **Facet:**
   - Frame insets, buttons, hit tests (the area beside a BeOS tab belongs to the window
     below), the dock layout, the strip, the work area, menus, the sia panel, the

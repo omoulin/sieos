@@ -27,7 +27,7 @@
 #define SIDE_W 150
 #define PAD 14
 #define ROW 24
-#define CARD_H 118
+#define CARD_H 88
 #define MAXMODES 32
 
 struct page {
@@ -157,6 +157,20 @@ static void preview(struct surface *s, struct rect r, const struct fct_skin *k)
         gfx_fill(s, w.x, w.y + 14, w.w, w.h - 14, C_FACE);
         gfx_frame(s, w.x, w.y + 14, w.w, w.h - 14, RGB(0x40, 0x40, 0x40));
         gfx_fill(s, w.x + 4, w.y + 18, w.w - 8, w.h - 22, C_CONTENT);
+    } else if (k->id == FCT_SKIN_CDE) {             /* a plum Motif frame; the Front Panel below */
+        gfx_fill(s, w.x, w.y, w.w, w.h - 14, C_TITLEBAR);
+        gfx_bevel(s, w.x, w.y, w.w, w.h - 14, 2, true, color_shade(C_TITLEBAR, 70), color_shade(C_TITLEBAR, -60));
+        gfx_fill(s, w.x + 5, w.y + 18, w.w - 10, w.h - 37, C_CONTENT);
+        struct rect fp = rect_make(r.x + r.w / 2 - 50, r.y + r.h - 12, 100, 12);
+        gfx_fill(s, fp.x, fp.y, fp.w, fp.h, C_SPINE);
+        gfx_bevel(s, fp.x, fp.y, fp.w, fp.h, 1, true, C_FACE_LIGHT, C_FACE_SHADOW);
+    } else if (k->id == FCT_SKIN_AMIGA) {           /* a blue title bar with gadgets, a grey body */
+        gfx_fill(s, w.x, w.y, w.w, w.h, C_FACE);
+        gfx_bevel(s, w.x, w.y, w.w, w.h, 1, true, RGB(0xFF, 0xFF, 0xFF), RGB(0, 0, 0));
+        gfx_fill(s, w.x + 1, w.y + 1, w.w - 2, 13, C_TITLEBAR);
+        gfx_frame(s, w.x + 3, w.y + 3, 9, 9, RGB(0, 0, 0));
+        gfx_frame(s, w.x + w.w - 12, w.y + 3, 9, 9, RGB(0, 0, 0));
+        gfx_fill(s, w.x + 4, w.y + 16, w.w - 8, w.h - 20, C_CONTENT);
     } else if (k->id == FCT_SKIN_IRIX) {            /* a thick steel-blue bevelled frame */
         gfx_fill(s, w.x, w.y, w.w, w.h, C_TITLEBAR);
         gfx_bevel(s, w.x, w.y, w.w, w.h, 2, true, color_shade(C_TITLEBAR, 70), color_shade(C_TITLEBAR, -60));
@@ -167,9 +181,9 @@ static void preview(struct surface *s, struct rect r, const struct fct_skin *k)
         gfx_frame(s, w.x, w.y, w.w, w.h, C_FACE_DARK);
         gfx_fill(s, w.x + 1, w.y + 16, 3, w.h - 17, C_ACCENT);
     }
-    static const int icons[] = { ICON_FOLDER, ICON_TERMINAL, ICON_MONITOR, ICON_NETWORK, ICON_CLOCK };
-    for (int i = 0; i < 5; i++)
-        icon_draw(s, icons[i], w.x + 12 + i * 40, w.y + w.h - 42, 32);
+    static const int icons[] = { ICON_FOLDER, ICON_TERMINAL, ICON_MONITOR };
+    for (int i = 0; i < 3; i++)
+        icon_draw(s, icons[i], w.x + 10 + i * 34, w.y + w.h - (k->id == FCT_SKIN_CDE ? 50 : 36), 28);
     fct_skin_use(cur);
 }
 
@@ -182,7 +196,7 @@ static void appearance_draw(struct surface *s, struct rect c)
         bool cur = k == fct_skin;
         gfx_fill(s, r.x, r.y, r.w, r.h, cur ? C_SELECT : C_CONTENT);
         gfx_frame(s, r.x, r.y, r.w, r.h, cur ? C_ACCENT : C_LINE);
-        struct rect pv = rect_make(r.x + 8, r.y + 8, 240, r.h - 16);
+        struct rect pv = rect_make(r.x + 8, r.y + 8, 170, r.h - 16);
         preview(s, pv, k);
         gfx_frame(s, pv.x, pv.y, pv.w, pv.h, C_FACE_DARK);
         int tx = pv.x + pv.w + 14, tw = r.x + r.w - 10 - tx;
@@ -190,7 +204,7 @@ static void appearance_draw(struct surface *s, struct rect c)
         if (cur)
             gfx_text_bold(s, r.x + r.w - 10 - text_width_bold("current"), r.y + 12, "current", C_ACCENT);
         const char *p = k->blurb;                   /* the description, wrapped */
-        int y = r.y + 36;
+        int y = r.y + 32;
         while (*p && y < r.y + r.h - FONT_H) {
             size_t n = text_fit(p, tw);
             if (p[n]) {

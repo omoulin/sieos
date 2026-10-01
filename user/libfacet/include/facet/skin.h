@@ -10,6 +10,10 @@
  *           surfaces, a Deskbar at the top right, a blue desktop
  *   irix    in the style of IRIX (4Dwm, Indigo Magic): steel-blue bevelled
  *           frames, a Toolchest at the top left, an indigo desktop
+ *   cde     in the style of CDE (Solaris): lavender-grey Motif frames, plum
+ *           for the active window, the Front Panel along the bottom
+ *   amiga   in the style of the Amiga's Workbench: grey, black, white and
+ *           blue; close, zoom and depth gadgets; icons on the desktop
  *
  * The skins evoke those desktops with original artwork (no logos).  The
  * default is BeOS style; the user's choice is the "skin" setting
@@ -30,12 +34,12 @@
 extern "C" {
 #endif
 
-enum { FCT_SKIN_STRATA, FCT_SKIN_BEOS, FCT_SKIN_IRIX, FCT_NSKINS };
+enum { FCT_SKIN_STRATA, FCT_SKIN_BEOS, FCT_SKIN_IRIX, FCT_SKIN_CDE, FCT_SKIN_AMIGA, FCT_NSKINS };
 
 struct fct_skin {
     int id;
-    const char *name;                  /* "strata", "beos", "irix" */
-    const char *title;                 /* "Strata", "BeOS style", "IRIX style" */
+    const char *name;                  /* "strata", "beos", "irix", "cde", "amiga" */
+    const char *title;                 /* "Strata", "BeOS style", "IRIX style", ... */
     const char *blurb;
     bool light;                        /* light surfaces, bevelled widgets */
     color_t face, face_light, face_shadow, face_dark;

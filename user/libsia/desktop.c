@@ -182,8 +182,10 @@ bool sia_add_desktop_tools(struct sia_session *s)
     add(s, "desktop_skin", "skin",
         "The desktop's look (skin): without a name, list the skins and the current one; with one, switch to it: "
         "strata (SIEOS's own, dark), beos (in the style of BeOS: yellow tabs, Deskbar), irix (in the style of IRIX: "
-        "4Dwm frames, Toolchest).",
-        "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"enum\":[\"strata\",\"beos\",\"irix\"]}}}",
+        "4Dwm frames, Toolchest), cde (in the style of CDE on Solaris: Motif frames, the Front Panel), amiga (in "
+        "the style of the Amiga's Workbench: blue title bars, gadgets, icons).",
+        "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"enum\":[\"strata\",\"beos\",\"irix\","
+        "\"cde\",\"amiga\"]}}}",
         true);
     add(s, "move_window", "move", "Move a window to another workspace.",
         "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"workspace\":{\"type\":\"integer\","
