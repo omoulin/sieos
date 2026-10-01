@@ -14,6 +14,8 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include "model.h"
+#include "libsia.h"
+#include <sys/wait.h>
 
 #define API_VERSION_OPENAI "2024-10-21"
 #define API_VERSION_FOUNDRY "2024-05-01-preview"
@@ -103,6 +105,46 @@ static void api_error(int status, const struct sbuf *body, char *err, size_t err
     json_free(j);
 }
 
+/* sia-brain: the local model's server, on this computer */
+bool model_is_brain(const struct model *m)
+{
+    return m->url.port == SIA_BRAIN_PORT && !strcmp(m->url.host, "127.0.0.1") && sia_brain_installed();
+}
+
+/* Start sia-brain's server (sia-brain start) and wait until it answers
+ * /health with 200: the model loads in seconds (a minute on a slow disk). */
+static bool brain_start(struct model *m, char *err, size_t errlen)
+{
+    pid_t pid = fork();
+    if (pid == 0) {
+        int nul = open("/dev/null", O_RDWR);
+        dup2(nul, 0);
+        dup2(nul, 1);
+        dup2(nul, 2);
+        execl(SIA_BRAIN_COMMAND, "sia-brain", "start", (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0) {
+        snprintf(err, errlen, "cannot start sia-brain");
+        return false;
+    }
+    waitpid(pid, NULL, 0);
+    struct url h = m->url;
+    snprintf(h.path, sizeof(h.path), "/health");
+    for (int i = 0; i < 360 && !sia_was_interrupted(); i++) {   /* (3 minutes) */
+        struct sbuf r;
+        sb_init(&r);
+        char e[200];
+        int st = http_request("GET", &h, NULL, NULL, 0, &r, e, sizeof(e), 2000);
+        sb_free(&r);
+        if (st == 200)
+            return true;
+        usleep(500000);
+    }
+    snprintf(err, errlen, "sia-brain did not start (see ~/.sia/brain.log)");
+    return false;
+}
+
 /* POST body; true with a 200 response (its body in resp, or passed to sink). */
 static bool request(struct model *m, const char *body, size_t bodylen, http_sink sink, void *ctx,
                     struct sbuf *resp, char *err, size_t errlen)
@@ -117,6 +159,11 @@ static bool request(struct model *m, const char *body, size_t bodylen, http_sink
                                          m->timeout_ms);
         memset(hdr.s, 0, hdr.len);
         sb_free(&hdr);
+        if (status < 0 && attempt == 0 && strstr(err, "cannot connect") && model_is_brain(m)) {
+            if (!brain_start(m, err, errlen))      /* (its server not running yet: start it, once) */
+                return false;
+            continue;
+        }
         if (status < 0) {
             if (strstr(err, "no answer within") || strstr(err, "nothing came for"))
                 snprintf(err + strlen(err), errlen - strlen(err),

@@ -2,16 +2,18 @@
 # Copyright (C) 2026 Olivier Moulin
 # Part of SIEOS, released under the GNU General Public License version 3
 # (GPL-3.0); see the LICENSE file.
-# mkiso.sh OUT.iso ISODIR BUILDDIR
+# mkiso.sh OUT.iso ISODIR BUILDDIR [PARTITION.img]
 #
 # Build a hybrid ISO that boots with both legacy BIOS (El Torito, GRUB
 # i386-pc) and UEFI (El Torito EFI system partition, GRUB x86_64-efi).
 # The GRUB images embed every module they need plus an early config that
-# locates the ISO file system and loads /boot/grub/grub.cfg.
+# locates the ISO file system and loads /boot/grub/grub.cfg.  PARTITION.img,
+# if given, is appended as one more GPT partition (the brain image's packages).
 set -e
 OUT=$1
 ISODIR=$2
 BUILD=$3
+APPEND=$4
 GRUB_MODS="normal configfile search search_fs_file test echo multiboot2 iso9660 part_msdos part_gpt"
 
 echo "SIEOS" > "$ISODIR/boot/sieos.tag"
@@ -39,4 +41,5 @@ xorriso -as mkisofs -quiet -o "$OUT" -R -J -V SIEOS \
     -b boot/grub/bios.img -no-emul-boot -boot-load-size 4 -boot-info-table \
     --grub2-boot-info --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
     -eltorito-alt-boot -e boot/efi.img -no-emul-boot -isohybrid-gpt-basdat \
+    ${APPEND:+-append_partition 3 0x83 "$APPEND" -appended_part_as_gpt} \
     "$ISODIR"

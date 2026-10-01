@@ -26,6 +26,7 @@ struct sia_session {
     int nhist, caphist;
     char last_action[96];
     int vision;                        /* the model sees images: 1, 0, -1 not tested */
+    bool compact;                      /* a local model: the programs are not tools of their own, sh runs them */
     struct sbuf img;                   /* an image for the model's next turn (a user message), or empty */
     char img_caption[200];
     int img_hist;                      /* the history entry holding the image shown, -1 none */

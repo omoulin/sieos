@@ -186,6 +186,22 @@ void brelse(struct buf *b)
     b->ref--;
 }
 
+/* A block's buffer if the cache holds it (no reference taken), else NULL. */
+struct buf *bcache_peek(int dev, uint64_t blk)
+{
+    return dev >= 0 && dev < NBLKDEV ? lookup(dev, blk) : NULL;
+}
+
+/* n blocks from blk were written to dev directly: the cache's copies follow. */
+void bcache_wrote(int dev, uint64_t blk, size_t n, const uint8_t *data)
+{
+    for (size_t i = 0; i < n; i++) {
+        struct buf *b = lookup(dev, blk + i);
+        if (b && b->valid)
+            memcpy(b->data, data + i * dev_bsize[dev], dev_bsize[dev]);
+    }
+}
+
 /* A file system on dev went away: forget its blocks. */
 void bcache_forget(int dev)
 {

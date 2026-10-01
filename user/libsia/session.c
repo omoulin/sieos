@@ -43,6 +43,7 @@ struct sia_session *sia_session_new(const struct sia_config *cfg, enum sia_role 
     s->io = *io;
     s->auto_approve = cfg->auto_approve;
     s->vision = cfg->vision;
+    s->compact = model_is_brain(&s->mdl);
     s->max_steps = MAX_STEPS;
     s->history_max = HISTORY_MAX;
     s->img_hist = -1;
@@ -128,10 +129,14 @@ static const char *tools_json(struct sia_session *s)
     sb_init(&s->tooljson);
     struct sbuf *out = &s->tooljson;
     sb_putc(out, '[');
+    bool first = true;
     for (int i = 0; i < s->ntools; i++) {
         const struct sia_tool *t = &s->tools[i];
-        if (i)
+        if (s->compact && t->path[0])
+            continue;                                  /* (a program: through sh, see system_prompt) */
+        if (!first)
             sb_putc(out, ',');
+        first = false;
         sb_puts(out, "{\"type\":\"function\",\"function\":{\"name\":");
         sb_json_str(out, t->name);
         sb_puts(out, ",\"description\":");
@@ -221,6 +226,13 @@ static void hist_trim(struct sia_session *s)
     }
 }
 
+/*
+ * The system prompt comes first in every request, and the model's server
+ * keeps what it computed for the start the requests share (a local model
+ * reads its instructions and tools, several thousand tokens, only once): so
+ * nothing in it changes during a conversation but the directory.  The date
+ * is the day's, not the time's.
+ */
 static void system_prompt(struct sia_session *s, struct sbuf *b)
 {
     char cwd[256] = "/", host[64] = "sieos";
@@ -237,16 +249,14 @@ static void system_prompt(struct sia_session *s, struct sbuf *b)
     if (s->role == SIA_ROLE_APP) {                     /* a program's own instructions, then where it is */
         if (s->instructions)
             s->instructions(s, &p, s->instructions_ctx);
-        sb_printf(&p, "The user is '%s' on host '%s'; the date is %04d-%02d-%02d %02d:%02d UTC.\n",
-                  pw ? pw->pw_name : "user", host, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-                  tm.tm_min);
+        sb_printf(&p, "The user is '%s' on host '%s'; the date is %04d-%02d-%02d.\n",
+                  pw ? pw->pw_name : "user", host, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
     } else {
         sb_printf(&p,
                   "You are sia, the assistant built into SIEOS (Synthetic Intelligence Enhanced Operating System), "
                   "a small Unix-like operating system (Solaris/BSD flavour, x86_64). The user is '%s' on host '%s'; "
-                  "the current directory is %s; the date is %04d-%02d-%02d %02d:%02d UTC.\n",
-                  pw ? pw->pw_name : "user", host, cwd, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-                  tm.tm_min);
+                  "the current directory is %s; the date is %04d-%02d-%02d (the date command tells the time).\n",
+                  pw ? pw->pw_name : "user", host, cwd, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
     }
     if (s->role == SIA_ROLE_TERMINAL)
         sb_puts(&p,
@@ -271,9 +281,17 @@ static void system_prompt(struct sia_session *s, struct sbuf *b)
                 "the panel.\n"
                 "- Do not ask for confirmation for harmless actions; just do them and say what you did.\n");
     if (s->role != SIA_ROLE_APP) {
-        sb_puts(&p,
-                "- Only the commands available as tools exist on this system (there is no editor or Python). Use "
-                "write_file to create files and cd to change directory.");
+        sb_puts(&p, s->compact ? "- Only the programs listed here exist on this system (there is no editor or Python). Use "
+                                 "write_file to create files and cd to change directory."
+                               : "- Only the commands available as tools exist on this system (there is no editor or "
+                                 "Python). Use write_file to create files and cd to change directory.");
+        if (s->compact) {                              /* a local model: the programs through sh */
+            sb_puts(&p, " Run programs with the sh tool; they are:");
+            for (int i = 0; i < s->ntools; i++)
+                if (s->tools[i].path[0])
+                    sb_printf(&p, " %s", s->tools[i].name);
+            sb_puts(&p, ".");
+        }
         if (sia_find_tool(s, "open_app") && access(SIA_MIR_PROGRAM, X_OK) == 0)   /* (MiR: a package) */
             sb_puts(&p, " When the user wants an application made, open MiR (open_app with app mir and their "
                         "request as path): it writes, builds and tests applications.");

@@ -161,13 +161,15 @@ static void scan_partitions(int disk)
                 continue;
             uint64_t table = *(uint64_t *)(sec + 72);
             uint32_t n = *(uint32_t *)(sec + 80), esize = *(uint32_t *)(sec + 84);
-            if (esize < 128 || esize > 512 || n > 128)
-                return;
+            if (esize < 128 || esize > 512 || (esize & (esize - 1)) || n > 1024)
+                return;                              /* (128 entries usually; xorriso's hybrid images have 248) */
             int slice = 0;
+            uint64_t have = ~0UL;                    /* the table's sector in sec */
             for (uint32_t i = 0; i < n && slice < 16; i++) {
                 uint64_t off = i * esize;
-                if (blk_read(disk, table * unit + off / SECTOR_SIZE, 1, sec) < 0)
+                if (off / SECTOR_SIZE != have && blk_read(disk, table * unit + off / SECTOR_SIZE, 1, sec) < 0)
                     return;
+                have = off / SECTOR_SIZE;
                 uint8_t *e = sec + off % SECTOR_SIZE;
                 static const uint8_t zero[16];
                 if (!memcmp(e, zero, 16))

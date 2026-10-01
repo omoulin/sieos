@@ -11,3 +11,12 @@ ifconfig -r > /etc/resolv.conf 2>/dev/null
 [ -f /etc/wifi.conf ] && dladm connect-wifi -q &
 # the power management settings kept by poweradm (/etc/power.conf)
 [ -f /etc/power.conf ] && poweradm -r
+# a live system (the root in memory) started from a USB drive with a package partition
+# (sieos-usb-brain.img's: sia-brain): its packages, kept on the drive, and their database
+if mount | grep -q '^/dev/ramdisk on / ' && mount -L sieos-pkg /usr/pkg 2>/dev/null; then
+    if [ -d /usr/pkg/.pkgdb ]; then
+        rm -rf /var/lib/pkg
+        /usr/gnu/bin/ln -s /usr/pkg/.pkgdb /var/lib/pkg
+    fi
+    echo "SIEOS: packages from the USB drive (/usr/pkg)."
+fi

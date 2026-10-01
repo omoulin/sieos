@@ -280,7 +280,30 @@ static long do_getsockopt(long fd, long level, long name, void *val, unsigned in
     return 0;
 }
 
+static long sock_call(struct trapframe *tf, bool *handled);
+
+/* A call on a descriptor holds its file while it runs (it may sleep: accept,
+ * connect, recv ...): another thread closing the descriptor meanwhile must not
+ * free the socket under it. */
 long syscall_sock_v2(struct trapframe *tf, bool *handled)
+{
+    struct file *held = NULL;
+    switch (tf->rax) {
+    case SIEOS_SYS_bind: case SIEOS_SYS_listen: case SIEOS_SYS_accept: case SIEOS_SYS_connect:
+    case SIEOS_SYS_shutdown: case SIEOS_SYS_recvfrom: case SIEOS_SYS_sendto: case SIEOS_SYS_recvmsg:
+    case SIEOS_SYS_sendmsg: case SIEOS_SYS_getsockname: case SIEOS_SYS_getpeername:
+    case SIEOS_SYS_setsockopt: case SIEOS_SYS_getsockopt:
+        if ((long)tf->rdi >= 0 && (long)tf->rdi < NOFILE && current->ofile[tf->rdi])
+            held = file_dup(current->ofile[tf->rdi]);
+        break;
+    }
+    long r = sock_call(tf, handled);
+    if (held)
+        file_close(held);
+    return r;
+}
+
+static long sock_call(struct trapframe *tf, bool *handled)
 {
     uint64_t a1 = tf->rdi, a2 = tf->rsi, a3 = tf->rdx, a4 = tf->r10, a5 = tf->r8, a6 = tf->r9;
     *handled = true;

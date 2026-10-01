@@ -142,6 +142,17 @@ void sia_set_instructions(struct sia_session *s, void (*fn)(struct sia_session *
  * model may stay silent (ms); 0 keeps the default (16, 60000, 300000). */
 void sia_set_limits(struct sia_session *s, int max_steps, size_t history_bytes, int silence_ms);
 
+/* sia-brain, the local model (the package sia-brain): when it is installed,
+ * a profile of its own, "sia-brain (local)", and the model sia uses when no
+ * other is registered.  Its server (llama-server, run by the sia-brain
+ * command) is started when a request finds it not running. */
+#define SIA_BRAIN_MODEL   "/usr/pkg/share/sia-brain/sia-brain.gguf"
+#define SIA_BRAIN_COMMAND "/usr/pkg/bin/sia-brain"
+#define SIA_BRAIN_NAME    "sia-brain (local)"
+#define SIA_BRAIN_PORT    8095
+#define SIA_BRAIN_URL     "http://127.0.0.1:8095/v1/chat/completions"
+bool sia_brain_installed(void);
+
 /* MiR (Make it Real, the package mir): sia opens it when the user wants an application made */
 #define SIA_MIR_PROGRAM "/usr/pkg/bin/facet-mir"
 

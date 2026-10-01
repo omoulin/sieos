@@ -14,7 +14,9 @@
  *                grub.cfg with root=<DISK>s1 (/usr/share/sieos/esp.img, patched)
  *   s1  the rest SIEOS's root file system: ext4 (mke2fs), then a copy of the
  *                running root (/proc, /tmp, /dev/pts, /dev/shm, /mnt and other
- *                mounts are left empty)
+ *                mounts are left empty; but a USB drive's package partition
+ *                on /usr/pkg, sieos-usb-brain.img's, is copied, its database
+ *                .pkgdb to /var/lib/pkg)
  *
  * Without -y it asks for the disk's name again as the confirmation.  The
  * progress is printed as lines the Facet installer reads:
@@ -226,7 +228,21 @@ static void write_gpt(int fd, uint64_t bytes, uint32_t bs, uint64_t *esp_first, 
 
 static unsigned long long total_bytes, copied_bytes;
 static int last_pct = -1;
-static dev_t root_dev;
+static dev_t root_dev, pkg_dev;          /* pkg_dev: a package partition on /usr/pkg (see rootfs/etc/rc), or 0 */
+#define PKG_DB "/usr/pkg/.pkgdb"
+
+static bool copied_dev(dev_t dev)
+{
+    return dev == root_dev || (pkg_dev && dev == pkg_dev);
+}
+
+/* A name in dir not copied there: mke2fs's lost+found; the package partition's database (to /var/lib/pkg). */
+static bool left_out(const char *dir, const char *name)
+{
+    if (!strcmp(name, "lost+found") && (!strcmp(dir, "/") || !strcmp(dir, "/usr/pkg")))
+        return true;
+    return pkg_dev && !strcmp(dir, "/usr/pkg") && !strcmp(name, ".pkgdb");
+}
 
 static void progress(void)
 {
@@ -255,7 +271,7 @@ static void measure(const char *path)
         return;
     if (S_ISREG(st.st_mode))
         total_bytes += st.st_size;
-    if (!S_ISDIR(st.st_mode) || skipped(path) || st.st_dev != root_dev)
+    if (!S_ISDIR(st.st_mode) || skipped(path) || !copied_dev(st.st_dev))
         return;
     DIR *d = opendir(path);
     if (!d)
@@ -272,7 +288,7 @@ static void measure(const char *path)
 }
 
 /* Hard links: the first path of each (device, inode) copied with st_nlink > 1. */
-static struct link { ino_t ino; char path[256]; } links[512];
+static struct link { dev_t dev; ino_t ino; char path[256]; } links[512];
 static int nlinks;
 
 static void set_attrs(const char *dst, const struct stat *st)
@@ -291,9 +307,13 @@ static void copy(const char *src, const char *dst)
         printf("warning %s: %s\n", src, strerror(errno));
         return;
     }
+    if (pkg_dev && S_ISLNK(st.st_mode) && !strcmp(src, "/var/lib/pkg")) {
+        copy(PKG_DB, dst);                        /* (the link rc made: the database itself) */
+        return;
+    }
     if (S_ISREG(st.st_mode) && st.st_nlink > 1) {
         for (int i = 0; i < nlinks; i++)
-            if (links[i].ino == st.st_ino) {
+            if (links[i].ino == st.st_ino && links[i].dev == st.st_dev) {
                 char to[1024];
                 snprintf(to, sizeof(to), "%s%s", TARGET, links[i].path);
                 if (link(to, dst) == 0)
@@ -301,13 +321,14 @@ static void copy(const char *src, const char *dst)
             }
         if (nlinks < (int)(sizeof(links) / sizeof(links[0]))) {
             links[nlinks].ino = st.st_ino;
+            links[nlinks].dev = st.st_dev;
             strncpy(links[nlinks++].path, src, sizeof(links[0].path) - 1);
         }
     }
     if (S_ISDIR(st.st_mode)) {
         if (strcmp(dst, TARGET) && mkdir(dst, 0700) < 0 && errno != EEXIST)
             fail("creating %s: %s", dst);
-        if (!skipped(src) && st.st_dev == root_dev) {
+        if (!skipped(src) && copied_dev(st.st_dev)) {
             DIR *d = opendir(src);
             if (!d)
                 fail("reading %s: %s", src);
@@ -315,8 +336,8 @@ static void copy(const char *src, const char *dst)
             while ((e = readdir(d))) {
                 if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
                     continue;
-                if (!strcmp(src, "/") && !strcmp(e->d_name, "lost+found"))
-                    continue;                     /* (mke2fs made one) */
+                if (left_out(src, e->d_name))
+                    continue;
                 char s2[1024], d2[1024];
                 snprintf(s2, sizeof(s2), "%s/%s", strcmp(src, "/") ? src : "", e->d_name);
                 snprintf(d2, sizeof(d2), "%s/%s", dst, e->d_name);
@@ -509,6 +530,10 @@ int main(int argc, char **argv)
     struct stat rs;
     stat("/", &rs);
     root_dev = rs.st_dev;
+    struct stat ps, ls;
+    if (stat("/usr/pkg", &ps) == 0 && ps.st_dev != root_dev && lstat("/var/lib/pkg", &ls) == 0 &&
+        S_ISLNK(ls.st_mode) && stat(PKG_DB, &ls) == 0)
+        pkg_dev = ps.st_dev;
     measure("/");
     progress();
     copy("/", TARGET);

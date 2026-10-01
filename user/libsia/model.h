@@ -49,4 +49,7 @@ struct json *model_chat_stream(struct model *m, const char *messages, const char
 /* Cheap request to check the endpoint, model name and key. */
 bool model_ping(struct model *m, char *err, size_t errlen);
 
+/* The endpoint is sia-brain's, the local model (on this computer's processor). */
+bool model_is_brain(const struct model *m);
+
 #endif

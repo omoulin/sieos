@@ -19,6 +19,7 @@ struct shmseg;
 struct vm_area {
     uint64_t start, end;
     int prot;                    /* SIEOS_PROT_* */
+    bool was_writable;           /* PROT_WRITE at some time: its shared file pages may differ from the file */
     int flags;                   /* SIEOS_MAP_* */
     struct inode *ip;            /* file mapping: referenced */
     uint64_t off;                /* file offset of start */

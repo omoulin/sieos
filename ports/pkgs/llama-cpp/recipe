@@ -1,0 +1,28 @@
+# llama.cpp: the engine of local models (sia-brain).  llama-server answers
+# OpenAI-style chat requests (what sia speaks) on 127.0.0.1; llama-cli chats
+# in a terminal.  On the processor only for now: an engine per x86-64
+# generation (x86-64, SSE4.2, AVX, AVX2, AVX-512...), the best one chosen
+# when it starts.  No web interface, no TLS (it serves this computer only).
+# sieos.patch: SIEOS beside Linux and the BSDs in its platform lists.
+name     = llama-cpp
+version  = 0.5.0-1
+summary  = llama.cpp: runs local language models on the processor (llama-server, llama-cli)
+source   = https://github.com/ggml-org/llama.cpp/archive/refs/tags/v0.5.0.tar.gz
+sha256   = fef9ed754f4e031fb5c663c29260feda4ebc241abb68d64a81c0f1df5f1748e2
+build    = printf '%s\n' "set(CMAKE_SYSTEM_NAME Linux)" "set(CMAKE_SYSTEM_PROCESSOR x86_64)" \
+               "set(CMAKE_C_COMPILER $(command -v $CC))" "set(CMAKE_CXX_COMPILER $(command -v $CXX))" \
+               "set(CMAKE_FIND_ROOT_PATH $TREE/build/sysroot)" "set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)" \
+               "set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)" "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)" \
+               "set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)" > sieos.cmake
+           cmake -S . -B b -DCMAKE_TOOLCHAIN_FILE=$PWD/sieos.cmake -DCMAKE_BUILD_TYPE=Release \
+               -DCMAKE_INSTALL_PREFIX=$PREFIX -DBUILD_SHARED_LIBS=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+               -DGGML_NATIVE=OFF -DGGML_BACKEND_DIR=$PREFIX/lib -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF \
+               -DLLAMA_OPENSSL=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_BUILD_APP=OFF \
+               -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON > /dev/null
+           cmake --build b -j$JOBS --target llama-server llama-cli
+install  = mkdir -p $DESTDIR$PREFIX/bin $DESTDIR$PREFIX/lib
+           cp b/bin/llama-server b/bin/llama-cli $DESTDIR$PREFIX/bin/
+           cp -P b/bin/libggml-cpu-*.so b/bin/libggml-base.so* b/bin/libggml.so* b/bin/libllama.so* \
+               b/bin/libllama-common.so* b/bin/libmtmd.so* b/bin/libllama-server-impl.so b/bin/libllama-cli-impl.so \
+               $DESTDIR$PREFIX/lib/
+           mkdir -p $DESTDIR$PREFIX/share/doc/llama-cpp && cp LICENSE $DESTDIR$PREFIX/share/doc/llama-cpp/

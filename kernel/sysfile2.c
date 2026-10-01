@@ -176,12 +176,18 @@ static long do_rw(long fd, void *ubuf, size_t n, bool write, bool positioned, in
         return -EBADF;
     if (!user_ok(ubuf, n, !write))
         return -EFAULT;
-    if (positioned) {
-        if (off < 0)
-            return -EINVAL;
-        return write ? file_pwrite(f, ubuf, n, off) : file_pread(f, ubuf, n, off);
-    }
-    return write ? file_write(f, ubuf, n) : file_read(f, ubuf, n);
+    if (positioned && off < 0)
+        return -EINVAL;
+    /* the file is held while the transfer may sleep: another thread closing
+     * the descriptor meanwhile must not free it (its pipe, socket ...) */
+    file_dup(f);
+    long r;
+    if (positioned)
+        r = write ? file_pwrite(f, ubuf, n, off) : file_pread(f, ubuf, n, off);
+    else
+        r = write ? file_write(f, ubuf, n) : file_read(f, ubuf, n);
+    file_close(f);
+    return r;
 }
 
 static long do_rwv(long fd, const struct sieos_iovec *uiov, int cnt, bool write)

@@ -216,8 +216,6 @@ uint64_t pmm_alloc(void)
 
 uint64_t pmm_alloc_contig(size_t n)
 {
-    if (n == 1)
-        return pmm_alloc();
     uint64_t run = 0, start = 0;
     spin_lock(&pmm_lock);
     for (uint64_t f = 256; f < nframes; f++) {      /* lowest first: early callers get 32-bit DMA memory */

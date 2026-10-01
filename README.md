@@ -27,7 +27,7 @@ Requirements (Debian 13 or Ubuntu):
 
 ```sh
 sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-amd64-bin \
-                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl flex bison
+                 xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl flex bison cmake
 ```
 
 - **KVM:** the build boots SIEOS in QEMU once, to compile ksh93 on SIEOS itself. With
@@ -36,6 +36,8 @@ sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-am
 - **Wi-Fi firmware** (optional): the AX201 firmware is copied from the build host's
   `/lib/firmware`: `firmware-iwlwifi` on Debian (from `non-free-firmware`),
   `linux-firmware` on Ubuntu.
+- `cmake` builds llama.cpp, for the local model (`make brain`, the `llama-cpp` and
+  `sia-brain` packages and `make usb-brain`).
 - `gperf`, `pkg-config` and `perl` are for the web browser's libraries (NetSurf's own
   build generates code with them); `openssl` makes the package signing key and signs
   package indexes (see Packages).
@@ -71,6 +73,7 @@ make run-uefi   # the same through UEFI firmware (OVMF)
 make run-nox    # serial console only (no window)
 make run-iso    # the ISO alone: root fs is a RAM disk shipped on the ISO
 make usb        # build/sieos-usb.img, to write to a USB drive for a real PC
+make usb-brain  # build/sieos-usb-brain.img: the same with sia-brain, the local model (2.7 GB)
 make run-usb    # boot sieos-usb.img in QEMU (UEFI) as a USB drive
 make fsck       # check build/disk.img with e2fsck
 make newdisk    # reset build/disk.img to the pristine root file system
@@ -84,6 +87,10 @@ see `lsblk`, not a partition):
 ```sh
 sudo dd if=build/sieos-usb.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
+
+`sieos-usb-brain.img` (a drive of 4 GB or more) adds a partition with the local model,
+sia-brain, installed; packages installed later on a live system started from it stay on
+the drive (see [sia-brain](#sia-brain-the-local-model)).
 
 The guest gets 1 GiB of memory (`make run MEM=2G` for more). The disk carries `gcc`,
 `g++`, `as`, `ld` and the other binutils, the C and C++ headers and libraries, and
@@ -144,7 +151,7 @@ so it can be written to a USB stick.
 | Permissions | Owner/group/other `rwx` checks on every open, exec and directory search. Creating or removing files needs write+search on the directory. Sticky directories (`/tmp`) restrict deletion. The superuser bypasses checks. `chown` is restricted to root, as in Solaris's `rstchown`, and a non-root `chown` clears the set-ID bits. |
 | Network     | PCI enumeration; interrupt-driven Intel e1000 and virtio-net drivers, USB Ethernet adapters (CDC ECM and NCM, such as the Realtek RTL8153 ones, plugged in at any time), with any number of cards as eth0, eth1, ... (each with its own addresses, DHCP and IPv6, and routes chosen per destination). Ethernet, ARP (with a queue for packets awaiting resolution), IPv4 routing through a gateway, loopback (127.0.0.0/8), ICMP echo, UDP, **TCP** and a **DHCP** client at boot. **IPv6**: neighbor discovery, stateless address autoconfiguration from router advertisements (with MTU and RDNSS), ICMPv6 echo, `::1`, and TCP and UDP over IPv6; `AF_INET6` sockets are dual-stack (IPv4-mapped peers) unless `IPV6_V6ONLY`. TCP covers the three-way handshake, MSS and window scaling, flow control, out-of-order reassembly, NewReno congestion control, RTT-based retransmission with backoff, zero-window probes, FIN/RST, TIME_WAIT and listen/accept backlogs. The **BSD sockets** API integrates with `read`/`write`/`poll`, including non-blocking `connect` (`EINPROGRESS`, then `poll` and `SO_ERROR`). Ports below 1024 and raw sockets require root. **Wi-Fi**: Intel Wi-Fi 6 AX201 (Intel's firmware), scanning and WPA2-Personal, with `dladm`. |
 | Power       | ACPI power-off (S5) and restart (reset register, 0xCF9), the power button; MWAIT idle states, Intel HWP or P-states with performance/balanced/power-saver policies, per-core and package temperatures (Intel DTS, AMD), passive cooling and a critical shutdown, desktop fan speeds (Nuvoton, ITE); `poweradm` and the Power and Temperature window. |
-| Disks       | ATA (bus-master DMA) and NVMe disks, GPT and MBR partitions (`/dev/dsk/c4t0d0s1`), a RAM disk from the ISO, lofi devices; `root=` on the boot command line picks the root partition. |
+| Disks       | ATA (bus-master DMA) and NVMe disks, USB drives present at boot (mass storage, bulk-only: `c8t0d0p0`), GPT and MBR partitions (`/dev/dsk/c4t0d0s1`), a RAM disk from the ISO, lofi devices; `root=` on the boot command line picks the root partition; `mount -L LABEL DIR`. |
 | Files       | ext4 read/write (see below), tmpfs (`/tmp`, `/dev/shm`), pipes and named FIFOs, `AF_UNIX` sockets (with descriptor passing), pseudo-terminals, `poll()`, record locks, and device nodes `/dev/console`, `/dev/tty`, `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/fb0` and `/dev/events` stored as real ext4 character-special inodes. |
 | Random      | `/dev/random` and `/dev/urandom` never block. They output a ChaCha20 keystream that is rekeyed after every read, from a pool fed by interrupt timing, the RTC and RDSEED/RDRAND when the CPU has them. |
 | TLS         | A TLS 1.3 client in user space (`user/tls`): X25519 and P-256 key exchange, AES-128/256-GCM, RSA-PSS/PKCS #1 and ECDSA (P-256, P-384) signatures, X.509 chain and host-name validation against `/etc/ssl/certs.pem` (the Mozilla roots), plus optional site roots in `/etc/ssl/local.pem`, and session resumption with tickets. |
@@ -371,7 +378,7 @@ pkg install git                   # with its dependencies (curl, openssl, zlib)
 pkg list; pkg upgrade; pkg remove git
 ```
 
-Available: **git**, **rsync**, **openssh** (the ssh client: `ssh`, `scp`, `sftp`,
+Available: **sia-brain** (the local model, see below) and **llama-cpp**, **git**, **rsync**, **openssh** (the ssh client: `ssh`, `scp`, `sftp`,
 `ssh-keygen`, `ssh-agent`), **curl**, **openssl**, **zlib**, **lua**, **pigz**, **mir** and
 **facet-git**. **Git** (`facet-git`) is a window for git:
 - repositories: add, clone, new;
@@ -443,7 +450,6 @@ nsgenbind (built for the build machine, with flex and bison) generates from WebI
   curl (below) uses Mbed TLS, which also speaks TLS 1.2.
 - The C library has `eventfd()`, but the kernel has no `eventfd2` system call yet: it
   fails with `ENOSYS` (ports must be configured without it, as curl is).
-- The web browser has no JavaScript (see Web browser).
 - SMP uses a big kernel lock. User code, page faults and simple system calls run in
   parallel across CPUs, and disk I/O releases the lock while it waits; the rest of the
   kernel does not run in parallel. Device interrupts go to the
@@ -466,6 +472,22 @@ SIEOS menu.
   which has the compilers.
 
 [docs/mir.md](docs/mir.md) has the details: the tools sia uses, the limits, the image test.
+
+## sia-brain: the local model
+
+**sia-brain** is a language model that runs on the computer's own processor, with no
+network or account. It is built on Mistral AI's open model **Ministral 3 3B Instruct**
+(Apache License 2.0), compressed to 2 GB, and runs on llama.cpp.
+
+- **Getting it:** `pkg install sia-brain`, or the USB image `sieos-usb-brain.img`, which
+  has it installed.
+- **Using it:** *sia-brain (local)* in Settings > Assistant. sia uses it when no other
+  model is registered, and starts it when needed (`sia-brain start|stop|status`).
+- **What it needs:** about 4 GB of free memory. It answers at a speed that depends on the
+  processor: about 20 tokens (some 15 words) a second in QEMU on 4 CPUs.
+
+[docs/sia-brain.md](docs/sia-brain.md) has the details: the licence, the USB image's
+partition, how the model is made (`make brain`).
 
 ## Layout
 
@@ -496,7 +518,7 @@ rootfs/          files copied into the root file system (/etc, /home, /root, /us
 tools/           build helpers: ISO, FAT, kernel symbols, shadow, permissions, downloads,
                  building on SIEOS under QEMU (nativebuild.py), host-side tests
 iso/boot/grub/   GRUB configuration (the ISO's, and the installed system's)
-build/           output (ignored by git): kernel.elf, sieos.iso, disk.img, sieos-usb.img,
+build/           output (ignored by git): kernel.elf, sieos.iso, disk.img, sieos-usb.img, sieos-usb-brain.img,
                  cross/ and native/ (toolchains), sysroot/, ports/
 ```
 

@@ -10,11 +10,18 @@
 
 #include "kernel.h"
 
+/* The FPU/SSE/AVX registers of an LWP: an xsave image (standard form: the
+ * fxsave layout's 512 bytes, the 64-byte header, then AVX's and AVX-512's
+ * areas), or the fxsave image alone on a processor without XSAVE. */
+#define FPU_AREA 3072
 struct fpu_state {
-    uint8_t area[512];                     /* fxsave image */
-} __attribute__((aligned(16)));
+    uint8_t area[FPU_AREA];
+} __attribute__((aligned(64)));
 
 extern struct fpu_state fpu_default;       /* after fninit, MXCSR = 0x1F80 */
+extern bool cpu_xsave;                     /* XSAVE in use (CR4.OSXSAVE) */
+extern uint64_t cpu_xcr0;                  /* the state components enabled: x87, SSE, AVX, AVX-512 */
+extern uint32_t cpu_xsave_size;            /* bytes of an xsave image for them (512 without XSAVE) */
 extern uint64_t pte_nx;                    /* PTE_NX if supported, else 0 */
 extern bool pat_wc;                        /* PWT alone selects write-combining (PAT entry 1) */
 

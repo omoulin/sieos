@@ -1,0 +1,10 @@
+# sia-brain: the local model of sia, built on Mistral AI's Ministral 3 3B
+# Instruct (Apache 2.0), quantized by the build (IQ4_XS, about 1.96 GB):
+# sia uses it without any account or network.  Runs on llama-cpp.
+name     = sia-brain
+version  = 1.0-1
+summary  = sia-brain: sia's local model (built on Mistral AI's Ministral 3 3B, Apache 2.0), no network needed
+source   = tree:user/sia-brain
+depends  = llama-cpp
+build    = make TREE="$TREE"
+install  = make install DESTDIR=$DESTDIR PREFIX=$PREFIX TREE="$TREE"

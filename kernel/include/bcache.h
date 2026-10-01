@@ -30,6 +30,8 @@ struct buf *bzero_get(int dev, uint64_t blk);          /* zero-filled buffer, no
 int  bwrite(struct buf *b);
 void brelse(struct buf *b);
 void bcache_forget(int dev);                           /* drop dev's unreferenced blocks */
+struct buf *bcache_peek(int dev, uint64_t blk);         /* the cached buffer, or NULL (no reference) */
+void bcache_wrote(int dev, uint64_t blk, size_t n, const uint8_t *data);   /* written past the cache */
 void bprefetch(int dev, uint64_t blk, int n);          /* read ahead [blk, blk + n) in one device read */
 size_t bcache_blocks(void);
 

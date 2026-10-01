@@ -451,6 +451,12 @@ static bool setup_frame_v2(struct trapframe *tf, int sig, struct ksigaction *ka,
     bool alt = (ka->flags & SIEOS_SA_ONSTACK) && !(l->altstack_flags & SIEOS_SS_DISABLE) && !on_altstack(l, tf->rsp);
     if (alt)
         sp = l->altstack_sp + l->altstack_size;
+    uint64_t xsp = 0, top = sp;
+    if (cpu_xsave) {                             /* the whole extended state, above the ucontext */
+        sp -= cpu_xsave_size;
+        sp &= ~63UL;
+        xsp = sp;
+    }
     sp -= sizeof(sieos_ucontext_t);
     sp &= ~15UL;
     uint64_t ucp = sp;
@@ -458,10 +464,17 @@ static bool setup_frame_v2(struct trapframe *tf, int sig, struct ksigaction *ka,
     sp &= ~15UL;
     uint64_t sip = sp;
     sp -= 8;                                     /* return address 0: handlers must not return */
-    if (!user_range_ok(current->pml4, sp, ucp + sizeof(sieos_ucontext_t) - sp, true))
+    if (!user_range_ok(current->pml4, sp, top - sp, true))
         return false;
     static sieos_ucontext_t uc;                  /* under the big kernel lock */
     make_ucontext(l, tf, previous_mask(l), &uc);
+    if (xsp) {                                   /* (make_ucontext saved it in l->fpu) */
+        memcpy((void *)xsp, l->fpu.area, cpu_xsave_size);
+        uc.uc_flags |= SIEOS_UC_XSAVE;
+        uc.uc_filler[0] = SIEOS_UC_XSAVE_MAGIC;
+        uc.uc_filler[1] = (long)xsp;
+        uc.uc_filler[2] = cpu_xsave_size;
+    }
     if (on_altstack(l, tf->rsp) || alt)
         uc.uc_stack.ss_flags |= SIEOS_SS_ONSTACK;
     memcpy((void *)ucp, &uc, sizeof(uc));
@@ -764,8 +777,22 @@ long sys2_context(int op, sieos_ucontext_t *ucp, struct trapframe *tf)
         sig_gregs_to_tf(uc.uc_mcontext.gregs, tf);
     if (uc.uc_flags & SIEOS_UC_SIGMASK)
         l->sig_blocked = sig_set_from_v2(&uc.uc_sigmask) & ~UNBLOCKABLE;
+    bool restore = false;
+    if ((uc.uc_flags & SIEOS_UC_XSAVE) && cpu_xsave && uc.uc_filler[0] == SIEOS_UC_XSAVE_MAGIC &&
+        uc.uc_filler[2] == (long)cpu_xsave_size && user_ok((void *)uc.uc_filler[1], cpu_xsave_size, false)) {
+        /* the whole extended state; what would make xrstor fault is cleaned: the
+         * components not enabled, the compacted form, the header's reserved bytes */
+        memcpy(l->fpu.area, (const void *)uc.uc_filler[1], cpu_xsave_size);
+        uint64_t *hdr = (uint64_t *)(l->fpu.area + 512);
+        hdr[0] &= cpu_xcr0;
+        memset(&hdr[1], 0, 56);
+        restore = true;
+    }
     if (uc.uc_flags & SIEOS_UC_FPU) {
         memcpy(l->fpu.area, &uc.uc_mcontext.fpregs, 512);
+        restore = true;
+    }
+    if (restore) {
         uint32_t *mxcsr = (uint32_t *)(l->fpu.area + 24);
         *mxcsr &= 0xFFFF;                            /* reserved MXCSR bits would fault */
         fpu_restore(&l->fpu);

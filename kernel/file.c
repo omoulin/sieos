@@ -77,6 +77,8 @@ void fd_close(struct proc *p, int fd)
     p->fdflags[fd] = 0;
     if (f->ip)
         flock_release(f->ip, p->pid);
+    if (f->type == FD_SOCKET && f->sock && f->ref > 1)
+        wakeup(f->sock);                         /* (a thread sleeping in accept on it sees it gone) */
     file_close(f);
 }
 

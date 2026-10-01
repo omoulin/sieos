@@ -175,6 +175,15 @@ state, previous mask and stack) and an `sieos_siginfo_t` on the user stack, or o
 the alternate stack when `SIEOS_SA_ONSTACK` is set. It then calls
 `handler(sig, siginfo *, ucontext *)` with a zero return address.
 
+**Extended state (AVX).** On a CPU with XSAVE, the frame also carries the full XSAVE
+area (x87, SSE, AVX and, where the CPU has it, AVX-512) in standard form: 64-byte
+aligned, above the `ucontext` on the stack. `uc_flags` then has `SIEOS_UC_XSAVE`
+(`0x10`), and `uc_filler[0..2]` hold `SIEOS_UC_XSAVE_MAGIC`, the area's address and
+its size. `uc_mcontext.fpregs` stays the x87/SSE part. `setcontext` restores the area
+too, after sanitizing it: the header's `xstate_bv` is masked to the components the
+kernel enabled (XCR0), its reserved bytes are zeroed and MXCSR's reserved bits
+cleared. A `ucontext` without the flag restores the x87/SSE part only.
+
 **Handlers must not return.** libc installs a wrapper around each user handler
 that, when the handler returns, restores the interrupted state with
 `context(SIEOS_SETCONTEXT, ucp)`. This mirrors Solaris's `sigacthandler`.
@@ -332,8 +341,9 @@ Milestone 2 (done):
 - **Errors.** The carry flag is set and `rax` holds the positive Solaris errno. `rdx` carries
   the second value of `getpid`, `getuid` and `getgid`. Interrupted calls restart
   (`SA_RESTART`, or stop/continue) or return `SIEOS_EINTR`.
-- **FPU/SSE.** The FPU and SSE registers are saved per process with `fxsave`/`fxrstor` at
-  every context switch. A new program starts with `fninit` and MXCSR `0x1F80`, and `fork`
+- **FPU/SSE/AVX.** The FPU, SSE and (with XSAVE) AVX and AVX-512 registers are saved per
+  LWP at every context switch: `xsave64`/`xrstor64` into a 3 KiB area when the CPU has
+  XSAVE (XCR0: x87, SSE, AVX, and AVX-512 when it fits), `fxsave`/`fxrstor` otherwise. A new program starts with `fninit` and MXCSR `0x1F80`, and `fork`
   copies the registers.
 - **NX.** `EFER.NXE` is enabled when the CPU has it. Segments get the permissions of their
   `p_flags`: text is read-only and executable, data is not executable. The stack, heap and
@@ -2789,6 +2799,26 @@ Milestone 34 (done): Facet skins.
 - **Non-blocking `connect`** (`EINPROGRESS`, then `poll` and `SO_ERROR`; `EALREADY`,
   `EISCONN`), which curl's IPv6-to-IPv4 fallback needs.
 
+### Milestone 70: the local model (sia-brain); USB drives; AVX
+
+- **AVX in programs.** XSAVE is enabled (CR4.OSXSAVE, XCR0), so programs may use AVX,
+  AVX2 and AVX-512; their state is saved per LWP and carried in signal frames
+  (`SIEOS_UC_XSAVE`, see section 5).
+- **USB drives.** The xHCI driver drives mass storage (bulk-only transport, SCSI READ/WRITE
+  (10) and (16), 512-byte blocks): `c8tNd0p0`, partitions `c8tNd0sM`, for drives present at
+  boot. GPT tables with more than 128 entries (xorriso's 248) are read. `mount -L LABEL DIR`
+  mounts the ext4 file system with that label; `/etc/mnttab` is a link to `/proc/mnttab`.
+- **Disk writes.** ext4 writes whole contiguous blocks in runs (up to 1 MiB) without reading
+  them first. The ATA driver's DMA memory is taken below 4 GiB (`pmm_alloc_contig` serves
+  the lowest memory first, one page too). Before, a machine with more than 4 GiB fell back to PIO, and
+  drivers of one page were refused.
+- **Exits.** Read-only shared file mappings are not written back (a mapping remembers whether
+  it was ever writable): ending a process that mapped a 2 GB model no longer rewrote it.
+  A socket closed while another thread waits in `accept` wakes it with `EBADF`; blocking
+  calls hold their file.
+- **sia-brain**: llama.cpp (package `llama-cpp`) and the model (package `sia-brain`), see
+  the README.
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -2855,6 +2885,7 @@ Milestone 34 (done): Facet skins.
 | 60 | the AX201's start for the integrated 22000 family: persistence bit, forced power gating, boot LTR, ALIVE handshake (done; ALIVE confirmed on the Surface) |
 | 61 | Wi-Fi stage 2: receive processing, the command queue, INIT/NVM commands, the NVM's information, the MAC address (done) |
 | 62 | Wi-Fi stage 3: the runtime configuration (antennas, SoC, power, regulatory domain), UMAC scans, the wifi() call, dladm, the Settings Wi-Fi page (done) |
+| 70 | the local model (sia-brain, llama.cpp); AVX (XSAVE) in programs and signal frames; USB drives (mass storage); faster disk writes; `mount -L` (done) |
 | 69 | NetSurf (the web browser); the mouse wheel (`EV_WHEEL`); `FCT_WIN_POINTER`; pressed buttons; non-blocking connect (done) |
 | 68 | Wi-Fi 802.11n/ac (HT/VHT, 40/80 MHz, 2x2, QoS), Wi-Fi power save (powermode), no boot pause (done) |
 | 67 | Installed disks boot (8.3 name of the boot archive on the ESP); the full root on the USB image; no model connection in any image; Settings > Assistant; GPL-3.0 notices (done) |

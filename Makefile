@@ -10,6 +10,7 @@
 #                 GPU=intel passes the host's Intel GPU to it (tools/vfio-gpu.sh)
 #   make run-iso  boot the ISO alone (root fs is a RAM disk from the ISO)
 #   make usb      build/sieos-usb.img, to write to a USB drive and boot a real PC
+#   make usb-brain  build/sieos-usb-brain.img: the same, with sia-brain (the local model, 2.5 GB)
 #   make run-usb  boot that image in QEMU (UEFI) as a USB drive
 #   make newdisk  reset build/disk.img to the pristine root file system
 #   make toolchain  the x86_64-pc-sieos cross compiler (build/cross)
@@ -80,6 +81,7 @@ E2FS_BINS := $(PORTS)/$(E2FS)/misc/mke2fs $(PORTS)/$(E2FS)/e2fsck/e2fsck
 NETLIB_TARS := zlib-1.3.2.tar.xz libpng-1.6.58.tar.xz jpegsrc.v9f.tar.gz expat-2.8.5.tar.xz \
                freetype-2.14.3.tar.xz mbedtls-3.6.7.tar.bz2 curl-8.22.0.tar.xz netsurf-all-3.11.tar.gz
 PORT_URLS := http://gondor.apana.org.au/~herbert/dash/files/$(DASH).tar.gz \
+             https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-BF16.gguf \
              https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz \
              https://download.sourceforge.net/libpng/libpng-1.6.58.tar.xz \
              https://ijg.org/files/jpegsrc.v9f.tar.gz \
@@ -372,6 +374,8 @@ $(ROOTIMG): $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(
 	cp $(PKG_BIN) $(ROOTFS)/bin/
 	mkdir -p $(ROOTFS)/usr/pkg/bin $(ROOTFS)/usr/pkg/lib $(ROOTFS)/var/lib/pkg $(ROOTFS)/var/cache/pkg $(ROOTFS)/etc/pkg/keys
 	cp $(PKG_PUB) $(ROOTFS)/etc/pkg/keys/build.pub
+	@# the mount table where Solaris keeps it (mount, getmntent): the kernel's
+	ln -sfn /proc/mnttab $(ROOTFS)/etc/mnttab
 	cp $(ABI2TEST) $(ROOTFS)/bin/abi2test
 	cp $(DASH_BIN) $(ROOTFS)/bin/sh
 	@# Intel's Wi-Fi firmware (AX201: Qu/QuZ with the Hr radio), from the build host's linux-firmware
@@ -525,8 +529,8 @@ run-uefi: all
 # sieos-usb.img: a hybrid image (the ISO's layout: MBR + GPT, an EFI system
 # partition, BIOS boot) to write to a USB drive for a real PC:
 #     sudo dd if=build/sieos-usb.img of=/dev/sdX bs=4M conv=fsync status=progress
-# The root file system is a RAM disk loaded from the drive (the kernel has no
-# USB storage driver), so changes are lost at power-off.  It is the hard disk's
+# The root file system is a RAM disk loaded from the drive (by GRUB: the boot
+# loader's modules must sit below 4 GiB), so changes are lost at power-off.  It is the hard disk's
 # root, native toolchain included (USB_ROOT_MB large), which the installer
 # copies to the disk.
 # It has no model connection: sia asks for one on first use (or Settings > Assistant).
@@ -871,6 +875,55 @@ $(PORTS)/.netsurf: $(PORTS)/.lib-netsurf $(PORTS)/.host-png $(PORTS)/.host-nsgen
 .PHONY: netsurf
 netsurf: $(PORTS)/.netsurf
 
+# ---------------------------------------------------------------- sia-brain
+#
+# sia's local model: Mistral AI's Ministral 3 3B Instruct (2512, Apache 2.0),
+# from Mistral's own BF16 GGUF, quantized here to IQ4_XS (about 1.96 GB) with
+# llama.cpp's tools built for the build host (cmake), guided by an importance
+# matrix: ports/sia-brain/imatrix.gguf, computed once on SIEOS's
+# documentation and sources (make brain-imatrix computes it again: about 20
+# minutes, the model downloaded first: 6.9 GB).  The package sia-brain
+# (user/sia-brain) carries the result; llama-cpp runs it.
+JOBS        ?= $(shell nproc)
+LLAMA_VER   := 0.5.0
+LLAMA_TGZ   := llama.cpp-v$(LLAMA_VER).tar.gz
+BRAIN_SRC   := Ministral-3-3B-Instruct-2512-BF16.gguf
+BRAIN       := $(BUILD)/brain
+BRAIN_GGUF  := $(BRAIN)/sia-brain.gguf
+BRAIN_IMAT  := ports/sia-brain/imatrix.gguf
+LLAMA_HOST  := $(PORTS)/llama-host
+
+$(PORTS_DL)/$(LLAMA_TGZ):
+	@mkdir -p $(PORTS_DL)
+	cd $(PORTS_DL) && $(abspath tools/fetch.sh) https://github.com/ggml-org/llama.cpp/archive/refs/tags/v$(LLAMA_VER).tar.gz $(LLAMA_TGZ)
+	cd $(PORTS_DL) && grep " $(LLAMA_TGZ)$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
+
+$(LLAMA_HOST)/.built: $(PORTS_DL)/$(LLAMA_TGZ)
+	rm -rf $(LLAMA_HOST) $(LLAMA_HOST)-src && mkdir -p $(LLAMA_HOST)-src
+	tar xzf $< -C $(LLAMA_HOST)-src --strip-components=1
+	cmake -S $(LLAMA_HOST)-src -B $(LLAMA_HOST) -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_CURL=OFF \
+		-DLLAMA_OPENSSL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF \
+		-DLLAMA_USE_PREBUILT_UI=OFF -DBUILD_SHARED_LIBS=OFF >$(PORTS)/llama-host.log 2>&1
+	cmake --build $(LLAMA_HOST) -j$(JOBS) --target llama-quantize llama-imatrix >>$(PORTS)/llama-host.log 2>&1 || \
+		{ tail -20 $(PORTS)/llama-host.log; exit 1; }
+	touch $@
+
+$(BRAIN_GGUF): $(PORTS_DL)/$(BRAIN_SRC) $(LLAMA_HOST)/.built $(BRAIN_IMAT)
+	@mkdir -p $(BRAIN)
+	$(LLAMA_HOST)/bin/llama-quantize --imatrix $(BRAIN_IMAT) $(PORTS_DL)/$(BRAIN_SRC) $@.tmp IQ4_XS $(JOBS) \
+		>$(BRAIN)/quantize.log 2>&1 || { tail -20 $(BRAIN)/quantize.log; exit 1; }
+	mv $@.tmp $@
+
+.PHONY: brain brain-imatrix
+brain: $(BRAIN_GGUF)
+brain-imatrix: $(PORTS_DL)/$(BRAIN_SRC) $(LLAMA_HOST)/.built
+	@mkdir -p $(BRAIN)
+	cat README.md docs/*.md user/mir/share/guide.txt user/mir/share/templates/window.c user/facet-apps/clock.c \
+		user/facet-apps/viewer.c user/libsia/session.c > $(BRAIN)/calibration.txt
+	$(LLAMA_HOST)/bin/llama-imatrix -m $(PORTS_DL)/$(BRAIN_SRC) -f $(BRAIN)/calibration.txt -o $(BRAIN)/imatrix.gguf \
+		-c 512 --chunks 120 -t $(JOBS) >$(BRAIN)/imatrix.log 2>&1
+	cp $(BRAIN)/imatrix.gguf $(BRAIN_IMAT)
+
 # ---------------------------------------------------------------- packages
 #
 # Software added to SIEOS as packages (pkg, /usr/pkg): a recipe per package in
@@ -888,11 +941,12 @@ PKG_NAMES := $(notdir $(wildcard ports/pkgs/*))
 pkg_deps = $(shell sed -n 's/^depends *= *//p' ports/pkgs/$(1)/recipe)
 # (SIEOS's own software, "source = tree:DIR": rebuilt when DIR changes, on the SDK and libsia's headers)
 pkg_tree = $(shell sed -n 's/^source *= *tree://p' ports/pkgs/$(1)/recipe)
+PKG_EXTRA_sia-brain := $(BRAIN_GGUF)               # (what a package's build takes from the build)
 pkg_tree_deps = $(if $(call pkg_tree,$(1)),$(shell find $(call pkg_tree,$(1)) -type f) $(SDK_STAMP) \
 		$(wildcard user/libsia/*.h) $(wildcard user/facet-apps/common.*))
 define PKG_RULE
 $(PKGWORK)/.built-$(1): ports/pkgs/$(1)/recipe $(wildcard ports/pkgs/$(1)/*.patch) tools/pkgbuild.py \
-		$(call pkg_tree_deps,$(1)) \
+		$(call pkg_tree_deps,$(1)) $(PKG_EXTRA_$(1)) \
 		$(foreach d,$(call pkg_deps,$(1)),$(PKGWORK)/.built-$(d)) | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
 	python3 tools/pkgbuild.py ports/pkgs/$(1) $(REPO) $(PKGWORK)
 	@touch $$@
@@ -906,6 +960,38 @@ repo: pkgs $(PKG_PUB)
 repo-serve: repo
 	@echo "serving $(REPO) at http://127.0.0.1:8000/ (SIEOS in QEMU: http://10.0.2.2:8000/)"
 	python3 -m http.server 8000 --bind 127.0.0.1 --directory $(REPO)
+
+# ---------------------------------------------------------------- USB drive with the local model
+#
+# sieos-usb-brain.img: sieos-usb.img (the same boot partitions and root) with a
+# third partition, ext4 labelled sieos-pkg, holding /usr/pkg with sia-brain
+# (the local model) and llama-cpp installed, and their database (.pkgdb).  A
+# live system started from it mounts that partition on /usr/pkg (rootfs/etc/rc,
+# through the USB storage driver), so these packages, and those installed
+# later, stay on the drive; the installer copies them to the disk.
+#     sudo dd if=build/sieos-usb-brain.img of=/dev/sdX bs=4M conv=fsync status=progress
+USBBRAIN      := $(BUILD)/sieos-usb-brain.img
+BRAINPART     := $(BUILD)/brainpkg.img
+BRAIN_PKGS    := llama-cpp sia-brain
+BRAIN_FREE_MB ?= 256                              # room left for packages installed later
+pkg_file = $(REPO)/$(1)-$(shell sed -n 's/^version *= *//p' ports/pkgs/$(1)/recipe).spkg
+$(BRAINPART): $(BRAIN_PKGS:%=$(PKGWORK)/.built-%) tools/pkgstage.py tools/mkperms.sh
+	rm -rf $(BUILD)/brainpkg $@
+	python3 tools/pkgstage.py $(BUILD)/brainpkg $(foreach p,$(BRAIN_PKGS),$(call pkg_file,$(p)))
+	mkfs.ext4 -q -F -b 4096 -L sieos-pkg -E root_owner=0:0 -d $(BUILD)/brainpkg $@ \
+		$$(( $$(du -sm $(BUILD)/brainpkg | cut -f1) * 103 / 100 + $(BRAIN_FREE_MB) ))M
+	tools/mkperms.sh $(BUILD)/brainpkg /dev/null > $(BUILD)/brainpkg.debugfs
+	debugfs -w -f $(BUILD)/brainpkg.debugfs $@ >/dev/null 2>&1
+	e2fsck -fy $@ >/dev/null 2>&1; [ $$? -le 1 ]
+	rm -rf $(BUILD)/brainpkg
+
+$(USBBRAIN): $(USBIMG) $(BRAINPART)
+	tools/mkiso.sh $@ $(BUILD)/usbdir $(BUILD)/usbwork $(BRAINPART)
+
+.PHONY: usb-brain
+usb-brain: $(USBBRAIN)
+	@echo "Write $(USBBRAIN) to a USB drive (all its data is lost) with"
+	@echo "    sudo dd if=$(USBBRAIN) of=/dev/sdX bs=4M conv=fsync status=progress"
 
 # a self-hosting check: GNU make configured and built on SIEOS, then rebuilt by itself
 .PHONY: native-make-test

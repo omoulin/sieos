@@ -715,6 +715,10 @@ static void sample_sia(void)
     sia_registered = sia_model[0] && endpoint[0];
     char profile[64] = "";
     read_key(cfg, "profile", profile, sizeof(profile));
+    if (!sia_registered && access("/usr/pkg/share/sia-brain/sia-brain.gguf", R_OK) == 0) {
+        sia_registered = true;                         /* (sia uses the local model: libsia's sia-brain) */
+        snprintf(profile, sizeof(profile), "sia-brain (local)");
+    }
     if (profile[0] && sia_registered)                  /* (the name the user gave it, Settings) */
         snprintf(sia_model, sizeof(sia_model), "%s", profile);
     static char seen[sizeof(sia_model)] = "\x01";      /* another model chosen (Settings): the strip's sia follows */

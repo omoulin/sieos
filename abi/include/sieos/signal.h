@@ -243,6 +243,11 @@ typedef struct {
 #define SIEOS_UC_CPU     0x04
 #define SIEOS_UC_FPU     0x08
 #define SIEOS_UC_ALL     (SIEOS_UC_SIGMASK | SIEOS_UC_STACK | SIEOS_UC_CPU | SIEOS_UC_FPU)
+/* The whole extended state (AVX, AVX-512) of a signal's frame: an xsave image
+ * (standard form) on the stack, uc_filler[0] the magic, [1] its address,
+ * [2] its size; setcontext restores it too.  (fpregs stays the x87/SSE part.) */
+#define SIEOS_UC_XSAVE   0x10
+#define SIEOS_UC_XSAVE_MAGIC 0x5853415645L  /* "XSAVE" */
 
 typedef struct __attribute__((aligned(16))) sieos_ucontext {
     unsigned long uc_flags;

@@ -20,11 +20,19 @@
  * first configuration is its vendor's (the Realtek RTL8153 of the Surface
  * USB-C adapter and docks, ...) is put in its CDC configuration.
  *
+ * USB drives (mass storage, bulk-only transport, SCSI commands: sticks,
+ * card readers, external disks) present at boot are disks (c8tNd0p0, their
+ * partitions c8tNd0sM): blk_init reads their partition tables.  The
+ * transfers are synchronous, from the reader's or writer's context: it
+ * takes the controller from the tick (busy) for each command, 64 KiB at
+ * most.  A drive plugged in later is registered, but its partitions are
+ * only read at the next boot.
+ *
  * Of the other devices only the HID interfaces with an interrupt IN endpoint are
  * used: boot keyboards and mice in the boot protocol (fixed reports),
  * anything else (tablets, keyboards and mice that are not boot devices) in
- * the report protocol with its report descriptor (hid.c).  Mass storage,
- * audio, ... are left alone: the root file system is already in memory.
+ * the report protocol with its report descriptor (hid.c).  Audio, ... are
+ * left alone.
  *
  * Enumeration is synchronous (commands and control transfers wait for
  * their completion events, dispatching the others meanwhile), at boot and
@@ -42,6 +50,7 @@
 #include "poll.h"
 #include "net.h"
 #include "smp.h"
+#include "blkdev.h"
 
 #define MAX_HC      4
 #define MAX_DEV     32
@@ -62,6 +71,7 @@
 #define TRB_EVAL_CTX      13
 #define TRB_RESET_EP      14
 #define TRB_SET_DEQ       16
+#define TRB_STOP_EP       15
 #define TRB_EV_TRANSFER   32
 #define TRB_EV_COMMAND    33
 #define TRB_EV_PORT       34
@@ -107,6 +117,7 @@ struct xhci;
 enum { EP_INT_IN, EP_BULK_IN, EP_BULK_OUT };
 
 struct usbnet;
+struct usbstor;
 
 struct usb_ep {
     bool used, halted;
@@ -122,6 +133,7 @@ struct usb_ep {
     uint64_t buf_pa;
     struct hid *hid;                /* NULL: a hub's status change endpoint */
     struct usbnet *net;             /* a network adapter's bulk endpoint */
+    struct usbstor *stor;           /* a drive's bulk endpoint (its transfers are waited for) */
     uint8_t nbuf;                   /* interrupt IN: transfers kept queued (buf split in nbuf) */
     int8_t tag[RING_TRBS];          /* ... the buffer of each TRB */
 };
@@ -148,6 +160,22 @@ struct usbnet {
     uint16_t seq, out_div, out_rem;
     struct spinlock lock;           /* the OUT ring: send may run on any CPU */
     uint64_t rx_frames, tx_frames, tx_drops;
+};
+
+/* A USB drive (bulk-only transport, LUN 0). */
+#define STOR_POOL   4
+#define STOR_MAX    (64 * 1024)     /* bytes a command: one TRB (its buffer may not cross 64 KiB) */
+struct usbstor {
+    bool used, gone;                /* gone: unplugged (its disk stays, and fails) */
+    struct usb_dev *d;
+    struct usb_ep *in, *out;
+    int iface, dev;                 /* the interface; the disk's device number */
+    uint32_t tag;
+    uint32_t bsize;                 /* the drive's block size: 512 (others are not used) */
+    uint64_t blocks;
+    uint8_t *buf, *cmd;             /* STOR_MAX at a 64 KiB boundary; a page: CBW at 0, CSW at 512 */
+    uint64_t buf_pa, cmd_pa;
+    char what[48];                  /* "SanDisk Cruzer Blade" */
 };
 
 struct usb_dev {
@@ -199,7 +227,9 @@ static int nhc;
 static struct usb_dev devs[MAX_DEV];
 static struct hid hids[MAX_DEV * MAX_EP];
 static struct usbnet nets[NET_POOL];
-static bool busy;                   /* enumerating or polling: the tick keeps out */
+static struct usbstor stors[STOR_POOL];
+static int nstor;
+static bool busy;                   /* enumerating, polling or a drive's command: the others keep out */
 static bool debug;
 static int nkbd, nmouse, nnet;
 static void usbnet_event(struct usb_ep *e, volatile struct trb *ev, uint32_t cc, uint32_t residual);
@@ -342,6 +372,8 @@ static void transfer_event(struct xhci *hc, volatile struct trb *ev)
         struct usb_ep *e = &d->ep[i];
         if (!e->used || e->dci != dci)
             continue;
+        if (e->stor)
+            return;                              /* (late: its command timed out) */
         if (e->net) {
             usbnet_event(e, ev, cc, residual);
             return;
@@ -375,7 +407,7 @@ static void transfer_event(struct xhci *hc, volatile struct trb *ev)
 static bool events(struct xhci *hc, uint64_t want, uint32_t *status, uint32_t *ctrl)
 {
     bool found = false;
-    int n = 0;
+    int n = 0, used = 0;
     while (!found && n++ < 4 * RING_TRBS) {
         volatile struct trb *ev = &hc->ev[hc->ev_idx];
         if ((ev->ctrl & 1) != hc->ev_cycle)
@@ -394,8 +426,9 @@ static bool events(struct xhci *hc, uint64_t want, uint32_t *status, uint32_t *c
             hc->ev_idx = 0;
             hc->ev_cycle ^= 1;
         }
+        used++;
     }
-    if (n > 1)
+    if (used)                                    /* (the one wanted, first, too: else the ring fills up) */
         wr64(hc->rt, 0x20 + 0x18, (hc->ev_pa + hc->ev_idx * sizeof(struct trb)) | 8);   /* ERDP, EHB */
     return found;
 }
@@ -521,6 +554,17 @@ static void dev_free(struct usb_dev *d)
                 n->ifp->present = false;
             d->ep[i].net = NULL;
             nnet--;
+        }
+    for (int i = 0; i < d->nep; i++)
+        if (d->ep[i].stor) {
+            struct usbstor *st = d->ep[i].stor;
+            if (!st->gone && i == 0) {
+                kprintf("usb %s: drive %s removed: %s fails until the next boot\n", d->name, st->what, blk_name(st->dev));
+                nstor--;
+            }
+            st->gone = true;
+            st->d = NULL;
+            d->ep[i].stor = NULL;
         }
     d->used = false;
 }
@@ -867,6 +911,7 @@ static bool usbnet_setup(struct usb_dev *d, const struct cdc_info *ci)
         e->burst = d->speed >= SPEED_SS ? src[k]->burst : 0;
         e->interval = 0;
         e->hid = NULL;
+        e->stor = NULL;
         e->net = n;
         ring_reset(&e->ring);
     }
@@ -926,6 +971,314 @@ static bool usbnet_setup(struct usb_dev *d, const struct cdc_info *ci)
     return true;
 }
 
+/* ---------------------------------------------------------------- drives (mass storage) */
+
+struct stor_info { int iface; struct cdc_ep in, out; };
+
+static inline void put32be(uint8_t *p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
+static inline uint32_t get32be(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
+static inline void put32le(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+static inline uint32_t get32le(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+
+/*
+ * An endpoint back to a known state after a stall, an error or a timeout:
+ * stopped (if it ran) or reset (if it halted), its ring empty, the drive's
+ * halt cleared.  The command that does not apply fails, harmlessly.
+ */
+static void stor_ep_reset(struct usb_dev *d, struct usb_ep *e)
+{
+    uint32_t ep = (uint32_t)d->slot << 24 | (uint32_t)e->dci << 16;
+    command(d->hc, 0, TRB_TYPE(TRB_STOP_EP) | ep, NULL);
+    command(d->hc, 0, TRB_TYPE(TRB_RESET_EP) | ep, NULL);
+    ring_reset(&e->ring);
+    command(d->hc, e->ring.pa | e->ring.cycle, TRB_TYPE(TRB_SET_DEQ) | ep, NULL);
+    control(d, 0x02, 1, 0, e->addr, 0);          /* CLEAR_FEATURE ENDPOINT_HALT */
+}
+
+/* One bulk transfer, waited for: 0, -2 a stall (cleared), -1 an error or a timeout. */
+static int stor_bulk(struct usbstor *s, struct usb_ep *e, uint64_t pa, uint32_t len, uint32_t *done, unsigned ms)
+{
+    struct usb_dev *d = s->d;
+    ring_room(&e->ring, 1);
+    uint64_t t = ring_push(&e->ring, pa, len, TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP);
+    barrier();
+    d->hc->db[d->slot] = e->dci;
+    uint32_t st, c;
+    if (!wait_for(d->hc, t, &st, &c, ms)) {
+        if (debug)
+            kprintf("usb %s: drive: endpoint %02x timed out\n", d->name, e->addr);
+        stor_ep_reset(d, e);
+        return -1;
+    }
+    uint32_t cc = st >> 24, residual = st & 0xFFFFFF;
+    if (done)
+        *done = residual <= len ? len - residual : 0;
+    if (cc == CC_SUCCESS || cc == CC_SHORT)
+        return 0;
+    if (debug)
+        kprintf("usb %s: drive: endpoint %02x completion %u\n", d->name, e->addr, cc);
+    stor_ep_reset(d, e);
+    return cc == 6 ? -2 : -1;
+}
+
+/* Bulk-only reset recovery: the drive's reset, both endpoints cleared. */
+static void stor_recover(struct usbstor *s)
+{
+    control(s->d, 0x21, 0xFF, 0, s->iface, 0);
+    stor_ep_reset(s->d, s->in);
+    stor_ep_reset(s->d, s->out);
+}
+
+/*
+ * A SCSI command through the bulk-only transport, its data in s->buf (len
+ * bytes, in or out): 0 done (*got bytes), 1 the drive reports a failure
+ * (its sense data tells), -1 the transport failed.
+ */
+static int stor_cmd(struct usbstor *s, const uint8_t *cdb, int cdblen, bool in, uint32_t len, uint32_t *got)
+{
+    uint8_t *w = s->cmd;
+    memset(w, 0, 31);
+    put32le(w, 0x43425355);                      /* "USBC" */
+    put32le(w + 4, ++s->tag);
+    put32le(w + 8, len);
+    w[12] = in ? 0x80 : 0;
+    w[14] = cdblen;
+    memcpy(w + 15, cdb, cdblen);
+    if (stor_bulk(s, s->out, s->cmd_pa, 31, NULL, 5000) < 0) {
+        stor_recover(s);
+        return -1;
+    }
+    uint32_t n = 0;
+    if (len && stor_bulk(s, in ? s->in : s->out, s->buf_pa, len, &n, 20000) == -1) {
+        stor_recover(s);                         /* (a stall: cleared, the status follows) */
+        return -1;
+    }
+    uint8_t *csw = s->cmd + 512;
+    int r = stor_bulk(s, s->in, s->cmd_pa + 512, 13, NULL, 20000);
+    if (r == -2)
+        r = stor_bulk(s, s->in, s->cmd_pa + 512, 13, NULL, 20000);
+    if (r < 0 || get32le(csw) != 0x53425355 || get32le(csw + 4) != s->tag || csw[12] > 1) {
+        stor_recover(s);                         /* (not "USBS", another command's, a phase error) */
+        return -1;
+    }
+    uint32_t residue = get32le(csw + 8);
+    if (got)
+        *got = residue < n ? n - residue : n;
+    return csw[12];
+}
+
+/* REQUEST SENSE: the sense key << 16 | ASC << 8 | ASCQ, or -1. */
+static int stor_sense(struct usbstor *s)
+{
+    const uint8_t cdb[6] = { 0x03, 0, 0, 0, 18, 0 };
+    uint32_t n = 0;
+    if (stor_cmd(s, cdb, 6, true, 18, &n) != 0 || n < 14)
+        return -1;
+    return (s->buf[2] & 0xF) << 16 | s->buf[12] << 8 | s->buf[13];
+}
+
+/* Blocks [lba, lba + n) from or to s->buf (n x 512 <= STOR_MAX), a few tries. */
+static bool stor_xfer(struct usbstor *s, uint64_t lba, uint32_t n, bool write)
+{
+    uint8_t cdb[16] = { 0 };
+    int len;
+    if (lba + n > 0xFFFFFFFFUL) {                /* READ (16), WRITE (16) */
+        cdb[0] = write ? 0x8A : 0x88;
+        put32be(cdb + 2, lba >> 32);
+        put32be(cdb + 6, (uint32_t)lba);
+        put32be(cdb + 10, n);
+        len = 16;
+    } else {                                     /* READ (10), WRITE (10) */
+        cdb[0] = write ? 0x2A : 0x28;
+        put32be(cdb + 2, (uint32_t)lba);
+        cdb[7] = n >> 8;
+        cdb[8] = n;
+        len = 10;
+    }
+    for (int tries = 0; tries < 3; tries++) {
+        uint32_t got = 0;
+        int r = stor_cmd(s, cdb, len, !write, n * 512, &got);
+        if (r == 0 && got == n * 512)
+            return true;
+        if (debug)
+            kprintf("usb: drive %s: command %02x: status %d, %u of %u bytes\n", s->what, cdb[0], r, got, n * 512);
+        if (r == 1)
+            stor_sense(s);                       /* (a unit attention, ...: it clears) */
+    }
+    return false;
+}
+
+static void stor_lock(void)
+{
+    while (__atomic_exchange_n(&busy, true, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause");
+}
+
+static void stor_unlock(void)
+{
+    __atomic_store_n(&busy, false, __ATOMIC_RELEASE);
+}
+
+static int stor_rw(void *drv, uint64_t lba, size_t count, void *buf, bool write)
+{
+    struct usbstor *s = drv;
+    uint8_t *p = buf;
+    while (count) {
+        uint32_t n = count < STOR_MAX / 512 ? count : STOR_MAX / 512;
+        stor_lock();                             /* (one command at a time: the tick gets in between) */
+        bool ok = s->d && !s->gone;
+        if (ok && write)
+            memcpy(s->buf, p, n * 512);
+        ok = ok && stor_xfer(s, lba, n, write);
+        if (ok && !write)
+            memcpy(p, s->buf, n * 512);
+        stor_unlock();
+        if (!ok) {
+            kprintf("usb: drive %s: %s of %u blocks at %lu failed\n", s->what, write ? "writing" : "reading", n, lba);
+            return -EIO;
+        }
+        lba += n;
+        count -= n;
+        p += n * 512;
+    }
+    return 0;
+}
+
+static int stor_read(void *drv, uint64_t lba, size_t count, void *buf) { return stor_rw(drv, lba, count, buf, false); }
+static int stor_write(void *drv, uint64_t lba, size_t count, const void *buf)
+{
+    return stor_rw(drv, lba, count, (void *)buf, true);
+}
+
+static const struct blk_ops stor_ops = { stor_read, stor_write };
+
+/* A drive's interface found: its endpoints, then the drive (INQUIRY, ready, capacity), then its disk. */
+static bool stor_setup(struct usb_dev *d, const struct stor_info *si, uint8_t config_value)
+{
+    struct usbstor *s = NULL;                    /* (an unplugged drive keeps its slot: its disk stays) */
+    for (int i = 0; i < STOR_POOL && !s; i++)
+        if (!stors[i].used)
+            s = &stors[i];
+    if (!s) {
+        kprintf("usb %s: %04x:%04x drive: too many drives\n", d->name, d->vendor, d->product);
+        return true;
+    }
+    if (!s->buf) {                               /* 64 KiB at a 64 KiB boundary, below 4 GiB (lowest first) */
+        uint64_t pa = pmm_alloc_contig(31), al = (pa + 0xFFFF) & ~0xFFFFUL;
+        if (!s->cmd_pa)
+            s->cmd_pa = dma_page(d->hc);
+        if (!pa || !s->cmd_pa || (!d->hc->ac64 && al + STOR_MAX > DIRECT_MAP_SIZE)) {
+            if (pa)
+                pmm_free_contig(pa, 31);
+            kprintf("usb %s: drive: no memory for its transfers\n", d->name);
+            return true;
+        }
+        s->buf_pa = al;
+        s->buf = P2V(al);
+        s->cmd = P2V(s->cmd_pa);
+    }
+    if (control(d, 0x00, 9, config_value, 0, 0) < 0)     /* SET_CONFIGURATION */
+        return false;
+    const struct cdc_ep *src[2] = { &si->in, &si->out };
+    for (int k = 0; k < 2; k++) {
+        struct usb_ep *e = &d->ep[k];
+        e->used = true;
+        e->halted = false;
+        e->errors = 0;
+        e->type = k ? EP_BULK_OUT : EP_BULK_IN;
+        e->addr = src[k]->addr;
+        e->dci = (src[k]->addr & 0xF) * 2 + (k ? 0 : 1);
+        e->maxp = src[k]->maxp ? src[k]->maxp : 512;
+        e->burst = d->speed >= SPEED_SS ? src[k]->burst : 0;
+        e->interval = 0;
+        e->hid = NULL;
+        e->net = NULL;
+        e->stor = s;
+        ring_reset(&e->ring);
+    }
+    d->nep = 2;
+    if (!configure_endpoints(d, 0)) {
+        d->nep = 0;
+        return false;
+    }
+    s->d = d;
+    s->in = &d->ep[0];
+    s->out = &d->ep[1];
+    s->iface = si->iface;
+    control(d, 0xA1, 0xFE, 0, si->iface, 1);     /* GET MAX LUN (only LUN 0 is used; it may stall) */
+
+    const uint8_t inquiry[6] = { 0x12, 0, 0, 0, 36, 0 };
+    char what[48] = "";
+    uint32_t n = 0;
+    if (stor_cmd(s, inquiry, 6, true, 36, &n) == 0 && n >= 32) {
+        char v[9], p[17];
+        memcpy(v, s->buf + 8, 8);
+        memcpy(p, s->buf + 16, 16);
+        v[8] = p[16] = 0;
+        for (int i = 7; i >= 0 && (v[i] == ' ' || !v[i]); i--)
+            v[i] = 0;
+        for (int i = 15; i >= 0 && (p[i] == ' ' || !p[i]); i--)
+            p[i] = 0;
+        snprintf(what, sizeof(what), "%s%s%s", v, v[0] && p[0] ? " " : "", p);
+    }
+    const uint8_t tur[6] = { 0 };                /* TEST UNIT READY: a card reader without a card is not */
+    int r = -1;
+    for (int t = 0; t < 30 && (r = stor_cmd(s, tur, 6, false, 0, NULL)) != 0; t++) {
+        if (r < 0 || stor_sense(s) >> 8 == 0x023A)   /* (NOT READY, MEDIUM NOT PRESENT) */
+            break;
+        mdelay(100);
+    }
+    uint64_t blocks = 0;
+    uint32_t bsize = 0;
+    const uint8_t cap10[10] = { 0x25 };
+    if (r == 0 && stor_cmd(s, cap10, 10, true, 8, &n) == 0 && n >= 8) {
+        uint32_t last = get32be(s->buf);
+        bsize = get32be(s->buf + 4);
+        blocks = (uint64_t)last + 1;
+        uint8_t cap16[16] = { 0x9E, 0x10 };      /* READ CAPACITY (16), for 2 TiB and more */
+        cap16[13] = 32;
+        if (last == 0xFFFFFFFF && stor_cmd(s, cap16, 16, true, 32, &n) == 0 && n >= 12) {
+            blocks = ((uint64_t)get32be(s->buf) << 32 | get32be(s->buf + 4)) + 1;
+            bsize = get32be(s->buf + 8);
+        }
+    }
+    if (!blocks || bsize != 512) {
+        kprintf("usb %s: %04x:%04x drive %s: %s, not used\n", d->name, d->vendor, d->product, what,
+                !blocks ? "no medium" : "blocks other than 512 bytes");
+        s->d = NULL;
+        d->ep[0].stor = d->ep[1].stor = NULL;
+        d->nep = 0;
+        return true;
+    }
+    char name[24], desc[64], sz[16];
+    snprintf(name, sizeof(name), "c8t%dd0p0", (int)(s - stors));
+    uint64_t mib = blocks / 2048;
+    if (mib >= 10240)
+        snprintf(sz, sizeof(sz), "%lu GiB", mib >> 10);
+    else if (mib >= 1024)
+        snprintf(sz, sizeof(sz), "%lu.%lu GiB", mib >> 10, (mib & 1023) * 10 / 1024);
+    else
+        snprintf(sz, sizeof(sz), "%lu MiB", mib);
+    s->dev = blk_register(name, blocks, &stor_ops, s);
+    if (s->dev < 0) {
+        kprintf("usb %s: drive %s: no device number left\n", d->name, what);
+        s->d = NULL;
+        d->ep[0].stor = d->ep[1].stor = NULL;
+        d->nep = 0;
+        return true;
+    }
+    s->used = true;
+    s->gone = false;
+    s->blocks = blocks;
+    s->bsize = bsize;
+    strlcpy(s->what, what, sizeof(s->what));
+    snprintf(desc, sizeof(desc), "USB %s, %s", what[0] ? what : "drive", sz);
+    blk_set_desc(s->dev, desc);
+    nstor++;
+    kprintf("usb %s: %04x:%04x drive %s: %s, %s\n", d->name, d->vendor, d->product, what, name, sz);
+    return true;
+}
+
 static void hub_scan(struct usb_dev *hub);
 
 /* After the address: descriptors, configuration, the HID interfaces or the hub. */
@@ -965,6 +1318,8 @@ static bool dev_configure(struct usb_dev *d)
     struct { int iface, sub, proto, rlen; } hidif[MAX_EP];
     int cur_class = -1, cur_iface = 0, cur_sub = 0, cur_proto = 0, cur_alt = 0, cur_rlen = 0;
     bool is_hub = dev_class == 9;
+    struct stor_info si = { .iface = -1 };
+    struct cdc_ep *last_bulk = NULL;             /* (a SuperSpeed companion follows its endpoint) */
     d->nep = 0;
     for (int i = 0; i + 2 <= n && cfg[i] >= 2; i += cfg[i]) {
         uint8_t *x = cfg + i;
@@ -979,6 +1334,18 @@ static bool dev_configure(struct usb_dev *d)
             cur_rlen = 0;
             if (cur_class == 9)
                 is_hub = true;
+            if (cur_class == 8 && cur_sub == 6 && cur_proto == 0x50 && cur_alt == 0 && si.iface < 0)
+                si.iface = cur_iface;            /* mass storage: SCSI, bulk-only */
+            last_bulk = NULL;
+        } else if (x[1] == 5 && x[0] >= 7 && cur_alt == 0 && si.iface >= 0 && cur_iface == si.iface &&
+                   (x[3] & 3) == 2) {            /* the drive's bulk endpoints */
+            last_bulk = (x[2] & 0x80) ? &si.in : &si.out;
+            last_bulk->addr = x[2];
+            last_bulk->maxp = (x[4] | x[5] << 8) & 0x7FF;
+            last_bulk->burst = 0;
+        } else if (x[1] == 0x30 && x[0] >= 6 && last_bulk) {
+            last_bulk->burst = x[2] & 0xF;
+            last_bulk = NULL;
         } else if (x[1] == 0x21 && x[0] >= 9 && cur_class == 3) {   /* HID: the report descriptor's length */
             cur_rlen = x[7] | x[8] << 8;
         } else if (x[1] == 5 && x[0] >= 7 && cur_alt == 0 && (cur_class == 3 || cur_class == 9) &&
@@ -997,6 +1364,7 @@ static bool dev_configure(struct usb_dev *d)
             e->type = EP_INT_IN;
             e->burst = 0;
             e->net = NULL;
+            e->stor = NULL;
             ring_reset(&e->ring);
             e->hid = NULL;
             e->interval = interval_of(d->speed, x[6]);
@@ -1012,6 +1380,8 @@ static bool dev_configure(struct usb_dev *d)
         d->nep = 0;
         return true;
     }
+    if (!d->nep && !is_hub && si.iface >= 0 && si.in.addr && si.out.addr)
+        return stor_setup(d, &si, config_value);
     if (!d->nep && !is_hub) {                    /* a network adapter, perhaps in another configuration */
         struct cdc_info ci;
         bool found = cdc_parse(cfg, n, &ci);
@@ -1444,7 +1814,9 @@ bool usb_summary(char *buf, size_t n)
     int k = snprintf(buf, n, "USB: %d xHCI controller%s, %d keyboard%s, %d pointer%s", nhc, nhc > 1 ? "s" : "",
                      nkbd, nkbd == 1 ? "" : "s", nmouse, nmouse == 1 ? "" : "s");
     if (nnet && k > 0 && (size_t)k < n)
-        snprintf(buf + k, n - k, ", %d network adapter%s", nnet, nnet == 1 ? "" : "s");
+        k += snprintf(buf + k, n - k, ", %d network adapter%s", nnet, nnet == 1 ? "" : "s");
+    if (nstor && k > 0 && (size_t)k < n)
+        snprintf(buf + k, n - k, ", %d drive%s", nstor, nstor == 1 ? "" : "s");
     return true;
 }
 
@@ -1483,9 +1855,8 @@ static void ep_recover(struct usb_dev *d, struct usb_ep *e)
 /* From the timer tick (the boot CPU): events, plugged and unplugged devices, key repeat. */
 void usb_poll(void)
 {
-    if (busy || !nhc)
+    if (!nhc || __atomic_exchange_n(&busy, true, __ATOMIC_ACQUIRE))
         return;
-    busy = true;
     for (int i = 0; i < nhc; i++) {
         struct xhci *hc = &hcs[i];
         if (!hc->ready)
@@ -1502,7 +1873,7 @@ void usb_poll(void)
         if (!d->used)
             continue;
         for (int k = 0; k < d->nep; k++) {
-            if (d->ep[k].used && d->ep[k].halted)
+            if (d->ep[k].used && d->ep[k].halted && !d->ep[k].stor)
                 ep_recover(d, &d->ep[k]);
             if (d->ep[k].hid)
                 hid_tick(d->ep[k].hid);
@@ -1517,7 +1888,7 @@ void usb_poll(void)
                     hub_port(d, p);
         }
     }
-    busy = false;
+    __atomic_store_n(&busy, false, __ATOMIC_RELEASE);
 }
 
 DDI_DRIVER("xhci", DDI_PHASE_BOOT, "USB 3 host controllers (xHCI): keyboards, pointers, Ethernet adapters");

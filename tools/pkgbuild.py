@@ -152,8 +152,9 @@ def pack(r, stage, out):
             size += os.path.getsize(p)
     manifest = ('name: %s\nversion: %s\nsummary: %s\ndepends: %s\nsize: %d\n' %
                 (r['name'], r['version'], r['summary'], ' '.join(r['depends'].split()), size)).encode()
-    raw = io.BytesIO()
-    with tarfile.open(fileobj=raw, mode='w', format=tarfile.USTAR_FORMAT) as t:
+    # (written through gzip as it goes: a package may be gigabytes, a model's)
+    with open(out, 'wb') as fh, gzip.GzipFile(filename='', mode='wb', fileobj=fh, mtime=0, compresslevel=9) as gz, \
+            tarfile.open(fileobj=gz, mode='w', format=tarfile.USTAR_FORMAT) as t:
         ti = tarfile.TarInfo('+MANIFEST')
         ti.size, ti.mode, ti.mtime, ti.uname, ti.gname = len(manifest), 0o644, 0, 'root', 'root'
         t.addfile(ti, io.BytesIO(manifest))
@@ -171,9 +172,6 @@ def pack(r, stage, out):
                     t.addfile(ti, fh)
             else:
                 t.addfile(ti)
-    with open(out, 'wb') as fh:
-        with gzip.GzipFile(filename='', mode='wb', fileobj=fh, mtime=0, compresslevel=9) as gz:
-            gz.write(raw.getvalue())
     return size
 
 

@@ -30,7 +30,36 @@ const char *sia_config_path(void)
     return cfg_path;
 }
 
+bool sia_brain_installed(void)
+{
+    return access(SIA_BRAIN_MODEL, R_OK) == 0 && access(SIA_BRAIN_COMMAND, X_OK) == 0;
+}
+
+static void brain_config(struct sia_config *c)
+{
+    snprintf(c->endpoint, sizeof(c->endpoint), "%s", SIA_BRAIN_URL);
+    snprintf(c->model, sizeof(c->model), "sia-brain");
+    snprintf(c->api_key, sizeof(c->api_key), "local");
+    snprintf(c->profile, sizeof(c->profile), "%s", SIA_BRAIN_NAME);
+    c->vision = 0;                                 /* (text only: the vision encoder is not included) */
+}
+
+/* ~/.sia/config; with no model registered there and sia-brain installed, sia-brain */
+static int config_file_load(struct sia_config *c);
+
 int sia_config_load(struct sia_config *c)
+{
+    int r = config_file_load(c);
+    if (r != 1 && sia_brain_installed()) {
+        bool aa = c->auto_approve;
+        brain_config(c);
+        c->auto_approve = aa;
+        return 1;
+    }
+    return r;
+}
+
+static int config_file_load(struct sia_config *c)
 {
     paths();
     memset(c, 0, sizeof(*c));
@@ -150,6 +179,21 @@ int sia_profiles_load(struct sia_profile *p, int max, char *active, size_t alen)
             snprintf(active, alen, "%s", p[k].name);
     }
     memset(&c, 0, sizeof(c));
+    bool listed = false;                             /* sia-brain, when installed: always listed */
+    for (int i = 0; i < n; i++)
+        listed |= !strcmp(p[i].name, SIA_BRAIN_NAME);
+    if (!listed && n < max && sia_brain_installed()) {
+        struct sia_config b;
+        memset(&b, 0, sizeof(b));
+        brain_config(&b);
+        memset(&p[n], 0, sizeof(p[n]));
+        snprintf(p[n].name, sizeof(p[n].name), "%s", b.profile);
+        snprintf(p[n].endpoint, sizeof(p[n].endpoint), "%s", b.endpoint);
+        snprintf(p[n].model, sizeof(p[n].model), "%s", b.model);
+        snprintf(p[n].api_key, sizeof(p[n].api_key), "%s", b.api_key);
+        p[n].vision = 0;
+        n++;
+    }
     return n;
 }
 

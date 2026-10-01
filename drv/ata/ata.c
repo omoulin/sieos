@@ -196,10 +196,14 @@ static void dma_init(void)
         return;
     uint32_t cmd = pci_read32(pd.bus, pd.dev, pd.func, 0x04);
     pci_write32(pd.bus, pd.dev, pd.func, 0x04, cmd | 0x05);   /* I/O space + bus master */
-    bounce_pa = pmm_alloc_contig(DMA_SECTORS * SECTOR_SIZE / PAGE_SIZE);
-    prdt_pa = pmm_alloc_contig(1);
-    if (!bounce_pa || !prdt_pa || bounce_pa + DMA_SECTORS * SECTOR_SIZE > 0x100000000UL || prdt_pa >= 0x100000000UL)
+    /* the bounce buffer and, after it, the PRD table: one contiguous allocation, which
+     * the allocator takes lowest first (a single page could come from above 4 GB) */
+    bounce_pa = pmm_alloc_contig(DMA_SECTORS * SECTOR_SIZE / PAGE_SIZE + 1);
+    prdt_pa = bounce_pa ? bounce_pa + DMA_SECTORS * SECTOR_SIZE : 0;
+    if (!bounce_pa || prdt_pa + PAGE_SIZE > 0x100000000UL) {
+        kprintf("ata: no DMA memory below 4 GB: PIO only\n");
         return;                                              /* the controller takes 32-bit addresses */
+    }
     prdt = P2V(prdt_pa);
     bm_base = pd.bar[4] & ~3u;
     pci_claim(&pd, "ata");

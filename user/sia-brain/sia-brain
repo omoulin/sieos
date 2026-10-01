@@ -1,0 +1,48 @@
+#!/bin/sh
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
+# sia-brain start|stop|status - the local model's server (llama-server), for
+# this user, on 127.0.0.1:8095 (SIA_BRAIN_PORT).  sia starts it the first
+# time it needs it; its output goes to ~/.sia/brain.log.
+MODEL=/usr/pkg/share/sia-brain/sia-brain.gguf
+PORT=${SIA_BRAIN_PORT:-8095}
+DIR=${HOME:-/tmp}/.sia
+PIDFILE=$DIR/brain.pid
+
+running() {
+    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+case "$1" in
+start)
+    if running; then
+        exit 0
+    fi
+    mkdir -p "$DIR" && chmod 700 "$DIR"
+    # 16K tokens of context (sia's instructions and tools, and the
+    # conversation); one request at a time; the prompt's start reused
+    nohup /usr/pkg/bin/llama-server -m "$MODEL" --host 127.0.0.1 --port "$PORT" --alias sia-brain \
+        --jinja --ctx-size 16384 --parallel 1 --cache-reuse 256 --no-webui \
+        > "$DIR/brain.log" 2>&1 < /dev/null &
+    echo $! > "$PIDFILE"
+    ;;
+stop)
+    if running; then
+        kill "$(cat "$PIDFILE")"
+    fi
+    rm -f "$PIDFILE"
+    ;;
+status)
+    if running; then
+        echo "sia-brain is running (process $(cat "$PIDFILE")), on 127.0.0.1:$PORT"
+    else
+        echo "sia-brain is not running"
+        exit 1
+    fi
+    ;;
+*)
+    echo "usage: sia-brain start|stop|status" >&2
+    exit 2
+    ;;
+esac

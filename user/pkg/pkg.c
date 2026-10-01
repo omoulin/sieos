@@ -563,7 +563,7 @@ static bool tar_next(gzFile z, struct tar_entry *t)
 static bool tar_data(gzFile z, const struct tar_entry *t, int out)
 {
     unsigned long left = t->size, pad = ((t->size + 511) & ~511UL) - t->size;
-    char buf[16384];
+    static char buf[1 << 20];                      /* (big writes: the file system writes them in runs) */
     while (left) {
         int want = left < sizeof(buf) ? (int)left : (int)sizeof(buf);
         int n = gzread(z, buf, want);
@@ -646,7 +646,7 @@ static bool file_sha256(const char *path, char out[65])
         return false;
     struct hash_ctx c;
     hash_init(&c, HASH_SHA256);
-    char buf[16384];
+    static char buf[1 << 20];
     long n;
     while ((n = read(fd, buf, sizeof(buf))) > 0)
         hash_update(&c, buf, n);
@@ -709,6 +709,8 @@ static bool install_file(const char *path, const struct rec *expect, bool force)
         }
     }
     gzFile z = gzopen(path, "rb");
+    if (z)
+        gzbuffer(z, 1 << 20);
     if (!z) {
         warn("%s: %s", path, strerror(errno));
         return false;
@@ -773,6 +775,8 @@ static bool install_file(const char *path, const struct rec *expect, bool force)
 
     /* second pass: extract (each file under a temporary name, then renamed over) */
     z = gzopen(path, "rb");
+    if (z)
+        gzbuffer(z, 1 << 20);
     if (!z || !read_manifest(z, &r))
         goto fail;
     while (tar_next(z, &t)) {

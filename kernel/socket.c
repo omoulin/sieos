@@ -511,14 +511,17 @@ static long sys_listen(int fd, int backlog)
 
 static long sys_accept(int fd, void *ua, unsigned int *ulen)
 {
-    struct socket *s = sockfd(fd, NULL);
+    struct file *f;
+    struct socket *s = sockfd(fd, &f);
     if (!s)
         return -ENOTSOCK;
     if (!s->tcb || tcp_state(s->tcb) != TCP_LISTEN)
         return -EINVAL;
     struct tcb *c;
     while (!(c = tcp_accept_ready(s->tcb))) {
-        if (current->ofile[fd]->flags & O_NONBLOCK_K)
+        if (current->ofile[fd] != f)                 /* closed by another thread while we slept */
+            return -EBADF;
+        if (f->flags & O_NONBLOCK_K)
             return -EAGAIN;
         if (signal_pending(current))
             return -ERESTART;

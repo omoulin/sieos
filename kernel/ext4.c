@@ -1378,6 +1378,44 @@ static long ext4_read(struct inode *ip, void *dst, uint64_t off, size_t n)
     return done;
 }
 
+/* Whole blocks of file data from lblk on (count at most): a run of them
+ * consecutive on the disk, written in one request, without reading them
+ * first (they are replaced) and past the cache (its copies follow).  Stops
+ * at a block the journal holds (the caller writes it the careful way).
+ * Returns the blocks written, or an error if none were. */
+#define RUN_MAX 256                                 /* blocks a request: 1 MiB of 4 KiB blocks */
+static uint8_t run_buf[RUN_MAX * 4096];
+
+static long write_run(struct inode *ip, const uint8_t *src, uint64_t lblk, size_t count)
+{
+    size_t nb = 0, cap = MIN(count, (size_t)(sizeof(run_buf) / bs));
+    uint64_t first = 0;
+    int r = 0;
+    while (nb < cap) {
+        uint64_t pb;
+        r = bmap_alloc(ip, lblk + nb, &pb);
+        if (r < 0)
+            break;
+        struct buf *cached = bcache_peek(V->dev, pb);
+        if ((nb && pb != first + nb) || (cached && V->journaled && jbd_has(&V->jnl, cached)))
+            break;                                  /* (not next on the disk, or journaled: the next pass) */
+        if (!nb)
+            first = pb;
+        memcpy(run_buf + nb * bs, src + nb * bs, bs);
+        nb++;
+    }
+    if (!nb)
+        return r < 0 ? r : 0;
+    struct ext4_vol *v = V;
+    uint32_t spb = bs / SECTOR_SIZE;
+    r = blk_write(v->dev, first * spb, nb * spb, run_buf);
+    V = v;
+    if (r < 0)
+        return r;
+    bcache_wrote(v->dev, first, nb, run_buf);
+    return (long)nb;
+}
+
 static long ext4_write(struct inode *ip, const void *src, uint64_t off, size_t n)
 {
     if (!rw)
@@ -1390,6 +1428,17 @@ static long ext4_write(struct inode *ip, const void *src, uint64_t off, size_t n
         uint64_t lblk = (off + done) / bs;
         uint32_t boff = (off + done) % bs;
         size_t chunk = MIN(n - done, (size_t)(bs - boff));
+        if (boff == 0 && n - done >= bs && bs <= 4096) {   /* whole blocks: in runs */
+            long w = write_run(ip, (const uint8_t *)src + done, lblk, (n - done) / bs);
+            if (w < 0) {
+                err = w;
+                break;
+            }
+            if (w > 0) {
+                done += (size_t)w * bs;
+                continue;
+            }
+        }
         uint64_t pblk;
         int r = bmap_alloc(ip, lblk, &pblk);
         if (r < 0) {

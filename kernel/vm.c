@@ -102,8 +102,8 @@ static void area_hold(struct vm_area *a)
 /* Part [s, e) of an area goes away: write shared file pages back. */
 static void area_writeback(struct vm_area *a, uint64_t s, uint64_t e)
 {
-    if (!a->ip || !(a->flags & SIEOS_MAP_SHARED))
-        return;                                  /* private file pages never go back */
+    if (!a->ip || !(a->flags & SIEOS_MAP_SHARED) || !a->was_writable)
+        return;                                  /* private or never-writable pages never go back */
     for (uint64_t va = s; va < e; va += PAGE_SIZE)
         vfs_writeback(a->ip, (a->off + (va - a->start)) / PAGE_SIZE);
 }
@@ -581,6 +581,7 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
     a->start = start;
     a->end = start + len;
     a->prot = prot;
+    a->was_writable = (prot & SIEOS_PROT_WRITE) != 0;
     a->flags = flags & (SIEOS_MAP_TYPE | SIEOS_MAP_ANON);
     a->ip = f ? idup(f->ip) : NULL;
     a->off = off;
@@ -703,6 +704,7 @@ long vm_mprotect(uint64_t addr, uint64_t len, int prot)
             return -ENOMEM;
         }
         a->prot = prot;
+        a->was_writable |= (prot & SIEOS_PROT_WRITE) != 0;
     }
     for (uint64_t va = next_mapped(p->pml4, addr, end); va < end; va = next_mapped(p->pml4, va + PAGE_SIZE, end)) {
         uint64_t *pte = vmm_pte(p->pml4, va, false);
@@ -793,6 +795,7 @@ long vm_map_shm(struct shmseg *seg, uint64_t addr, uint64_t len, int prot, bool 
     a->start = start;
     a->end = start + len;
     a->prot = prot;
+    a->was_writable |= (prot & SIEOS_PROT_WRITE) != 0;
     a->flags = SIEOS_MAP_SHARED;
     a->shm = seg;
     shm_attach_ref(seg, 1);
@@ -838,6 +841,7 @@ void vm_add_area(struct proc *p, uint64_t start, uint64_t end, int prot, int fla
     a->start = start;
     a->end = end;
     a->prot = prot;
+    a->was_writable |= (prot & SIEOS_PROT_WRITE) != 0;
     a->flags = flags;
     vm_space_lock(p);
     insert_area(p, a);

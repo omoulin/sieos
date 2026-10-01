@@ -1,0 +1,17 @@
+sia-brain - the local model of SIEOS's assistant, sia
+
+sia-brain is built on Ministral 3 3B Instruct (2512), an open model by
+Mistral AI, released under the Apache License, Version 2.0 (the LICENSE
+file next to this one):
+    https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512
+
+What SIEOS changed: the file sia-brain.gguf is Mistral AI's own GGUF of the
+model in BF16 (Ministral-3-3B-Instruct-2512-BF16.gguf, SHA-256
+17ef932bea952e007f9dad63151da5699132ec513d1033d618df7382e24aa3ee),
+quantized to IQ4_XS with llama.cpp's llama-quantize, guided by an importance
+matrix computed with llama-imatrix on SIEOS's own documentation and sources.
+The weights were not trained or fine-tuned further; the vision encoder is not
+included.  The name sia-brain is SIEOS's: Mistral AI does not endorse SIEOS,
+and no trademark of Mistral AI is licensed here.
+
+It runs on llama.cpp (the package llama-cpp, MIT License).
