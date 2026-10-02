@@ -1,7 +1,8 @@
 /*
  * iwlwifi.c - Intel Wi-Fi 6 AX201 (the "22000" family: the Qu MAC with the
  * Hr radio, integrated in Ice Lake as CNVi: 8086:34F0, and in Comet/Tiger
- * Lake): the firmware, its configuration, scanning.
+ * Lake) and Wi-Fi 6E AX210 (the AX210 family: the Ty MAC with the Gf radio,
+ * a PCIe card: 8086:2725): the firmware, its configuration, scanning.
  *
  * The device runs Intel's firmware (/lib/firmware/iwlwifi-Qu-<step>-hr-b0-77.ucode,
  * from linux-firmware, chosen by the MAC's stepping), which the driver
@@ -12,6 +13,15 @@
  * the device's CPUs, which copy the firmware in themselves; the first thing
  * it sends back is the ALIVE notification (status 0xCAFE), in the first
  * receive buffer.
+ *
+ * The AX210 takes the "gen3" context info instead: a peripheral scratch area
+ * (the firmware's sections, the free receive buffers, later the PNVM), the
+ * image loader (the file's IML section) at CSR_IML_DATA_ADDR, 16-byte free
+ * and 32-byte used receive descriptors, one packet a buffer, the UMAC's
+ * peripheral registers 0x300000 higher.  After its ALIVE, the platform NVM
+ * (iwlwifi-ty-a0-gf-a0.pnvm: the section for the SKU the ALIVE names) is
+ * handed over (UREG_DOORBELL_TO_ISR6) before the NVM is read.  Its transmit
+ * command has a 28-byte header, its byte count table counts bytes.
  *
  * Steps: the card is made ready (CSR_HW_IF_CONFIG NIC_READY), reset, its
  * clocks started (APM: INIT_DONE, MAC_CLOCK_READY), configured (the MAC's
@@ -94,14 +104,27 @@
 #define HBUS_PRPH_WDAT     0x44C
 #define HBUS_PRPH_RDAT     0x450
 #define HBUS_TARG_WRPTR    0x460
-#define RFH_Q0_FRBDCB_WIDX_TRG 0x1C80             /* the receive queue's free-buffer write index (22000; AX210: HBUS_TARG_WRPTR) */
+#define RFH_Q0_FRBDCB_WIDX_TRG 0x1C80             /* the receive queue's free-buffer write index (22000, AX210) */
 #define UREG_CPU_INIT_RUN  0xA05C44
+#define UREG_DOORBELL_TO_ISR6 0xA05C04
+#define   ISR6_PNVM          (1U << 20)
+#define UMAC_PRPH_GEN3     0x300000               /* (the AX210's UMAC registers: above the 22000's) */
+/* the AX210's context info (gen3) */
+#define CSR_CTXT_INFO_BOOT_CTRL 0x000
+#define   AUTO_FUNC_BOOT_ENA (1U << 1)
+#define CSR_CTXT_INFO_ADDR 0x118
+#define CSR_IML_DATA_ADDR  0x120
+#define CSR_IML_SIZE_ADDR  0x128
+#define CSR_LTR_LONG_VAL_AD 0x0D4
 
 /* firmware file */
 #define TLV_SEC_RT         19
 #define TLV_PHY_SKU        22
 #define TLV_API_CHANGES    29                     /* (index, 32 bits): what the firmware's commands look like */
 #define TLV_CAPABILITIES   30                     /* (index, 32 bits): what it can do */
+#define TLV_IML            52                     /* the image loader (AX210) */
+#define TLV_HW_TYPE        58                     /* PNVM: the MAC and radio a section is for */
+#define TLV_PNVM_SKU       64                     /* PNVM: a SKU's sections start */
 #define SEP_CPU1_CPU2      0xFFFFCCCC
 #define SEP_PAGING         0xAAAABBBB
 #define MAX_SEC            64
@@ -127,6 +150,7 @@
 #define   INIT_NVM            (1U << 1)
 #define CMD_NVM_ACCESS_DONE 0x00                  /* NVM group */
 #define CMD_NVM_GET_INFO    0x02
+#define CMD_PNVM_INIT_COMPLETE 0xFE               /* NVM group notification: the PNVM taken */
 #define CSR_MAC_ADDR_BASE   0x380                 /* OTP 0x380, 0x384; OEM strap 0x388, 0x38C */
 #define GRP_PHY_OPS 0x4
 #define CMD_SCAN_CFG        0x0C                  /* (long group) the scan's antennas */
@@ -204,6 +228,38 @@ _Static_assert(__builtin_offsetof(struct ctxt_info, free_rbd_addr) == 24, "conte
 _Static_assert(__builtin_offsetof(struct ctxt_info, cmd_queue_addr) == 48, "context info layout");
 _Static_assert(__builtin_offsetof(struct ctxt_info, umac_img) == 192, "context info layout");
 
+/* The AX210's (gen3) context info, peripheral scratch, receive descriptors. */
+struct __attribute__((packed)) ctxt_info_gen3 {
+    uint16_t version, size;
+    uint32_t config;
+    uint64_t prph_info_addr, cr_head_idx_addr, tr_tail_idx_addr, cr_tail_idx_addr, tr_head_idx_addr;
+    uint16_t cr_idx_size, tr_idx_size;
+    uint64_t mtr_addr, mcr_addr;
+    uint16_t mtr_size, mcr_size, mtr_doorbell, mcr_doorbell, mtr_msi, mcr_msi;
+    uint8_t mtr_hdr, mtr_ftr, mcr_hdr, mcr_ftr;
+    uint16_t rings_flags, prph_info_msi;
+    uint64_t prph_scratch_addr;
+    uint32_t prph_scratch_size, reserved;
+};
+_Static_assert(sizeof(struct ctxt_info_gen3) == 104, "gen3 context info layout");
+struct fw_dram { uint64_t umac_img[MAX_SEC], lmac_img[MAX_SEC], virtual_img[MAX_SEC]; };
+struct __attribute__((packed)) prph_scratch {
+    uint16_t mac_id, version, size, reserved;    /* version */
+    uint32_t control_flags, reserved_c;          /* control */
+    uint64_t pnvm_addr; uint32_t pnvm_size, reserved_p;
+    uint64_t hwm_addr; uint32_t hwm_size, debug_token;
+    uint64_t free_rbd_addr; uint32_t reserved_r;
+    uint64_t reduce_power_addr; uint32_t reduce_power_size, reserved_u;
+    uint32_t reserved2[12];
+    struct fw_dram dram;
+};
+_Static_assert(__builtin_offsetof(struct prph_scratch, dram) == 124, "peripheral scratch layout");
+#define PRPH_RB_SIZE_4K    (1U << 16)
+#define PRPH_MTR_MODE      (1U << 17)
+#define PRPH_MTR_FORMAT_256B 0xC0000
+struct __attribute__((packed)) rx_transfer_desc { uint16_t rbid, reserved[3]; uint64_t addr; };
+#define USED_DESC_GEN3     32                     /* (a completion descriptor: the buffer's id at byte 4) */
+
 #define CTXT_TFD_FORMAT_LONG 0x0100
 #define CTXT_RB_CB_SIZE_POS  4
 #define CTXT_RB_SIZE_POS     9
@@ -217,6 +273,16 @@ static struct {
     uint64_t ci_pa;
     uint64_t *free_rbd;
     uint32_t *used_rbd;
+    bool gen3;                                   /* the AX210 family */
+    bool integrated;                             /* CNVi (the AX201), not a PCIe card */
+    struct fw_dram *dram;                        /* where the firmware's sections go (context info, scratch) */
+    struct prph_scratch *scratch;
+    struct rx_transfer_desc *free_rbd3;
+    uint8_t *used_rbd3;
+    uint8_t *iml;
+    uint32_t iml_len;
+    uint32_t sku_id[3];                          /* the ALIVE's: which PNVM section */
+    bool pnvm_done;
     volatile uint16_t *rb_status;
     uint64_t rb_pa[NRBD];
     const char *state;
@@ -298,17 +364,22 @@ static void release_nic(void)
     wr(CSR_GP_CNTRL, rd(CSR_GP_CNTRL) & ~GP_MAC_ACCESS_REQ);
 }
 
+static uint32_t prph_mask(void) { return wf.gen3 ? 0x00FFFFFF : 0x000FFFFF; }
+
 static uint32_t read_prph(uint32_t addr)
 {
-    wr(HBUS_PRPH_RADDR, (addr & 0x000FFFFF) | (3U << 24));
+    wr(HBUS_PRPH_RADDR, (addr & prph_mask()) | (3U << 24));
     return rd(HBUS_PRPH_RDAT);
 }
 
 static void write_prph(uint32_t addr, uint32_t v)
 {
-    wr(HBUS_PRPH_WADDR, (addr & 0x000FFFFF) | (3U << 24));   /* (the 22000 family's mask: 0xA05C44 is 0x05C44) */
+    wr(HBUS_PRPH_WADDR, (addr & prph_mask()) | (3U << 24));  /* (the 22000 family's mask: 0xA05C44 is 0x05C44) */
     wr(HBUS_PRPH_WDAT, v);
 }
+
+/* A UMAC peripheral register's address (the AX210's are 0x300000 higher). */
+static uint32_t umac(uint32_t addr) { return wf.gen3 ? addr + UMAC_PRPH_GEN3 : addr; }
 
 static bool prph_bits(uint32_t addr, uint32_t set, uint32_t clear)
 {
@@ -321,7 +392,7 @@ static bool prph_bits(uint32_t addr, uint32_t set, uint32_t clear)
 
 static bool fail(const char *step)
 {
-    kprintf("wifi: %s: %s (hw rev %08x, rf %08x, GP_CNTRL %08x, HW_IF %08x)\n", wf.fw_name[0] ? wf.fw_name : "AX201",
+    kprintf("wifi: %s: %s (hw rev %08x, rf %08x, GP_CNTRL %08x, HW_IF %08x)\n", wf.fw_name[0] ? wf.fw_name : "Wi-Fi",
             step, wf.hw_rev, wf.rf_id, rd(CSR_GP_CNTRL), rd(CSR_HW_IF_CONFIG));
     wf.state = step;
     return false;
@@ -359,6 +430,15 @@ static bool load_firmware(struct inode *ip, uint32_t *phy)
             break;
         if (type == TLV_PHY_SKU && len >= 4)
             *phy = *(uint32_t *)data;
+        if (type == TLV_IML && len && !wf.iml) {
+            uint64_t pa;
+            if (!dma_copy(data, len, &pa)) {
+                fail("no memory for the image loader");
+                goto out;
+            }
+            wf.iml = P2V(pa);
+            wf.iml_len = len;
+        }
         if ((type == TLV_API_CHANGES || type == TLV_CAPABILITIES) && len >= 8) {
             uint32_t word = *(const uint32_t *)data;
             if (word < 4)
@@ -376,7 +456,7 @@ static bool load_firmware(struct inode *ip, uint32_t *phy)
                     fail("no memory for the firmware sections");
                     goto out;
                 }
-                uint64_t *table = part == 0 ? wf.ci->lmac_img : part == 1 ? wf.ci->umac_img : wf.ci->virtual_img;
+                uint64_t *table = part == 0 ? wf.dram->lmac_img : part == 1 ? wf.dram->umac_img : wf.dram->virtual_img;
                 table[n[part]++] = pa;
             }
         }
@@ -386,6 +466,8 @@ static bool load_firmware(struct inode *ip, uint32_t *phy)
     ok = n[0] && n[1];
     if (!ok)
         fail("the firmware has no runtime image");
+    else if (wf.gen3 && !wf.iml)
+        ok = fail("the firmware has no image loader (IML)");
 out:
     kfree(fw);
     return ok;
@@ -438,7 +520,7 @@ static bool start(uint32_t phy)
         if (!ok)
             return fail("the card is not ready (NIC_READY)");
     }
-    uint32_t hpm = read_prph(HPM_DEBUG);         /* (read without the NIC lock) */
+    uint32_t hpm = wf.gen3 ? 0 : read_prph(HPM_DEBUG);   /* (22000 only; read without the NIC lock) */
     if (hpm != 0xA5A5A5A0 && (hpm & PERSISTENCE_BIT)) {
         if (read_prph(PREG_PRPH_WPROT) & PREG_WFPM_ACCESS)
             return fail("the persistence bit cannot be cleared");
@@ -446,6 +528,8 @@ static bool start(uint32_t phy)
         kprintf("wifi: the persistence bit cleared\n");
     }
     sw_reset();
+    if (!wf.integrated || wf.gen3)
+        goto apm;
     /* integrated: the clocks, the power gating forced once, and a reset again */
     set_bits(CSR_GP_CNTRL, GP_INIT_DONE);
     udelay(20);
@@ -458,6 +542,7 @@ static bool start(uint32_t phy)
     udelay(20);
     prph_bits(HPM_HIPM_GEN_CFG, 0, HIPM_FORCE_ACTIVE);
     sw_reset();
+apm:
     if (!apm_init())
         return fail("the MAC clock did not start (APM)");
     if (!(rd(CSR_GP_CNTRL) & GP_RFKILL_HW))
@@ -498,6 +583,10 @@ static void rx_packet(const uint8_t *pkt, uint32_t len)
         wf.got_resp = true;
         return;
     }
+    if ((group & ~PKT_CMD_FAILED) == GRP_NVM && code == CMD_PNVM_INIT_COMPLETE) {
+        wf.pnvm_done = true;
+        return;
+    }
     if ((group & ~PKT_CMD_FAILED) > GRP_LONG)
         return;
     if (code == CMD_ALIVE && len >= 20) {
@@ -508,6 +597,8 @@ static void rx_packet(const uint8_t *pkt, uint32_t len)
             wf.lmac_err = *(const uint32_t *)(pkt + 8 + 20);
             wf.umac_err = *(const uint32_t *)(pkt + 8 + 108);
         }
+        if (len >= 8 + 128)                      /* (version 5 and later: the SKU, for the PNVM) */
+            memcpy(wf.sku_id, pkt + 8 + 116, 12);
         wf.alive = status == 0xCAFE;
         kprintf("wifi: the firmware is alive (status %#x, version %u.%x)%s\n", status, wf.fw_major, wf.fw_minor,
                 wf.alive ? "" : ": not OK");
@@ -534,7 +625,8 @@ static void rx_process(void)
     if (hw == wf.rx_cur)
         return;
     while (wf.rx_cur != hw) {
-        int id = wf.used_rbd[wf.rx_cur] & 0xFFF;  /* (the buffer the firmware closed there) */
+        int id = wf.gen3 ? *(const uint16_t *)(wf.used_rbd3 + wf.rx_cur * USED_DESC_GEN3 + 4) & 0xFFF
+                         : (int)(wf.used_rbd[wf.rx_cur] & 0xFFF);   /* (the buffer the firmware closed there) */
         const uint8_t *rb = P2V(wf.rb_pa[id < NRBD ? id : wf.rx_cur]);
         for (uint32_t off = 0; off + 8 < RB_SIZE;) {
             const uint8_t *pkt = rb + off;
@@ -545,6 +637,8 @@ static void rx_process(void)
             if (len < 8 || len > RB_SIZE - off)
                 break;
             rx_packet(pkt, len);
+            if (wf.gen3)
+                break;                           /* (the AX210: one packet a buffer) */
             off += (len + 63) & ~63U;            /* packets at 64-byte boundaries */
         }
         memset((void *)rb, 0, 16);               /* (a stale header must not look new next time) */
@@ -752,6 +846,8 @@ static bool runtime_init(void)
     if (!init_cmd(GRP_LONG, CMD_BT_CONFIG, bt, sizeof(bt), "BT_CONFIG"))
         return false;
     uint32_t soc[2] = { 0, 500 };                /* integrated (no LTR delay: the driver sets no LTR); the crystal's 500 us */
+    if (!wf.integrated)
+        soc[0] = 1, soc[1] = 0;                  /* a discrete card (the AX210) */
     if (!init_cmd(GRP_SYSTEM, CMD_SOC_CONFIG, soc, sizeof(soc), "SOC_CONFIGURATION"))
         return false;
     if (has_capa(CAPA_DQA)) {
@@ -787,9 +883,98 @@ static bool runtime_init(void)
     return true;
 }
 
+/*
+ * The AX210's platform NVM: the .pnvm file's section for the SKU the ALIVE named
+ * and this MAC and radio, in DMA memory the peripheral scratch points at; then
+ * the doorbell, and the firmware's PNVM_INIT_COMPLETE.  Without a section, the
+ * doorbell alone (the firmware goes on without it).
+ */
+#define PNVM_FILE "/lib/firmware/iwlwifi-ty-a0-gf-a0.pnvm"
+static void pnvm_section(const uint8_t *d, uint32_t len)
+{
+    uint32_t mac_type = (wf.hw_rev & 0xFFF0) >> 4, rf_type = (wf.rf_id & 0xFFF000) >> 12;
+    bool match = false;
+    uint32_t total = 0;
+    const uint8_t *parts[MAX_SEC];
+    uint32_t sizes[MAX_SEC];
+    int n = 0;
+    for (uint32_t off = 0; off + 8 <= len;) {
+        uint32_t type = *(const uint32_t *)(d + off), tl = *(const uint32_t *)(d + off + 4);
+        const uint8_t *v = d + off + 8;
+        if (off + 8 + tl > len || type == TLV_PNVM_SKU)
+            break;
+        if (type == TLV_HW_TYPE && tl >= 4 && !match)
+            match = *(const uint16_t *)v == mac_type && *(const uint16_t *)(v + 2) == rf_type;
+        if (type == TLV_SEC_RT && tl > 4 && *(const uint32_t *)v != 0xDDDDEEEE && n < MAX_SEC) {
+            parts[n] = v + 4, sizes[n] = tl - 4;
+            total += sizes[n++];
+        }
+        off += 8 + ((tl + 3) & ~3U);
+    }
+    if (!match || !total) {
+        kprintf("wifi: PNVM: no section for MAC %03x, radio %03x\n", mac_type, rf_type);
+        return;
+    }
+    uint64_t pa = pmm_alloc_contig((total + PAGE_SIZE - 1) / PAGE_SIZE);
+    if (!pa)
+        return;
+    uint8_t *dst = P2V(pa);
+    for (int i = 0; i < n; i++)
+        memcpy(dst, parts[i], sizes[i]), dst += sizes[i];
+    wf.scratch->pnvm_addr = pa;
+    wf.scratch->pnvm_size = total;
+    __asm__ volatile("wbinvd" ::: "memory");
+    kprintf("wifi: PNVM: %u bytes in %d part%s for MAC %03x, radio %03x\n", total, n, n == 1 ? "" : "s", mac_type,
+            rf_type);
+}
+
+static void load_pnvm(void)
+{
+    if (!(wf.sku_id[0] | wf.sku_id[1] | wf.sku_id[2])) {
+        kprintf("wifi: PNVM: the ALIVE named no SKU\n");
+        return;
+    }
+    int err;
+    struct inode *ip = namei(PNVM_FILE, &err);
+    if (!ip) {
+        kprintf("wifi: PNVM: %s is missing\n", PNVM_FILE);
+    } else {
+        uint64_t size = inode_size(ip);
+        uint8_t *f = size && size < 4 * 1024 * 1024 ? kmalloc(size) : NULL;
+        if (f && readi(ip, f, 0, size) == (long)size) {
+            bool found = false;
+            for (uint64_t off = 0; off + 8 <= size && !found;) {
+                uint32_t type = *(uint32_t *)(f + off), tl = *(uint32_t *)(f + off + 4);
+                if (off + 8 + tl > size)
+                    break;
+                uint64_t next = off + 8 + ((tl + 3) & ~3U);
+                if (type == TLV_PNVM_SKU && tl >= 12 && !memcmp(f + off + 8, wf.sku_id, 12)) {
+                    pnvm_section(f + next, (uint32_t)(size - next));
+                    found = true;
+                }
+                off = next;
+            }
+            if (!found)
+                kprintf("wifi: PNVM: no section for SKU %08x %08x %08x\n", wf.sku_id[0], wf.sku_id[1], wf.sku_id[2]);
+        }
+        kfree(f);
+        iput(ip);
+    }
+    if (!grab_nic())
+        return;
+    write_prph(umac(UREG_DOORBELL_TO_ISR6), ISR6_PNVM);
+    release_nic();
+    if (wait_for(&wf.pnvm_done, 2000))
+        kprintf("wifi: PNVM taken by the firmware\n");
+    else
+        kprintf("wifi: PNVM: no PNVM_INIT_COMPLETE from the firmware\n");
+}
+
 /* Stage 2: the firmware's initialisation (NVM access), the NVM's information, the MAC address. */
 static void firmware_init(void)
 {
+    if (wf.gen3)
+        load_pnvm();
     uint32_t v = INIT_NVM;
     if (send_cmd(GRP_SYSTEM, CMD_INIT_EXT_CFG, &v, 4) < 0)
         return (void)(wf.state = "firmware: INIT_EXTENDED_CFG failed");
@@ -1210,24 +1395,31 @@ static int tx_frame(const uint8_t *hdr, uint32_t hlen, const uint8_t *body, uint
     int i = jn.cur;
     uint8_t *c = jn.slot[i];
     uint32_t padn = (hlen & 3) ? 4 - (hlen & 3) : 0, total = hlen + blen;
-    memset(c, 0, 4 + 20 + hlen + padn);
+    uint32_t th = wf.gen3 ? 28 : 20;             /* the command before the 802.11 header (AX210: version 8) */
+    memset(c, 0, 4 + th + hlen + padn);
     c[0] = CMD_TX, c[1] = 0, c[2] = i, c[3] = jn.fwq;          /* (the narrow header) */
     uint8_t *t = c + 4;
+    uint32_t offload = ((hlen / 2) & 0x1F) << 8 | (padn ? 1U << 13 : 0);   /* the header's size, padded */
     *(uint16_t *)t = total;
-    *(uint16_t *)(t + 2) = ((hlen / 2) & 0x1F) << 8 | (padn ? 1U << 13 : 0);   /* the header's size, padded */
-    *(uint32_t *)(t + 4) = flags;
+    if (wf.gen3) {
+        *(uint16_t *)(t + 2) = (uint16_t)flags;
+        *(uint32_t *)(t + 4) = offload;
+    } else {
+        *(uint16_t *)(t + 2) = (uint16_t)offload;
+        *(uint32_t *)(t + 4) = flags;
+    }
     *(uint32_t *)(t + 16) = rate;
-    memcpy(t + 20, hdr, hlen);
+    memcpy(t + th, hdr, hlen);
     memcpy(c + TX_BODY, body, blen);
     uint8_t *tfd = jn.tfd + i * TFD_SIZE;
     memset(tfd, 0, 2 + 3 * 10);
-    uint16_t ntb = 3, l0 = FIRST_TB, l1 = 4 + 20 + hlen + padn - FIRST_TB, l2 = blen;
+    uint16_t ntb = 3, l0 = FIRST_TB, l1 = 4 + th + hlen + padn - FIRST_TB, l2 = blen;
     uint64_t a0 = jn.slot_pa[i], a1 = a0 + FIRST_TB, a2 = a0 + TX_BODY;
     memcpy(tfd, &ntb, 2);
     memcpy(tfd + 2, &l0, 2), memcpy(tfd + 4, &a0, 8);
     memcpy(tfd + 12, &l1, 2), memcpy(tfd + 14, &a1, 8);
     memcpy(tfd + 22, &l2, 2), memcpy(tfd + 24, &a2, 8);
-    jn.bc[i] = (total + 3) / 4;                  /* (in dwords; one 64-byte chunk of TFD) */
+    jn.bc[i] = wf.gen3 ? total : (total + 3) / 4;   /* (AX210: bytes, else dwords; one 64-byte chunk of TFD) */
     __asm__ volatile("sfence" ::: "memory");
     jn.cur = (i + 1) % TXQ_SIZE;
     wr(HBUS_TARG_WRPTR, (uint32_t)jn.fwq << 16 | jn.cur);
@@ -2179,7 +2371,8 @@ long wifi_op(int op, void *buf, long n)
 
 void wifi_init(const char *cmdline)
 {
-    static const uint16_t ids[] = { 0x34F0, 0x02F0, 0x06F0, 0xA0F0, 0x43F0, 0x4DF0, 0x3DF0 };   /* Qu, QuZ (Hr) */
+    static const uint16_t ids[] = { 0x34F0, 0x02F0, 0x06F0, 0xA0F0, 0x43F0, 0x4DF0, 0x3DF0,   /* Qu, QuZ (Hr) */
+                                    0x2725 };                                                 /* Ty (Gf) */
     if (!pci_find(0x8086, ids, ARRAY_SIZE(ids), &wf.pci))
         return;
     if (boot_option(cmdline, "nowifi")) {
@@ -2207,13 +2400,18 @@ void wifi_init(const char *cmdline)
         wf.state = "does not answer";
         return;
     }
-    /* the firmware file: Qu (Ice Lake) or QuZ (Comet Lake), the MAC's step */
+    /* the firmware file: Qu (Ice Lake) or QuZ (Comet Lake), the MAC's step; Ty (the AX210) */
     int step = (wf.hw_rev >> 2) & 3;
+    wf.gen3 = pd->device == 0x2725;
+    wf.integrated = !wf.gen3;
     bool quz = pd->device == 0x02F0 || pd->device == 0x06F0;
-    snprintf(wf.fw_name, sizeof(wf.fw_name), "iwlwifi-%s-%c0-hr-b0-77.ucode", quz ? "QuZ" : "Qu",
-             quz ? 'a' : step >= 2 ? 'c' : 'b');
-    kprintf("wifi: Intel Wi-Fi 6 AX201 (8086:%04x), hw rev %08x (step %c), rf %08x: %s\n", pd->device, wf.hw_rev,
-            'A' + step, wf.rf_id, wf.fw_name);
+    if (wf.gen3)
+        snprintf(wf.fw_name, sizeof(wf.fw_name), "iwlwifi-ty-a0-gf-a0-77.ucode");
+    else
+        snprintf(wf.fw_name, sizeof(wf.fw_name), "iwlwifi-%s-%c0-hr-b0-77.ucode", quz ? "QuZ" : "Qu",
+                 quz ? 'a' : step >= 2 ? 'c' : 'b');
+    kprintf("wifi: Intel %s (8086:%04x), hw rev %08x (step %c), rf %08x: %s\n",
+            wf.gen3 ? "Wi-Fi 6E AX210" : "Wi-Fi 6 AX201", pd->device, wf.hw_rev, 'A' + step, wf.rf_id, wf.fw_name);
     char path[96];
     snprintf(path, sizeof(path), "/lib/firmware/%s", wf.fw_name);
     int err;
@@ -2222,15 +2420,28 @@ void wifi_init(const char *cmdline)
         fail("the firmware file is missing");
         return;
     }
+    /* the context info (gen3: with the peripheral scratch and information), the receive ring, the command queue */
+    size_t used_size = wf.gen3 ? NRBD * USED_DESC_GEN3 : NRBD * 4, free_size = wf.gen3 ? NRBD * 16 : NRBD * 8;
     wf.ci_pa = pmm_alloc_contig((sizeof(struct ctxt_info) + PAGE_SIZE - 1) / PAGE_SIZE);
-    uint64_t free_pa = pmm_alloc_contig(1), used_pa = pmm_alloc_contig(1), st_pa = pmm_alloc_contig(1);
+    uint64_t free_pa = pmm_alloc_contig((free_size + PAGE_SIZE - 1) / PAGE_SIZE);
+    uint64_t used_pa = pmm_alloc_contig((used_size + PAGE_SIZE - 1) / PAGE_SIZE), st_pa = pmm_alloc_contig(1);
     uint64_t cmdq_pa = pmm_alloc_contig(CMDQ_SIZE * 256 / PAGE_SIZE);
-    if (!wf.ci_pa || !free_pa || !used_pa || !st_pa || !cmdq_pa) {
+    uint64_t scratch_pa = wf.gen3 ? pmm_alloc_contig(1) : 0, info_pa = wf.gen3 ? pmm_alloc_contig(1) : 0;
+    if (!wf.ci_pa || !free_pa || !used_pa || !st_pa || !cmdq_pa || (wf.gen3 && (!scratch_pa || !info_pa))) {
         iput(ip);
         fail("no memory");
         return;
     }
     wf.ci = P2V(wf.ci_pa);
+    memset(wf.ci, 0, sizeof(struct ctxt_info));
+    if (wf.gen3) {
+        wf.scratch = P2V(scratch_pa);
+        memset(wf.scratch, 0, PAGE_SIZE);
+        memset(P2V(info_pa), 0, PAGE_SIZE);
+        wf.dram = (struct fw_dram *)(void *)((uint8_t *)wf.scratch + __builtin_offsetof(struct prph_scratch, dram));
+    } else {
+        wf.dram = (struct fw_dram *)wf.ci->umac_img;
+    }
     uint32_t phy = 0;
     bool ok = load_firmware(ip, &phy);
     iput(ip);
@@ -2238,42 +2449,85 @@ void wifi_init(const char *cmdline)
     if (!ok || !start(phy))
         return;
 
-    /* the receive ring: free descriptors (address | id), used ones (the ids), the status */
+    /* the receive ring: free descriptors (address | id; gen3: id, address), used ones (the ids), the status */
     wf.free_rbd = P2V(free_pa);
+    wf.free_rbd3 = P2V(free_pa);
     wf.used_rbd = P2V(used_pa);
+    wf.used_rbd3 = P2V(used_pa);
+    memset(wf.used_rbd3, 0, used_size);
     wf.rb_status = P2V(st_pa);
+    memset((void *)wf.rb_status, 0, PAGE_SIZE);
     for (int i = 0; i < NRBD; i++) {
         if (!(wf.rb_pa[i] = pmm_alloc_contig(1)))
             return (void)fail("no memory for the receive buffers");
-        wf.free_rbd[i] = wf.rb_pa[i] | (uint64_t)i;                 /* the buffer's address | its index */
+        if (wf.gen3) {
+            wf.free_rbd3[i].rbid = i;
+            wf.free_rbd3[i].addr = wf.rb_pa[i];
+        } else {
+            wf.free_rbd[i] = wf.rb_pa[i] | (uint64_t)i;             /* the buffer's address | its index */
+        }
     }
-    struct ctxt_info *ci = wf.ci;
-    ci->mac_id = rd(CSR_HW_REV) & 0xFFFF;        /* (the register as it reads) */
-    ci->version = 0;
-    ci->size = sizeof(*ci) / 4;
-    ci->control_flags = CTXT_TFD_FORMAT_LONG | (uint32_t)RB_CB_LOG << CTXT_RB_CB_SIZE_POS |
-                        CTXT_RB_SIZE_4K << CTXT_RB_SIZE_POS;
-    ci->free_rbd_addr = free_pa;
-    ci->used_rbd_addr = used_pa;
-    ci->status_wr_ptr = st_pa;
-    ci->cmd_queue_addr = cmdq_pa;
     wf.cmdq = P2V(cmdq_pa);
     wf.cmdq_pa = cmdq_pa;
     wf.cmdbuf_pa = pmm_alloc_contig(1);
     if (!wf.cmdbuf_pa)
         return (void)fail("no memory for the command buffer");
     wf.cmdbuf = P2V(wf.cmdbuf_pa);
-    ci->cmd_queue_size = CMDQ_CB;
+    if (wf.gen3) {
+        struct prph_scratch *sc = wf.scratch;
+        sc->mac_id = rd(CSR_HW_REV) & 0xFFFF;
+        sc->version = 0;
+        sc->size = sizeof(*sc) / 4;
+        sc->control_flags = PRPH_RB_SIZE_4K | PRPH_MTR_MODE | PRPH_MTR_FORMAT_256B;
+        sc->free_rbd_addr = free_pa;
+        struct ctxt_info_gen3 *c3 = (struct ctxt_info_gen3 *)wf.ci;
+        c3->prph_info_addr = info_pa;
+        c3->prph_scratch_addr = scratch_pa;
+        c3->prph_scratch_size = sizeof(*sc);
+        c3->cr_head_idx_addr = st_pa;
+        c3->tr_tail_idx_addr = info_pa + PAGE_SIZE / 2;     /* (unused tail indexes the device still writes) */
+        c3->cr_tail_idx_addr = info_pa + 3 * PAGE_SIZE / 4;
+        c3->mtr_addr = cmdq_pa;
+        c3->mcr_addr = used_pa;
+        c3->mtr_size = CMDQ_CB;
+        c3->mcr_size = RB_CB_LOG;
+    } else {
+        struct ctxt_info *ci = wf.ci;
+        ci->mac_id = rd(CSR_HW_REV) & 0xFFFF;    /* (the register as it reads) */
+        ci->version = 0;
+        ci->size = sizeof(*ci) / 4;
+        ci->control_flags = CTXT_TFD_FORMAT_LONG | (uint32_t)RB_CB_LOG << CTXT_RB_CB_SIZE_POS |
+                            CTXT_RB_SIZE_4K << CTXT_RB_SIZE_POS;
+        ci->free_rbd_addr = free_pa;
+        ci->used_rbd_addr = used_pa;
+        ci->status_wr_ptr = st_pa;
+        ci->cmd_queue_addr = cmdq_pa;
+        ci->cmd_queue_size = CMDQ_CB;
+    }
     __asm__ volatile("wbinvd" ::: "memory");     /* (the device may not snoop: all of it in memory) */
 
-    wr(CSR_CTXT_INFO_BA, (uint32_t)wf.ci_pa);    /* (two 32-bit writes: a 64-bit one does not take on the AX201) */
-    wr(CSR_CTXT_INFO_BA + 4, (uint32_t)(wf.ci_pa >> 32));
+    if (wf.gen3) {
+        uint64_t iml_pa = V2P(wf.iml);
+        wr(CSR_CTXT_INFO_ADDR, (uint32_t)wf.ci_pa);
+        wr(CSR_CTXT_INFO_ADDR + 4, (uint32_t)(wf.ci_pa >> 32));
+        wr(CSR_IML_DATA_ADDR, (uint32_t)iml_pa);
+        wr(CSR_IML_DATA_ADDR + 4, (uint32_t)(iml_pa >> 32));
+        wr(CSR_IML_SIZE_ADDR, wf.iml_len);
+        set_bits(CSR_CTXT_INFO_BOOT_CTRL, AUTO_FUNC_BOOT_ENA);
+    } else {
+        wr(CSR_CTXT_INFO_BA, (uint32_t)wf.ci_pa);    /* (two 32-bit writes: a 64-bit one does not take on the AX201) */
+        wr(CSR_CTXT_INFO_BA + 4, (uint32_t)(wf.ci_pa >> 32));
+    }
     if (!grab_nic())
         return (void)fail("the NIC does not wake (MAC access)");
-    write_prph(HPM_MAC_LTR_CSR, HPM_LTR_ENABLE_ALL);   /* the boot LTR (integrated 22000) */
-    write_prph(HPM_UMAC_LTR, BOOT_LTR);
-    kprintf("wifi: context info at %#lx, starting the CPUs\n", wf.ci_pa);
-    write_prph(UREG_CPU_INIT_RUN, 1);            /* the CPUs load the firmware from the context info */
+    if (wf.integrated) {
+        write_prph(HPM_MAC_LTR_CSR, HPM_LTR_ENABLE_ALL);   /* the boot LTR (integrated 22000) */
+        write_prph(HPM_UMAC_LTR, BOOT_LTR);
+    } else {
+        wr(CSR_LTR_LONG_VAL_AD, BOOT_LTR);       /* (a discrete card: the CSR) */
+    }
+    kprintf("wifi: context info at %#lx%s, starting the CPUs\n", wf.ci_pa, wf.gen3 ? " (gen3)" : "");
+    write_prph(umac(UREG_CPU_INIT_RUN), 1);      /* the CPUs load the firmware from the context info */
     release_nic();
     kprintf("wifi: starting the firmware\n");
 
@@ -2300,7 +2554,7 @@ void wifi_init(const char *cmdline)
     /* what the device's CPUs did: their load (secure boot) status and where they run */
     if (grab_nic()) {
         kprintf("wifi: CPU1 status %08x, CPU2 status %08x, UMAC PC %08x, LMAC PC %08x, RX closed %u, INT %08x, FH %08x\n",
-                read_prph(0xA038C0), read_prph(0xA038C4), read_prph(0xA05C18), read_prph(0xA05C1C),
+                read_prph(0xA038C0), read_prph(0xA038C4), read_prph(umac(0xA05C18)), read_prph(umac(0xA05C1C)),
                 wf.rb_status[0] & 0xFFF, rd(CSR_INT), rd(CSR_FH_INT_STATUS));
         release_nic();
     }
@@ -2312,7 +2566,7 @@ const char *wifi_state(void)
     return wf.state;
 }
 
-DDI_DRIVER("iwlwifi", DDI_PHASE_ROOT, "Intel Wi-Fi 6 AX201 (22000 family: Qu, QuZ with the Hr radio)");
+DDI_DRIVER("iwlwifi", DDI_PHASE_ROOT, "Intel Wi-Fi 6 AX201 (Qu, QuZ with the Hr radio), Wi-Fi 6E AX210 (Ty, Gf)");
 DDI_ALIAS("pci8086,34f0");
 DDI_ALIAS("pci8086,2f0");
 DDI_ALIAS("pci8086,6f0");
@@ -2320,6 +2574,7 @@ DDI_ALIAS("pci8086,a0f0");
 DDI_ALIAS("pci8086,43f0");
 DDI_ALIAS("pci8086,4df0");
 DDI_ALIAS("pci8086,3df0");
+DDI_ALIAS("pci8086,2725");
 
 int _init(void)
 {

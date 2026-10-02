@@ -10,7 +10,7 @@
 
 #include "kernel.h"
 
-#define NCPU 16
+#define NCPU 64
 
 #define T_LAPIC_TIMER 0x40
 #define T_IPI_RESCHED 0x41

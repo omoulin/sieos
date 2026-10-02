@@ -60,6 +60,7 @@ void    *mmio_map(uint64_t pa, size_t size);
 /* The same, write-combining (framebuffers); uncached without PAT. */
 void    *mmio_map_wc(uint64_t pa, size_t size);
 #define PTE_WC   0x008                     /* PWT: write-combining once pat_wc (PAT entry 1) */
+#define PTE_UC   0x018                     /* PCD and PWT: uncached */
 uint64_t vmm_new_space(void);
 int      vmm_map(uint64_t pml4, uint64_t va, uint64_t pa, uint64_t flags);
 uint64_t vmm_translate(uint64_t pml4, uint64_t va, uint64_t *flags);

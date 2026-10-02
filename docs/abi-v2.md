@@ -2995,6 +2995,97 @@ values (SIEOS's open flags, clocks and signals), which the C library calls as Li
   Linux does: an `exec` that failed (`ENOENT`) ended them all the same (Python's
   `faulthandler` thread went, and waiting for it hung).
 
+### Milestone 75: a laptop's hardware (Raptor Lake HX): 64 processors, RTL8168, AX210
+
+- **Why:** a laptop with a Core i9 of the Raptor Lake HX kind (32 threads), a Realtek
+  RTL8111/8168 Ethernet port and an Intel Wi-Fi 6E AX210 card. Its RTX 5060 is milestone 76.
+- **Processors:** up to 64 (`NCPU`; were 16); an LWP's processor set (`lwp_affinity`) is a
+  64-bit mask in the kernel too. SIEOS starts 32 in QEMU.
+- **RTL8111/8168/8411** (`drv/rtl8168`, PCI 10ec:8168, 10ec:8161): the chip from its XID;
+  the 8168g and later ones taken over from the firmware's out-of-band mode (MCU), their
+  PHY through OCP registers, receive DMA ungated (MISC `RXDV_GATED_EN`); the older ones
+  the classic way. The PHY powered up and autonegotiating 10/100/1000; rings of 256
+  descriptors, polled by the network timer. The PHY's parameter patches (`rtl_nic`
+  firmware) are not applied. Not tested on the hardware yet.
+- **Intel Wi-Fi 6E AX210** (`drv/iwlwifi`, 8086:2725, the Ty MAC with the Gf radio): the
+  AX201's driver with the AX210 family's differences, as OpenBSD's iwx and Linux's iwlwifi
+  document them: the gen3 context info (a peripheral scratch area holding the firmware's
+  sections and the receive ring, the image loader, `CSR_CTXT_INFO_ADDR`), the UMAC's
+  registers 0x300000 higher, 16-byte free and 32-byte used receive descriptors (one packet
+  a buffer), the platform NVM (`iwlwifi-ty-a0-gf-a0.pnvm`, the section for the SKU the
+  ALIVE names) handed over after the ALIVE, a discrete card's start (no CNVi power gating;
+  the boot LTR in the CSR; `SOC_CONFIGURATION`: discrete), the transmit command's version 8
+  (28 bytes) and byte counts in bytes. Its firmware, API 77 as the AX201's, is downloaded
+  from linux-firmware (20231211) and checked. Not tested on the hardware yet.
+- **`hwreport`** (`/sbin/hwreport`): the machine as SIEOS found it, in one file (`uname`,
+  `lscpu`, `lidev -v`, `modinfo`, the links, Wi-Fi networks in range, a connectivity
+  check, `dmesg`); a live system started from a USB image writes one to the drive's
+  package partition 45 seconds after it starts (`hwreport/report-N.txt`).
+
+### Milestone 76 (in progress): the NVIDIA GPU for Vulkan compute (RTX 50, Blackwell)
+
+- **The goal:** Vulkan compute on the laptop's GeForce RTX 5060 (GB206), through Mesa's NVK, so
+  that llama.cpp's Vulkan backend runs the local model (sia-brain) on the GPU. The display stays
+  on the Intel GPU (hybrid mode); the NVIDIA GPU renders and computes off screen.
+- **Rust for SIEOS** (done): NVK's shader compiler (NAK) is Rust. The target
+  `x86_64-unknown-linux-sieos` (`tools/rust-sieos`): Linux's interface with musl, as SIEOS's C
+  library is, and the libc crate made SIEOS's by `gen-libc.py`, which compares every constant,
+  type and structure of the crate with SIEOS's headers (600 constants, 2 types and 18
+  structures differ: errno, open flags, signals, sockets, `stat`, `sigaction`, `termios`...)
+  and rewrites them where the crate defines them; std is built from source for it. Threads,
+  locks, files, processes, time and TCP work on SIEOS.
+- **`mmap`** takes Linux's hint flags (`MAP_STACK`, `MAP_POPULATE`, `MAP_NONBLOCK`,
+  `MAP_LOCKED`, `MAP_EXECUTABLE`) and ignores them, as the C library's header has them (Rust's
+  std maps its signal stacks with `MAP_STACK`; they were refused, `EINVAL`).
+- **The firmware:** NVIDIA's GSP-RM 570.144 (`nvidia/gb202/gsp/{fmc,bootloader,gsp}-570.144.bin`,
+  GB203 to GB207 linked to GB202's, 64 MB), from linux-firmware (20260916, checked), in the base
+  image (the RAM disk grows to 160 MiB).
+- **The driver, `drv/nvgpu`** (stages 1 to 3 written, not tested on the hardware): the GPU found
+  (`pci10de,class03`: a new kind of alias, a vendor's devices of a class, matched after the
+  exact device and before the class, as the laptop's GPU is VGA-class beside the Intel GPU),
+  its registers, the chip and its memory; the FSP's boot awaited; GSP-RM's three files read
+  (the FMC's ELF sections checked against GB202's FSP: a 48-byte hash, a 96-byte signature, a
+  97-byte key), its 64 MB image a page at a time under the radix3 table, the bootloader,
+  LIBOS's log buffers, the command and message queues, the RM arguments, the WPR metadata, the
+  system information and the registry queued; the chain-of-trust message to the FSP through
+  its EMEM; the GSP's lockdown, its RISC-V, GSP-RM's INIT_DONE awaited; its static information
+  (its internal handles, the VRAM regions). The RM structures are NVIDIA's MIT-licensed
+  excerpts (`drv/nvgpu/nvrm`), as nouveau carries them.
+- **`/dev/nvgpu0`** (`sieos/nvgpu.h`, major 195): what a process asks of the GPU, as NVK's
+  kernel interface needs it: the device's information, memory objects (mapped by `mmap` at
+  their offset), GPU VA ranges, bindings, channels, execution of push buffers, timeline
+  semaphores (64-bit values, waited on with an absolute timeout). Working now: the
+  information, the GPU's clock (PTIMER), system-memory objects and their mappings, VA
+  reservations, the semaphores; VRAM, bindings, channels and execution answer `ENOSYS` until
+  stage 4.
+- **Drivers' character devices** (`kernel/cdev.c`): a driver registers a major with its open
+  function, which makes the file an `FD_OPS` one; `file_ops` gains `ioctl` and `page` (mmap's
+  page at an offset: mapped at once, `PTE_DEVICE`, write-combined for a BAR's memory);
+  `dev_node` makes its `/dev` node.
+- **NVK on SIEOS** (`ports/pkgs/mesa/sieos2-nvk.patch`): `nvkmd_sieos`, NVK's kernel interface
+  for `/dev/nvgpuN`: the device's information through nouveau's winsys's chipset tables, memory
+  and VA (a heap in the process, bindings by the kernel), contexts (a channel, or the binding
+  queue) whose push buffers, waits and signals go to the kernel together, a `vk_sync` type over
+  the kernel's timeline semaphores (binary ones emulated by Mesa's runtime); the instance
+  enumerates `/dev/nvgpu0` to `3`. libdrm (Meson's fallback, static) only for NVK's nouveau
+  parts, which find no DRM device on SIEOS.
+- **The plan, in stages, each one's result in the hardware report:**
+  1. the driver (`drv/nvgpu`): the GPU found, its registers (BAR0), the chip (`PMC_BOOT_0`), the
+     VBIOS, the firmware files read;
+  2. GSP-RM started as Linux's nouveau does it for Blackwell: the FSP (the security processor)
+     given the FMC image and the boot arguments ("chain of trust"), then GSP-RM's message
+     queues and its init done;
+  3. RM's objects: the client, the device, the subdevice; the GPU's information (its SMs, its
+     memory);
+  4. a VA space (page tables kept by the driver, as nouveau's), memory in VRAM and in system
+     memory, a channel (GPFIFO, USERD, the doorbell) with the compute and copy engines; a push
+     buffer that writes a semaphore, run;
+  5. `/dev/nvgpu0`, SIEOS's own interface for it (memory, VA, channels, execution, timeline
+     semaphores), and NVK's kernel interface (nvkmd) written for it in Mesa, not Linux's DRM;
+     `vulkaninfo` and `vkcompute` on the GPU;
+  6. llama.cpp's Vulkan backend: sia-brain on the GPU.
+  Stages 1 to 4 can only be tried on the hardware; Mesa's side is built and checked in QEMU.
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -3062,6 +3153,8 @@ values (SIEOS's open flags, clocks and signals), which the C library calls as Li
 | 61 | Wi-Fi stage 2: receive processing, the command queue, INIT/NVM commands, the NVM's information, the MAC address (done) |
 | 62 | Wi-Fi stage 3: the runtime configuration (antennas, SoC, power, regulatory domain), UMAC scans, the wifi() call, dladm, the Settings Wi-Fi page (done) |
 | 74 | epoll, eventfd, timerfd, memfd, pidfd, `splice`, `copy_file_range`, `preadv`/`pwritev`, `mremap`, `lchmod` (done) |
+| 75 | a laptop's hardware: 64 processors, RTL8111/8168 Ethernet, Wi-Fi 6E AX210, `hwreport` (done; not tested on the hardware) |
+| 76 | NVIDIA RTX 50 (Blackwell) for Vulkan compute: Rust for SIEOS, GSP-RM, `/dev/nvgpu0`, NVK (in progress) |
 | 73 | 4096-byte paths, TCP urgent data and `MSG_PEEK`, processor sets (`lwp_affinity`), demand-paged file mappings, `posix_spawn` scheduling, the locale database (done) |
 | 72 | Python 3.14 and its libraries; larger file, socket and inode tables; exit, tmpfs and pipe fixes; 64 KiB pipes; listen backlogs; socket options kept; pty output processing; `setreuid`, `sigwait`, CPU clocks; `SO_DOMAIN`, `SO_PROTOCOL`; `pthread_getattr_np`, thread names (done) |
 | 71 | OpenGL, EGL and Vulkan in software (Mesa: llvmpipe, lavapipe; LLVM 22), EGL's Facet platform, the Vulkan loader (done) |

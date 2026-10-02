@@ -1,0 +1,47 @@
+#!/bin/sh
+# Copyright (C) 2026 Olivier Moulin
+# Part of SIEOS, released under the GNU General Public License version 3
+# (GPL-3.0); see the LICENSE file.
+#
+# hwreport - what SIEOS found on this machine and how its drivers did, in one
+# file: hwreport [FILE].  Without FILE, on a USB drive's package partition
+# (/usr/pkg/hwreport/report-N.txt, which any Linux can read), else in /root.
+# A live system started from a USB image runs it once at boot (/etc/rc).
+
+out=$1
+if [ -z "$out" ]; then
+    dir=/root
+    mount | grep -q ' on /usr/pkg ' && dir=/usr/pkg/hwreport
+    mkdir -p $dir
+    n=1
+    while [ -e $dir/report-$n.txt ]; do n=$((n + 1)); done
+    out=$dir/report-$n.txt
+fi
+
+section() { echo; echo "===== $*"; }
+run() { section "$*"; "$@" 2>&1; }
+
+{
+    echo "SIEOS hardware report"
+    run uname -a
+    run date
+    run uptime
+    run lscpu
+    run free
+    run lidev -v
+    run modinfo
+    run mount
+    run df
+    run ifconfig -a
+    run dladm show-link
+    run dladm show-wifi
+    run dladm scan-wifi
+    run netstat
+    section "connectivity"
+    host example.com 2>&1
+    ping -c 3 example.com 2>&1
+    run cat /etc/resolv.conf
+    run dmesg
+} > $out 2>&1
+sync
+echo "hwreport: $out"

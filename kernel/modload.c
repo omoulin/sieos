@@ -11,7 +11,8 @@
  *
  * At each phase of the boot the devices (the PCI functions; the platform's:
  * the i8042) are matched against the aliases, the most specific name first:
- * pciVVVV,DDDD, then pciclass,CCSSPP, then pciclass,CCSS.  A driver matched
+ * pciVVVV,DDDD, then pciVVVV,classCC (a vendor's devices of a class: its
+ * GPUs, say), then pciclass,CCSSPP, then pciclass,CCSS.  A driver matched
  * is loaded, once: its allocated sections laid out in physically contiguous
  * memory below 2 GiB, used through the kernel's own mapping (so drivers are
  * compiled as the kernel is, -mcmodel=kernel); its symbols resolved against
@@ -460,12 +461,13 @@ void modules_attach(int phase)
         if (done[i])
             continue;
         const struct pci_dev *d = pci_at(i);
-        char a[3][32];
+        char a[4][32];
         snprintf(a[0], 32, "pci%x,%x", d->vendor, d->device);
-        snprintf(a[1], 32, "pciclass,%02x%02x%02x", d->class_code, d->subclass, d->prog_if);
-        snprintf(a[2], 32, "pciclass,%02x%02x", d->class_code, d->subclass);
-        const char *names[3] = { a[0], a[1], a[2] };
-        done[i] = attach(names, 3, phase);
+        snprintf(a[1], 32, "pci%x,class%02x", d->vendor, d->class_code);   /* (a vendor's devices of a class) */
+        snprintf(a[2], 32, "pciclass,%02x%02x%02x", d->class_code, d->subclass, d->prog_if);
+        snprintf(a[3], 32, "pciclass,%02x%02x", d->class_code, d->subclass);
+        const char *names[4] = { a[0], a[1], a[2], a[3] };
+        done[i] = attach(names, 4, phase);
     }
     /* the platform's devices: the i8042 (its ports do not read all ones) */
     if (!i8042_done && inb(0x64) != 0xFF) {

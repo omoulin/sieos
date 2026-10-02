@@ -694,6 +694,12 @@ static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
         *ip = (int)MIN(n, 0x7FFFFFFF);
         return 0;
     }
+    default:
+        if (f->type == FD_OPS && f->ops->ioctl)
+            return f->ops->ioctl(f, cmd, (void *)arg);   /* (a driver's device) */
+        break;
+    }
+    switch (cmd) {
     case SIEOS_ISPTM:
     case SIEOS_UNLKPT:
     case SIEOS_PTSNAME:

@@ -26,7 +26,7 @@ BUILD    := build
 ISO      := $(BUILD)/sieos.iso
 DISK     := $(BUILD)/disk.img
 # sizes: the ISO's root file system (a RAM disk), the hard disk; guest memory
-ROOT_MB  := 96
+ROOT_MB  := 160
 DISK_MB  := 768
 MEM      ?= 1G
 ROOTIMG  := $(BUILD)/rootfs.img
@@ -363,7 +363,7 @@ $(ESPIMG): $(KERNEL) $(BOOTARCH) iso/boot/grub/installed.cfg tools/mkfat.py
 # rootfs.img: pristine ext4 image built from rootfs/ + the user programs.
 # It is embedded in the ISO (loaded by GRUB as a RAM disk) and is the
 # template for disk.img.
-$(ROOTIMG): $(LOCALE_DB) $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(PKG_BIN) $(PKG_PUB) $(ABI2TEST) $(TCDEP) $(DASH_BIN) $(E2FS_BINS) $(ESPIMG) $(shell find rootfs -type f 2>/dev/null) tools/rootfs.perms tools/mkperms.sh tools/mkshadow.py
+$(ROOTIMG): $(LOCALE_DB) $(FW_FETCHED) $(NV_FW) $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(PKG_BIN) $(PKG_PUB) $(ABI2TEST) $(TCDEP) $(DASH_BIN) $(E2FS_BINS) $(ESPIMG) $(shell find rootfs -type f 2>/dev/null) tools/rootfs.perms tools/mkperms.sh tools/mkshadow.py
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/sbin $(ROOTFS)/tmp $(ROOTFS)/proc $(ROOTFS)/dev/pts $(ROOTFS)/dev/shm $(ROOTFS)/mnt
 	cp -r rootfs/. $(ROOTFS)/
 	for p in $(UPROGS); do cp $(BUILD)/user/bin/$$p $(ROOTFS)/bin/$$p; done
@@ -389,11 +389,20 @@ $(ROOTIMG): $(LOCALE_DB) $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(
 	ln -sfn /proc/mnttab $(ROOTFS)/etc/mnttab
 	cp $(ABI2TEST) $(ROOTFS)/bin/abi2test
 	cp $(DASH_BIN) $(ROOTFS)/bin/sh
-	@# Intel's Wi-Fi firmware (AX201: Qu/QuZ with the Hr radio), from the build host's linux-firmware
+	@# Intel's Wi-Fi firmware: the AX201's (Qu/QuZ with the Hr radio) from the build host's
+	@# linux-firmware, the AX210's (Ty with the Gf radio, and its .pnvm) fetched (FW_FETCHED)
 	mkdir -p $(ROOTFS)/lib/firmware
 	for f in iwlwifi-Qu-b0-hr-b0-77 iwlwifi-Qu-c0-hr-b0-77 iwlwifi-QuZ-a0-hr-b0-77; do \
 		if [ -f /lib/firmware/$$f.ucode.zst ]; then zstd -dqf /lib/firmware/$$f.ucode.zst -o $(ROOTFS)/lib/firmware/$$f.ucode; \
 		elif [ -f /lib/firmware/$$f.ucode ]; then cp /lib/firmware/$$f.ucode $(ROOTFS)/lib/firmware/; fi; done
+	cp $(FW_FETCHED) $(ROOTFS)/lib/firmware/
+	@# NVIDIA's GSP firmware, as linux-firmware lays it out (gb203 to gb207: links to gb202)
+	mkdir -p $(ROOTFS)/lib/firmware/nvidia/gb202/gsp
+	cp $(FW_DL)/nvidia-gb202-bootloader-570.144.bin $(ROOTFS)/lib/firmware/nvidia/gb202/gsp/bootloader-570.144.bin
+	cp $(FW_DL)/nvidia-gb202-fmc-570.144.bin $(ROOTFS)/lib/firmware/nvidia/gb202/gsp/fmc-570.144.bin
+	cp $(FW_DL)/nvidia-ga102-gsp-570.144.bin $(ROOTFS)/lib/firmware/nvidia/gb202/gsp/gsp-570.144.bin
+	for c in gb203 gb205 gb206 gb207; do ln -sfn gb202 $(ROOTFS)/lib/firmware/nvidia/$$c; done
+	cp ports/firmware/LICENCE.nvidia $(ROOTFS)/lib/firmware/
 	cp ports/firmware/LICENCE.iwlwifi_firmware $(ROOTFS)/lib/firmware/
 	@# the installer's tools: mke2fs, e2fsck, the EFI system partition
 	cp $(E2FS_BINS) $(ROOTFS)/sbin/
@@ -782,6 +791,26 @@ $(PORTS_DL)/$(KSH).tar.gz:
 	cd $(PORTS_DL) && $(abspath tools/fetch.sh) https://github.com/ksh93/ksh/archive/refs/tags/v1.0.10.tar.gz $(KSH).tar.gz
 	cd $(PORTS_DL) && grep " $(KSH).tar.gz$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
 
+# Firmware the build host's linux-firmware may not have, pinned to a linux-firmware release:
+# the AX210's at the firmware API the Wi-Fi driver speaks (77), with its .pnvm.
+LINUX_FW     := https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
+LINUX_FW_TAG := 20231211
+FW_DL        := $(PORTS_DL)/firmware
+FW_FETCHED   := $(FW_DL)/iwlwifi-ty-a0-gf-a0-77.ucode $(FW_DL)/iwlwifi-ty-a0-gf-a0.pnvm
+# NVIDIA's GSP-RM 570.144 for the GeForce RTX 50 GPUs (GB202 to GB207: linux-firmware links them to
+# gb202's files, its GSP image to ga102's), from a later release
+NV_FW_TAG    := 20260916
+NV_FW        := $(FW_DL)/nvidia-gb202-bootloader-570.144.bin $(FW_DL)/nvidia-gb202-fmc-570.144.bin \
+                $(FW_DL)/nvidia-ga102-gsp-570.144.bin
+$(FW_DL)/nvidia-%:
+	@mkdir -p $(FW_DL)
+	cd $(FW_DL) && $(abspath tools/fetch.sh) '$(LINUX_FW)/nvidia/$(word 1,$(subst -, ,$*))/gsp/$(subst $(word 1,$(subst -, ,$*))-,,$*)?h=$(NV_FW_TAG)' nvidia-$*
+	cd $(FW_DL) && grep " nvidia-$*$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
+$(FW_DL)/%:
+	@mkdir -p $(FW_DL)
+	cd $(FW_DL) && $(abspath tools/fetch.sh) '$(LINUX_FW)/$*?h=$(LINUX_FW_TAG)' $*
+	cd $(FW_DL) && grep " $*$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
+
 $(PORTS_DL)/%:
 	@mkdir -p $(PORTS_DL)
 	cd $(PORTS_DL) && $(abspath tools/fetch.sh) $(filter %/$*,$(PORT_URLS)) $*
@@ -1019,6 +1048,34 @@ $(VK_HEADERS)/.built: $(PORTS_DL)/Vulkan-Headers-$(VK_SDK).tar.gz ports/vulkan-h
 .PHONY: llvm-sieos
 llvm-sieos: $(LLVM_SIEOS)/.built
 
+# ---------------------------------------------------------------- Rust for SIEOS
+#
+# The target x86_64-unknown-linux-sieos (tools/rust-sieos): the pinned toolchain from
+# rustup (~/.rustup, ~/.cargo), std built from source with the libc crate made SIEOS's,
+# a sysroot for rustc (build/rust-sieos/sysroot); Mesa's NVK needs it (its compiler, NAK,
+# is Rust), with bindgen and cbindgen (cargo install; bindgen uses build/host-mesa-clc's clang).
+RUST_SIEOS   := $(BUILD)/rust-sieos
+$(RUST_SIEOS)/.built: tools/rust-sieos/build.sh tools/rust-sieos/gen-libc.py tools/rust-sieos/x86_64-unknown-linux-sieos.json \
+		$(wildcard tools/rust-sieos/hello/*) $(wildcard tools/rust-sieos/hello/src/*) | $(TC_DONE) $(SYSROOT)/usr/lib/libc.so
+	tools/rust-sieos/build.sh . $(RUST_SIEOS)
+	for t in bindgen-cli:0.73.2 cbindgen:0.29.4; do \
+		$$HOME/.cargo/bin/cargo install -q --locked --version $${t#*:} $${t%:*} 2>/dev/null || exit 1; done
+	touch $@
+
+.PHONY: rust-sieos
+rust-sieos: $(RUST_SIEOS)/.built
+
+# Mesa's mesa_clc and vtn_bindgen2 for the build host (tools/host-mesa-clc.sh): NVK's OpenCL C
+# shaders compiled when Mesa is cross-built (clang and LLVM 20 from conda-forge, SPIRV-Tools)
+HOST_MESA_CLC := $(abspath $(BUILD))/host-mesa-clc
+$(PORTS_DL)/mesa-26.2.4.tar.xz:
+	@mkdir -p $(PORTS_DL)
+	cd $(PORTS_DL) && $(abspath tools/fetch.sh) https://archive.mesa3d.org/mesa-26.2.4.tar.xz mesa-26.2.4.tar.xz
+	cd $(PORTS_DL) && grep " mesa-26.2.4.tar.xz$$" $(abspath ports/SHA256SUMS) | sha256sum -c --quiet
+$(HOST_MESA_CLC)/.built: tools/host-mesa-clc.sh $(PORTS_DL)/mesa-26.2.4.tar.xz
+	tools/host-mesa-clc.sh . $(HOST_MESA_CLC)
+	touch $@
+
 # ---------------------------------------------------------------- Python for the build host
 #
 # CPython cross-builds with a Python of its own version on the build host
@@ -1054,7 +1111,7 @@ pkg_deps = $(shell sed -n 's/^depends *= *//p' ports/pkgs/$(1)/recipe)
 pkg_tree = $(shell sed -n 's/^source *= *tree://p' ports/pkgs/$(1)/recipe)
 PKG_EXTRA_sia-brain := $(BRAIN_GGUF)               # (what a package's build takes from the build)
 PKG_EXTRA_vulkan-loader := $(VK_HEADERS)/.built
-PKG_EXTRA_mesa := $(LLVM_SIEOS)/.built $(wildcard user/mesa-demos/*)
+PKG_EXTRA_mesa := $(LLVM_SIEOS)/.built $(RUST_SIEOS)/.built $(HOST_MESA_CLC)/.built $(wildcard user/mesa-demos/*)
 PKG_EXTRA_python := $(PY_HOST)/.built
 pkg_tree_deps = $(if $(call pkg_tree,$(1)),$(shell find $(call pkg_tree,$(1)) -type f) $(SDK_STAMP) \
 		$(wildcard user/libsia/*.h) $(wildcard user/facet-apps/common.*))

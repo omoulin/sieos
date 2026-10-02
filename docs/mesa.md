@@ -106,6 +106,19 @@ gcc prog.c -lvulkan -lfacet
 `user/mesa-demos/vklogo.c` is a whole program: the logo's mesh, a depth buffer, a
 pipeline with push constants, and the swapchain made again when the window is resized.
 
+## NVK: NVIDIA GPUs
+
+Mesa's NVK, NVIDIA's open Vulkan driver, is in the package too, for the GeForce RTX 50
+GPUs (Blackwell) that `drv/nvgpu` drives (milestone 76 in [abi-v2.md](abi-v2.md)). On
+SIEOS it does not use Linux's DRM: `nvkmd_sieos` (`sieos2-nvk.patch`), its kernel
+interface written for SIEOS, speaks to `/dev/nvgpuN` (`<sieos/nvgpu.h>`): the device's
+information, memory objects mapped by `mmap`, the GPU's VA space managed in the
+process with the kernel binding memory into it, channels whose push buffers go to the
+kernel with their waits and signals, and timeline semaphores (a `vk_sync` type of
+their own; binary ones emulated by Mesa's runtime). Without `/dev/nvgpu0`, NVK finds
+no GPU and lavapipe remains. The kernel side of channels and GPU memory is stage 4 of
+the driver, not done yet: NVK cannot run work on the GPU yet.
+
 ## How it is built
 
 - **LLVM 22** (its libraries, the X86 target) is cross-built for SIEOS
@@ -125,4 +138,10 @@ pipeline with push constants, and the swapchain made again when the window is re
   `vulkan_facet.h`, and the surface's platform in `vk_icd.h`) and in Mesa's `vk.xml`;
   Mesa's window-system code shows the swapchain's images in the window
   (`src/vulkan/wsi/wsi_common_facet.c`), and lavapipe offers the extension.
+- **NVK** needs Rust for SIEOS (`make rust-sieos`: NAK, its shader compiler, is Rust;
+  bindgen and cbindgen), Mesa's `mesa_clc` and `vtn_bindgen2` built for the build host
+  (`tools/host-mesa-clc.sh`, with clang and LLVM 20 from conda-forge: NVK's OpenCL C
+  shaders), libdrm from Meson's fallback (static, for NVK's nouveau parts, which find
+  no DRM device on SIEOS), and a small libelf (`src/nouveau/cubin/sieos`: what NVK's
+  cubin reader uses).
 - The build host needs `cmake`, `meson`, `ninja` and `glslangValidator` (README).

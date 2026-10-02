@@ -1,0 +1,1233 @@
+--- a/meson.build
++++ b/meson.build
+@@ -1929,6 +1929,11 @@
+       'amdgpu' : _libdrm_checks[1][1] ? 'enabled' : 'disabled',
+     },
+   )
++elif host_machine.system() == 'sieos' and with_nouveau_vk
++  # SIEOS: NVK speaks to /dev/nvgpuN (nvkmd_sieos), but its nouveau parts are built with libdrm,
++  # which has no device to find there
++  dep_libdrm = dependency('libdrm', version : '>=' + _drm_ver, allow_fallback : true,
++                          default_options : { 'auto_features' : 'disabled', 'default_library' : 'static' })
+ else
+   # We should prevent libdrm from being available when the target doesn't have it to avoid transitive
+   # dependencies (such as vk-runtime) linking to it
+@@ -2144,6 +2149,12 @@
+ if not with_platform_windows and not dep_elf.found()
+   dep_elf = cc.find_library('elf', required : false)
+ endif
++if not dep_elf.found() and host_machine.system() == 'sieos' and with_nouveau_vk
++  # SIEOS: no libelf; NVK's cubin reader has the part of it it uses (src/nouveau/cubin/sieos)
++  dep_elf = declare_dependency(
++    sources : files('src/nouveau/cubin/sieos/libelf.c'),
++    include_directories : include_directories('src/nouveau/cubin/sieos'))
++endif
+ if dep_elf.found()
+   pre_args += '-DUSE_LIBELF'
+ elif with_gallium_radeonsi and with_gfx_compute
+--- a/src/nouveau/cubin/sieos/libelf.c
++++ b/src/nouveau/cubin/sieos/libelf.c
+@@ -0,0 +1,154 @@
++/*
++ * Copyright © 2026 Olivier Moulin
++ * SPDX-License-Identifier: MIT
++ *
++ * libelf.c - SIEOS: libelf's read-only interface over an ELF64 image in
++ * memory, as NVK's cubin reader uses it (no libelf on SIEOS).  A section
++ * is its index; its data is the image's bytes (no conversion: the cubins
++ * are little-endian ELF64, as the processor).
++ */
++#include "libelf.h"
++
++#include <stdlib.h>
++#include <string.h>
++
++struct Elf_Scn {
++   Elf *elf;
++   size_t index;
++   Elf_Data data;
++};
++
++struct Elf {
++   char *image;
++   size_t size;
++   Elf64_Ehdr *ehdr;
++   Elf64_Shdr *shdrs;
++   size_t nscn;
++   Elf_Scn *scns;
++};
++
++static int last_error;
++
++unsigned int
++elf_version(unsigned int version)
++{
++   return version == EV_NONE ? EV_CURRENT : version == EV_CURRENT ? EV_CURRENT : EV_NONE;
++}
++
++Elf *
++elf_memory(char *image, size_t size)
++{
++   Elf64_Ehdr *eh = (Elf64_Ehdr *)image;
++   if (!image || size < sizeof(*eh) || memcmp(eh->e_ident, ELFMAG, SELFMAG) ||
++       eh->e_ident[EI_CLASS] != ELFCLASS64 || eh->e_shentsize != sizeof(Elf64_Shdr) ||
++       eh->e_shoff + (unsigned long long)eh->e_shnum * sizeof(Elf64_Shdr) > size) {
++      last_error = 1;
++      return NULL;
++   }
++   Elf *elf = calloc(1, sizeof(*elf));
++   if (!elf)
++      return NULL;
++   elf->image = image;
++   elf->size = size;
++   elf->ehdr = eh;
++   elf->shdrs = (Elf64_Shdr *)(image + eh->e_shoff);
++   elf->nscn = eh->e_shnum;
++   elf->scns = calloc(elf->nscn ? elf->nscn : 1, sizeof(Elf_Scn));
++   if (!elf->scns) {
++      free(elf);
++      return NULL;
++   }
++   for (size_t i = 0; i < elf->nscn; i++) {
++      Elf64_Shdr *sh = &elf->shdrs[i];
++      elf->scns[i].elf = elf;
++      elf->scns[i].index = i;
++      if (sh->sh_type != SHT_NOBITS && sh->sh_offset + sh->sh_size <= size) {
++         elf->scns[i].data.d_buf = image + sh->sh_offset;
++         elf->scns[i].data.d_size = sh->sh_size;
++      }
++      elf->scns[i].data.d_align = sh->sh_addralign;
++      elf->scns[i].data.d_version = EV_CURRENT;
++   }
++   return elf;
++}
++
++int
++elf_end(Elf *elf)
++{
++   if (elf) {
++      free(elf->scns);
++      free(elf);
++   }
++   return 0;
++}
++
++Elf_Kind
++elf_kind(Elf *elf)
++{
++   return elf ? ELF_K_ELF : ELF_K_NONE;
++}
++
++int
++elf_errno(void)
++{
++   int e = last_error;
++   last_error = 0;
++   return e;
++}
++
++const char *
++elf_errmsg(int error)
++{
++   return error ? "not a valid ELF64 image" : "no error";
++}
++
++Elf64_Ehdr *
++elf64_getehdr(Elf *elf)
++{
++   return elf ? elf->ehdr : NULL;
++}
++
++int
++elf_getshdrstrndx(Elf *elf, size_t *dst)
++{
++   if (!elf)
++      return -1;
++   *dst = elf->ehdr->e_shstrndx;
++   return 0;
++}
++
++Elf_Scn *
++elf_getscn(Elf *elf, size_t index)
++{
++   return elf && index < elf->nscn ? &elf->scns[index] : NULL;
++}
++
++Elf_Scn *
++elf_nextscn(Elf *elf, Elf_Scn *scn)
++{
++   size_t next = scn ? scn->index + 1 : 1;   /* (as libelf: section 0, the null one, is skipped) */
++   return elf_getscn(elf, next);
++}
++
++Elf64_Shdr *
++elf64_getshdr(Elf_Scn *scn)
++{
++   return scn ? &scn->elf->shdrs[scn->index] : NULL;
++}
++
++Elf_Data *
++elf_getdata(Elf_Scn *scn, Elf_Data *data)
++{
++   return scn && !data ? &scn->data : NULL;
++}
++
++char *
++elf_strptr(Elf *elf, size_t section, size_t offset)
++{
++   if (!elf || section >= elf->nscn)
++      return NULL;
++   Elf_Scn *s = &elf->scns[section];
++   if (!s->data.d_buf || offset >= s->data.d_size)
++      return NULL;
++   return (char *)s->data.d_buf + offset;
++}
+--- a/src/nouveau/cubin/sieos/libelf.h
++++ b/src/nouveau/cubin/sieos/libelf.h
+@@ -0,0 +1,45 @@
++/*
++ * Copyright © 2026 Olivier Moulin
++ * SPDX-License-Identifier: MIT
++ *
++ * libelf.h - SIEOS: the part of libelf's interface NVK's cubin reader uses
++ * (nv_cubin.c): an ELF64 image in memory, read only.
++ */
++#ifndef SIEOS_LIBELF_H
++#define SIEOS_LIBELF_H
++
++#include <elf.h>
++#include <stddef.h>
++
++#define EV_NONE    0
++#define EV_CURRENT 1
++
++typedef enum { ELF_K_NONE, ELF_K_AR, ELF_K_COFF, ELF_K_ELF } Elf_Kind;
++typedef enum { ELF_T_BYTE } Elf_Type;
++
++typedef struct Elf Elf;
++typedef struct Elf_Scn Elf_Scn;
++typedef struct {
++   void *d_buf;
++   Elf_Type d_type;
++   unsigned int d_version;
++   size_t d_size;
++   long long d_off;
++   size_t d_align;
++} Elf_Data;
++
++unsigned int elf_version(unsigned int version);
++Elf *elf_memory(char *image, size_t size);
++int elf_end(Elf *elf);
++Elf_Kind elf_kind(Elf *elf);
++int elf_errno(void);
++const char *elf_errmsg(int error);
++Elf64_Ehdr *elf64_getehdr(Elf *elf);
++int elf_getshdrstrndx(Elf *elf, size_t *dst);
++Elf_Scn *elf_getscn(Elf *elf, size_t index);
++Elf_Scn *elf_nextscn(Elf *elf, Elf_Scn *scn);
++Elf64_Shdr *elf64_getshdr(Elf_Scn *scn);
++Elf_Data *elf_getdata(Elf_Scn *scn, Elf_Data *data);
++char *elf_strptr(Elf *elf, size_t section, size_t offset);
++
++#endif
+--- a/src/nouveau/vulkan/meson.build
++++ b/src/nouveau/vulkan/meson.build
+@@ -134,6 +134,11 @@
+   ],
+ )
+ 
++if host_machine.system() == 'sieos'
++  # SIEOS: its kernel interface, /dev/nvgpuN
++  nvk_files += files('nvkmd/sieos/nvkmd_sieos.c')
++endif
++
+ nvk_deps = [
+   dep_libdrm,
+   dep_elf,
+--- a/src/nouveau/vulkan/nvk_device.c
++++ b/src/nouveau/vulkan/nvk_device.c
+@@ -261,7 +261,9 @@
+       dev->vk.command_buffer_ops = &nvk_cmd_buffer_ops;
+ 
+       dev->vk.get_timestamp = nvk_device_get_timestamp;
++#ifndef __sieos__
+       dev->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
++#endif
+ 
+       result = nvk_upload_queue_init(dev, &dev->upload);
+       if (result != VK_SUCCESS)
+--- a/src/nouveau/vulkan/nvk_instance.c
++++ b/src/nouveau/vulkan/nvk_instance.c
+@@ -162,6 +162,9 @@
+ 
+    instance->vk.physical_devices.try_create_for_drm =
+       nvk_create_drm_physical_device;
++#ifdef __sieos__
++   instance->vk.physical_devices.enumerate = nvk_enumerate_sieos_physical_devices;
++#endif
+    instance->vk.physical_devices.destroy = nvk_physical_device_destroy;
+ 
+    const struct build_id_note *note =
+--- a/src/nouveau/vulkan/nvkmd/nvkmd.h
++++ b/src/nouveau/vulkan/nvkmd/nvkmd.h
+@@ -25,10 +25,18 @@
+ struct nvkmd_va;
+ 
+ struct _drmDevice;
++
+ struct vk_object_base;
+ struct vk_sync_wait;
+ struct vk_sync_signal;
+ 
++#ifdef __sieos__
++VkResult nvkmd_sieos_try_create_pdev(const char *path,
++                                     struct vk_object_base *log_obj,
++                                     enum nvk_debug debug_flags,
++                                     struct nvkmd_pdev **pdev_out);
++#endif
++
+ /*
+  * Enums
+  */
+--- a/src/nouveau/vulkan/nvkmd/sieos/nvkmd_sieos.c
++++ b/src/nouveau/vulkan/nvkmd/sieos/nvkmd_sieos.c
+@@ -0,0 +1,783 @@
++/*
++ * Copyright © 2026 Olivier Moulin
++ * SPDX-License-Identifier: MIT
++ *
++ * nvkmd_sieos.c - NVK's kernel interface (nvkmd) on SIEOS: /dev/nvgpuN
++ * (<sieos/nvgpu.h>), drv/nvgpu's device, instead of Linux's nouveau DRM.
++ *
++ * The device's information (the chip, its classes, its memory) fills
++ * nv_device_info as nouveau's winsys does from the chipset; memory objects
++ * are the kernel's (mapped by mmap at their offset); the GPU's VA space is
++ * managed here (as nvkmd_nouveau does), the kernel binding memory into it;
++ * a context is a channel (or, for NVKMD_ENGINE_BIND, the binding queue) whose
++ * push buffers, waits and signals go to the kernel together at a flush.  The
++ * semaphores are the kernel's timeline semaphores (a vk_sync type of their
++ * own; binary ones emulated over them by Mesa's runtime).
++ */
++#include "nvkmd/nvkmd.h"
++#include "nvk_device.h"
++#include "nouveau_device.h"
++#include "nvk_debug.h"
++#include "util/os_misc.h"
++#include "util/u_dynarray.h"
++#include "util/u_math.h"
++#include "util/vma.h"
++#include "util/simple_mtx.h"
++#include "vk_device.h"
++#include "vk_log.h"
++#include "vk_sync.h"
++#include "vk_sync_binary.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/ioctl.h>
++#include <sys/mman.h>
++#include <time.h>
++#include <unistd.h>
++
++#include <sieos/nvgpu.h>
++
++
++#define SIEOS_HEAP_START   (1ull << 32)
++#define SIEOS_HEAP_END     (1ull << 39)
++#define SIEOS_MAX_SYNCS    256
++#define SIEOS_MAX_BINDS    1024
++
++static int
++nvgpu_ioctl(int fd, unsigned long cmd, void *arg)
++{
++   int r;
++   do {
++      r = ioctl(fd, cmd, arg);
++   } while (r < 0 && (errno == EINTR || errno == EAGAIN));
++   return r;
++}
++
++/* ---------------------------------------------------------------- semaphores */
++
++struct sieos_sync {
++   struct vk_sync base;
++   uint32_t handle;
++};
++
++static int sieos_dev_fd(struct nvkmd_dev *dev);
++
++/* The device's file (its semaphores'): NVK's device's nvkmd one. */
++static int
++sync_fd(struct vk_device *device)
++{
++   return sieos_dev_fd(container_of(device, struct nvk_device, vk)->nvkmd);
++}
++
++static VkResult
++sieos_sync_init(struct vk_device *device, struct vk_sync *sync, uint64_t initial_value)
++{
++   struct sieos_sync *s = container_of(sync, struct sieos_sync, base);
++   struct sieos_nvgpu_sync a = { .value = initial_value };
++   if (nvgpu_ioctl(sync_fd(device), SIEOS_NVGPU_SYNC_NEW, &a))
++      return vk_errorf(device, VK_ERROR_OUT_OF_HOST_MEMORY, "SIEOS_NVGPU_SYNC_NEW failed: %m");
++   s->handle = a.handle;
++   return VK_SUCCESS;
++}
++
++static void
++sieos_sync_finish(struct vk_device *device, struct vk_sync *sync)
++{
++   struct sieos_sync *s = container_of(sync, struct sieos_sync, base);
++   struct sieos_nvgpu_sync a = { .handle = s->handle };
++   nvgpu_ioctl(sync_fd(device), SIEOS_NVGPU_SYNC_FREE, &a);
++}
++
++static VkResult
++sieos_sync_signal(struct vk_device *device, struct vk_sync *sync, uint64_t value)
++{
++   struct sieos_sync *s = container_of(sync, struct sieos_sync, base);
++   struct sieos_nvgpu_sync a = { .handle = s->handle, .value = value };
++   if (nvgpu_ioctl(sync_fd(device), SIEOS_NVGPU_SYNC_SIGNAL, &a))
++      return vk_errorf(device, VK_ERROR_UNKNOWN, "SIEOS_NVGPU_SYNC_SIGNAL failed: %m");
++   return VK_SUCCESS;
++}
++
++static VkResult
++sieos_sync_get_value(struct vk_device *device, struct vk_sync *sync, uint64_t *value)
++{
++   struct sieos_sync *s = container_of(sync, struct sieos_sync, base);
++   struct sieos_nvgpu_sync a = { .handle = s->handle };
++   if (nvgpu_ioctl(sync_fd(device), SIEOS_NVGPU_SYNC_QUERY, &a))
++      return vk_errorf(device, VK_ERROR_UNKNOWN, "SIEOS_NVGPU_SYNC_QUERY failed: %m");
++   *value = a.value;
++   return VK_SUCCESS;
++}
++
++static VkResult
++sieos_sync_wait_many(struct vk_device *device, uint32_t wait_count, const struct vk_sync_wait *waits,
++                     enum vk_sync_wait_flags wait_flags, uint64_t abs_timeout_ns)
++{
++   if (wait_count == 0)
++      return VK_SUCCESS;
++   STACK_ARRAY(struct sieos_nvgpu_sync_point, pts, wait_count);
++   for (uint32_t i = 0; i < wait_count; i++) {
++      struct sieos_sync *s = container_of(waits[i].sync, struct sieos_sync, base);
++      pts[i] = (struct sieos_nvgpu_sync_point) { .handle = s->handle, .value = waits[i].wait_value };
++   }
++   struct sieos_nvgpu_wait w = {
++      .points_ptr = (uintptr_t)pts,
++      .count = wait_count,
++      .flags = (wait_flags & VK_SYNC_WAIT_ANY) ? 0 : SIEOS_NVGPU_WAIT_ALL,
++      .timeout_ns = abs_timeout_ns > INT64_MAX ? -1 : (int64_t)abs_timeout_ns,
++   };
++   int r;
++   do {
++      r = ioctl(sync_fd(device), SIEOS_NVGPU_SYNC_WAIT, &w);
++   } while (r < 0 && errno == EINTR);
++   STACK_ARRAY_FINISH(pts);
++   if (r < 0 && errno == ETIME)
++      return VK_TIMEOUT;
++   if (r < 0)
++      return vk_errorf(device, VK_ERROR_UNKNOWN, "SIEOS_NVGPU_SYNC_WAIT failed: %m");
++   return VK_SUCCESS;
++}
++
++const struct vk_sync_type sieos_sync_type = {
++   .size = sizeof(struct sieos_sync),
++   .features = VK_SYNC_FEATURE_TIMELINE | VK_SYNC_FEATURE_GPU_WAIT | VK_SYNC_FEATURE_GPU_MULTI_WAIT |
++               VK_SYNC_FEATURE_CPU_WAIT | VK_SYNC_FEATURE_CPU_SIGNAL | VK_SYNC_FEATURE_WAIT_ANY |
++               VK_SYNC_FEATURE_WAIT_BEFORE_SIGNAL,
++   .init = sieos_sync_init,
++   .finish = sieos_sync_finish,
++   .signal = sieos_sync_signal,
++   .get_value = sieos_sync_get_value,
++   .wait_many = sieos_sync_wait_many,
++};
++
++static uint32_t
++sync_handle(struct vk_sync *sync)
++{
++   assert(sync->type == &sieos_sync_type);
++   return container_of(sync, struct sieos_sync, base)->handle;
++}
++
++/* ---------------------------------------------------------------- the physical device */
++
++struct nvkmd_sieos_pdev {
++   struct nvkmd_pdev base;
++   char path[32];
++   struct vk_sync_binary_type binary_type;
++   const struct vk_sync_type *sync_types[3];
++};
++
++struct nvkmd_sieos_dev {
++   struct nvkmd_dev base;
++   int fd;
++   uint32_t max_push;
++   simple_mtx_t heap_mutex;
++   struct util_vma_heap heap;
++};
++
++#define to_pdev(p) container_of(p, struct nvkmd_sieos_pdev, base)
++#define to_dev(d) container_of(d, struct nvkmd_sieos_dev, base)
++
++static int
++sieos_dev_fd(struct nvkmd_dev *dev)
++{
++   return to_dev(dev)->fd;
++}
++
++static void
++sieos_pdev_destroy(struct nvkmd_pdev *pdev)
++{
++   FREE(to_pdev(pdev));
++}
++
++static uint64_t
++sieos_pdev_get_vram_used(struct nvkmd_pdev *pdev)
++{
++   int fd = open(to_pdev(pdev)->path, O_RDWR | O_CLOEXEC);
++   if (fd < 0)
++      return 0;
++   struct sieos_nvgpu_info in;
++   uint64_t used = nvgpu_ioctl(fd, SIEOS_NVGPU_INFO, &in) ? 0 : in.vram_used;
++   close(fd);
++   return used;
++}
++
++static int
++sieos_pdev_get_drm_primary_fd(struct nvkmd_pdev *pdev)
++{
++   return -1;
++}
++
++static VkResult sieos_create_dev(struct nvkmd_pdev *pdev, struct vk_object_base *log_obj,
++                                 struct nvkmd_dev **dev_out);
++
++static const struct nvkmd_pdev_ops sieos_pdev_ops = {
++   .destroy = sieos_pdev_destroy,
++   .get_vram_used = sieos_pdev_get_vram_used,
++   .get_drm_primary_fd = sieos_pdev_get_drm_primary_fd,
++   .create_dev = sieos_create_dev,
++};
++
++VkResult
++nvkmd_sieos_try_create_pdev(const char *path, struct vk_object_base *log_obj,
++                            enum nvk_debug debug_flags, struct nvkmd_pdev **pdev_out)
++{
++   int fd = open(path, O_RDWR | O_CLOEXEC);
++   if (fd < 0)
++      return VK_ERROR_INCOMPATIBLE_DRIVER;
++   struct sieos_nvgpu_info in;
++   int r = nvgpu_ioctl(fd, SIEOS_NVGPU_INFO, &in);
++   close(fd);
++   if (r || in.version != 1)
++      return VK_ERROR_INCOMPATIBLE_DRIVER;
++
++   struct nvkmd_sieos_pdev *pdev = CALLOC_STRUCT(nvkmd_sieos_pdev);
++   if (pdev == NULL)
++      return vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
++   snprintf(pdev->path, sizeof(pdev->path), "%s", path);
++   pdev->base.ops = &sieos_pdev_ops;
++   pdev->base.debug_flags = debug_flags;
++
++   struct nv_device_info *info = &pdev->base.dev_info;
++   info->type = NV_DEVICE_TYPE_DIS;
++   info->device_id = in.device_id;
++   info->chipset = in.chipset;
++   snprintf(info->device_name, sizeof(info->device_name), "%s", in.name);
++   snprintf(info->chipset_name, sizeof(info->chipset_name), "%s", in.chip);
++   info->pci.domain = in.pci_domain;
++   info->pci.bus = in.pci_bus;
++   info->pci.dev = in.pci_dev;
++   info->pci.func = in.pci_func;
++   info->pci.revision_id = in.revision;
++   info->gpc_count = in.gpc_count;
++   info->tpc_count = in.tpc_count;
++   info->cls_copy = in.cls_copy;
++   info->cls_eng2d = in.cls_eng2d;
++   info->cls_eng3d = in.cls_eng3d;
++   info->cls_m2mf = in.cls_m2mf;
++   info->cls_compute = in.cls_compute;
++   info->cls_gpfifo = in.cls_gpfifo;
++   info->vram_size_B = in.vram_size;
++   info->bar_size_B = in.bar1_size;
++   /* the shader model, warps, SMs per TPC and shared memory: from the chipset, as nouveau's winsys */
++   nouveau_ws_device_info_from_chipset(info);
++   const char *name = nouveau_ws_device_name_for_chip(in.device_id, in.subdevice_id, in.subvendor_id);
++   if (name)
++      snprintf(info->device_name, sizeof(info->device_name), "%s", name);
++   info->nc_atom_size_B = 64;
++
++   pdev->base.kmd_info = (struct nvkmd_info) {
++      .has_map_fixed = true,
++      .has_overmap = true,
++   };
++   pdev->base.bind_align_B = in.bind_align ? in.bind_align : 4096;
++
++   pdev->binary_type = vk_sync_binary_get_type(&sieos_sync_type);
++   pdev->sync_types[0] = &sieos_sync_type;
++   pdev->sync_types[1] = &pdev->binary_type.sync;
++   pdev->sync_types[2] = NULL;
++   pdev->base.sync_types = pdev->sync_types;
++
++   *pdev_out = &pdev->base;
++   return VK_SUCCESS;
++}
++
++/* ---------------------------------------------------------------- the device */
++
++static void
++sieos_dev_destroy(struct nvkmd_dev *_dev)
++{
++   struct nvkmd_sieos_dev *dev = to_dev(_dev);
++   util_vma_heap_finish(&dev->heap);
++   simple_mtx_destroy(&dev->heap_mutex);
++   close(dev->fd);
++   FREE(dev);
++}
++
++static uint64_t
++sieos_dev_get_gpu_timestamp(struct nvkmd_dev *_dev)
++{
++   uint64_t t = 0;
++   nvgpu_ioctl(to_dev(_dev)->fd, SIEOS_NVGPU_TIMESTAMP, &t);
++   return t;
++}
++
++static int
++sieos_dev_get_drm_fd(struct nvkmd_dev *_dev)
++{
++   return to_dev(_dev)->fd;                       /* (the vk_device's: the semaphores' file) */
++}
++
++/* memory objects */
++struct nvkmd_sieos_mem {
++   struct nvkmd_mem base;
++   uint32_t handle;
++   uint64_t map_offset;
++};
++#define to_mem(m) container_of(m, struct nvkmd_sieos_mem, base)
++
++static const struct nvkmd_mem_ops sieos_mem_ops;
++
++static VkResult
++sieos_alloc_tiled_mem(struct nvkmd_dev *_dev, struct vk_object_base *log_obj, uint64_t size_B,
++                      uint64_t align_B, uint8_t pte_kind, uint16_t tile_mode, enum nvkmd_mem_flags flags,
++                      struct nvkmd_mem **mem_out)
++{
++   struct nvkmd_sieos_dev *dev = to_dev(_dev);
++   align_B = MAX2(align_B, dev->base.pdev->bind_align_B);
++   size_B = align64(size_B, align_B);
++
++   struct sieos_nvgpu_mem a = {
++      .size = size_B,
++      .align = align_B,
++      .pte_kind = pte_kind,
++      .tile_mode = tile_mode,
++   };
++   if (flags & NVKMD_MEM_GART)
++      a.flags |= SIEOS_NVGPU_MEM_GART;
++   else if (flags & NVKMD_MEM_VRAM)
++      a.flags |= SIEOS_NVGPU_MEM_VRAM;
++   else
++      a.flags |= SIEOS_NVGPU_MEM_VRAM | SIEOS_NVGPU_MEM_GART;
++   if (flags & NVKMD_MEM_CAN_MAP)
++      a.flags |= SIEOS_NVGPU_MEM_CAN_MAP;
++   flags |= NVKMD_MEM_COHERENT;                   /* (system memory, or VRAM through BAR1) */
++
++   /* VRAM where it can be, system memory else (VRAM comes with GSP-RM's memory) */
++   if (nvgpu_ioctl(dev->fd, SIEOS_NVGPU_MEM_NEW, &a) && (a.flags & SIEOS_NVGPU_MEM_VRAM)) {
++      a.flags = (a.flags & ~SIEOS_NVGPU_MEM_VRAM) | SIEOS_NVGPU_MEM_GART;
++      if (nvgpu_ioctl(dev->fd, SIEOS_NVGPU_MEM_NEW, &a))
++         return vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "SIEOS_NVGPU_MEM_NEW failed: %m");
++   } else if (a.handle == 0) {
++      return vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "SIEOS_NVGPU_MEM_NEW failed: %m");
++   }
++
++   struct nvkmd_sieos_mem *mem = CALLOC_STRUCT(nvkmd_sieos_mem);
++   if (mem == NULL)
++      goto fail_obj;
++   nvkmd_mem_init(&dev->base, &mem->base, &sieos_mem_ops, flags, size_B, align_B);
++   mem->handle = a.handle;
++   mem->map_offset = a.map_offset;
++
++   VkResult result = nvkmd_dev_alloc_va(&dev->base, log_obj, 0, pte_kind, size_B, align_B, 0,
++                                        &mem->base.va);
++   if (result != VK_SUCCESS) {
++      FREE(mem);
++      goto fail_obj;
++   }
++   result = nvkmd_va_bind_mem(mem->base.va, log_obj, 0, &mem->base, 0, size_B);
++   if (result != VK_SUCCESS) {
++      nvkmd_va_free(mem->base.va);
++      FREE(mem);
++      struct sieos_nvgpu_mem f = { .handle = a.handle };
++      nvgpu_ioctl(dev->fd, SIEOS_NVGPU_MEM_FREE, &f);
++      return result;
++   }
++   *mem_out = &mem->base;
++   return VK_SUCCESS;
++
++fail_obj: {
++      struct sieos_nvgpu_mem f = { .handle = a.handle };
++      nvgpu_ioctl(dev->fd, SIEOS_NVGPU_MEM_FREE, &f);
++      return vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
++   }
++}
++
++static VkResult
++sieos_alloc_mem(struct nvkmd_dev *dev, struct vk_object_base *log_obj, uint64_t size_B, uint64_t align_B,
++                enum nvkmd_mem_flags flags, struct nvkmd_mem **mem_out)
++{
++   return sieos_alloc_tiled_mem(dev, log_obj, size_B, align_B, 0, 0, flags, mem_out);
++}
++
++static VkResult
++sieos_import_dma_buf(struct nvkmd_dev *dev, struct vk_object_base *log_obj, int fd, struct nvkmd_mem **mem_out)
++{
++   return vk_error(log_obj, VK_ERROR_FEATURE_NOT_PRESENT);
++}
++
++static void
++sieos_mem_free(struct nvkmd_mem *_mem)
++{
++   struct nvkmd_sieos_mem *mem = to_mem(_mem);
++   struct sieos_nvgpu_mem f = { .handle = mem->handle };
++   nvgpu_ioctl(to_dev(mem->base.dev)->fd, SIEOS_NVGPU_MEM_FREE, &f);
++   FREE(mem);
++}
++
++static VkResult
++sieos_mem_map(struct nvkmd_mem *_mem, struct vk_object_base *log_obj, enum nvkmd_mem_map_flags flags,
++              void *fixed_addr, void **map_out)
++{
++   struct nvkmd_sieos_mem *mem = to_mem(_mem);
++   int prot = ((flags & NVKMD_MEM_MAP_RD) ? PROT_READ : 0) | ((flags & NVKMD_MEM_MAP_WR) ? PROT_WRITE : 0);
++   void *map = mmap(fixed_addr, mem->base.size_B, prot, MAP_SHARED | (fixed_addr ? MAP_FIXED : 0),
++                    to_dev(mem->base.dev)->fd, mem->map_offset);
++   if (map == MAP_FAILED)
++      return vk_errorf(log_obj, VK_ERROR_MEMORY_MAP_FAILED, "mmap failed: %m");
++   *map_out = map;
++   return VK_SUCCESS;
++}
++
++static void
++sieos_mem_unmap(struct nvkmd_mem *mem, enum nvkmd_mem_map_flags flags, void *map)
++{
++   munmap(map, mem->size_B);
++}
++
++static VkResult
++sieos_mem_overmap(struct nvkmd_mem *mem, struct vk_object_base *log_obj, enum nvkmd_mem_map_flags flags,
++                  void *map)
++{
++   void *p = mmap(map, mem->size_B, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++   if (p == MAP_FAILED)
++      return vk_errorf(log_obj, VK_ERROR_MEMORY_MAP_FAILED, "overmap failed: %m");
++   return VK_SUCCESS;
++}
++
++static uint32_t
++sieos_mem_log_handle(struct nvkmd_mem *mem)
++{
++   return to_mem(mem)->handle;
++}
++
++static const struct nvkmd_mem_ops sieos_mem_ops = {
++   .free = sieos_mem_free,
++   .map = sieos_mem_map,
++   .unmap = sieos_mem_unmap,
++   .overmap = sieos_mem_overmap,
++   .log_handle = sieos_mem_log_handle,
++};
++
++/* the VA space: ranges from a heap here, memory bound by the kernel */
++static const struct nvkmd_va_ops sieos_va_ops;
++
++static VkResult
++sieos_bind_now(struct nvkmd_sieos_dev *dev, struct vk_object_base *log_obj, uint32_t op, uint32_t handle,
++               uint64_t addr, uint64_t range, uint64_t mem_offset, uint8_t pte_kind)
++{
++   struct sieos_nvgpu_bind_op o = {
++      .op = op, .handle = handle, .addr = addr, .range = range, .mem_offset = mem_offset, .pte_kind = pte_kind,
++   };
++   struct sieos_nvgpu_bind b = { .op_count = 1, .op_ptr = (uintptr_t)&o };
++   if (nvgpu_ioctl(dev->fd, SIEOS_NVGPU_BIND, &b))
++      return vk_errorf(log_obj, VK_ERROR_UNKNOWN, "SIEOS_NVGPU_BIND failed: %m");
++   return VK_SUCCESS;
++}
++
++static VkResult
++sieos_alloc_va(struct nvkmd_dev *_dev, struct vk_object_base *log_obj, enum nvkmd_va_flags flags,
++               uint8_t pte_kind, uint64_t size_B, uint64_t align_B, uint64_t fixed_addr,
++               struct nvkmd_va **va_out)
++{
++   struct nvkmd_sieos_dev *dev = to_dev(_dev);
++   struct nvkmd_va *va = CALLOC_STRUCT(nvkmd_va);
++   if (va == NULL)
++      return vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
++   align_B = MAX2(align_B, dev->base.pdev->bind_align_B);
++   simple_mtx_lock(&dev->heap_mutex);
++   uint64_t addr;
++   if (flags & NVKMD_VA_ALLOC_FIXED)
++      addr = util_vma_heap_alloc_addr(&dev->heap, fixed_addr, size_B) ? fixed_addr : 0;
++   else
++      addr = util_vma_heap_alloc(&dev->heap, size_B, align_B);
++   simple_mtx_unlock(&dev->heap_mutex);
++   if (addr == 0) {
++      FREE(va);
++      return vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "no GPU VA left");
++   }
++   *va = (struct nvkmd_va) {
++      .ops = &sieos_va_ops, .dev = &dev->base, .flags = flags, .pte_kind = pte_kind,
++      .addr = addr, .size_B = size_B,
++   };
++   *va_out = va;
++   return VK_SUCCESS;
++}
++
++static void
++sieos_va_free(struct nvkmd_va *va)
++{
++   struct nvkmd_sieos_dev *dev = to_dev(va->dev);
++   sieos_bind_now(dev, NULL, SIEOS_NVGPU_BIND_UNMAP, 0, va->addr, va->size_B, 0, 0);
++   simple_mtx_lock(&dev->heap_mutex);
++   util_vma_heap_free(&dev->heap, va->addr, va->size_B);
++   simple_mtx_unlock(&dev->heap_mutex);
++   FREE(va);
++}
++
++static VkResult
++sieos_va_bind_mem(struct nvkmd_va *va, struct vk_object_base *log_obj, uint64_t va_offset_B,
++                  struct nvkmd_mem *mem, uint64_t mem_offset_B, uint64_t range_B)
++{
++   return sieos_bind_now(to_dev(va->dev), log_obj, SIEOS_NVGPU_BIND_MAP, to_mem(mem)->handle,
++                         va->addr + va_offset_B, range_B, mem_offset_B, va->pte_kind);
++}
++
++static VkResult
++sieos_va_unbind(struct nvkmd_va *va, struct vk_object_base *log_obj, uint64_t va_offset_B, uint64_t range_B)
++{
++   return sieos_bind_now(to_dev(va->dev), log_obj, SIEOS_NVGPU_BIND_UNMAP, 0, va->addr + va_offset_B,
++                         range_B, 0, 0);
++}
++
++static const struct nvkmd_va_ops sieos_va_ops = {
++   .free = sieos_va_free,
++   .bind_mem = sieos_va_bind_mem,
++   .unbind = sieos_va_unbind,
++};
++
++/* ---------------------------------------------------------------- contexts */
++
++struct nvkmd_sieos_ctx {
++   struct nvkmd_ctx base;
++   struct nvkmd_sieos_dev *dev;
++   bool bind;                                     /* the binding queue, not a channel */
++   uint32_t chan;
++   struct util_dynarray push, ops;
++   uint32_t wait_count, sig_count;
++   struct sieos_nvgpu_sync_point waits[SIEOS_MAX_SYNCS], sigs[SIEOS_MAX_SYNCS];
++   uint32_t sync_handle;                          /* (sync(): the context's own) */
++   uint64_t sync_value;
++};
++#define to_ctx(c) container_of(c, struct nvkmd_sieos_ctx, base)
++
++static VkResult
++sieos_ctx_flush(struct nvkmd_ctx *_ctx, struct vk_object_base *log_obj)
++{
++   struct nvkmd_sieos_ctx *ctx = to_ctx(_ctx);
++   uint32_t n = ctx->bind ? util_dynarray_num_elements(&ctx->ops, struct sieos_nvgpu_bind_op)
++                          : util_dynarray_num_elements(&ctx->push, struct sieos_nvgpu_push);
++   if (n == 0 && ctx->wait_count == 0 && ctx->sig_count == 0)
++      return VK_SUCCESS;
++   int r;
++   if (ctx->bind) {
++      struct sieos_nvgpu_bind b = {
++         .op_count = n, .wait_count = ctx->wait_count, .sig_count = ctx->sig_count,
++         .op_ptr = (uintptr_t)util_dynarray_begin(&ctx->ops),
++         .wait_ptr = (uintptr_t)ctx->waits, .sig_ptr = (uintptr_t)ctx->sigs,
++      };
++      r = nvgpu_ioctl(ctx->dev->fd, SIEOS_NVGPU_BIND, &b);
++      util_dynarray_clear(&ctx->ops);
++   } else {
++      struct sieos_nvgpu_exec e = {
++         .chan = ctx->chan, .push_count = n, .wait_count = ctx->wait_count, .sig_count = ctx->sig_count,
++         .push_ptr = (uintptr_t)util_dynarray_begin(&ctx->push),
++         .wait_ptr = (uintptr_t)ctx->waits, .sig_ptr = (uintptr_t)ctx->sigs,
++      };
++      r = nvgpu_ioctl(ctx->dev->fd, SIEOS_NVGPU_EXEC, &e);
++      util_dynarray_clear(&ctx->push);
++   }
++   ctx->wait_count = ctx->sig_count = 0;
++   if (r)
++      return vk_errorf(log_obj, errno == ENODEV ? VK_ERROR_DEVICE_LOST : VK_ERROR_UNKNOWN,
++                       "%s failed: %m", ctx->bind ? "SIEOS_NVGPU_BIND" : "SIEOS_NVGPU_EXEC");
++   return VK_SUCCESS;
++}
++
++static VkResult
++add_point(struct nvkmd_sieos_ctx *ctx, struct vk_object_base *log_obj, bool wait, struct vk_sync *sync,
++          uint64_t value)
++{
++   uint32_t *count = wait ? &ctx->wait_count : &ctx->sig_count;
++   if (*count >= SIEOS_MAX_SYNCS) {
++      VkResult result = sieos_ctx_flush(&ctx->base, log_obj);
++      if (result != VK_SUCCESS)
++         return result;
++   }
++   (wait ? ctx->waits : ctx->sigs)[(*count)++] =
++      (struct sieos_nvgpu_sync_point) { .handle = sync_handle(sync), .value = value ? value : 1 };
++   return VK_SUCCESS;
++}
++
++static VkResult
++sieos_ctx_wait(struct nvkmd_ctx *_ctx, struct vk_object_base *log_obj, uint32_t wait_count,
++               const struct vk_sync_wait *waits)
++{
++   for (uint32_t i = 0; i < wait_count; i++) {
++      VkResult result = add_point(to_ctx(_ctx), log_obj, true, waits[i].sync, waits[i].wait_value);
++      if (result != VK_SUCCESS)
++         return result;
++   }
++   return VK_SUCCESS;
++}
++
++static VkResult
++sieos_ctx_exec(struct nvkmd_ctx *_ctx, struct vk_object_base *log_obj, uint32_t exec_count,
++               const struct nvkmd_ctx_exec *execs)
++{
++   struct nvkmd_sieos_ctx *ctx = to_ctx(_ctx);
++   for (uint32_t i = 0; i < exec_count; i++) {
++      uint32_t incomplete = 0;
++      for (uint32_t j = i; j < exec_count && execs[j].incomplete; j++)
++         incomplete++;
++      if (util_dynarray_num_elements(&ctx->push, struct sieos_nvgpu_push) + incomplete >= ctx->dev->max_push) {
++         VkResult result = sieos_ctx_flush(&ctx->base, log_obj);
++         if (result != VK_SUCCESS)
++            return result;
++      }
++      struct sieos_nvgpu_push p = {
++         .va = execs[i].addr, .len = execs[i].size_B,
++         .flags = execs[i].no_prefetch ? SIEOS_NVGPU_PUSH_NO_PREFETCH : 0,
++      };
++      util_dynarray_append(&ctx->push, p);
++   }
++   return VK_SUCCESS;
++}
++
++static VkResult
++sieos_ctx_bind(struct nvkmd_ctx *_ctx, struct vk_object_base *log_obj, uint32_t bind_count,
++               const struct nvkmd_ctx_bind *binds)
++{
++   struct nvkmd_sieos_ctx *ctx = to_ctx(_ctx);
++   for (uint32_t i = 0; i < bind_count; i++) {
++      if (util_dynarray_num_elements(&ctx->ops, struct sieos_nvgpu_bind_op) >= SIEOS_MAX_BINDS) {
++         VkResult result = sieos_ctx_flush(&ctx->base, log_obj);
++         if (result != VK_SUCCESS)
++            return result;
++      }
++      struct sieos_nvgpu_bind_op o = {
++         .op = binds[i].op == NVKMD_BIND_OP_BIND ? SIEOS_NVGPU_BIND_MAP : SIEOS_NVGPU_BIND_UNMAP,
++         .addr = binds[i].va->addr + binds[i].va_offset_B,
++         .range = binds[i].range_B,
++         .pte_kind = binds[i].va->pte_kind,
++      };
++      if (binds[i].op == NVKMD_BIND_OP_BIND) {
++         o.handle = to_mem(binds[i].mem)->handle;
++         o.mem_offset = binds[i].mem_offset_B;
++      }
++      util_dynarray_append(&ctx->ops, o);
++   }
++   return VK_SUCCESS;
++}
++
++static VkResult
++sieos_ctx_signal(struct nvkmd_ctx *_ctx, struct vk_object_base *log_obj, uint32_t signal_count,
++                 const struct vk_sync_signal *signals)
++{
++   for (uint32_t i = 0; i < signal_count; i++) {
++      VkResult result = add_point(to_ctx(_ctx), log_obj, false, signals[i].sync, signals[i].signal_value);
++      if (result != VK_SUCCESS)
++         return result;
++   }
++   return sieos_ctx_flush(_ctx, log_obj);
++}
++
++static VkResult
++sieos_ctx_sync(struct nvkmd_ctx *_ctx, struct vk_object_base *log_obj)
++{
++   struct nvkmd_sieos_ctx *ctx = to_ctx(_ctx);
++   if (ctx->sig_count >= SIEOS_MAX_SYNCS) {
++      VkResult result = sieos_ctx_flush(_ctx, log_obj);
++      if (result != VK_SUCCESS)
++         return result;
++   }
++   ctx->sigs[ctx->sig_count++] =
++      (struct sieos_nvgpu_sync_point) { .handle = ctx->sync_handle, .value = ++ctx->sync_value };
++   VkResult result = sieos_ctx_flush(_ctx, log_obj);
++   if (result != VK_SUCCESS)
++      return result;
++   struct sieos_nvgpu_sync_point pt = { .handle = ctx->sync_handle, .value = ctx->sync_value };
++   struct sieos_nvgpu_wait w = { .points_ptr = (uintptr_t)&pt, .count = 1, .flags = SIEOS_NVGPU_WAIT_ALL,
++                                 .timeout_ns = -1 };
++   if (nvgpu_ioctl(ctx->dev->fd, SIEOS_NVGPU_SYNC_WAIT, &w))
++      return vk_errorf(log_obj, VK_ERROR_DEVICE_LOST, "SIEOS_NVGPU_SYNC_WAIT failed: %m");
++   return VK_SUCCESS;
++}
++
++static void
++sieos_ctx_destroy(struct nvkmd_ctx *_ctx)
++{
++   struct nvkmd_sieos_ctx *ctx = to_ctx(_ctx);
++   if (!ctx->bind) {
++      struct sieos_nvgpu_chan c = { .chan = ctx->chan };
++      nvgpu_ioctl(ctx->dev->fd, SIEOS_NVGPU_CHAN_FREE, &c);
++   }
++   struct sieos_nvgpu_sync s = { .handle = ctx->sync_handle };
++   nvgpu_ioctl(ctx->dev->fd, SIEOS_NVGPU_SYNC_FREE, &s);
++   util_dynarray_fini(&ctx->push);
++   util_dynarray_fini(&ctx->ops);
++   FREE(ctx);
++}
++
++static const struct nvkmd_ctx_ops sieos_ctx_ops = {
++   .destroy = sieos_ctx_destroy,
++   .wait = sieos_ctx_wait,
++   .exec = sieos_ctx_exec,
++   .bind = sieos_ctx_bind,
++   .signal = sieos_ctx_signal,
++   .flush = sieos_ctx_flush,
++   .sync = sieos_ctx_sync,
++};
++
++static VkResult
++sieos_create_ctx(struct nvkmd_dev *_dev, struct vk_object_base *log_obj, enum nvkmd_engines engines,
++                 struct nvkmd_ctx **ctx_out)
++{
++   struct nvkmd_sieos_dev *dev = to_dev(_dev);
++   struct nvkmd_sieos_ctx *ctx = CALLOC_STRUCT(nvkmd_sieos_ctx);
++   if (ctx == NULL)
++      return vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
++   ctx->base.ops = &sieos_ctx_ops;
++   ctx->base.dev = &dev->base;
++   ctx->dev = dev;
++   ctx->bind = engines == NVKMD_ENGINE_BIND;
++   util_dynarray_init(&ctx->push, NULL);
++   util_dynarray_init(&ctx->ops, NULL);
++   if (!ctx->bind) {
++      struct sieos_nvgpu_chan c = { .engines = engines & 0x1f };
++      if (nvgpu_ioctl(dev->fd, SIEOS_NVGPU_CHAN_NEW, &c)) {
++         FREE(ctx);
++         return vk_errorf(log_obj, errno == ENOSPC ? VK_ERROR_TOO_MANY_OBJECTS : VK_ERROR_INITIALIZATION_FAILED,
++                          "SIEOS_NVGPU_CHAN_NEW failed: %m");
++      }
++      ctx->chan = c.chan;
++   }
++   struct sieos_nvgpu_sync s = { .value = 0 };
++   if (nvgpu_ioctl(dev->fd, SIEOS_NVGPU_SYNC_NEW, &s)) {
++      sieos_ctx_destroy(&ctx->base);
++      return vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
++   }
++   ctx->sync_handle = s.handle;
++   *ctx_out = &ctx->base;
++   return VK_SUCCESS;
++}
++
++static const struct nvkmd_dev_ops sieos_dev_ops = {
++   .destroy = sieos_dev_destroy,
++   .get_gpu_timestamp = sieos_dev_get_gpu_timestamp,
++   .get_drm_fd = sieos_dev_get_drm_fd,
++   .alloc_mem = sieos_alloc_mem,
++   .alloc_tiled_mem = sieos_alloc_tiled_mem,
++   .import_dma_buf = sieos_import_dma_buf,
++   .alloc_va = sieos_alloc_va,
++   .create_ctx = sieos_create_ctx,
++};
++
++static VkResult
++sieos_create_dev(struct nvkmd_pdev *_pdev, struct vk_object_base *log_obj, struct nvkmd_dev **dev_out)
++{
++   struct nvkmd_sieos_pdev *pdev = to_pdev(_pdev);
++   struct nvkmd_sieos_dev *dev = CALLOC_STRUCT(nvkmd_sieos_dev);
++   if (dev == NULL)
++      return vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
++   dev->fd = open(pdev->path, O_RDWR | O_CLOEXEC);
++   struct sieos_nvgpu_info in;
++   if (dev->fd < 0 || nvgpu_ioctl(dev->fd, SIEOS_NVGPU_INFO, &in)) {
++      if (dev->fd >= 0)
++         close(dev->fd);
++      FREE(dev);
++      return vk_errorf(log_obj, VK_ERROR_INITIALIZATION_FAILED, "%s: %m", pdev->path);
++   }
++   dev->base.ops = &sieos_dev_ops;
++   dev->base.pdev = &pdev->base;
++   dev->base.va_start = 0;
++   dev->base.va_end = SIEOS_HEAP_END;
++   dev->max_push = in.max_push ? in.max_push : 512;
++   list_inithead(&dev->base.mems);
++   simple_mtx_init(&dev->base.mems_mutex, mtx_plain);
++   simple_mtx_init(&dev->heap_mutex, mtx_plain);
++   util_vma_heap_init(&dev->heap, SIEOS_HEAP_START, SIEOS_HEAP_END - SIEOS_HEAP_START);
++   *dev_out = &dev->base;
++   return VK_SUCCESS;
++}
+--- a/src/nouveau/vulkan/nvk_physical_device.c
++++ b/src/nouveau/vulkan/nvk_physical_device.c
+@@ -1485,19 +1485,56 @@
+    return pdev->info.vram_size_B - used;
+ }
+ 
++static VkResult
++nvk_create_physical_device(struct nvk_instance *instance,
++                           struct nvkmd_pdev *nvkmd,
++                           struct vk_physical_device **pdev_out);
++
+ VkResult
+ nvk_create_drm_physical_device(struct vk_instance *_instance,
+                                struct _drmDevice *drm_device,
+                                struct vk_physical_device **pdev_out)
+ {
+    struct nvk_instance *instance = (struct nvk_instance *)_instance;
+-   VkResult result;
+-
+    struct nvkmd_pdev *nvkmd;
+-   result = nvkmd_try_create_pdev_for_drm(drm_device, &instance->vk.base,
+-                                          instance->debug_flags, &nvkmd);
++   VkResult result = nvkmd_try_create_pdev_for_drm(drm_device, &instance->vk.base,
++                                                   instance->debug_flags, &nvkmd);
+    if (result != VK_SUCCESS)
+       return result;
++   return nvk_create_physical_device(instance, nvkmd, pdev_out);
++}
++
++#ifdef __sieos__
++/* SIEOS: the GPUs are /dev/nvgpuN (drv/nvgpu), not DRM devices. */
++VkResult
++nvk_enumerate_sieos_physical_devices(struct vk_instance *_instance)
++{
++   struct nvk_instance *instance = (struct nvk_instance *)_instance;
++   for (int i = 0; i < 4; i++) {
++      char path[32];
++      snprintf(path, sizeof(path), "/dev/nvgpu%d", i);
++      struct nvkmd_pdev *nvkmd;
++      if (nvkmd_sieos_try_create_pdev(path, &instance->vk.base,
++                                      instance->debug_flags, &nvkmd) != VK_SUCCESS)
++         continue;
++      struct vk_physical_device *pdev;
++      VkResult result = nvk_create_physical_device(instance, nvkmd, &pdev);
++      if (result == VK_ERROR_INCOMPATIBLE_DRIVER)
++         continue;
++      if (result != VK_SUCCESS)
++         return result;
++      list_addtail(&pdev->link, &instance->vk.physical_devices.list);
++   }
++   return VK_SUCCESS;
++}
++#endif
++
++static VkResult
++nvk_create_physical_device(struct nvk_instance *instance,
++                           struct nvkmd_pdev *nvkmd,
++                           struct vk_physical_device **pdev_out)
++{
++   VkResult result;
+ 
+    /* We don't support anything pre-Kepler */
+    if (nvkmd->dev_info.cls_eng3d < KEPLER_A) {
+--- a/src/nouveau/vulkan/nvk_physical_device.h
++++ b/src/nouveau/vulkan/nvk_physical_device.h
+@@ -81,6 +81,10 @@
+    return (struct nvk_instance *)pdev->vk.instance;
+ }
+ 
++#ifdef __sieos__
++VkResult nvk_enumerate_sieos_physical_devices(struct vk_instance *vk_instance);
++#endif
++
+ VkResult nvk_create_drm_physical_device(struct vk_instance *vk_instance,
+                                         struct _drmDevice *drm_device,
+                                         struct vk_physical_device **pdev_out);
+--- a/src/nouveau/winsys/nouveau_device.c
++++ b/src/nouveau/winsys/nouveau_device.c
+@@ -428,6 +428,25 @@
+    return ret;
+ }
+ 
++/* What the chipset decides (the shader model, warps, SMs per TPC, shared memory): for a
++ * kernel interface other than nouveau's (SIEOS's nvkmd_sieos). */
++void
++nouveau_ws_device_info_from_chipset(struct nv_device_info *info)
++{
++   info->sm = sm_for_chipset(info->chipset);
++   info->max_warps_per_mp = max_warps_per_mp_for_sm(info->sm);
++   info->mp_per_tpc = mp_per_tpc_for_chipset(info->chipset);
++   info->has_transfer_queue = info->cls_eng3d >= TURING_A;
++   init_shared_mem_sizes(info);
++}
++
++const char *
++nouveau_ws_device_name_for_chip(uint32_t dev_id, uint16_t subsystem_id,
++                                uint16_t subsystem_vendor_id)
++{
++   return name_for_chip(dev_id, subsystem_id, subsystem_vendor_id);
++}
++
+ struct nouveau_ws_device *
+ nouveau_ws_device_new(drmDevicePtr drm_device)
+ {
+--- a/src/nouveau/winsys/nouveau_device.h
++++ b/src/nouveau/winsys/nouveau_device.h
+@@ -33,6 +33,9 @@
+ };
+ 
+ struct nouveau_ws_device *nouveau_ws_device_new(struct _drmDevice *drm_device);
++void nouveau_ws_device_info_from_chipset(struct nv_device_info *info);
++const char *nouveau_ws_device_name_for_chip(uint32_t dev_id, uint16_t subsystem_id,
++                                            uint16_t subsystem_vendor_id);
+ void nouveau_ws_device_destroy(struct nouveau_ws_device *);
+ 
+ uint64_t nouveau_ws_device_vram_used(struct nouveau_ws_device *);
+--- a/src/vulkan/runtime/vk_image.c
++++ b/src/vulkan/runtime/vk_image.c
+@@ -23,7 +23,7 @@
+ 
+ #include "vk_image.h"
+ 
+-#if DETECT_OS_LINUX || DETECT_OS_BSD
++#if DETECT_OS_LINUX || DETECT_OS_BSD || DETECT_OS_SIEOS
+ #include <drm-uapi/drm_fourcc.h>
+ #endif
+ 
+@@ -105,7 +105,7 @@
+       vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
+    image->wsi_legacy_scanout = wsi_info && wsi_info->scanout;
+ 
+-#if DETECT_OS_LINUX || DETECT_OS_BSD
++#if DETECT_OS_LINUX || DETECT_OS_BSD || DETECT_OS_SIEOS
+    image->drm_format_mod = ((1ULL << 56) - 1) /* DRM_FORMAT_MOD_INVALID */;
+ #endif
+ 
+@@ -185,7 +185,7 @@
+    vk_object_free(device, alloc, image);
+ }
+ 
+-#if DETECT_OS_LINUX || DETECT_OS_BSD
++#if DETECT_OS_LINUX || DETECT_OS_BSD || DETECT_OS_SIEOS
+ VKAPI_ATTR VkResult VKAPI_CALL
+ vk_common_GetImageDrmFormatModifierPropertiesEXT(UNUSED VkDevice device,
+                                                  VkImage _image,
+--- a/src/vulkan/runtime/vk_image.h
++++ b/src/vulkan/runtime/vk_image.h
+@@ -77,7 +77,7 @@
+    /* wsi_image_create_info::scanout */
+    bool wsi_legacy_scanout;
+ 
+-#if DETECT_OS_LINUX || DETECT_OS_BSD
++#if DETECT_OS_LINUX || DETECT_OS_BSD || DETECT_OS_SIEOS
+    /* VK_EXT_drm_format_modifier
+     *
+     * Initialized by vk_image_create/init() to DRM_FORMAT_MOD_INVALID.  It's

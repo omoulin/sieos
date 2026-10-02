@@ -172,7 +172,7 @@ static int open_device(struct file *f, struct inode *ip, int flags)
         f->type = FD_RANDOM;
         return 0;
     }
-    return -ENXIO;
+    return cdev_open(f, dev);                    /* (the drivers' devices) */
 }
 
 /* An opened block-special inode: the device itself, read and written in bytes (root). */

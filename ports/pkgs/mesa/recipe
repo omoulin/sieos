@@ -13,11 +13,15 @@
 # systems, a DRI system without kernel GPU drivers as GNU/Hurd; the EGL
 # platform facet; SIEOS's EGL native types; VK_SIEOS_facet_surface (in
 # vk.xml, the Vulkan headers and lavapipe).
+# NVK, NVIDIA's Vulkan driver (sieos2-nvk.patch): on SIEOS it speaks to
+# /dev/nvgpuN (drv/nvgpu) through nvkmd_sieos, its kernel interface written
+# for it; NAK, its shader compiler, is Rust: built with Rust for SIEOS (make
+# rust-sieos: the target x86_64-unknown-linux-sieos, bindgen, cbindgen).
 # The build host needs meson, ninja, glslangValidator and a Python 3 with
 # mako and yaml (the first python3 on the PATH that has them, else
 # /usr/bin/python3: a conda or venv python3 first on the PATH may not).
 name     = mesa
-version  = 26.2.4-2
+version  = 26.2.4-3
 summary  = Mesa: OpenGL, OpenGL ES, EGL and Vulkan, drawn by the processor (llvmpipe, lavapipe), in Facet windows
 source   = https://archive.mesa3d.org/mesa-26.2.4.tar.xz
 sha256   = bce5f7fbebb934373b86c999a064d52fb5065878dc57f287f95346648ec832e9
@@ -26,21 +30,31 @@ build    = for t in meson ninja glslangValidator; do command -v $t > /dev/null |
                { echo "mesa: $t is needed on the build host (meson ninja-build glslang-tools)"; exit 1; }; done
            PY=; for p in python3 /usr/bin/python3; do $p -c 'import mako, yaml' 2>/dev/null && PY=$(command -v $p) && break; done
            [ -n "$PY" ] || { echo "mesa: a Python 3 with mako and yaml is needed (python3-mako python3-yaml)"; exit 1; }
-           { echo "[binaries]"; for v in 3.16 3.15 3.14 3.13 3.12 3.11 3.10 3 ''; do echo "python$v = '$PY'"; done; } \
+           mkdir -p sieos-compat/sys && echo '#include <sys/ioctl.h>' > sieos-compat/sys/ioccom.h   # (drm.h's BSD path)
+           RS=$TREE/build/rust-sieos RT=$TREE/tools/rust-sieos/x86_64-unknown-linux-sieos.json C=$HOME/.cargo/bin
+           H=$TREE/build/host-mesa-clc; export RUSTC_BOOTSTRAP=1 LIBCLANG_PATH=$H/env/lib   # (bindgen: clang 20's)
+           { echo "[binaries]"; for v in 3.16 3.15 3.14 3.13 3.12 3.11 3.10 3 ''; do echo "python$v = '$PY'"; done
+             echo "rust = ['$C/rustc', '+1.99.0']"; echo "bindgen = '$C/bindgen'"; echo "cbindgen = '$C/cbindgen'"
+             echo "mesa_clc = '$H/bin/mesa_clc'"
+             echo "vtn_bindgen2 = '$H/bin/vtn_bindgen2'"; } \
                > sieos-native.ini
            printf '%s\n' "[binaries]" "c = '$CC'" "cpp = '$CXX'" "ar = '$AR'" "strip = '$STRIP'" \
                "pkg-config = 'pkg-config'" "llvm-config = '$TREE/build/ports/llvm-sieos/bin/llvm-config'" \
+               "rust = ['$C/rustc', '+1.99.0', '-Zunstable-options', '--target', '$RT', '--sysroot', '$RS/sysroot', '-C', 'linker=$CC']" \
+               "bindgen = '$C/bindgen'" \
                "[host_machine]" "system = 'sieos'" "cpu_family = 'x86_64'" "cpu = 'x86_64'" "endian = 'little'" \
-               "[built-in options]" "c_args = ['-D_GNU_SOURCE']" "cpp_args = ['-D_GNU_SOURCE']" \
-               "[properties]" "needs_exe_wrapper = true" > sieos-cross.ini
+               "[built-in options]" "c_args = ['-D_GNU_SOURCE', '-I$PWD/sieos-compat']" "cpp_args = ['-D_GNU_SOURCE', '-I$PWD/sieos-compat']" \
+               "[properties]" "needs_exe_wrapper = true" \
+               "bindgen_clang_arguments = ['--target=x86_64-unknown-linux-musl', '-U__linux__', '-U__linux', '-Ulinux', '-U__gnu_linux__', '-D__sieos__', '-nostdinc', '-isystem', '$(ls -d $H/env/lib/clang/*/include | head -1)', '-isystem', '$TREE/build/sysroot/usr/include', '-D_GNU_SOURCE']" \
+               > sieos-cross.ini
            meson setup b . --cross-file sieos-cross.ini --native-file sieos-native.ini --prefix=$PREFIX -Dbuildtype=release -Dcpp_rtti=false \
-               -Dplatforms=facet -Degl-native-platform=facet -Dgallium-drivers=llvmpipe -Dvulkan-drivers=swrast \
+               -Dplatforms=facet -Degl-native-platform=facet -Dgallium-drivers=llvmpipe -Dvulkan-drivers=swrast,nouveau -Dmesa-clc=system -Dprecomp-compiler=system \
                -Dglx=disabled -Dgbm=disabled -Degl=enabled -Dgles1=disabled -Dgles2=enabled -Dopengl=true \
                -Dllvm=enabled -Dshared-llvm=disabled -Dshader-cache=disabled -Dxmlconfig=disabled \
                -Dzstd=disabled -Dlibunwind=disabled -Dlmsensors=disabled -Dvalgrind=disabled -Dbuild-tests=false \
                -Dglvnd=disabled -Dvideo-codecs= -Dexpat=disabled > b.log
            ninja -C b -j$JOBS
-install  = DESTDIR=$DESTDIR meson install -C b > /dev/null
+install  = DESTDIR=$DESTDIR meson install -C b --skip-subprojects > /dev/null
            D=$TREE/user/mesa-demos L=$DESTDIR$PREFIX/lib R=$(dirname $($CC -print-file-name=libstdc++.so))
            mkdir -p $DESTDIR$PREFIX/bin
            glslangValidator -V --vn square_spv -o b/square_spv.h $D/square.comp > /dev/null

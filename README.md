@@ -36,7 +36,16 @@ sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-am
   few minutes; without it QEMU emulates the CPU, which is much slower.
 - **Wi-Fi firmware** (optional): the AX201 firmware is copied from the build host's
   `/lib/firmware`: `firmware-iwlwifi` on Debian (from `non-free-firmware`),
-  `linux-firmware` on Ubuntu.
+  `linux-firmware` on Ubuntu. The AX210's (firmware API 77 and its `.pnvm`) is
+  downloaded from linux-firmware's 20231211 release and checked against
+  `ports/SHA256SUMS`.
+- **Rust** (for Mesa's NVK): rustup (https://rustup.rs, in your home directory); `make
+  rust-sieos` installs the pinned toolchain (1.99.0), builds Rust's standard library for SIEOS
+  (`tools/rust-sieos`) and installs bindgen and cbindgen with cargo (bindgen uses the clang
+  of the conda environment below, so the host needs no clang).
+- **conda or mamba** (miniforge, https://conda-forge.org/download/) for NVK's build: clang and
+  LLVM 20 with LLVM's SPIR-V translator, in an environment of the build tree
+  (`tools/host-mesa-clc.sh`: Mesa's own shader tools for the build host).
 - `cmake` builds llama.cpp, for the local model (`make brain`, the `llama-cpp` and
   `sia-brain` packages and `make usb-brain`), and LLVM and the Vulkan loader; `meson`,
   `ninja`, `glslangValidator` (glslang-tools) and Python's mako and yaml modules build Mesa
@@ -75,7 +84,7 @@ through the `ftpmirror.gnu.org` mirrors.
 ```sh
 make            # build/sieos.iso (BIOS + UEFI) and build/disk.img, toolchains included
 make run        # BIOS boot, 4 CPUs, e1000 network, persistent disk, QEMU window + serial here
-make run SMP=8  # any CPU count up to 16
+make run SMP=8  # any CPU count up to 64
 make run-uefi   # the same through UEFI firmware (OVMF)
 make run-nox    # serial console only (no window)
 make run-iso    # the ISO alone: root fs is a RAM disk shipped on the ISO
@@ -101,6 +110,12 @@ from the repository stay on the drive, and the installer copies them all to the 
 `sieos-usb.img` (710 MB) has every package except the local model; `sieos-usb-brain.img`
 (2.8 GB, a drive of 4 GB or more) has the local model too, sia-brain (see
 [sia-brain](#sia-brain-the-local-model)). `make run-usb-brain` boots it in QEMU.
+
+**A hardware report:** a live system started from a USB drive writes what it found on
+the machine and how its drivers did (`dmesg`, `lidev -v`, the links, a connectivity
+check) to `hwreport/report-N.txt` on the drive's package partition (`sieos-pkg`, ext4),
+45 seconds after it starts; any Linux can read it. `hwreport` writes one at any time;
+an empty file `/usr/pkg/hwreport/off` stops the automatic ones.
 
 The guest gets 1 GiB of memory (`make run MEM=2G` for more). The disk carries `gcc`,
 `g++`, `as`, `ld` and the other binutils, the C and C++ headers and libraries, and
@@ -148,7 +163,7 @@ so it can be written to a USB stick.
 | Console     | VGA text mode, or a GOP/VBE linear framebuffer with an 8x16 font. Both handle ANSI colours and are mirrored to COM1. The kernel's messages are kept for `dmesg`. |
 | Display     | QEMU's standard VGA (Bochs VBE), and Intel integrated graphics with its own mode setting (display versions 11 to 14: Ice Lake, Raptor Lake-S, Arrow Lake-P); the screen's resolution is chosen in Settings. |
 | Input       | PS/2 keyboard and mouse (i8042, with the wheel in IntelliMouse mode); USB keyboards, mice and tablets on every xHCI controller (the chipset's and Thunderbolt ones), directly or through USB 2 hubs, plugged in at any time (mouse wheels included); HID-over-I2C touchpads and keyboards on the Intel LPSS I2C controllers (Raptor Lake, Ice Lake, Tiger/Alder/Meteor/Arrow Lake), found through the ACPI tables. Boot options `nousb`, `noi2c`, `usbdebug`, `i2cdebug`. |
-| SMP         | CPUs found through the ACPI MADT and started with INIT-SIPI-SIPI via a real-mode trampoline. Per-CPU GDT/TSS/idle process reached through `%gs` (`swapgs`). Local APIC timers preempt on every CPU, and idle CPUs are woken by reschedule IPIs. A big kernel lock serialises kernel code while user processes run in parallel. |
+| SMP         | Up to 64 CPUs, found through the ACPI MADT and started with INIT-SIPI-SIPI via a real-mode trampoline. Per-CPU GDT/TSS/idle process reached through `%gs` (`swapgs`). Local APIC timers preempt on every CPU, and idle CPUs are woken by reschedule IPIs. A big kernel lock serialises kernel code while user processes run in parallel. |
 | Memory      | Bitmap frame allocator over all RAM (up to 256 GiB), 4-level paging with a per-process address space, direct map of physical memory, kernel heap. |
 | System calls | ABI v2, Solaris-inspired (Solaris errno values, signal numbers, flags and structure layouts), entered with the `syscall` instruction; specified in [`docs/abi-v2.md`](docs/abi-v2.md) and `abi/include/sieos/`. |
 | Processes   | Processes with LWPs (threads), preemptive priority scheduling across CPUs with the Solaris TS, FX and RT classes (`priocntl`), page faults and simple system calls without the big kernel lock, copy-on-write `fork`, demand paging, `mmap` (private and shared, anonymous and file), `execve` of static, PIE and dynamically linked ELF64 programs (the kernel loads `PT_INTERP`), set-user-ID/set-group-ID, `waitid`, rlimits (with `RLIMIT_VMEM`) and rusage, ELF core files (`RLIMIT_CORE`), System V IPC, `/proc` (Solaris layout), `mount`/`umount2` of tmpfs and proc, `nanosleep` to the microsecond. |
@@ -159,7 +174,7 @@ so it can be written to a USB stick.
 | Terminal    | termios with canonical and raw modes, `ECHO` (used for password prompts), and editable control characters. |
 | Users       | Real, effective and saved uid/gid plus supplementary groups; `setuid`, `seteuid`, `setgid`, `setgroups`; `umask`; `access`. |
 | Permissions | Owner/group/other `rwx` checks on every open, exec and directory search. Creating or removing files needs write+search on the directory. Sticky directories (`/tmp`) restrict deletion. The superuser bypasses checks. `chown` is restricted to root, as in Solaris's `rstchown`, and a non-root `chown` clears the set-ID bits. |
-| Network     | PCI enumeration; interrupt-driven Intel e1000 and virtio-net drivers, USB Ethernet adapters (CDC ECM and NCM, such as the Realtek RTL8153 ones, plugged in at any time), with any number of cards as eth0, eth1, ... (each with its own addresses, DHCP and IPv6, and routes chosen per destination). Ethernet, ARP (with a queue for packets awaiting resolution), IPv4 routing through a gateway, loopback (127.0.0.0/8), ICMP echo, UDP, **TCP** and a **DHCP** client at boot. **IPv6**: neighbor discovery, stateless address autoconfiguration from router advertisements (with MTU and RDNSS), ICMPv6 echo, `::1`, and TCP and UDP over IPv6; `AF_INET6` sockets are dual-stack (IPv4-mapped peers) unless `IPV6_V6ONLY`. TCP covers the three-way handshake, MSS and window scaling, flow control, out-of-order reassembly, NewReno congestion control, RTT-based retransmission with backoff, zero-window probes, FIN/RST, TIME_WAIT and listen/accept backlogs. The **BSD sockets** API integrates with `read`/`write`/`poll`, including non-blocking `connect` (`EINPROGRESS`, then `poll` and `SO_ERROR`). Ports below 1024 and raw sockets require root. **Wi-Fi**: Intel Wi-Fi 6 AX201 (Intel's firmware), scanning and WPA2-Personal, with `dladm`. |
+| Network     | PCI enumeration; interrupt-driven Intel e1000 and virtio-net drivers, USB Ethernet adapters (CDC ECM and NCM, such as the Realtek RTL8153 ones, plugged in at any time), with any number of cards as eth0, eth1, ... (each with its own addresses, DHCP and IPv6, and routes chosen per destination). Ethernet, ARP (with a queue for packets awaiting resolution), IPv4 routing through a gateway, loopback (127.0.0.0/8), ICMP echo, UDP, **TCP** and a **DHCP** client at boot. **IPv6**: neighbor discovery, stateless address autoconfiguration from router advertisements (with MTU and RDNSS), ICMPv6 echo, `::1`, and TCP and UDP over IPv6; `AF_INET6` sockets are dual-stack (IPv4-mapped peers) unless `IPV6_V6ONLY`. TCP covers the three-way handshake, MSS and window scaling, flow control, out-of-order reassembly, NewReno congestion control, RTT-based retransmission with backoff, zero-window probes, FIN/RST, TIME_WAIT and listen/accept backlogs. The **BSD sockets** API integrates with `read`/`write`/`poll`, including non-blocking `connect` (`EINPROGRESS`, then `poll` and `SO_ERROR`). Ports below 1024 and raw sockets require root. Realtek RTL8111/8168/8411 Gigabit Ethernet (polled). **Wi-Fi**: Intel Wi-Fi 6 AX201 and Wi-Fi 6E AX210 (Intel's firmware), scanning and WPA2-Personal, with `dladm`. |
 | Power       | ACPI power-off (S5) and restart (reset register, 0xCF9), the power button; MWAIT idle states, Intel HWP or P-states with performance/balanced/power-saver policies, per-core and package temperatures (Intel DTS, AMD), passive cooling and a critical shutdown, desktop fan speeds (Nuvoton, ITE); `poweradm` and the Power and Temperature window. |
 | Disks       | ATA (bus-master DMA), NVMe and virtio disks (`if=virtio` in QEMU, read-only images too), USB drives, plugged in at any time (mass storage, bulk-only: `c8t0d0p0`), GPT and MBR partitions (`/dev/dsk/c4t0d0s1`), a RAM disk from the ISO, lofi devices; `root=` on the boot command line picks the root partition; `mount -L LABEL DIR`. |
 | Files       | ext4 read/write (see below), tmpfs (`/tmp`, `/dev/shm`), pipes and named FIFOs, `AF_UNIX` sockets (with descriptor passing), pseudo-terminals, `poll()`, record locks, and device nodes `/dev/console`, `/dev/tty`, `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/fb0` and `/dev/events` stored as real ext4 character-special inodes. |
@@ -585,8 +600,8 @@ Third-party components:
   definitions (the build host's `/usr/share/i18n/locales`), whose authors claim no
   copyright in the data; the collation's letters and accents come from Unicode's data.
 - **Fonts:** DejaVu (`rootfs/usr/share/fonts/dejavu`, with its licence).
-- **Intel's Wi-Fi firmware** is copied from the build host's linux-firmware, under its
-  licence (`ports/firmware/LICENCE.iwlwifi_firmware`).
+- **Intel's Wi-Fi firmware** comes from linux-firmware (the build host's, or downloaded),
+  under its licence (`ports/firmware/LICENCE.iwlwifi_firmware`).
 - **Font:** `kernel/font8x16.c` is generated by `tools/psf2c.py` from
   `Lat15-VGA16.psf.gz` in the console-setup package. That package's copyright
   file states that the console fonts are in the public domain.

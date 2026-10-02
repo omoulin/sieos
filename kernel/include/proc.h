@@ -61,7 +61,7 @@ struct lwp {
     uint64_t nvcsw, nivcsw;     /* voluntary / involuntary context switches */
     uint64_t minflt;            /* page faults resolved */
     int bound;                  /* processor_bind: CPU + 1, 0 = unbound */
-    uint32_t affinity;          /* lwp_affinity: the CPUs it may run on (bit per id), 0 = any */
+    uint64_t affinity;          /* lwp_affinity: the CPUs it may run on (bit per id), 0 = any */
     int cid;                    /* scheduling class (sieos/priocntl.h), see sched.c */
     short upri, uprilim;        /* TS/FX user priority and its limit */
     short cpupri;               /* TS: the dispatcher priority */

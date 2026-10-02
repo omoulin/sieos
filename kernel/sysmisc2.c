@@ -508,10 +508,10 @@ static long do_p_online(long id, long flag)
                 online++;
         if (!c->offline && online <= 1)
             return -EBUSY;                       /* the last processor stays online */
-        uint32_t others = 0;                     /* the processors left online */
+        uint64_t others = 0;                     /* the processors left online */
         for (int i = 0; i < ncpu; i++)
             if (cpus[i].online && !cpus[i].offline && &cpus[i] != c)
-                others |= 1u << cpus[i].id;
+                others |= 1ULL << cpus[i].id;
         for (int i = 0; i < NLWP; i++) {
             struct lwp *l = &lwp_table[i];
             if (l->state != LWP_UNUSED && (l->bound == c->id + 1 || (l->affinity && !(l->affinity & others))))
@@ -538,15 +538,15 @@ static long do_lwp_affinity(long idtype, long id, long op, uint64_t *umask)
         return -EFAULT;
     if (op != SIEOS_AFF_GET && op != SIEOS_AFF_SET)
         return -EINVAL;
-    uint32_t online = 0, set = 0;
+    uint64_t online = 0, set = 0;
     for (int i = 0; i < ncpu; i++)
         if (cpus[i].online && !cpus[i].offline)
-            online |= 1u << cpus[i].id;
+            online |= 1ULL << cpus[i].id;
     if (op == SIEOS_AFF_SET) {
         uint64_t m = *umask;
         if (!(m & online))
             return -EINVAL;
-        set = (m & online) == online ? 0 : (uint32_t)(m & online);
+        set = (m & online) == online ? 0 : (m & online);
     }
     struct proc *p;
     if (idtype == SIEOS_P_LWPID) {
@@ -575,12 +575,12 @@ static long do_lwp_affinity(long idtype, long id, long op, uint64_t *umask)
         found = true;
         if (l != curlwp && l->state == LWP_RUNNING)
             for (int c = 0; c < ncpu; c++)
-                if (cpus[c].lwp == l && set && !(set & (1u << cpus[c].id)))
+                if (cpus[c].lwp == l && set && !(set & (1ULL << cpus[c].id)))
                     cpus[c].need_resched = true; /* (it moves at its next reschedule) */
     }
     if (!found)
         return -ESRCH;
-    if (curlwp->affinity && !(curlwp->affinity & (1u << mycpu()->id)))
+    if (curlwp->affinity && !(curlwp->affinity & (1ULL << mycpu()->id)))
         schedule();                              /* move to an allowed processor now */
     return 0;
 }

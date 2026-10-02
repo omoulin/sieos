@@ -89,7 +89,7 @@ static void preempt_for(struct lwp *l)
     for (int i = 0; i < ncpu; i++) {
         struct cpu *c = &cpus[i];
         if (!c->online || c->offline || (l->bound && l->bound != c->id + 1) ||
-            (l->affinity && !(l->affinity & (1u << c->id))))
+            (l->affinity && !(l->affinity & (1ULL << c->id))))
             continue;
         if (!c->lwp || c->lwp->is_idle)
             return;                                /* an idle CPU takes it (smp_kick_idle) */

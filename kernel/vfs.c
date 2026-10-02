@@ -571,6 +571,12 @@ static void ensure(const char *path, uint16_t mode, uint32_t rdev)
         kprintf("vfs: cannot create %s (%d)\n", path, err);
 }
 
+/* A device node (a driver's), created if missing. */
+void dev_node(const char *path, uint16_t mode, uint32_t rdev)
+{
+    ensure(path, mode, rdev);
+}
+
 /*
  * The /dev/dsk nodes of the block devices there are: created, or made
  * again where the name now stands for another device (after a disk's

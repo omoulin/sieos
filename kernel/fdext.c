@@ -34,7 +34,6 @@
 #include "sieos/fdext.h"
 
 struct inode *tmpfs_unnamed(struct fs *fs, int uid, int gid);   /* tmpfs.c */
-void poll_sleep(uint64_t deadline);                             /* poll.c */
 
 /* A new FD_OPS descriptor (SIEOS_O_CLOEXEC, SIEOS_O_NONBLOCK from oflags). */
 static long ops_install(const struct file_ops *ops, void *priv, long oflags)
@@ -132,7 +131,7 @@ static void efd_close(struct file *f)
     kfree(f->priv);
 }
 
-static const struct file_ops efd_ops = { "eventfd", efd_read, efd_write, efd_poll, efd_close };
+static const struct file_ops efd_ops = { "eventfd", efd_read, efd_write, efd_poll, efd_close, NULL, NULL };
 
 static long do_eventfd(unsigned int initval, long flags)
 {
@@ -243,7 +242,7 @@ static void tfd_close(struct file *f)
     kfree(t);
 }
 
-static const struct file_ops tfd_ops = { "timerfd", tfd_read, NULL, tfd_poll, tfd_close };
+static const struct file_ops tfd_ops = { "timerfd", tfd_read, NULL, tfd_poll, tfd_close, NULL, NULL };
 
 static long do_timerfd_create(int clock, long flags)
 {
@@ -350,7 +349,7 @@ static void pidfd_close(struct file *f)
     kfree(f->priv);
 }
 
-static const struct file_ops pidfd_ops = { "pidfd", NULL, NULL, pidfd_poll, pidfd_close };
+static const struct file_ops pidfd_ops = { "pidfd", NULL, NULL, pidfd_poll, pidfd_close, NULL, NULL };
 
 static long do_pidfd_open(int pid, long flags)
 {
@@ -512,7 +511,7 @@ static void ep_close(struct file *f)
     kfree(ep);
 }
 
-static const struct file_ops ep_ops = { "eventpoll", NULL, NULL, ep_poll, ep_close };
+static const struct file_ops ep_ops = { "eventpoll", NULL, NULL, ep_poll, ep_close, NULL, NULL };
 
 static long do_epoll_create(long flags)
 {

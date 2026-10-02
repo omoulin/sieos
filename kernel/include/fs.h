@@ -217,7 +217,15 @@ struct file_ops {
     long (*write)(struct file *f, const void *buf, size_t n);
     short (*poll)(struct file *f);               /* POLLIN, POLLOUT, POLLHUP... ready now */
     void (*close)(struct file *f);               /* the last close: f->priv goes */
+    long (*ioctl)(struct file *f, unsigned long cmd, void *arg);   /* optional: a device's commands */
+    uint64_t (*page)(struct file *f, uint64_t off, bool *wc);       /* optional: mmap's page at off (its
+                                                                     * physical address, 0: none; wc: write-combined) */
 };
+
+/* Character devices of the drivers (cdev.c): a major's open, which makes f an FD_OPS file. */
+int  cdev_register(int major, int (*open)(struct file *f, int minor));
+int  cdev_open(struct file *f, uint32_t dev);    /* -ENXIO: no driver has the major */
+void dev_node(const char *path, uint16_t mode, uint32_t rdev);   /* a /dev node, created if missing */
 
 struct pipe;
 struct pty;

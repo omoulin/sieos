@@ -12,6 +12,7 @@
 #include "abi.h"
 
 void poll_wakeup(void);                       /* something may have become ready */
+void poll_sleep(uint64_t deadline);           /* until a poll_wakeup or the tick deadline (0: none) */
 long sys_poll(struct pollfd *fds, int nfds, int timeout_ms);
 
 /* input.c */

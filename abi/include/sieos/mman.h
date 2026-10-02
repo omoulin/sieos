@@ -19,6 +19,9 @@
 #define SIEOS_MAP_ALIGN     0x200      /* addr argument is the required alignment */
 #define SIEOS_MAP_TEXT      0x400
 #define SIEOS_MAP_INITDATA  0x800
+/* Linux's hints, taken and ignored (the C library's <sys/mman.h> has them):
+ * MAP_EXECUTABLE, MAP_LOCKED, MAP_POPULATE, MAP_NONBLOCK, MAP_STACK */
+#define SIEOS_MAP_HINTS     (0x1000 | 0x2000 | 0x8000 | 0x10000 | 0x20000)
 #define SIEOS_MAP_FAILED    ((void *)-1)
 
 /* memcntl() commands */

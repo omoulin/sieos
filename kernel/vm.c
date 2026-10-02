@@ -27,6 +27,7 @@
 #include "proc.h"
 #include "mm.h"
 #include "vm.h"
+#include "cpu.h"
 #include "smp.h"
 #include "fs.h"
 #include "abi2.h"
@@ -591,18 +592,20 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
         (prot & ~(SIEOS_PROT_READ | SIEOS_PROT_WRITE | SIEOS_PROT_EXEC)))
         return -EINVAL;
     if (flags & ~(SIEOS_MAP_TYPE | SIEOS_MAP_FIXED | SIEOS_MAP_NORESERVE | SIEOS_MAP_ANON | SIEOS_MAP_ALIGN |
-                  SIEOS_MAP_TEXT | SIEOS_MAP_INITDATA))
+                  SIEOS_MAP_TEXT | SIEOS_MAP_INITDATA | SIEOS_MAP_HINTS))
         return -EINVAL;
     len = PAGE_ALIGN_UP(len);
     if (!vm_vmem_ok(p, len))
         return -ENOMEM;
-    bool anon = flags & SIEOS_MAP_ANON;
+    bool anon = flags & SIEOS_MAP_ANON, device = false;
     struct file *f = NULL;
     if (!anon) {
         f = fd_file(fd);
         if (!f)
             return -EBADF;
-        if (f->type != FD_INODE || !S_ISREG(inode_mode(f->ip)))
+        if (f->type == FD_OPS && f->ops->page)
+            device = true;                       /* (a driver's device memory: mapped below, now) */
+        else if (f->type != FD_INODE || !S_ISREG(inode_mode(f->ip)))
             return -ENODEV;
         if ((f->flags & O_ACCMODE) == O_WRONLY)
             return -EACCES;
@@ -650,7 +653,7 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
     a->prot = prot;
     a->was_writable = (prot & SIEOS_PROT_WRITE) != 0;
     a->flags = flags & (SIEOS_MAP_TYPE | SIEOS_MAP_ANON);
-    a->ip = f ? idup(f->ip) : NULL;
+    a->ip = f && !device ? idup(f->ip) : NULL;
     a->off = off;
     a->shm = NULL;
     vm_space_lock(p);
@@ -659,6 +662,23 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
     if (merge)
         merge_area(p, a);                        /* (a may be gone: private anonymous memory is not filled below) */
     vm_space_unlock(p);
+
+    /* A device's memory: its pages where the driver has them, now (never freed here: PTE_DEVICE). */
+    if (device) {
+        uint64_t fl = prot_flags(prot) | PTE_DEVICE | PTE_SHARED;
+        if (prot == SIEOS_PROT_NONE)
+            fl = (fl & ~PTE_U) | PTE_NOACC;
+        for (uint64_t va = start; va < start + len; va += PAGE_SIZE) {
+            bool wc = false;
+            uint64_t pa = f->ops->page(f, off + (va - start), &wc);
+            if (!pa || map_locked(p, va, pa, fl | (wc ? (pat_wc ? PTE_WC : PTE_UC) : 0)) < 0) {
+                unmap_pages(p, start, start + len);
+                cut_areas(p, start, start + len);
+                return pa ? -ENOMEM : -ENXIO;
+            }
+        }
+        return (long)start;
+    }
 
     /* Shared anonymous memory is filled now; private anonymous memory and files on demand. */
     if (type == SIEOS_MAP_SHARED && anon) {

@@ -31,4 +31,7 @@ if mount | grep -q '^/dev/ramdisk on / '; then
     done
     [ -f /etc/sieos-usb-pkg ] && [ $tries -eq 0 ] &&
         echo "SIEOS: the USB drive's package partition (sieos-pkg) was not found: its packages are not available."
+    # a hardware report on the drive (/usr/pkg/hwreport/report-N.txt), once the links and DHCP
+    # have had their time; /usr/pkg/hwreport/off stops them
+    [ $tries -gt 0 ] && [ ! -e /usr/pkg/hwreport/off ] && (sleep 45; /sbin/hwreport > /dev/null) &
 fi

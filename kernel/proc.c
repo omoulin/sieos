@@ -223,7 +223,7 @@ void schedule(void)
         int idx = (c->rr + i) % NLWP;
         struct lwp *l = &lwp_table[idx];
         if (l->state == LWP_RUNNABLE && (!l->bound || l->bound == c->id + 1) &&
-            (!l->affinity || (l->affinity & (1u << c->id)))) {
+            (!l->affinity || (l->affinity & (1ULL << c->id)))) {
             int pri = sched_gpri(l);
             if (pri > best) {
                 best = pri;
@@ -232,7 +232,7 @@ void schedule(void)
         }
     }
     bool cur_ok = cur->state == LWP_RUNNING && !cur->is_idle && !c->offline && (!cur->bound || cur->bound == c->id + 1) &&
-                  (!cur->affinity || (cur->affinity & (1u << c->id)));
+                  (!cur->affinity || (cur->affinity & (1ULL << c->id)));
     if (cur_ok && (!next || sched_gpri(cur) > best || (sched_gpri(cur) == best && !c->slice_expired))) {
         c->slice_expired = false;
         return;                         /* it keeps the CPU: nobody ranks higher */
