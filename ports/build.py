@@ -42,7 +42,8 @@ PORTS = {
 }
 
 def teach_config_sub(tree):
-    for path in glob.glob(os.path.join(tree, '**', 'config.sub'), recursive=True):
+    # (config.sub, and copies under other names: SQLite's autosetup-config.sub)
+    for path in glob.glob(os.path.join(tree, '**', '*config.sub'), recursive=True):
         text = open(path).read()
         if 'sieos' in text:
             continue

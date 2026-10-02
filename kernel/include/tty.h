@@ -28,6 +28,7 @@ struct tty {
     size_t line_len;
     /* output sink (console or pty master buffer); returns bytes accepted */
     size_t (*output)(struct tty *t, const char *s, size_t n);
+    void (*oflush)(struct tty *t);   /* tcflush(TCOFLUSH): drop queued output; NULL: none queued */
     void *priv;
 };
 

@@ -28,6 +28,7 @@ struct tnode {
     uint64_t next_cookie;
     uint64_t *pages;              /* data: physical addresses, 0 = hole */
     size_t npages;
+    size_t nresident;             /* pages[] entries that are not holes */
 };
 
 struct tmpfs {
@@ -59,13 +60,28 @@ static struct inode *tnode_new(struct fs *fs, uint16_t mode, int uid, int gid)
     return ip;
 }
 
+/*
+ * A file of tmpfs fs that no directory names (memfd_create): freed with its
+ * last reference.  NULL if fs is not a tmpfs or memory is short.
+ */
+struct inode *tmpfs_unnamed(struct fs *fs, int uid, int gid)
+{
+    if (!fs || fs->ops != &tmpfs_ops)
+        return NULL;
+    struct inode *ip = tnode_new(fs, S_IFREG | 0600, uid, gid);
+    if (ip)
+        DI(ip)->i_links_count = 0;
+    return ip;
+}
+
 static void data_free_from(struct inode *ip, size_t first)
 {
     struct tnode *tn = TN(ip);
-    for (size_t i = first; i < tn->npages; i++)
+    for (size_t i = first; i < tn->npages && tn->nresident; i++)
         if (tn->pages[i]) {
             pmm_unref(tn->pages[i]);             /* shared mappings may still hold it */
             tn->pages[i] = 0;
+            tn->nresident--;
             TFS(ip)->used_pages--;
         }
 }
@@ -90,12 +106,7 @@ static void tmpfs_release(struct inode *ip)
 
 static void set_blocks(struct inode *ip)
 {
-    uint64_t n = 0;
-    struct tnode *tn = TN(ip);
-    for (size_t i = 0; i < tn->npages; i++)
-        if (tn->pages[i])
-            n++;
-    n *= PAGE_SIZE / 512;
+    uint64_t n = (uint64_t)TN(ip)->nresident * (PAGE_SIZE / 512);   /* (a count: files may be huge and sparse) */
     DI(ip)->i_blocks_lo = n & 0xFFFFFFFF;
     DI(ip)->i_blocks_high = n >> 32;
 }
@@ -160,6 +171,7 @@ static long tmpfs_write(struct inode *ip, const void *src, uint64_t off, size_t 
                 break;
             memset(P2V(pa), 0, PAGE_SIZE);
             tn->pages[pg] = pa;
+            tn->nresident++;
             t->used_pages++;
         }
         memcpy((uint8_t *)P2V(tn->pages[pg]) + po, (const uint8_t *)src + done, chunk);
@@ -466,6 +478,7 @@ static int tmpfs_getpage(struct inode *ip, uint64_t idx, uint64_t *pa)
         if (!f)
             return -ENOMEM;
         tn->pages[idx] = f;
+        tn->nresident++;
         t->used_pages++;
         set_blocks(ip);
     }

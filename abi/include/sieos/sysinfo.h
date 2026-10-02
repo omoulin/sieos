@@ -62,6 +62,10 @@
 #define SIEOS_PBIND_NONE  (-1)
 #define SIEOS_PBIND_QUERY (-2)
 
+/* lwp_affinity ops */
+#define SIEOS_AFF_GET     0
+#define SIEOS_AFF_SET     1
+
 #define SIEOS_PI_TYPELEN  16
 #define SIEOS_PI_FPUTYPE  32
 typedef struct {

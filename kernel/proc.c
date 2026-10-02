@@ -222,7 +222,8 @@ void schedule(void)
     for (int i = 1; i <= NLWP && !c->offline; i++) {   /* highest priority first, round robin among equals */
         int idx = (c->rr + i) % NLWP;
         struct lwp *l = &lwp_table[idx];
-        if (l->state == LWP_RUNNABLE && (!l->bound || l->bound == c->id + 1)) {
+        if (l->state == LWP_RUNNABLE && (!l->bound || l->bound == c->id + 1) &&
+            (!l->affinity || (l->affinity & (1u << c->id)))) {
             int pri = sched_gpri(l);
             if (pri > best) {
                 best = pri;
@@ -230,7 +231,8 @@ void schedule(void)
             }
         }
     }
-    bool cur_ok = cur->state == LWP_RUNNING && !cur->is_idle && !c->offline && (!cur->bound || cur->bound == c->id + 1);
+    bool cur_ok = cur->state == LWP_RUNNING && !cur->is_idle && !c->offline && (!cur->bound || cur->bound == c->id + 1) &&
+                  (!cur->affinity || (cur->affinity & (1u << c->id)));
     if (cur_ok && (!next || sched_gpri(cur) > best || (sched_gpri(cur) == best && !c->slice_expired))) {
         c->slice_expired = false;
         return;                         /* it keeps the CPU: nobody ranks higher */
@@ -328,9 +330,12 @@ static void update_loadavg(void)
 }
 
 /* n ticks have passed (usually 1). */
+void timerfd_tick(void);                         /* fdext.c */
+
 void clock_tick(uint64_t n)
 {
     bool woke = false;
+    timerfd_tick();                              /* (expired timerfds wake their waiters) */
     if (ticks / (5 * TIMER_HZ) != (ticks - n) / (5 * TIMER_HZ))
         update_loadavg();
     if (ticks / TIMER_HZ != (ticks - n) / TIMER_HZ)
@@ -634,6 +639,8 @@ static int exec_script(struct lwp *l, struct inode *ip, const char *path, char *
     return r;
 }
 
+static void single_lwp(void);
+
 static int exec_into(struct lwp *l, const char *path, char *const argv[], char *const envp[])
 {
     return exec_file(l, path, argv, envp, 0);
@@ -671,7 +678,7 @@ static int exec_file(struct lwp *l, const char *path, char *const argv[], char *
     }
     /* PIE: relocate so that the lowest segment starts at PIE_BASE */
     uint64_t bias = 0, lowest = ~0UL;
-    char interp[MAXPATH];
+    char interp[256];                            /* (PT_INTERP: a short absolute path) */
     interp[0] = 0;
     for (int i = 0; i < eh.e_phnum; i++) {
         if (phs[i].p_type == PT_INTERP) {            /* the dynamic linker to run first */
@@ -801,6 +808,15 @@ static int exec_file(struct lwp *l, const char *path, char *const argv[], char *
     copy_to_space(pml4, v, aux, sizeof(aux));
     kfree(strs);
 
+    /* The point of no return: only now do the other LWPs go (a failed exec leaves them be). */
+    if (l == curlwp) {
+        single_lwp();
+        if (l->must_exit) {                          /* another LWP's exec (or an exit) won */
+            vmm_free_space(pml4);
+            return -EINTR;
+        }
+    }
+
     /* Commit: replace the old address space. */
     uint64_t old = p->pml4;
     p->pml4 = pml4;
@@ -859,7 +875,7 @@ static int exec_file(struct lwp *l, const char *path, char *const argv[], char *
 static void single_lwp(void)
 {
     struct proc *p = current;
-    for (;;) {
+    while (!curlwp->must_exit) {
         int others = 0;
         for (int i = 0; i < NLWP; i++) {
             struct lwp *l = &lwp_table[i];
@@ -883,7 +899,6 @@ static void single_lwp(void)
 
 long proc_exec(const char *path, char *const argv[], char *const envp[])
 {
-    single_lwp();
     return exec_into(curlwp, path, argv, envp);
 }
 
@@ -1023,7 +1038,8 @@ long proc_fork(int flags)
 
     np->parent = cp;
     np->state = PSTATE_RUNNING;
-    nl->bound = curlwp->bound;       /* processor bindings are inherited */
+    nl->bound = curlwp->bound;       /* processor bindings and affinities are inherited */
+    nl->affinity = curlwp->affinity;
     nl->exit_word = 0;
     nl->robust_list = 0;
     make_runnable(nl);
@@ -1112,11 +1128,15 @@ static void proc_teardown(struct proc *p)
         }
     }
 
-    write_cr3(kernel_pml4_phys);
-    vm_space_free(p, p->pml4);
+    /* The address space goes before freeing it: writing its shared mappings
+     * back may sleep, and a dispatch meanwhile loads p->pml4 into CR3. */
+    uint64_t pml4 = p->pml4;
     p->pml4 = 0;
+    write_cr3(kernel_pml4_phys);
+    vm_space_free(p, pml4);
     p->itimer_value[0] = p->itimer_value[1] = p->itimer_value[2] = 0;
     p->state = PSTATE_ZOMBIE;
+    poll_wakeup();                               /* (its pidfds are readable now) */
     if (p->parent) {
         if (!p->nosigchld) {
             struct ksiginfo info = { 0 };

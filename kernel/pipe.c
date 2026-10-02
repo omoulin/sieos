@@ -12,7 +12,8 @@
 #include "mm.h"
 #include "poll.h"
 
-#define PIPE_SIZE 4096
+#define PIPE_SIZE 65536             /* as Linux's */
+#define PIPE_BUF  4096              /* writes up to this size are not split */
 
 struct pipe {
     char buf[PIPE_SIZE];
@@ -54,9 +55,21 @@ bool pipe_readable(struct pipe *p)
     return p->nread != p->nwrite || p->writers == 0;
 }
 
+/* As Linux: the read end hung up when no writer is left (a FIFO's: once it had
+ * one), the write end in error when no reader is (asyncio waits for these). */
+short pipe_hangup(struct pipe *p, int acc)
+{
+    short r = 0;
+    if (acc != O_WRONLY && p->writers == 0 && (!p->fs || p->wopens))
+        r |= POLLHUP;
+    if (acc != O_RDONLY && p->readers == 0)
+        r |= POLLERR;
+    return r;
+}
+
 bool pipe_writable(struct pipe *p)
 {
-    return p->nwrite - p->nread < PIPE_SIZE || p->readers == 0;
+    return PIPE_SIZE - (p->nwrite - p->nread) >= PIPE_BUF || p->readers == 0;
 }
 
 static void pipe_free(struct pipe *p)
@@ -145,14 +158,24 @@ long pipe_read(struct pipe *p, char *buf, size_t n)
         sleep_on(p);
     }
     size_t got = 0;
-    while (got < n && p->nread < p->nwrite)
-        buf[got++] = p->buf[p->nread++ % PIPE_SIZE];
+    while (got < n && p->nread < p->nwrite) {
+        size_t at = p->nread % PIPE_SIZE;
+        size_t c = MIN(n - got, MIN(p->nwrite - p->nread, PIPE_SIZE - at));
+        memcpy(buf + got, p->buf + at, c);
+        got += c;
+        p->nread += c;
+    }
     wakeup(p);
     poll_wakeup();
     return got;
 }
 
-long pipe_write(struct pipe *p, const char *buf, size_t n)
+/*
+ * A write of up to PIPE_BUF bytes goes in at once, when there is room for all
+ * of it; a larger one as room comes.  Non-blocking (O_NONBLOCK), what fits
+ * now, or EAGAIN.
+ */
+long pipe_write(struct pipe *p, const char *buf, size_t n, bool nonblock)
 {
     size_t done = 0;
     while (done < n) {
@@ -160,16 +183,26 @@ long pipe_write(struct pipe *p, const char *buf, size_t n)
             signal_send(current, SIGPIPE);
             return done ? (long)done : -EPIPE;
         }
-        if (p->nwrite - p->nread == PIPE_SIZE) {
+        size_t room = PIPE_SIZE - (p->nwrite - p->nread);
+        if (room == 0 || (n <= PIPE_BUF && room < n)) {
+            if (nonblock)
+                return done ? (long)done : -EAGAIN;
             wakeup(p);
             if (signal_pending(current))
                 return done ? (long)done : -ERESTART;
             sleep_on(p);
             continue;
         }
-        p->buf[p->nwrite++ % PIPE_SIZE] = buf[done++];
+        while (done < n && room) {
+            size_t at = p->nwrite % PIPE_SIZE;
+            size_t c = MIN(n - done, MIN(room, PIPE_SIZE - at));
+            memcpy(p->buf + at, buf + done, c);
+            done += c;
+            room -= c;
+            p->nwrite += c;
+        }
+        wakeup(p);
+        poll_wakeup();
     }
-    wakeup(p);
-    poll_wakeup();
     return done;
 }

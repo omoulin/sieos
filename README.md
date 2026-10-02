@@ -28,7 +28,7 @@ Requirements (Debian 13 or Ubuntu):
 ```sh
 sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-amd64-bin \
                  xorriso e2fsprogs qemu-system-x86 ovmf gperf pkg-config perl openssl flex bison cmake \
-                 meson ninja-build glslang-tools python3-mako python3-yaml
+                 meson ninja-build glslang-tools python3-mako python3-yaml locales
 ```
 
 - **KVM:** the build boots SIEOS in QEMU once, to compile ksh93 on SIEOS itself. With
@@ -44,6 +44,10 @@ sudo apt install gcc g++ binutils make python3 curl zstd grub-pc-bin grub-efi-am
 - `gperf`, `pkg-config` and `perl` are for the web browser's libraries (NetSurf's own
   build generates code with them); `openssl` makes the package signing key and signs
   package indexes (see Packages).
+- `locales` brings glibc's locale definitions (`/usr/share/i18n/locales`), from which
+  `tools/mklocales.py` makes SIEOS's locale database (`/usr/lib/locale`: the numbers,
+  money, dates and collation of 350 UTF-8 locales); without them SIEOS has only the C
+  locales.
 - `mkfs.ext4`, `debugfs` and `e2fsck` are in `/usr/sbin`, which a Debian user's `PATH`
   lacks; the Makefile adds it, so `make` needs no root and no `PATH` change.
 
@@ -149,7 +153,7 @@ so it can be written to a USB stick.
 | System calls | ABI v2, Solaris-inspired (Solaris errno values, signal numbers, flags and structure layouts), entered with the `syscall` instruction; specified in [`docs/abi-v2.md`](docs/abi-v2.md) and `abi/include/sieos/`. |
 | Processes   | Processes with LWPs (threads), preemptive priority scheduling across CPUs with the Solaris TS, FX and RT classes (`priocntl`), page faults and simple system calls without the big kernel lock, copy-on-write `fork`, demand paging, `mmap` (private and shared, anonymous and file), `execve` of static, PIE and dynamically linked ELF64 programs (the kernel loads `PT_INTERP`), set-user-ID/set-group-ID, `waitid`, rlimits (with `RLIMIT_VMEM`) and rusage, ELF core files (`RLIMIT_CORE`), System V IPC, `/proc` (Solaris layout), `mount`/`umount2` of tmpfs and proc, `nanosleep` to the microsecond. |
 | Signals     | Solaris numbering (1-41, real-time 42-73, queued). Default actions: terminate, core, stop, continue, ignore. `sigaction` handlers get a `ucontext`/`siginfo` frame, with `SA_RESTART`, `SA_RESETHAND`, `SA_NODEFER`, `SA_ONSTACK`; per-LWP masks, `sigtimedwait`, `sigqueue`, and system-call restart. |
-| C library   | musl 1.2.5 adapted to ABI v2 (`libc/`), shared (`/usr/lib/libc.so`, which is also the dynamic linker `/lib/ld-musl-sieos64.so.1`) and static, with POSIX threads and the Solaris extensions (`thr_*`, `_lwp_*`, `gethrtime`, `processor_bind`, `sig2str`, ...). libstdc++ and libgcc_s are shared too. |
+| C library   | musl 1.2.5 adapted to ABI v2 (`libc/`), shared (`/usr/lib/libc.so`, which is also the dynamic linker `/lib/ld-musl-sieos64.so.1`) and static, with POSIX threads, the Solaris extensions (`thr_*`, `_lwp_*`, `gethrtime`, `processor_bind`, `sig2str`, ...) and a locale database (`/usr/lib/locale`: 350 UTF-8 locales, from glibc's data: `localeconv`, `nl_langinfo`, `strftime`, Unicode collation). libstdc++ and libgcc_s are shared too. |
 | Toolchain   | An `x86_64-pc-sieos` cross compiler (GCC 15.2 C/C++, binutils 2.45) built by `make`, and the same compiler hosted on SIEOS (`make native`): SIEOS can compile programs, including its own. |
 | Job control | Process groups and sessions (`setpgid`, `setsid`), a controlling terminal (`TIOCSCTTY`), and the foreground group (`tcsetpgrp`). ^C/^Z/^\ send SIGINT/SIGTSTP/SIGQUIT; background reads get SIGTTIN, and so do writes when `TOSTOP` is set; a session leader's exit sends SIGHUP. |
 | Terminal    | termios with canonical and raw modes, `ECHO` (used for password prompts), and editable control characters. |
@@ -385,7 +389,8 @@ pkg list; pkg upgrade; pkg remove git
 ```
 
 Available: **sia-brain** (the local model, see below) and **llama-cpp**, **mesa** and
-**vulkan-loader** (OpenGL, EGL and Vulkan, see Graphics), **git**, **rsync**, **openssh** (the ssh client: `ssh`, `scp`, `sftp`,
+**vulkan-loader** (OpenGL, EGL and Vulkan, see Graphics), **python** (see Python) and its
+libraries **libffi**, **sqlite**, **bzip2**, **xz**, **ncurses** and **readline**, **git**, **rsync**, **openssh** (the ssh client: `ssh`, `scp`, `sftp`,
 `ssh-keygen`, `ssh-agent`), **curl**, **openssl**, **zlib**, **lua**, **pigz**, **mir** and
 **facet-git**. **Git** (`facet-git`) is a window for git:
 - repositories: add, clone, new;
@@ -418,6 +423,20 @@ loader, package **vulkan-loader**).
   SIEOS logo turning) and `vkcompute`.
 
 [docs/mesa.md](docs/mesa.md) has the details: writing an EGL program, Vulkan, how it is built.
+
+## Python
+
+The **python** package (`pkg install python`) is **CPython 3.14**: the interpreter, the
+standard library with its C modules, and pip.
+- **Modules:** `ssl` and `hashlib` (OpenSSL), `sqlite3`, `ctypes`, `zlib`, `bz2`,
+  `lzma`, `curses` and `readline` work, through the library packages above.
+- **Programs:** threads, `subprocess`, `multiprocessing`, `asyncio`, sockets and `venv`.
+- **pip:** `pip3 install` takes pure-Python packages from PyPI, and builds packages with
+  C code from their sources with SIEOS's gcc.
+- **sia** knows when Python is installed, and runs Python scripts with its `sh` tool.
+
+[docs/python.md](docs/python.md) has the details: what is there, pip, the test suite,
+how it is built.
 
 ## Web browser
 
@@ -562,6 +581,9 @@ Third-party components:
   build time where SIEOS needs them): the C library (musl), GCC and binutils, ksh93, dash,
   the GNU utilities, e2fsprogs, and for the browser zlib, libpng, libjpeg, expat, FreeType,
   Mbed TLS, curl, NetSurf and its libraries. Each keeps its own licence.
+- **Locale data:** `/usr/lib/locale` is generated from the GNU C Library's locale
+  definitions (the build host's `/usr/share/i18n/locales`), whose authors claim no
+  copyright in the data; the collation's letters and accents come from Unicode's data.
 - **Fonts:** DejaVu (`rootfs/usr/share/fonts/dejavu`, with its licence).
 - **Intel's Wi-Fi firmware** is copied from the build host's linux-firmware, under its
   licence (`ports/firmware/LICENCE.iwlwifi_firmware`).

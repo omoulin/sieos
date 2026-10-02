@@ -1,0 +1,14 @@
+# GNU Readline: line editing and history (Python's interactive prompt, and others).
+# shobj-conf, shlib-install: SIEOS's shared libraries as Linux's (sonames,
+# the .so links).
+name     = readline
+version  = 8.3-1
+summary  = GNU Readline: line editing and history for interactive programs
+source   = https://ftpmirror.gnu.org/gnu/readline/readline-8.3.tar.gz
+sha256   = fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc
+depends  = ncurses
+build    = sed -i 's/^linux\*-\*|gnu\*-\*|/linux*-*|gnu*-*|sieos*-*|/' support/shobj-conf
+           sed -i -e 's/^hpux\*|darwin\*|macosx\*|linux\*|/hpux*|darwin*|macosx*|linux*|sieos*|/' -e 's/^\*linux\*|freebsd\*|/*linux*|sieos*|freebsd*|/' support/shlib-install
+           $CONFIGURE --disable-static --with-curses bash_cv_termcap_lib=libncursesw
+           make -j$JOBS SHLIB_LIBS=-lncursesw
+install  = make install DESTDIR=$DESTDIR

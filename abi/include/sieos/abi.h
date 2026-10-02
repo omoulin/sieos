@@ -28,5 +28,6 @@
 #include "dkio.h"
 #include "power.h"
 #include "priocntl.h"
+#include "fdext.h"
 
 #endif

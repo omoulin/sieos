@@ -141,6 +141,15 @@ SDM      := $(BUILD)/user/sbin/sdm
 
 ROOTFS   := $(BUILD)/rootfs
 PCI_IDS   ?= $(firstword $(wildcard /usr/share/misc/pci.ids /usr/share/hwdata/pci.ids))
+# The locale database (/usr/lib/locale: numbers, money, dates and collation of the UTF-8
+# locales, for the C library), from the build host's glibc locale sources (Debian: locales)
+LOCALE_SRC := /usr/share/i18n/locales
+LOCALE_DB  := $(BUILD)/locale/.built
+$(LOCALE_DB): tools/mklocales.py
+	rm -rf $(BUILD)/locale && mkdir -p $(BUILD)/locale
+	if [ -d $(LOCALE_SRC) ]; then python3 tools/mklocales.py $(LOCALE_SRC) $(BUILD)/locale; \
+	else echo "mklocales: no $(LOCALE_SRC): only the C locales"; fi
+	touch $@
 
 QEMU     := qemu-system-x86_64
 SMP      ?= 4
@@ -354,7 +363,7 @@ $(ESPIMG): $(KERNEL) $(BOOTARCH) iso/boot/grub/installed.cfg tools/mkfat.py
 # rootfs.img: pristine ext4 image built from rootfs/ + the user programs.
 # It is embedded in the ISO (loaded by GRUB as a RAM disk) and is the
 # template for disk.img.
-$(ROOTIMG): $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(PKG_BIN) $(PKG_PUB) $(ABI2TEST) $(TCDEP) $(DASH_BIN) $(E2FS_BINS) $(ESPIMG) $(shell find rootfs -type f 2>/dev/null) tools/rootfs.perms tools/mkperms.sh tools/mkshadow.py
+$(ROOTIMG): $(LOCALE_DB) $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(LIBSIA_SO) $(SDM) $(SIA_PROGS) $(PKG_BIN) $(PKG_PUB) $(ABI2TEST) $(TCDEP) $(DASH_BIN) $(E2FS_BINS) $(ESPIMG) $(shell find rootfs -type f 2>/dev/null) tools/rootfs.perms tools/mkperms.sh tools/mkshadow.py
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/sbin $(ROOTFS)/tmp $(ROOTFS)/proc $(ROOTFS)/dev/pts $(ROOTFS)/dev/shm $(ROOTFS)/mnt
 	cp -r rootfs/. $(ROOTFS)/
 	for p in $(UPROGS); do cp $(BUILD)/user/bin/$$p $(ROOTFS)/bin/$$p; done
@@ -368,6 +377,8 @@ $(ROOTIMG): $(DRV_FILES) $(wildcard kernel/include/*.h) $(UBINS) $(FAPP_BINS) $(
 	ln -sf ping $(ROOTFS)/bin/ping6
 	@# the PCI ID database (device names for lidev), from the build host when it has one
 	if [ -f $(PCI_IDS) ]; then mkdir -p $(ROOTFS)/usr/share/misc && cp $(PCI_IDS) $(ROOTFS)/usr/share/misc/pci.ids; fi
+	@# the locale database (tools/mklocales.py)
+	mkdir -p $(ROOTFS)/usr/lib/locale && find $(BUILD)/locale -type f ! -name .built -exec cp {} $(ROOTFS)/usr/lib/locale/ \;
 	cp $(SDM) $(ROOTFS)/sbin/sdm
 	cp $(SIA_PROGS) $(ROOTFS)/bin/
 	@# pkg: its program, directories and the key its indexes must be signed with
@@ -1008,6 +1019,24 @@ $(VK_HEADERS)/.built: $(PORTS_DL)/Vulkan-Headers-$(VK_SDK).tar.gz ports/vulkan-h
 .PHONY: llvm-sieos
 llvm-sieos: $(LLVM_SIEOS)/.built
 
+# ---------------------------------------------------------------- Python for the build host
+#
+# CPython cross-builds with a Python of its own version on the build host
+# (--with-build-python: it runs the build's scripts and compiles the standard
+# library): build/ports/python-host, from the same tarball as the package.
+PY_VER      := 3.14.8
+PY_HOST     := $(PORTS)/python-host
+PORT_URLS   += https://www.python.org/ftp/python/$(PY_VER)/Python-$(PY_VER).tar.xz
+
+$(PY_HOST)/.built: $(PORTS_DL)/Python-$(PY_VER).tar.xz
+	rm -rf $(PY_HOST) && mkdir -p $(PY_HOST)
+	tar xf $< -C $(PY_HOST) --strip-components=1
+	cd $(PY_HOST) && PATH=/usr/bin:/bin ./configure --prefix=$(PY_HOST)/inst --without-ensurepip \
+		>configure.log 2>&1
+	PATH=/usr/bin:/bin $(MAKE) -C $(PY_HOST) -j$(JOBS) >$(PY_HOST)/make.log 2>&1 || { tail -20 $(PY_HOST)/make.log; exit 1; }
+	PATH=/usr/bin:/bin $(MAKE) -C $(PY_HOST) install >$(PY_HOST)/install.log 2>&1
+	touch $@
+
 # Software added to SIEOS as packages (pkg, /usr/pkg): a recipe per package in
 # ports/pkgs/NAME (tools/pkgbuild.py says what it holds), built with the cross
 # toolchain into build/repo/NAME-VERSION.spkg, after the packages it depends
@@ -1026,6 +1055,7 @@ pkg_tree = $(shell sed -n 's/^source *= *tree://p' ports/pkgs/$(1)/recipe)
 PKG_EXTRA_sia-brain := $(BRAIN_GGUF)               # (what a package's build takes from the build)
 PKG_EXTRA_vulkan-loader := $(VK_HEADERS)/.built
 PKG_EXTRA_mesa := $(LLVM_SIEOS)/.built $(wildcard user/mesa-demos/*)
+PKG_EXTRA_python := $(PY_HOST)/.built
 pkg_tree_deps = $(if $(call pkg_tree,$(1)),$(shell find $(call pkg_tree,$(1)) -type f) $(SDK_STAMP) \
 		$(wildcard user/libsia/*.h) $(wildcard user/facet-apps/common.*))
 define PKG_RULE

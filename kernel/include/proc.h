@@ -15,12 +15,12 @@
 #include "cpu.h"
 
 #define NPROC       256
-#define NOFILE      64
+#define NOFILE      1024        /* open files a process may have (as Linux's default) */
 #define KSTACK_SIZE (16 * 1024)
 #define MAXARGS     (256 * 1024)
 #define MAXENV      (256 * 1024)
 #define MAXARGSTR   2096640              /* ARG_MAX (as Solaris): argument and environment strings and pointers */
-#define MAXPATH     1024
+#define MAXPATH     4096        /* a path, its NUL included: PATH_MAX, one page (path_get) */
 
 struct file;
 struct inode;
@@ -61,6 +61,7 @@ struct lwp {
     uint64_t nvcsw, nivcsw;     /* voluntary / involuntary context switches */
     uint64_t minflt;            /* page faults resolved */
     int bound;                  /* processor_bind: CPU + 1, 0 = unbound */
+    uint32_t affinity;          /* lwp_affinity: the CPUs it may run on (bit per id), 0 = any */
     int cid;                    /* scheduling class (sieos/priocntl.h), see sched.c */
     short upri, uprilim;        /* TS/FX user priority and its limit */
     short cpupri;               /* TS: the dispatcher priority */
@@ -69,6 +70,7 @@ struct lwp {
     uint64_t last_run;          /* tick it last ran at */
 
     ksigset_t sig_blocked;
+    ksigset_t sig_waiting;      /* sigtimedwait: the signals it waits for (blocked, yet they wake it) */
     ksigset_t sig_pending;      /* LWP-directed signals */
     struct ksiginfo siginfo[KNSIG];
     bool restart_syscall;       /* last syscall returned -ERESTART */

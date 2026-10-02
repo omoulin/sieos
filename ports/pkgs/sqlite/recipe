@@ -1,0 +1,11 @@
+# SQLite: the embedded SQL database (libsqlite3, the sqlite3 shell; Python's sqlite3).
+name     = sqlite
+version  = 3.53.4-1
+summary  = SQLite: the embedded SQL database (libsqlite3 and the sqlite3 shell)
+source   = https://www.sqlite.org/2026/sqlite-autoconf-3530400.tar.gz
+sha256   = 0e9483900e92cd5de8fd48d16bf9200145a61f7fd5be542a5ac81d8a9516eb9c
+depends  = zlib
+build    = ./configure --host=$HOST --prefix=$PREFIX --disable-static --disable-readline --enable-fts5 \
+               --enable-rtree
+           make -j$JOBS
+install  = make install DESTDIR=$DESTDIR

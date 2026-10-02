@@ -1,0 +1,15 @@
+# bzip2: the bzip2 format (the bzip2 command, libbz2 shared: Python's bz2).
+name     = bzip2
+version  = 1.0.8-1
+summary  = bzip2: block-sorting compression (the bzip2 command and libbz2)
+source   = https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
+sha256   = ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269
+build    = make -f Makefile-libbz2_so CC="$CC" CFLAGS="-O2 -fPIC -D_FILE_OFFSET_BITS=64"
+           make bzip2 bzip2recover CC="$CC" AR="$AR" RANLIB="$RANLIB" CFLAGS="-O2 -D_FILE_OFFSET_BITS=64"
+install  = mkdir -p $DESTDIR$PREFIX/bin $DESTDIR$PREFIX/lib $DESTDIR$PREFIX/include
+           cp bzip2 bzip2recover $DESTDIR$PREFIX/bin/
+           ln -sf bzip2 $DESTDIR$PREFIX/bin/bunzip2 && ln -sf bzip2 $DESTDIR$PREFIX/bin/bzcat
+           cp libbz2.so.1.0.8 $DESTDIR$PREFIX/lib/
+           ln -sf libbz2.so.1.0.8 $DESTDIR$PREFIX/lib/libbz2.so.1.0 && ln -sf libbz2.so.1.0 $DESTDIR$PREFIX/lib/libbz2.so
+           cp bzlib.h $DESTDIR$PREFIX/include/
+           mkdir -p $DESTDIR$PREFIX/share/doc/bzip2 && cp LICENSE $DESTDIR$PREFIX/share/doc/bzip2/

@@ -89,6 +89,12 @@ NATIVE = {
     'accept': 'accept', 'accept4': 'accept', 'connect': 'connect', 'getsockname': 'getsockname',
     'getpeername': 'getpeername', 'sendto': 'sendto', 'recvfrom': 'recvfrom', 'setsockopt': 'setsockopt',
     'getsockopt': 'getsockopt', 'shutdown': 'shutdown', 'sendmsg': 'sendmsg', 'recvmsg': 'recvmsg',
+    # Linux's descriptors and transfers (sieos/fdext.h)
+    'epoll_create1': 'epoll_create1', 'epoll_ctl': 'epoll_ctl', 'eventfd2': 'eventfd2',
+    'timerfd_create': 'timerfd_create', 'timerfd_settime': 'timerfd_settime',
+    'timerfd_gettime': 'timerfd_gettime', 'memfd_create': 'memfd_create', 'pidfd_open': 'pidfd_open',
+    'pidfd_send_signal': 'pidfd_send_signal', 'splice': 'splice', 'copy_file_range': 'copy_file_range',
+    'preadv': 'preadv', 'pwritev': 'pwritev', 'mremap': 'mremap',
 }
 
 # emulated in libc (src/sieos/emu.c); the order gives the numbers
@@ -103,7 +109,7 @@ EMU = [
     'shmdt', 'sched_getaffinity', 'sched_setaffinity', 'sched_get_priority_max', 'sched_get_priority_min',
     'sched_getscheduler', 'sched_getparam', 'rt_sigaction', 'fchown', 'fchmod', 'set_robust_list', 'get_robust_list',
     'mount', 'umount2', 'getpriority', 'setpriority', 'sched_setscheduler', 'sched_setparam',
-    'sched_rr_get_interval',
+    'sched_rr_get_interval', 'prlimit64', 'epoll_pwait',
 ]
 
 def aarch64_names(tree):
@@ -172,6 +178,11 @@ def patches():
 	pid_t l_pid;
 	long __l_pad2[4];
 };''')
+    # EOPNOTSUPP is not ENOTSUP on SIEOS (Solaris's numbers): its own message
+    add('src/errno/__strerror.h', 'E(ENOTSUP,      "Not supported")',
+        'E(ENOTSUP,      "Not supported")\nE(EOPNOTSUPP,   "Operation not supported")')
+    # no pipe size control: a pipe holds 64 KiB
+    add('include/fcntl.h', '#define F_SETPIPE_SZ\t1031\n#define F_GETPIPE_SZ\t1032\n', '')
     add('include/fcntl.h', '#define F_DUPFD_CLOEXEC 1030', '#define F_DUPFD_CLOEXEC %s\n#define F_DUP2FD %s\n#define F_DUP2FD_CLOEXEC %s\n#define F_FREESP %s'
         % (D('F_DUPFD_CLOEXEC'), D('F_DUP2FD'), D('F_DUP2FD_CLOEXEC'), D('F_FREESP')))
     add('include/fcntl.h', '#define F_RDLCK 0\n#define F_WRLCK 1\n#define F_UNLCK 2',
@@ -187,6 +198,8 @@ def patches():
 #define AT_EACCESS %s''' % (D('AT_SYMLINK_NOFOLLOW'), D('AT_REMOVEDIR'), D('AT_SYMLINK_FOLLOW'), D('AT_EACCESS')))
     # AT_EMPTY_PATH is handled by libc (fstatat with an empty path = fstat)
     add('include/fcntl.h', '#define AT_EMPTY_PATH 0x1000', '#define AT_EMPTY_PATH 0x40000000')
+    # SIEOS has no O_ASYNC (nor has Solaris): FASYNC only where it exists
+    add('include/fcntl.h', '#define FASYNC O_ASYNC', '#ifdef O_ASYNC\n#define FASYNC O_ASYNC\n#endif')
     # sys/wait.h: Solaris idtypes and options
     add('include/sys/wait.h', '''	P_ALL = 0,
 	P_PID = 1,
@@ -337,7 +350,100 @@ def patches():
             ('sched_getparam', 'pid_t pid, struct sched_param *param',
              'syscall(SYS_sched_getparam, -(pid ? pid : getpid()), param)')]:
         add('src/sched/%s.c' % fn, 'int %s(%s)\n{\n\treturn __syscall_ret(-ENOSYS);\n}' % (fn, sig),
-            '#include <unistd.h>\nint %s(%s)\n{\n\treturn %s;\n}' % (fn, sig, call))
+            '#include <unistd.h>\nint %s(%s)\n{\n\tif (pid < 0) return __syscall_ret(-EINVAL);\n\treturn %s;\n}' % (fn, sig, call))
+    # posix_spawn's scheduling attributes (src/process/sieos64/posix_spawnattr_sched.c): the
+    # child sets its policy and priority (the emulation takes the pid negated)
+    add('src/process/posix_spawn.c', """	if (attr->__flags & POSIX_SPAWN_SETPGROUP)
+		if ((ret=__syscall(SYS_setpgid, 0, attr->__pgrp)))
+			goto fail;
+""", """	if (attr->__flags & POSIX_SPAWN_SETPGROUP)
+		if ((ret=__syscall(SYS_setpgid, 0, attr->__pgrp)))
+			goto fail;
+
+	if (attr->__flags & (POSIX_SPAWN_SETSCHEDULER | POSIX_SPAWN_SETSCHEDPARAM)) {
+		struct sched_param sp = { .sched_priority = attr->__prio };
+		long self = -__syscall(SYS_getpid);
+		if (attr->__flags & POSIX_SPAWN_SETSCHEDULER)
+			ret = __syscall(SYS_sched_setscheduler, self, attr->__pol, &sp);
+		else
+			ret = __syscall(SYS_sched_setparam, self, &sp);
+		if (ret < 0)
+			goto fail;
+	}
+""")
+    # strftime's %Z: the zone name the program's struct tm gives (tm_zone), as glibc; musl
+    # kept only names from its own tables (Python's time.strftime builds its tm_zone itself)
+    add('src/time/__tz.c', """	if (p != __utc && p != __tzname[0] && p != __tzname[1] &&
+	    (!zi || (uintptr_t)p-(uintptr_t)abbrevs >= abbrevs_end - abbrevs))
+		p = "";""", """	if (!p)
+		p = __tzname[tm->tm_isdst > 0];""")
+    # strftime's E and O modifiers: eras and alternative digits (src/time/sieos64/__strftime_mod.c)
+    # (and a conversion's buffer of 400 bytes, not 100: a UTF-8 %c, Shan's or Burmese's, is longer)
+    add('src/time/time_impl.h', 'hidden const char *__strftime_fmt_1(char (*)[100], size_t *, int, const struct tm *, locale_t, int);',
+        'hidden const char *__strftime_fmt_1(char (*)[400], size_t *, int, const struct tm *, locale_t, int);\n'
+        'hidden const char *__strftime_fmt_mod(char (*)[400], size_t *, int, int, const struct tm *, locale_t, int);')
+    add('src/time/strftime.c', 'const char *__strftime_fmt_1(char (*s)[100], size_t *l, int f, const struct tm *tm, locale_t loc, int pad)',
+        'const char *__strftime_fmt_1(char (*s)[400], size_t *l, int f, const struct tm *tm, locale_t loc, int pad)')
+    add('src/time/strftime.c', '\tchar buf[100];\n', '\tchar buf[400];\n')
+    add('src/time/wcsftime.c', '\tchar buf[100];\n\twchar_t wbuf[100];\n', '\tchar buf[400];\n\twchar_t wbuf[400];\n')
+    add('src/time/strftime.c', """		if (*f == 'E' || *f == 'O') f++;
+		t = __strftime_fmt_1(&buf, &k, *f, tm, loc, pad);""", """		int mod = 0;
+		if (*f == 'E' || *f == 'O') mod = *f++;
+		t = __strftime_fmt_mod(&buf, &k, mod, *f, tm, loc, pad);""")
+    add('src/time/wcsftime.c', """		if (*f == 'E' || *f == 'O') f++;
+		t_mb = __strftime_fmt_1(&buf, &k, *f, tm, loc, pad);""", """		int mod = 0;
+		if (*f == 'E' || *f == 'O') mod = *f++;
+		t_mb = __strftime_fmt_mod(&buf, &k, mod, *f, tm, loc, pad);""")
+    # sendmsg and recvmsg with several buffers on datagram sockets: one datagram, gathered and
+    # scattered by the C library (src/network/sieos64/__sieos_dgram.c)
+    add('src/network/sendmsg.c', """ssize_t sendmsg(int fd, const struct msghdr *msg, int flags)
+{
+""", """hidden int __sieos_is_dgram(int);
+hidden char *__sieos_dgram_buf(const struct msghdr *, size_t, size_t *);
+hidden void __sieos_dgram_copy(const struct msghdr *, char *, size_t, int);
+#include <stdlib.h>
+
+ssize_t sendmsg(int fd, const struct msghdr *msg, int flags)
+{
+	if (msg && msg->msg_iovlen > 1 && __sieos_is_dgram(fd)) {
+		size_t n;
+		char *b = __sieos_dgram_buf(msg, (size_t)-1, &n);
+		if (!b) return -1;
+		__sieos_dgram_copy(msg, b, n, 1);
+		struct iovec v = { b, n };
+		struct msghdr m = *msg;
+		m.msg_iov = &v;
+		m.msg_iovlen = 1;
+		ssize_t r = sendmsg(fd, &m, flags);
+		free(b);
+		return r;
+	}
+""")
+    add('src/network/recvmsg.c', """ssize_t recvmsg(int fd, struct msghdr *msg, int flags)
+{
+""", """hidden int __sieos_is_dgram(int);
+hidden char *__sieos_dgram_buf(const struct msghdr *, size_t, size_t *);
+hidden void __sieos_dgram_copy(const struct msghdr *, char *, size_t, int);
+#include <stdlib.h>
+
+ssize_t recvmsg(int fd, struct msghdr *msg, int flags)
+{
+	if (msg && msg->msg_iovlen > 1 && __sieos_is_dgram(fd)) {
+		size_t n;
+		char *b = __sieos_dgram_buf(msg, 65536, &n);
+		if (!b) return -1;
+		struct iovec v = { b, n }, *iov = msg->msg_iov;
+		int iovlen = msg->msg_iovlen;
+		msg->msg_iov = &v;
+		msg->msg_iovlen = 1;
+		ssize_t r = recvmsg(fd, msg, flags);
+		msg->msg_iov = iov;
+		msg->msg_iovlen = iovlen;
+		if (r > 0) __sieos_dgram_copy(msg, b, (size_t)r < n ? (size_t)r : n, 0);
+		free(b);
+		return r;
+	}
+""")
     # confstr(_CS_PATH): the POSIX utilities are the GNU ones in /usr/gnu/bin (as /usr/xpg4/bin on
     # Solaris); /bin holds the smaller SIEOS programs
     add('src/conf/confstr.c', 's = "/bin:/usr/bin";', 's = "/usr/gnu/bin:/bin:/usr/bin";')
@@ -430,6 +536,8 @@ def patches():
     add('src/process/posix_spawn.c', 'if (i-32<3U) {', 'if (i-32<2U || i==36) {')
     add('src/signal/sigfillset.c', 'set->__bits[0] = 0xfffffffc7ffffffful;', 'set->__bits[0] = 0xfffffff67ffffffful;')
     add('src/signal/block.c', '0xfffffffc7fffffff, -1UL', '0xfffffff67fffffff, -1UL')
+    # the thread's name (src/thread/sieos64/pthread_[gs]etname_np.c): no prctl, no /proc/self/task
+    add('src/internal/pthread_impl.h', '\tvoid *stdio_locks;\n', '\tvoid *stdio_locks;\n\tchar name[16];\n')
     add('src/internal/pthread_impl.h', '[sizeof(long)==4] = 3UL<<(32*(sizeof(long)>4)) })',
         '[0] = (1UL<<32) | (1UL<<35) })')
     add('src/signal/sigrtmin.c', 'return 35;', 'return %s;' % D('SIGRTMIN'))
@@ -534,6 +642,44 @@ def gen_solaris_headers(tree):
 
 # ---------------------------------------------------------------- main
 
+def gen_collate(tree):
+    """src/internal/sieos_collate.h: for letters with accents (Latin, Greek, Cyrillic), the
+    base letter they sort as, their accent and case (src/locale/sieos64/__sieos_coll.c),
+    from the build host's Unicode database."""
+    import unicodedata
+    special = {0xdf: ('ss', 0, 0), 0x1e9e: ('ss', 0, 1), 0xe6: ('ae', 0, 0), 0xc6: ('ae', 0, 1),
+               0x153: ('oe', 0, 0), 0x152: ('oe', 0, 1), 0x133: ('ij', 0, 0), 0x132: ('ij', 0, 1),
+               0xf8: ('o', 0x80, 0), 0xd8: ('o', 0x80, 1), 0x111: ('d', 0x81, 0), 0x110: ('d', 0x81, 1),
+               0x142: ('l', 0x82, 0), 0x141: ('l', 0x82, 1), 0x131: ('i', 0x83, 0), 0xf0: ('d', 0x84, 0),
+               0xd0: ('d', 0x84, 1), 0xfe: ('th', 0, 0), 0xde: ('th', 0, 1), 0x127: ('h', 0x81, 0),
+               0x126: ('h', 0x81, 1), 0x167: ('t', 0x81, 0), 0x166: ('t', 0x81, 1)}
+    rows = []
+    for lo, hi in [(0xc0, 0x250), (0x370, 0x400), (0x400, 0x530), (0x1e00, 0x1f00)]:
+        for cp in range(lo, hi):
+            ch = chr(cp)
+            cat = unicodedata.category(ch)
+            if not cat.startswith('L'):
+                continue
+            upper = 1 if cat in ('Lu', 'Lt') else 0
+            if cp in special:
+                base, acc, upper = special[cp]
+            else:
+                d = unicodedata.normalize('NFD', ch)
+                marks = [m for m in d[1:] if unicodedata.combining(m)]
+                if not marks:
+                    continue
+                base = unicodedata.normalize('NFD', d[0].lower())[0]
+                m = ord(marks[0])
+                acc = m - 0x2ff if 0x300 <= m < 0x370 else 0x7f
+            p = [ord(c) for c in base] + [0]
+            rows.append((cp, p[0], p[1], acc, upper))
+    lines = ['/* generated by libc/sieos-port.py from Unicode %s: letter, its base letter(s), accent, '
+             'case */' % unicodedata.unidata_version,
+             'static const struct { unsigned short cp, p1, p2; unsigned char acc, upper; } __coll_tab[] = {']
+    lines += ['\t{ 0x%04x, 0x%04x, 0x%04x, %d, %d },' % r for r in rows]
+    lines.append('};')
+    open(os.path.join(tree, 'src', 'internal', 'sieos_collate.h'), 'w').write('\n'.join(lines) + '\n')
+
 def main():
     tarball, dest = sys.argv[1], sys.argv[2]
     if os.path.exists(dest):
@@ -569,6 +715,7 @@ def main():
     gen_syscalls(dest)
     apply_patches(dest)
     gen_solaris_headers(dest)
+    gen_collate(dest)
 
 if __name__ == '__main__':
     main()

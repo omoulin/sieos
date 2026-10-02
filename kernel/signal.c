@@ -223,7 +223,7 @@ void signal_send_info(struct proc *p, int sig, const struct ksiginfo *info)
         struct lwp *l = &lwp_table[i];
         if (l->proc != p || l->state == LWP_UNUSED || l->state == LWP_ZOMBIE || l->state == LWP_EMBRYO)
             continue;
-        if (!unblockable && (l->sig_blocked & KSIGBIT(sig)))
+        if (!unblockable && (l->sig_blocked & KSIGBIT(sig)) && !(l->sig_waiting & KSIGBIT(sig)))
             continue;
         if (l->state == LWP_RUNNING || l->state == LWP_RUNNABLE) {
             if (sig != SIGKILL)
@@ -261,7 +261,7 @@ void signal_lwp(struct lwp *l, int sig, const struct ksiginfo *info)
         l->sig_pending |= KSIGBIT(sig);
         l->siginfo[sig] = k;
     }
-    if (l->state == LWP_SLEEPING && !(l->sig_blocked & KSIGBIT(sig)))
+    if (l->state == LWP_SLEEPING && (!(l->sig_blocked & KSIGBIT(sig)) || (l->sig_waiting & KSIGBIT(sig))))
         make_runnable(l);
 }
 
@@ -749,7 +749,9 @@ long sys2_sigtimedwait(const sieos_sigset_t *set, sieos_siginfo_t *uinfo, const 
         if (((l->sig_pending | current->sig_pending) & ~(l->sig_blocked & ~UNBLOCKABLE) & ~want) || l->must_exit)
             return -EINTR;
         l->wake_tick = timeout ? deadline : 0;
+        l->sig_waiting = want;                       /* a waited-for signal wakes us, blocked as it is */
         sleep_on(&wait_chan);
+        l->sig_waiting = 0;
         l->wake_tick = 0;
     }
 }

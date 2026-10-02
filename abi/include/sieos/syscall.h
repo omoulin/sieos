@@ -169,6 +169,7 @@
 #define SIEOS_SYS_processor_bind 162   /* processor_bind(idtype, id, cpu, processorid *obind) */
 #define SIEOS_SYS_pset           163   /* (reserved) */
 #define SIEOS_SYS_getloadavg     164   /* getloadavg(long *avg[3] in 1/1000ths, n) */
+#define SIEOS_SYS_lwp_affinity   165   /* lwp_affinity(idtype, id, op, uint64_t *mask)  SIEOS_AFF_*: the CPUs it may run on */
 
 /* ---- SIEOS extensions (200-) ------------------------------------------ */
 #define SIEOS_SYS_fbmap          200   /* fbmap(fd) - map /dev/fb0, returns address */
@@ -184,6 +185,24 @@
 #define SIEOS_SYS_wifi           210   /* wifi(int op, void *buf, long n): the Wi-Fi device (SIEOS_WIFI_OP_*) */
 #define SIEOS_SYS_modinfo        211   /* modinfo(sieos_modinfo *, int index): the drivers known; ENOENT past the last */
 #define SIEOS_SYS_modload        212   /* modload(const char *path): load a driver (root) */
+
+/* ---- Linux's descriptors and transfers (213-227), their arguments and flags (SIEOS's
+ * O_CLOEXEC, O_NONBLOCK, clocks and signals); see sieos/fdext.h ---- */
+#define SIEOS_SYS_epoll_create1     213   /* epoll_create1(flags)              EPOLL_CLOEXEC */
+#define SIEOS_SYS_epoll_ctl         214   /* epoll_ctl(epfd, op, fd, sieos_epoll_event *) */
+#define SIEOS_SYS_epoll_wait        215   /* epoll_wait(epfd, sieos_epoll_event *, max, timeout ms) */
+#define SIEOS_SYS_eventfd2          216   /* eventfd2(initval, flags)          EFD_* */
+#define SIEOS_SYS_timerfd_create    217   /* timerfd_create(clock, flags) */
+#define SIEOS_SYS_timerfd_settime   218   /* timerfd_settime(fd, flags, new, old)  sieos_itimerspec */
+#define SIEOS_SYS_timerfd_gettime   219   /* timerfd_gettime(fd, sieos_itimerspec *) */
+#define SIEOS_SYS_memfd_create      220   /* memfd_create(name, flags)         MFD_*: an unnamed tmpfs file */
+#define SIEOS_SYS_pidfd_open        221   /* pidfd_open(pid, flags): readable when the process ends */
+#define SIEOS_SYS_pidfd_send_signal 222   /* pidfd_send_signal(pidfd, sig, NULL, 0) */
+#define SIEOS_SYS_splice            223   /* splice(fd_in, int64 *off_in, fd_out, int64 *off_out, len, flags) */
+#define SIEOS_SYS_copy_file_range   224   /* copy_file_range(fd_in, *off_in, fd_out, *off_out, len, 0) */
+#define SIEOS_SYS_preadv            225   /* preadv(fd, iov, cnt, off) */
+#define SIEOS_SYS_pwritev           226   /* pwritev(fd, iov, cnt, off) */
+#define SIEOS_SYS_mremap            227   /* mremap(addr, oldlen, newlen, flags, newaddr)  MREMAP_* */
 
 #define SIEOS_NSYSCALLS          256
 

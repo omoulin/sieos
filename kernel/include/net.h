@@ -204,6 +204,8 @@ const char *ip_str(uint32_t ip, char *buf);
 
 /* transports over either IP (net.c) */
 int      net_send(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *payload, size_t len);
+int      net_send_opts(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *payload, size_t len,
+                       int hltc);                 /* IPv6: hop limit | traffic class << 8 */
 uint32_t net_pseudo_sum(const naddr_t *src, const naddr_t *dst, uint8_t proto, uint32_t len);
 naddr_t  net_source(const naddr_t *dst);      /* the source address for talking to dst */
 bool     net_is_local(const naddr_t *a);       /* one of ours (loopback included) */
@@ -232,6 +234,8 @@ void net6_attach(struct netif *ifp);
 void net6_tick(void);
 void ip6_input(struct netif *in, const uint8_t *pkt, size_t len);
 int  ip6_send(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *payload, size_t len);
+/* hltc: the hop limit (0: the default) | the traffic class << 8 */
+int  ip6_send_opts(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *payload, size_t len, int hltc);
 naddr_t ip6_source(const naddr_t *dst);
 bool ip6_is_local(const naddr_t *a);
 const char *ip6_str(const naddr_t *a, char *buf);    /* buf: 40 bytes */
@@ -241,13 +245,14 @@ void eth_send(struct netif *ifp, const uint8_t *dst, uint16_t type, const void *
 /* socket.c */
 struct socket;
 struct tcb;
-void udp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_t len);
+void udp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_t len, int hops, int tclass);
 void icmp_deliver_raw(const naddr_t *src, int proto, const uint8_t *msg, size_t len);
 struct socket *socket_alloc(int type, int proto);
 void socket_close(struct socket *s);
-long socket_read(struct socket *s, void *buf, size_t n);
-long socket_write(struct socket *s, const void *buf, size_t n);
+long socket_read(struct socket *s, void *buf, size_t n, bool nonblock);
+long socket_write(struct socket *s, const void *buf, size_t n, bool nonblock);
 bool socket_readable(struct socket *s);
+bool socket_urgent(struct socket *s);          /* TCP urgent data unread: POLLPRI */
 bool socket_writable(struct socket *s);
 bool socket_failed(struct socket *s);
 void socket_wake(struct socket *s);
@@ -266,8 +271,14 @@ struct tcb *tcp_alloc(void);
 int  tcp_connect(struct tcb *t, const naddr_t *lip, uint16_t lport, const naddr_t *rip, uint16_t rport,
                  bool nonblock);
 int  tcp_listen(struct tcb *t, const naddr_t *lip, uint16_t lport, bool v6only);
-long tcp_send(struct tcb *t, const void *buf, size_t n, bool nonblock);
-long tcp_recv(struct tcb *t, void *buf, size_t n, bool nonblock, int timeout_ms);
+void tcp_set_backlog(struct tcb *t, int backlog);
+long tcp_send(struct tcb *t, const void *buf, size_t n, int flags);       /* MSG_DONTWAIT, MSG_OOB, MSG_NOSIGNAL */
+long tcp_recv(struct tcb *t, void *buf, size_t n, int flags, int timeout_ms, bool oobinline);  /* + MSG_PEEK */
+bool tcp_urgent(struct tcb *t);                  /* urgent data not read yet: POLLPRI */
+/* struct socket's opts (sock2.c's flag options) the stack reads */
+#define SOPT_OOBINLINE    (1 << 5)          /* SO_OOBINLINE */
+#define SOPT_RECVHOPLIMIT (1 << 8)          /* IPV6_RECVHOPLIMIT */
+#define SOPT_RECVTCLASS   (1 << 9)          /* IPV6_RECVTCLASS */
 void tcp_shutdown_write(struct tcb *t);
 void tcp_close(struct tcb *t);
 void tcp_abort(struct tcb *t);

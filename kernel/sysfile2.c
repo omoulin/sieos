@@ -213,6 +213,131 @@ static long do_rwv(long fd, const struct sieos_iovec *uiov, int cnt, bool write)
     return total;
 }
 
+/* preadv / pwritev: the buffers in turn from off; the file offset stays. */
+static long do_prwv(long fd, const struct sieos_iovec *uiov, int cnt, int64_t off, bool write)
+{
+    if (cnt <= 0 || cnt > 1024 || off < 0)
+        return -EINVAL;
+    if (!user_ok(uiov, cnt * sizeof(*uiov), false))
+        return -EFAULT;
+    long total = 0;
+    for (int i = 0; i < cnt; i++) {
+        struct sieos_iovec v = uiov[i];
+        if ((long)v.iov_len < 0)
+            return -EINVAL;
+        if (!v.iov_len)
+            continue;
+        long r = do_rw(fd, v.iov_base, v.iov_len, write, true, off + total);
+        if (r < 0)
+            return total ? total : r;
+        total += r;
+        if ((size_t)r < v.iov_len)
+            break;
+    }
+    return total;
+}
+
+#define XFER_BUF 65536
+
+/* Write all of buf (n bytes) to f, at *off if off; what was written. */
+static long write_all(struct file *f, const void *buf, size_t n, int64_t *off)
+{
+    size_t done = 0;
+    while (done < n) {
+        long w = off ? file_pwrite(f, (const char *)buf + done, n - done, *off + done)
+                     : file_write(f, (const char *)buf + done, n - done);
+        if (w <= 0)
+            return done ? (long)done : (w ? w : -EIO);
+        done += w;
+    }
+    if (off)
+        *off += done;
+    return done;
+}
+
+/*
+ * The data of copy_file_range and splice: up to len bytes from fin (at *uoff_in, or
+ * its offset) to fout (at *uoff_out, or its offset), through a kernel buffer.  once:
+ * stop after the first read (splice: what a pipe or socket has now).
+ */
+static long xfer(long fd_in, int64_t *uoff_in, long fd_out, int64_t *uoff_out, size_t len, bool once)
+{
+    struct file *fi = fsys_file(fd_in), *fo = fsys_file(fd_out);
+    if (!fi || !fo)
+        return -EBADF;
+    if ((uoff_in && !user_ok(uoff_in, 8, true)) || (uoff_out && !user_ok(uoff_out, 8, true)))
+        return -EFAULT;
+    int64_t oi = uoff_in ? *uoff_in : 0, oo = uoff_out ? *uoff_out : 0;
+    if (oi < 0 || oo < 0)
+        return -EINVAL;
+    char *buf = kmalloc(XFER_BUF);
+    if (!buf)
+        return -ENOMEM;
+    file_dup(fi);
+    file_dup(fo);
+    long total = 0, r = 0;
+    while ((size_t)total < len) {
+        size_t n = MIN(len - total, (size_t)XFER_BUF);
+        r = uoff_in ? file_pread(fi, buf, n, oi) : file_read(fi, buf, n);
+        if (r <= 0)
+            break;
+        if (uoff_in)
+            oi += r;
+        long w = write_all(fo, buf, r, uoff_out ? &oo : NULL);
+        if (w < 0) {
+            r = w;
+            break;
+        }
+        total += w;
+        if (w < r || once || (size_t)r < n)
+            break;
+    }
+    file_close(fi);
+    file_close(fo);
+    kfree(buf);
+    if (uoff_in)
+        *uoff_in = oi;
+    if (uoff_out)
+        *uoff_out = oo;
+    return total ? total : r;
+}
+
+/* copy_file_range(fd_in, *off_in, fd_out, *off_out, len, flags): regular files only. */
+static long do_copy_file_range(long fd_in, int64_t *off_in, long fd_out, int64_t *off_out, size_t len, long flags)
+{
+    struct file *fi = fsys_file(fd_in), *fo = fsys_file(fd_out);
+    if (!fi || !fo)
+        return -EBADF;
+    if (flags)
+        return -EINVAL;
+    if (fi->type != FD_INODE || fo->type != FD_INODE || !fi->ip || !fo->ip)
+        return -EINVAL;
+    if (S_ISDIR(inode_mode(fi->ip)) || S_ISDIR(inode_mode(fo->ip)))
+        return -EISDIR;
+    if (!S_ISREG(inode_mode(fi->ip)) || !S_ISREG(inode_mode(fo->ip)))
+        return -EINVAL;
+    if ((fi->flags & O_ACCMODE) == O_WRONLY || (fo->flags & O_ACCMODE) == O_RDONLY || (fo->flags & O_APPEND))
+        return -EBADF;
+    return xfer(fd_in, off_in, fd_out, off_out, len, false);
+}
+
+/* splice(fd_in, *off_in, fd_out, *off_out, len, flags): one end a pipe (its offset NULL). */
+static long do_splice(long fd_in, int64_t *off_in, long fd_out, int64_t *off_out, size_t len, long flags)
+{
+    struct file *fi = fsys_file(fd_in), *fo = fsys_file(fd_out);
+    if (!fi || !fo)
+        return -EBADF;
+    if (flags & ~0xFL)                               /* SPLICE_F_MOVE, NONBLOCK, MORE, GIFT */
+        return -EINVAL;
+    if (fi->type != FD_PIPE && fo->type != FD_PIPE)
+        return -EINVAL;
+    if ((fi->type == FD_PIPE && off_in) || (fo->type == FD_PIPE && off_out))
+        return -ESPIPE;
+    if (len == 0)
+        return 0;
+    return xfer(fd_in, off_in, fd_out, off_out, len, true);
+}
+
 /* ---------------- fcntl ---------------- */
 
 static long flock_range(struct file *f, const struct sieos_flock *u, struct kflock *k)
@@ -429,16 +554,28 @@ static int nonempty_cb(void *arg, const char *name, size_t len, uint64_t ino, in
     return 0;
 }
 
+static long mount_at(const char *uspec, const char *udir, long mflag, const char *utype, char *dir);
+
 /* mount(spec, dir, mflag, fstype, dataptr, datalen): tmpfs and proc. */
 static long do_mount(const char *uspec, const char *udir, long mflag, const char *utype)
 {
-    char spec[64], dir[MAXPATH], type[32], abs[64];
+    char *dir = path_get();
+    if (!dir)
+        return -ENOMEM;
+    long r = mount_at(uspec, udir, mflag, utype, dir);
+    path_put(dir);
+    return r;
+}
+
+static long mount_at(const char *uspec, const char *udir, long mflag, const char *utype, char *dir)
+{
+    char spec[64], type[32], abs[64];
     if (current->euid != 0)
         return -EPERM;
     if (mflag & ~(long)(SIEOS_MS_RDONLY | SIEOS_MS_FSS | SIEOS_MS_DATA | SIEOS_MS_REMOUNT | SIEOS_MS_NOSUID |
                         SIEOS_MS_OVERLAY | SIEOS_MS_OPTIONSTR))
         return -EINVAL;
-    if (user_fetch_str(udir, dir, sizeof(dir)) < 0 || user_fetch_str(utype, type, sizeof(type)) < 0)
+    if (user_fetch_str(udir, dir, MAXPATH) < 0 || user_fetch_str(utype, type, sizeof(type)) < 0)
         return -EFAULT;
     if (!uspec)
         strlcpy(spec, type, sizeof(spec));
@@ -509,15 +646,16 @@ static long do_mount(const char *uspec, const char *udir, long mflag, const char
 
 static long do_umount2(const char *udir, long mflag)
 {
-    char dir[MAXPATH];
     if (current->euid != 0)
         return -EPERM;
     if (mflag & ~(long)SIEOS_MS_FORCE)
         return -EINVAL;
-    if (user_fetch_str(udir, dir, sizeof(dir)) < 0)
-        return -EFAULT;
-    int err;
-    struct inode *ip = namei(dir, &err);
+    char *dir = path_get();
+    if (!dir)
+        return -ENOMEM;
+    int err = -EFAULT;
+    struct inode *ip = user_fetch_str(udir, dir, MAXPATH) < 0 ? NULL : namei(dir, &err);
+    path_put(dir);
     if (!ip)
         return err;
     struct fs *fs = vfs_mounted_on(ip);
@@ -631,8 +769,9 @@ static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
         return tty_set_termios(t, &kt, kc);
     }
     case SIEOS_TCSBRK:
-    case SIEOS_TCXONC:
         return 0;
+    case SIEOS_TCXONC:                               /* tcflow: TCOOFF..TCION, accepted (no flow control) */
+        return arg <= 3 ? 0 : -EINVAL;
     case SIEOS_TCFLSH:
         return tty_flush(t, (int)arg);
     case SIEOS_TIOCGPGRP: return tty_call(t, TIOCGPGRP, arg);
@@ -683,7 +822,7 @@ static long do_statvfs(long fd, const char *upath, struct sieos_statvfs *u)
 
 long syscall_file_v2(struct trapframe *tf, bool *handled)
 {
-    uint64_t a1 = tf->rdi, a2 = tf->rsi, a3 = tf->rdx, a4 = tf->r10, a5 = tf->r8;
+    uint64_t a1 = tf->rdi, a2 = tf->rsi, a3 = tf->rdx, a4 = tf->r10, a5 = tf->r8, a6 = tf->r9;
     bool ok;
     int fl, k;
     *handled = true;
@@ -693,6 +832,11 @@ long syscall_file_v2(struct trapframe *tf, bool *handled)
     case SIEOS_SYS_pread:     return do_rw(a1, (void *)a2, a3, false, true, (int64_t)a4);
     case SIEOS_SYS_pwrite:    return do_rw(a1, (void *)a2, a3, true, true, (int64_t)a4);
     case SIEOS_SYS_readv:     return do_rwv(a1, (const struct sieos_iovec *)a2, (int)a3, false);
+    case SIEOS_SYS_preadv:    return do_prwv(a1, (const struct sieos_iovec *)a2, (int)a3, (int64_t)a4, false);
+    case SIEOS_SYS_pwritev:   return do_prwv(a1, (const struct sieos_iovec *)a2, (int)a3, (int64_t)a4, true);
+    case SIEOS_SYS_copy_file_range:
+        return do_copy_file_range(a1, (int64_t *)a2, a3, (int64_t *)a4, a5, (long)a6);
+    case SIEOS_SYS_splice:    return do_splice(a1, (int64_t *)a2, a3, (int64_t *)a4, a5, (long)a6);
     case SIEOS_SYS_writev:    return do_rwv(a1, (const struct sieos_iovec *)a2, (int)a3, true);
     case SIEOS_SYS_close:
         if (!fsys_file(a1))

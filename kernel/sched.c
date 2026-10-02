@@ -35,6 +35,7 @@ static const char *const class_names[] = { "SYS", "TS", "FX", "RT" };
 
 void sched_init_lwp(struct lwp *l, struct lwp *from)
 {
+    l->affinity = from && !from->is_idle ? from->affinity : 0;   /* (threads keep their creator's) */
     if (from && !from->is_idle && from->cid) {
         l->cid = from->cid;
         l->upri = from->upri;
@@ -87,7 +88,8 @@ static void preempt_for(struct lwp *l)
     int pri = sched_gpri(l), best = -1, low = pri;
     for (int i = 0; i < ncpu; i++) {
         struct cpu *c = &cpus[i];
-        if (!c->online || c->offline || (l->bound && l->bound != c->id + 1))
+        if (!c->online || c->offline || (l->bound && l->bound != c->id + 1) ||
+            (l->affinity && !(l->affinity & (1u << c->id))))
             continue;
         if (!c->lwp || c->lwp->is_idle)
             return;                                /* an idle CPU takes it (smp_kick_idle) */

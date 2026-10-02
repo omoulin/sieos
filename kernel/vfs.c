@@ -179,13 +179,13 @@ int inode_setattr(struct inode *ip, int mode, int uid, int gid)
         return -EROFS;
     if (mode >= 0)
         di->i_mode = (di->i_mode & S_IFMT) | (mode & 07777);
-    if (uid >= 0) {
-        di->i_uid = uid & 0xFFFF;
-        di->i_uid_high = uid >> 16;
+    if (uid != -1) {                             /* (IDs are 32-bit unsigned: -1 alone means "unchanged") */
+        di->i_uid = (uint32_t)uid & 0xFFFF;
+        di->i_uid_high = (uint32_t)uid >> 16;
     }
-    if (gid >= 0) {
-        di->i_gid = gid & 0xFFFF;
-        di->i_gid_high = gid >> 16;
+    if (gid != -1) {
+        di->i_gid = (uint32_t)gid & 0xFFFF;
+        di->i_gid_high = (uint32_t)gid >> 16;
     }
     inode_touch(ip, false, true);
     return iupdate(ip);
@@ -660,20 +660,46 @@ static int findname_cb(void *arg, const char *name, size_t len, uint64_t ino, in
     return 1;
 }
 
+_Static_assert(MAXPATH == PAGE_SIZE, "path_get hands out pages");
+
+char *path_get(void)
+{
+    uint64_t pa = pmm_alloc();
+    return pa ? P2V(pa) : NULL;
+}
+
+void path_put(char *p)
+{
+    if (p)
+        pmm_free(V2P(p));
+}
+
+static int dir_path(struct inode *dir, char *buf, size_t size, char *tmp);
+
 /*
  * Build the absolute path of a directory by walking "..", crossing mount
  * points upwards, and stopping at the process's root.
  */
 int vfs_dir_path(struct inode *dir, char *buf, size_t size)
 {
-    char tmp[MAXPATH], name[256];
-    size_t pos = sizeof(tmp) - 1;
+    char *tmp = path_get();
+    if (!tmp)
+        return -ENOMEM;
+    int r = dir_path(dir, buf, size, tmp);
+    path_put(tmp);
+    return r;
+}
+
+static int dir_path(struct inode *dir, char *buf, size_t size, char *tmp)
+{
+    char name[256];
+    size_t pos = MAXPATH - 1;
     tmp[pos] = 0;
     struct inode *root = current && current->root ? current->root : root_fs->root;
     struct inode *cur = idup(dir);
     int r = 0;
     for (int depth = 0; !same_inode(cur, root); depth++) {
-        if (depth > 128) {
+        if (depth > MAXPATH / 2) {                 /* (a path has at most that many directories) */
             r = -ELOOP;
             break;
         }
@@ -711,9 +737,9 @@ int vfs_dir_path(struct inode *dir, char *buf, size_t size)
     iput(cur);
     if (r < 0)
         return r;
-    if (pos == sizeof(tmp) - 1)
+    if (pos == MAXPATH - 1)
         tmp[--pos] = '/';
-    size_t len = sizeof(tmp) - 1 - pos;
+    size_t len = MAXPATH - 1 - pos;
     if (len + 1 > size)
         return -ERANGE;
     memcpy(buf, tmp + pos, len + 1);

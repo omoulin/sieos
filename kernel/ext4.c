@@ -28,7 +28,7 @@
 #include "jbd2.h"
 #include "kmutex.h"
 
-#define NINODE 64
+#define NINODE 1024                     /* inodes in use at once (open, mapped, cwd), per volume */
 
 /*
  * One mounted ext4 volume.  The code below works on the volume V points to:

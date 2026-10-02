@@ -66,6 +66,35 @@ static void proc_times(struct proc *p, uint64_t *total, uint64_t *sys)
 
 /* ---------------- clocks ---------------- */
 
+/*
+ * A process's or thread's CPU clock by id, as the C library makes them
+ * (Linux's encoding, pthread_getcpuclockid, clock_getcpuclockid): -(id + 1) * 8
+ * plus 2 for a process, 6 for a thread.  This process and its own threads.
+ * Its CPU time in *ns; false: no such clock.
+ */
+static bool cpu_clock(long clk, uint64_t *ns)
+{
+    if (clk >= 0 || ((clk & 7) != 2 && (clk & 7) != 6))
+        return false;
+    long id = ~(clk >> 3);
+    if ((clk & 7) == 2) {
+        if (id != 0 && id != current->pid)
+            return false;
+        uint64_t t, s;
+        proc_times(current, &t, &s);
+        *ns = t * NS_PER_TICK;
+        return true;
+    }
+    for (int i = 0; i < NLWP; i++) {
+        struct lwp *l = &lwp_table[i];
+        if (l->state != LWP_UNUSED && l->state != LWP_ZOMBIE && l->proc == current && l->lwpid == id) {
+            *ns = l->ticks * NS_PER_TICK;
+            return true;
+        }
+    }
+    return false;
+}
+
 static long do_clock_gettime(long clk, struct sieos_timespec *uts)
 {
     if (!user_ok(uts, sizeof(*uts), true))
@@ -93,7 +122,10 @@ static long do_clock_gettime(long clk, struct sieos_timespec *uts)
         ns_to_ts((curlwp->ticks - curlwp->sticks) * NS_PER_TICK, &ts);
         break;
     default:
-        return -EINVAL;
+        if (!cpu_clock(clk, &t))
+            return -EINVAL;
+        ns_to_ts(t, &ts);
+        break;
     }
     memcpy(uts, &ts, sizeof(ts));
     return 0;
@@ -126,8 +158,13 @@ static long do_clock_getres(long clk, struct sieos_timespec *u)
     case SIEOS_CLOCK_VIRTUAL:
         res = NS_PER_TICK;
         break;
-    default:
-        return -EINVAL;
+    default: {
+        uint64_t ns;
+        if (!cpu_clock(clk, &ns))
+            return -EINVAL;
+        res = NS_PER_TICK;
+        break;
+    }
     }
     if (u) {
         if (!user_ok(u, sizeof(*u), true))
@@ -471,14 +508,81 @@ static long do_p_online(long id, long flag)
                 online++;
         if (!c->offline && online <= 1)
             return -EBUSY;                       /* the last processor stays online */
-        for (int i = 0; i < NLWP; i++)
-            if (lwp_table[i].state != LWP_UNUSED && lwp_table[i].bound == c->id + 1)
-                return -EBUSY;                   /* LWPs are bound to it */
+        uint32_t others = 0;                     /* the processors left online */
+        for (int i = 0; i < ncpu; i++)
+            if (cpus[i].online && !cpus[i].offline && &cpus[i] != c)
+                others |= 1u << cpus[i].id;
+        for (int i = 0; i < NLWP; i++) {
+            struct lwp *l = &lwp_table[i];
+            if (l->state != LWP_UNUSED && (l->bound == c->id + 1 || (l->affinity && !(l->affinity & others))))
+                return -EBUSY;                   /* LWPs are bound to it, or may run on it only */
+        }
         c->offline = true;
         return old;
     }
     }
     return -EINVAL;
+}
+
+/*
+ * lwp_affinity(idtype, id, op, uint64_t *mask): the processors an LWP (P_LWPID,
+ * of this process) or every LWP of a process (P_PID) may run on, a bit per
+ * processor id.  SIEOS_AFF_GET reads the first one's (all online processors
+ * when it has no set), SIEOS_AFF_SET sets them: online processors only, at
+ * least one; all of them clears the set.
+ */
+static long do_lwp_affinity(long idtype, long id, long op, uint64_t *umask)
+{
+    id = (int)id;
+    if (!user_ok(umask, sizeof(*umask), op == SIEOS_AFF_GET))
+        return -EFAULT;
+    if (op != SIEOS_AFF_GET && op != SIEOS_AFF_SET)
+        return -EINVAL;
+    uint32_t online = 0, set = 0;
+    for (int i = 0; i < ncpu; i++)
+        if (cpus[i].online && !cpus[i].offline)
+            online |= 1u << cpus[i].id;
+    if (op == SIEOS_AFF_SET) {
+        uint64_t m = *umask;
+        if (!(m & online))
+            return -EINVAL;
+        set = (m & online) == online ? 0 : (uint32_t)(m & online);
+    }
+    struct proc *p;
+    if (idtype == SIEOS_P_LWPID) {
+        p = current;
+    } else if (idtype == SIEOS_P_PID) {
+        p = id == SIEOS_P_MYID ? current : proc_find(id);
+        if (!p || p->state != PSTATE_RUNNING)
+            return -ESRCH;
+    } else {
+        return -EINVAL;
+    }
+    if (op == SIEOS_AFF_SET && p != current && !is_root() && current->euid != p->uid && current->euid != p->euid)
+        return -EPERM;
+    bool found = false;
+    for (int i = 0; i < NLWP; i++) {
+        struct lwp *l = &lwp_table[i];
+        if (l->proc != p || l->state == LWP_UNUSED || l->state == LWP_ZOMBIE)
+            continue;
+        if (idtype == SIEOS_P_LWPID && l->lwpid != (id == SIEOS_P_MYID ? curlwp->lwpid : id))
+            continue;
+        if (op == SIEOS_AFF_GET) {
+            *umask = l->affinity ? (l->affinity & online) : online;
+            return 0;
+        }
+        l->affinity = set;
+        found = true;
+        if (l != curlwp && l->state == LWP_RUNNING)
+            for (int c = 0; c < ncpu; c++)
+                if (cpus[c].lwp == l && set && !(set & (1u << cpus[c].id)))
+                    cpus[c].need_resched = true; /* (it moves at its next reschedule) */
+    }
+    if (!found)
+        return -ESRCH;
+    if (curlwp->affinity && !(curlwp->affinity & (1u << mycpu()->id)))
+        schedule();                              /* move to an allowed processor now */
+    return 0;
 }
 
 static long do_processor_bind(long idtype, long id, long cpu, int *uobind)
@@ -569,6 +673,7 @@ long syscall_misc_v2(struct trapframe *tf, bool *handled)
     case SIEOS_SYS_processor_info: return do_processor_info(a1, (sieos_processor_info_t *)a2);
     case SIEOS_SYS_p_online:      return do_p_online(a1, a2);
     case SIEOS_SYS_processor_bind: return do_processor_bind(a1, a2, a3, (int *)a4);
+    case SIEOS_SYS_lwp_affinity:   return do_lwp_affinity(a1, a2, a3, (uint64_t *)a4);
     case SIEOS_SYS_priocntl:     return sys2_priocntl(a1, a2, a3, (void *)a4);
     case SIEOS_SYS_getloadavg:    return do_getloadavg((long *)a1, a2);
     case SIEOS_SYS_msgsys:        return sys2_msgsys(a1, a2, a3, a4, tf->r8, tf->r9);

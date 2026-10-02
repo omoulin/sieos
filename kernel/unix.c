@@ -527,17 +527,31 @@ static long get_rights(const void *ctl, unsigned int clen, struct urights **out)
         if (c->cmsg_level == SIEOS_SOL_SOCKET && c->cmsg_type == SIEOS_SCM_RIGHTS) {
             int n = (c->cmsg_len - sizeof(*c)) / sizeof(int);
             const int *fds = (const int *)(c + 1);
-            if (*out || n > UNIX_MAXFDS)
+            int had = *out ? (*out)->n : 0;          /* (several SCM_RIGHTS messages: one set) */
+            if (had + n > UNIX_MAXFDS) {
+                rights_free(*out);
+                *out = NULL;
                 return -EINVAL;
+            }
             if (n == 0)
                 goto next;
-            struct urights *r = kzalloc(sizeof(*r) + n * sizeof(struct file *));
-            if (!r)
+            struct urights *r = kzalloc(sizeof(*r) + (had + n) * sizeof(struct file *));
+            if (!r) {
+                rights_free(*out);
+                *out = NULL;
                 return -ENOMEM;
+            }
+            if (*out) {
+                memcpy(r->f, (*out)->f, had * sizeof(struct file *));
+                r->n = had;
+                kfree(*out);
+                *out = NULL;
+            }
             for (int i = 0; i < n; i++) {
                 int fd = fds[i];
                 if (fd < 0 || fd >= NOFILE || !current->ofile[fd]) {
                     rights_free(r);
+                    *out = NULL;
                     return -EBADF;
                 }
                 r->f[r->n++] = file_dup(current->ofile[fd]);
@@ -930,6 +944,8 @@ static long do_getsockopt(struct usock *u, long level, long name, void *val, uns
     int iv;
     switch (name) {
     case SIEOS_SO_TYPE:       iv = u->type; break;
+    case SIEOS_SO_DOMAIN:     iv = SIEOS_AF_UNIX; break;
+    case SIEOS_SO_PROTOCOL:   iv = 0; break;
     case SIEOS_SO_ACCEPTCONN: iv = u->state == US_LISTEN; break;
     case SIEOS_SO_SNDBUF:
     case SIEOS_SO_RCVBUF:     iv = u->type == SIEOS_SOCK_STREAM ? UNIX_BUF : UNIX_QUEUE; break;

@@ -175,20 +175,24 @@ long sys2_lwp_private(int op, int which, uint64_t base)
     return 0;
 }
 
-/* The key of a user-mutex word: its physical address, or (pid, address) for private ones. */
+/*
+ * The key of a user-mutex word: (pid, address) for a private one, or one in
+ * the process's own memory; its physical address only in memory shared with
+ * other processes (MAP_SHARED, shm).  (As Linux: private memory turns
+ * copy-on-write at fork, and a store to the word between a wait and its wake
+ * moved it to another page, the wake missing the waiter.)
+ */
 static long umtx_key(uint64_t addr, int flags, uint64_t *key)
 {
     if (addr & 3)
         return -EINVAL;
     if (!user_ok((void *)addr, 4, false))
         return -EFAULT;
-    if (flags & SIEOS_UMTX_PRIVATE) {
+    uint64_t fl = 0, pa = (flags & SIEOS_UMTX_PRIVATE) ? 0 : vmm_translate(current->pml4, addr, &fl);
+    if (!pa || !(fl & PTE_SHARED)) {
         *key = ((uint64_t)current->pid << 48) | addr | 1;    /* odd: never a physical address */
         return 0;
     }
-    uint64_t pa = vmm_translate(current->pml4, addr, NULL);
-    if (!pa)
-        return -EFAULT;
     *key = pa & ~1UL;
     return 0;
 }
@@ -243,9 +247,12 @@ long sys2_lwp_umtx_wake(uint64_t addr, int count, int flags)
     int n = 0;
     for (int i = 0; i < NLWP && n < count; i++) {
         struct lwp *l = &lwp_table[i];
-        if (l->state == LWP_SLEEPING && l->umtx_key == key) {
+        /* (one inside the wait, asleep or not: a signal may have made it runnable,
+         * and skipping it then lost this wake when it went back to sleep) */
+        if (l->umtx_key == key && l->state != LWP_UNUSED && l->state != LWP_ZOMBIE) {
             l->umtx_key = 0;
-            make_runnable(l);
+            if (l->state == LWP_SLEEPING)
+                make_runnable(l);
             n++;
         }
     }
@@ -284,9 +291,11 @@ static void umtx_wake_both(struct proc *p, uint64_t addr, int n)
     uint64_t shared = pa & ~1UL, priv = ((uint64_t)p->pid << 48) | addr | 1;
     for (int i = 0; i < NLWP && n > 0; i++) {
         struct lwp *w = &lwp_table[i];
-        if (w->state == LWP_SLEEPING && w->umtx_key && (w->umtx_key == shared || w->umtx_key == priv)) {
+        if (w->umtx_key && (w->umtx_key == shared || w->umtx_key == priv) &&
+            w->state != LWP_UNUSED && w->state != LWP_ZOMBIE) {
             w->umtx_key = 0;
-            make_runnable(w);
+            if (w->state == LWP_SLEEPING)
+                make_runnable(w);
             n--;
         }
     }

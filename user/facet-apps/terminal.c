@@ -434,7 +434,7 @@ static void term_key(struct fct_view *w, const struct fct_key *ev)
     case FCT_KEY_LEFT:  term_send(t, "\033[D", 3); return;
     }
     if (ev->ascii) {
-        char ch = ev->ascii == '\n' ? '\r' : (char)ev->ascii;
+        char ch = ev->ascii == '\n' ? '\r' : ev->code == 0x0E ? 127 : (char)ev->ascii;   /* Backspace: DEL */
         term_send(t, &ch, 1);
     }
 }

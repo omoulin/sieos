@@ -1,0 +1,12 @@
+# SIEOS's terminal (facet-terminal): ANSI colours, cursor movement, erasing;
+# the arrow keys send ESC [ A..D; it wraps when the next character comes.
+sieos|SIEOS terminal (Facet),
+	am, xenl, msgr,
+	colors#8, cols#80, it#8, lines#24, pairs#64,
+	bel=^G, bold=\E[1m, clear=\E[H\E[2J, cr=\r,
+	cub=\E[%p1%dD, cub1=^H, cud=\E[%p1%dB, cud1=\n,
+	cuf=\E[%p1%dC, cuf1=\E[C, cup=\E[%i%p1%d;%p2%dH,
+	cuu=\E[%p1%dA, cuu1=\E[A, ed=\E[J, el=\E[K, home=\E[H,
+	ht=^I, ind=\n, kbs=\177, kcub1=\E[D, kcud1=\E[B, kcuf1=\E[C,
+	kcuu1=\E[A, op=\E[39;49m, setab=\E[4%p1%dm,
+	setaf=\E[3%p1%dm, sgr0=\E[0m,

@@ -30,14 +30,17 @@
 #define SIEOS_IPPROTO_ICMPV6 58
 
 /* IPPROTO_IPV6 options (Solaris values) */
-#define SIEOS_IPV6_UNICAST_HOPS   0x05   /* int: hop limit of unicast packets, -1 default */
+#define SIEOS_IPV6_UNICAST_HOPS   0x05   /* int: hop limit of the unicast packets sent, -1 default */
 #define SIEOS_IPV6_MULTICAST_IF   0x06
 #define SIEOS_IPV6_MULTICAST_HOPS 0x07
 #define SIEOS_IPV6_MULTICAST_LOOP 0x08
 #define SIEOS_IPV6_JOIN_GROUP     0x09
 #define SIEOS_IPV6_LEAVE_GROUP    0x0a
 #define SIEOS_IPV6_V6ONLY         0x27   /* int: an AF_INET6 socket takes no IPv4 traffic */
-#define SIEOS_IPV6_TCLASS         0x43   /* int: traffic class (accepted, not applied) */
+#define SIEOS_IPV6_TCLASS         0x43   /* int: traffic class of the packets sent (-1 default); cmsg: a datagram's */
+#define SIEOS_IPV6_RECVHOPLIMIT   0x33   /* int: recvmsg gives each datagram's IPV6_HOPLIMIT (RFC 3542) */
+#define SIEOS_IPV6_HOPLIMIT       0x34   /* cmsg (int): a datagram's hop limit, received or to send */
+#define SIEOS_IPV6_RECVTCLASS     0x42   /* int: recvmsg gives each datagram's IPV6_TCLASS */
 #define SIEOS_IP_TOS              0x01   /* int, level IPPROTO_IP: type of service (accepted, not applied) */
 
 #define SIEOS_SOL_SOCKET    0xffff
@@ -58,8 +61,12 @@
 #define SIEOS_SO_RCVTIMEO   0x1006
 #define SIEOS_SO_ERROR      0x1007
 #define SIEOS_SO_TYPE       0x1008
+#define SIEOS_SO_DOMAIN     0x100c   /* the socket's address family (as Solaris) */
+#define SIEOS_SO_PROTOCOL   0x1016   /* its protocol (Solaris: SO_PROTOTYPE) */
+#define SIEOS_SO_REUSEPORT  0x100e   /* int (kept and reported, as the other flags) */
 
 #define SIEOS_TCP_NODELAY   0x01
+#define SIEOS_TCP_QUICKACK  0x0c   /* int (kept and reported, as the flag options) */
 
 #define SIEOS_MSG_OOB       0x0001
 #define SIEOS_MSG_PEEK      0x0002

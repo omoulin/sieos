@@ -46,6 +46,14 @@ static size_t pty_output(struct tty *t, const char *s, size_t n)
     return done;                   /* echo may drop bytes if the master is slow */
 }
 
+/* tcflush(TCOFLUSH) on the slave: what the master has not read goes. */
+static void pty_oflush(struct tty *t)
+{
+    struct pty *p = t->priv;
+    p->onr = p->onw;
+    wakeup(p);
+}
+
 bool tty_is_pty(struct tty *t)
 {
     return t->output == pty_output;
@@ -77,6 +85,7 @@ int pty_open_master(struct file *f)
     p->uid = current->euid;
     p->gid = current->egid;
     tty_setup(&p->tty, pty_output, p);
+    p->tty.oflush = pty_oflush;
     tty_register(&p->tty);
     p->master_open = 1;
     f->type = FD_PTM;
@@ -172,16 +181,31 @@ long pty_master_write(struct pty *p, const char *buf, size_t n)
     return n;
 }
 
+/* What the slave writes, with the output processing of c_oflag: ONLCR (with
+ * OPOST) sends a newline as CR LF. */
 long pty_slave_write(struct tty *t, const char *buf, size_t n)
 {
     struct pty *p = t->priv;
+    bool onlcr = (t->t.c_oflag & (OPOST | ONLCR)) == (OPOST | ONLCR);
     size_t done = 0;
     while (done < n) {
         if (!p->master_open)
             return done ? (long)done : -EIO;
-        size_t k = pty_output(t, buf + done, n - done);
+        size_t k;
+        if (onlcr && buf[done] == '\n') {
+            k = 0;
+            if (PTY_OUT - (p->onw - p->onr) >= 2) {
+                pty_output(t, "\r\n", 2);
+                k = 1;
+            }
+        } else {
+            size_t run = 0;                      /* up to the next newline */
+            while (done + run < n && !(onlcr && buf[done + run] == '\n'))
+                run++;
+            k = pty_output(t, buf + done, run);
+        }
         done += k;
-        if (done < n) {
+        if (k == 0) {                            /* the master's buffer is full */
             if (signal_pending(current))
                 return done ? (long)done : -ERESTART;
             sleep_on(p);

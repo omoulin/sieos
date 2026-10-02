@@ -344,9 +344,10 @@ static void header6(struct netif *ifp, uint8_t *pkt, const naddr_t *src, const n
                     size_t plen, int hlim)
 {
     struct ip6_hdr *h = (struct ip6_hdr *)pkt;
-    h->vtcfl = htonl(6U << 28);
+    h->vtcfl = htonl(6U << 28 | (uint32_t)(hlim >> 8 & 0xFF) << 20);       /* (hlim: | traffic class << 8) */
     h->plen = htons(plen);
     h->nxt = nxt;
+    hlim &= 0xFF;
     h->hlim = hlim ? hlim : na_multicast6(dst) ? 1 : ifp && ifp->v6.hoplimit ? ifp->v6.hoplimit : 64;
     h->src = src ? *src : ip6_source(dst);
     h->dst = *dst;
@@ -418,6 +419,12 @@ static void output_router_alert(struct netif *ifp, const naddr_t *src, const nad
 
 int ip6_send(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *payload, size_t len)
 {
+    return ip6_send_opts(src, dst, proto, payload, len, 0);
+}
+
+/* hltc: the hop limit (0: the default) | the traffic class << 8 */
+int ip6_send_opts(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *payload, size_t len, int hltc)
+{
     const naddr_t *s = src && !na_zero(src) ? src : NULL;
     struct netif *ifp = ip6_is_local(dst) ? NULL : route6(dst, s);
     if (!ifp && !ip6_is_local(dst))
@@ -427,7 +434,7 @@ int ip6_send(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *
         chosen = ip6_is_local(dst) ? *dst : source_on(ifp, dst);
         s = &chosen;
     }
-    return output(ifp, s, dst, proto, payload, len, 0);
+    return output(ifp, s, dst, proto, payload, len, hltc);
 }
 
 /* ---------------- duplicate address detection and MLD ---------------- */
@@ -658,7 +665,7 @@ static void icmp6_input(struct netif *in, const naddr_t *src, const naddr_t *dst
 
 /* The payload after the fixed header: extension headers, fragments, then the protocol. */
 static void deliver6(struct netif *in, const naddr_t *src, const naddr_t *dst, uint8_t nxt, const uint8_t *p,
-                     size_t plen, int hlim, int depth)
+                     size_t plen, int hlim, int tclass, int depth)
 {
     while (nxt == 0 || nxt == 43 || nxt == 60) {  /* hop-by-hop, routing, destination options */
         if (plen < 8 || plen < (size_t)(p[1] + 1) * 8)
@@ -678,14 +685,14 @@ static void deliver6(struct netif *in, const naddr_t *src, const naddr_t *dst, u
         uint8_t *whole;
         size_t n;
         if (frag_add(&k, offlg & ~7U, p + 8, plen - 8, offlg & 1, &whole, &n) == 1) {
-            deliver6(in, src, dst, p[0], whole, n, hlim, depth + 1);
+            deliver6(in, src, dst, p[0], whole, n, hlim, tclass, depth + 1);
             kfree(whole);
         }
         return;
     }
     switch (nxt) {
     case IPPROTO_ICMPV6_K: icmp6_input(in, src, dst, p, plen, hlim); break;
-    case IPPROTO_UDP:      udp_input(src, dst, p, plen); break;
+    case IPPROTO_UDP:      udp_input(src, dst, p, plen, hlim, tclass); break;
     case IPPROTO_TCP:      tcp_input(src, dst, p, plen); break;
     }
 }
@@ -705,7 +712,7 @@ void ip6_input(struct netif *in, const uint8_t *pkt, size_t len)
         return;
     if (!ip6_is_local(&dst) && !(in && our_group(in, &dst)))
         return;
-    deliver6(in, &src, &dst, h->nxt, pkt + IP6_HLEN, plen, h->hlim, 0);
+    deliver6(in, &src, &dst, h->nxt, pkt + IP6_HLEN, plen, h->hlim, (ntohl(h->vtcfl) >> 20) & 0xFF, 0);
 }
 
 /* ---------------- start-up and timers ---------------- */

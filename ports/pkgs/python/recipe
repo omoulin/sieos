@@ -1,0 +1,37 @@
+# Python 3.14: the interpreter (python3, libpython3.14.so) and the standard
+# library with its C modules: ssl and hashlib (openssl), zlib, bz2, lzma
+# (xz), sqlite3, ctypes (libffi), curses and readline (ncurses, readline),
+# decimal and expat (bundled).  pip comes installed (the wheel Python
+# bundles), with venv and ensurepip.  sys.platform is "sieos".  Without
+# Python's own test suite (--disable-test-modules) and the -O and -OO
+# bytecode (made when a program runs with them).
+# Cross-built with the build host's Python of the same version
+# (build/ports/python-host).  sieos.patch (configure): SIEOS as a cross
+# build's system, its shared libraries as on Linux; sysconfig's platform
+# sieos-x86_64; os.pidfd_open as on Linux.  config.site: the functions musl
+# has but SIEOS's kernel does not (ENOSYS): preadv2/pwritev2,
+# process_vm_readv, namespaces.  No tkinter (no X11).
+name     = python
+version  = 3.14.8-1
+summary  = Python 3.14: the interpreter, the standard library and pip
+source   = https://www.python.org/ftp/python/3.14.8/Python-3.14.8.tar.xz
+sha256   = c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73
+depends  = zlib openssl libffi sqlite bzip2 xz ncurses readline
+build    = printf '%s\n' ac_cv_file__dev_ptmx=yes ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no \
+               ac_cv_func_preadv2=no ac_cv_func_pwritev2=no ac_cv_func_process_vm_readv=no \
+               ac_cv_func_setns=no ac_cv_func_unshare=no > config.site
+           CONFIG_SITE=$PWD/config.site $CONFIGURE --build=x86_64-pc-linux-gnu \
+               --with-build-python=$TREE/build/ports/python-host/inst/bin/python3.14 --enable-shared \
+               --with-ensurepip=no --without-static-libpython --with-openssl=$PKG_CONFIG_SYSROOT_DIR$PREFIX \
+               --with-readline=readline --enable-loadable-sqlite-extensions --disable-test-modules > configure.out
+           make -j$JOBS
+install  = make install DESTDIR=$DESTDIR > install.out
+           SP=$DESTDIR$PREFIX/lib/python3.14/site-packages
+           W=$(ls $PWD/Lib/ensurepip/_bundled/pip-*.whl)
+           mkdir -p $SP && (cd $SP && python3 -m zipfile -e $W .)
+           printf '%s\n' '#!/usr/pkg/bin/python3' 'import sys' 'from pip._internal.cli.main import main' \
+               'sys.exit(main())' > $DESTDIR$PREFIX/bin/pip3
+           chmod 755 $DESTDIR$PREFIX/bin/pip3 && ln -sf pip3 $DESTDIR$PREFIX/bin/pip
+           ln -sf python3 $DESTDIR$PREFIX/bin/python
+           find $DESTDIR$PREFIX/lib/python3.14 -name '*.opt-[12].pyc' -delete
+           mkdir -p $DESTDIR$PREFIX/share/doc/python && cp LICENSE $DESTDIR$PREFIX/share/doc/python/

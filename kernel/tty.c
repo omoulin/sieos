@@ -177,7 +177,7 @@ void tty_input(struct tty *t, char c)
         return;
     }
 
-    if (c == tm->c_cc[VERASE] || c == '\b' || c == 127) {
+    if (c == tm->c_cc[VERASE]) {                 /* (only it: ^H goes through, as on Linux) */
         erase_char(t);
         return;
     }
@@ -316,7 +316,7 @@ long tty_set_termios(struct tty *t, const struct termios *kt, unsigned long cmd)
     return 0;
 }
 
-/* tcflush: 0 input, 1 output, 2 both (output is never queued). */
+/* tcflush: 0 input, 1 output, 2 both (output is queued by a pty only). */
 long tty_flush(struct tty *t, int which)
 {
     if (which < 0 || which > 2)
@@ -325,6 +325,8 @@ long tty_flush(struct tty *t, int which)
         t->r_head = t->r_tail;
         t->line_len = 0;
     }
+    if (which != 0 && t->oflush)
+        t->oflush(t);
     return 0;
 }
 

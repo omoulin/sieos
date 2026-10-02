@@ -147,9 +147,15 @@ static struct netif *route4(uint32_t dst, uint32_t src, uint32_t *nexthop)
 
 int net_send(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *payload, size_t len)
 {
+    return net_send_opts(src, dst, proto, payload, len, 0);
+}
+
+/* hltc: for IPv6, the hop limit (0: the default) | the traffic class << 8 */
+int net_send_opts(const naddr_t *src, const naddr_t *dst, uint8_t proto, const void *payload, size_t len, int hltc)
+{
     if (na_is_v4(dst))
         return ip_send(na_is_v4(src) ? na_to_v4(src) : 0, na_to_v4(dst), proto, payload, len);
-    return ip6_send(src, dst, proto, payload, len);
+    return ip6_send_opts(src, dst, proto, payload, len, hltc);
 }
 
 uint32_t net_pseudo_sum(const naddr_t *src, const naddr_t *dst, uint8_t proto, uint32_t len)
@@ -560,7 +566,7 @@ void ip_input(struct netif *in, const uint8_t *pkt, size_t len)
     }
     switch (h->proto) {
     case IPPROTO_ICMP: icmp_input(src, dst, payload, plen); break;
-    case IPPROTO_UDP:  udp_input(&s, &d, payload, plen); break;
+    case IPPROTO_UDP:  udp_input(&s, &d, payload, plen, h->ttl, h->tos); break;
     case IPPROTO_TCP:  tcp_input(&s, &d, payload, plen); break;
     }
     kfree(whole);

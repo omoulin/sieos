@@ -62,11 +62,14 @@ static int prep(int dirfd, const char *upath, char *path, struct inode **start)
 
 static struct inode *resolve(int dirfd, const char *upath, int atflags, int *err)
 {
-    char path[MAXPATH];
-    struct inode *start;
-    if ((*err = prep(dirfd, upath, path, &start)) < 0)
-        return NULL;
-    return namei_at(start, path, (atflags & AT_NOFOLLOW_K) ? NAMEI_NOFOLLOW : 0, err);
+    char *path = path_get();
+    struct inode *start, *ip = NULL;
+    if (!path)
+        *err = -ENOMEM;
+    else if ((*err = prep(dirfd, upath, path, &start)) >= 0)
+        ip = namei_at(start, path, (atflags & AT_NOFOLLOW_K) ? NAMEI_NOFOLLOW : 0, err);
+    path_put(path);
+    return ip;
 }
 
 /* The inode a call targets: a path, or the descriptor itself if upath is NULL. */
@@ -88,11 +91,14 @@ static struct inode *target(int dirfd, const char *upath, int atflags, int *err)
 
 static struct inode *resolve_parent(int dirfd, const char *upath, char *name, int *err)
 {
-    char path[MAXPATH];
-    struct inode *start;
-    if ((*err = prep(dirfd, upath, path, &start)) < 0)
-        return NULL;
-    return nameiparent_at(start, path, name, err);
+    char *path = path_get();
+    struct inode *start, *ip = NULL;
+    if (!path)
+        *err = -ENOMEM;
+    else if ((*err = prep(dirfd, upath, path, &start)) >= 0)
+        ip = nameiparent_at(start, path, name, err);
+    path_put(path);
+    return ip;
 }
 
 /* Group of a new file: the directory's with set-gid, else the caller's. */
@@ -261,9 +267,21 @@ static int create_through_link(struct inode *dir, char *name, int mode, struct i
     return r;
 }
 
+static long open_at(int dirfd, const char *upath, int flags, int mode, char *path);
+
 long fsys_open(int dirfd, const char *upath, int flags, int mode)
 {
-    char path[MAXPATH], name[256];
+    char *path = path_get();
+    if (!path)
+        return -ENOMEM;
+    long r = open_at(dirfd, upath, flags, mode, path);
+    path_put(path);
+    return r;
+}
+
+static long open_at(int dirfd, const char *upath, int flags, int mode, char *path)
+{
+    char name[256];
     struct inode *start, *ip = NULL;
     int r, err;
     bool created = false;
@@ -299,6 +317,11 @@ long fsys_open(int dirfd, const char *upath, int flags, int mode)
                 iput(dir);
             }
         } else if (r == -ENOENT) {
+            size_t pl = strlen(path);
+            if (pl && path[pl - 1] == '/') {             /* "new/": not a file to create (as Linux) */
+                iput(dir);
+                return -EISDIR;
+            }
             if ((r = inode_permission(dir, W_OK | X_OK)) == 0)
                 r = vfs_create(dir, name, S_IFREG | ((mode & 07777) & ~current->umask), 0, current->euid,
                                new_gid(dir), &ip);
@@ -595,11 +618,11 @@ long fsys_chmod(int dirfd, const char *upath, int mode, int flags)
     if (!ip)
         return err;
     long r;
-    if (S_ISLNK(inode_mode(ip)))
-        r = -EOPNOTSUPP;
-    else if (!inode_owner_or_root(ip))
+    if (!inode_owner_or_root(ip))
         r = -EPERM;
-    else {
+    else if (S_ISLNK(inode_mode(ip))) {
+        r = inode_setattr(ip, mode & 0777, -1, -1);  /* lchmod: kept, as BSD's (links' access ignores it) */
+    } else {
         if (!is_root() && !cred_in_group(current, inode_gid(ip)))
             mode &= ~S_ISGID;
         if (!is_root() && !S_ISDIR(inode_mode(ip)))
@@ -756,15 +779,17 @@ long fsys_chroot(const char *upath)
 
 long fsys_getcwd(char *ubuf, size_t n)
 {
-    char path[MAXPATH];
-    long len = vfs_dir_path(current->cwd, path, sizeof(path));
-    if (len < 0)
-        return len;
-    if (n < (size_t)len)
-        return -ERANGE;
-    if (!user_ok(ubuf, len, true))
-        return -EFAULT;
-    memcpy(ubuf, path, len);
+    char *path = path_get();
+    if (!path)
+        return -ENOMEM;
+    long len = vfs_dir_path(current->cwd, path, MAXPATH);
+    if (len >= 0 && n < (size_t)len)
+        len = -ERANGE;
+    else if (len >= 0 && !user_ok(ubuf, len, true))
+        len = -EFAULT;
+    else if (len >= 0)
+        memcpy(ubuf, path, len);
+    path_put(path);
     return len;
 }
 
@@ -803,6 +828,8 @@ long fsys_lseek(int fd, int64_t off, int whence)
         f->off = b + off;
         return f->off;
     }
+    if (f->type == FD_NULL || f->type == FD_ZERO || f->type == FD_RANDOM)
+        return whence >= SEEK_SET && whence <= SEEK_END ? 0 : -EINVAL;   /* (as Linux: always at 0) */
     if (f->type != FD_INODE)
         return -ESPIPE;
     int64_t base, size = inode_size(f->ip);

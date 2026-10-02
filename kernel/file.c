@@ -14,7 +14,7 @@
 #include "random.h"
 #include "proc.h"
 
-#define NFILE 512
+#define NFILE 8192                       /* open files in the whole system */
 
 static struct file ftable[NFILE];
 
@@ -22,8 +22,10 @@ struct file *file_alloc(void)
 {
     for (int i = 0; i < NFILE; i++) {
         if (ftable[i].ref == 0) {
+            static uint64_t gen;
             memset(&ftable[i], 0, sizeof(ftable[i]));
             ftable[i].ref = 1;
+            ftable[i].gen = ++gen;
             return &ftable[i];
         }
     }
@@ -64,6 +66,8 @@ void file_close(struct file *f)
         socket_close(c.sock);
     else if (c.type == FD_UNIX && c.usock)
         unix_close(c.usock);
+    else if (c.type == FD_OPS && c.ops->close)
+        c.ops->close(&c);
     memset(f, 0, sizeof(*f));                    /* free (ref 0), type FD_NONE */
 }
 
@@ -103,6 +107,10 @@ int file_path(struct file *f, char *buf, size_t size)
         break;
     case FD_PIPE:
         snprintf(tmp, sizeof(tmp), "pipe:[%lx]", (uint64_t)f->pipe & 0xFFFFFF);
+        s = tmp;
+        break;
+    case FD_OPS:
+        snprintf(tmp, sizeof(tmp), "anon_inode:[%s]", f->ops->name);
         s = tmp;
         break;
     case FD_SOCKET:
@@ -167,13 +175,15 @@ long file_read(struct file *f, void *buf, size_t n)
     case FD_EVENTS:
         return input_read(buf, n);
     case FD_SOCKET:
-        return socket_read(f->sock, buf, n);
+        return socket_read(f->sock, buf, n, f->flags & O_NONBLOCK_K);
     case FD_UNIX:
         return unix_read(f, buf, n);
     case FD_FB:
         return -EINVAL;
     case FD_PIPE:
         return pipe_read(f->pipe, buf, n);
+    case FD_OPS:
+        return f->ops->read ? f->ops->read(f, buf, n) : -EINVAL;
     case FD_NULL:
         return 0;
     case FD_ZERO:
@@ -215,11 +225,13 @@ long file_write(struct file *f, const void *buf, size_t n)
     case FD_FB:
         return -EINVAL;
     case FD_SOCKET:
-        return socket_write(f->sock, buf, n);
+        return socket_write(f->sock, buf, n, f->flags & O_NONBLOCK_K);
     case FD_UNIX:
         return unix_write(f, buf, n);
     case FD_PIPE:
-        return pipe_write(f->pipe, buf, n);
+        return pipe_write(f->pipe, buf, n, f->flags & O_NONBLOCK_K);
+    case FD_OPS:
+        return f->ops->write ? f->ops->write(f, buf, n) : -EINVAL;
     case FD_NULL:
     case FD_ZERO:
         return n;

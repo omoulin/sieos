@@ -110,16 +110,20 @@ static void free_strvec(char **kvec)
 
 static long sys_exec(const char *upath, char *const *uargv, char *const *uenvp)
 {
-    char path[MAXPATH];
+    char *path = path_get();
     size_t budget = MAXARGSTR;
+    if (!path)
+        return -ENOMEM;
     long na = count_strvec(uargv, MAXARGS), ne = count_strvec(uenvp, MAXENV);
-    if (na < 0 || ne < 0)
+    if (na < 0 || ne < 0) {
+        path_put(path);
         return na < 0 ? na : ne;
+    }
     char **kargv = kmalloc((na + 1) * sizeof(char *)), **kenvp = kmalloc((ne + 1) * sizeof(char *));
     int r = -ENOMEM;
     if (kargv && kenvp) {
         kargv[0] = kenvp[0] = NULL;
-        if ((r = fetch_str(upath, path, sizeof(path))) >= 0 &&
+        if ((r = fetch_str(upath, path, MAXPATH)) >= 0 &&
             (r = copy_strvec(uargv, kargv, na, &budget)) >= 0 &&
             (r = copy_strvec(uenvp, kenvp, ne, &budget)) >= 0)
             r = proc_exec(path, kargv, kenvp);
@@ -128,6 +132,7 @@ static long sys_exec(const char *upath, char *const *uargv, char *const *uenvp)
     }
     kfree(kargv);
     kfree(kenvp);
+    path_put(path);
     return r;
 }
 

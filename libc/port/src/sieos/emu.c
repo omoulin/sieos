@@ -730,35 +730,57 @@ static long emu_nice(int which, long who, int op, int val)
 	return op == SIEOS_PC_GETNICE ? 20 - n.pc_val : 0;   /* the kernel convention musl expects */
 }
 
+/* The calling LWP's processors (lwp_affinity: a 64-bit mask, a bit per processor) */
 static long emu_sched_getaffinity(size_t size, unsigned char *mask)
 {
-	long n = __syscall(S(sysconfig), SIEOS_CONFIG_NPROC_CONF);
+	uint64_t m;
 	if (size < 8)
 		return -EINVAL;
+	long r = __syscall(S(lwp_affinity), SIEOS_P_LWPID, SIEOS_P_MYID, SIEOS_AFF_GET, &m);
+	if (r < 0)
+		return r;
 	memset(mask, 0, size);
-	for (long i = 0; i < n && i < (long)size * 8; i++)
-		if (__syscall(S(p_online), i, SIEOS_P_STATUS) == SIEOS_P_ONLINE)
+	for (int i = 0; i < 64; i++)
+		if (m >> i & 1)
 			mask[i / 8] |= 1 << (i % 8);
 	return 8;
 }
 
 static long emu_sched_setaffinity(size_t size, const unsigned char *mask)
 {
-	long n = __syscall(S(sysconfig), SIEOS_CONFIG_NPROC_CONF), one = -1, count = 0, all = 1;
-	for (long i = 0; i < (long)size * 8; i++) {
-		bool on = mask[i / 8] & (1 << (i % 8));
-		if (on) {
-			count++;
-			one = i;
-		} else if (i < n) {
-			all = 0;
-		}
+	uint64_t m = 0;
+	for (size_t i = 0; i < size && i < 8; i++)
+		m |= (uint64_t)mask[i] << (8 * i);
+	return __syscall(S(lwp_affinity), SIEOS_P_LWPID, SIEOS_P_MYID, SIEOS_AFF_SET, &m);
+}
+
+/* prlimit: this process's limits (getrlimit, setrlimit); another's are not reachable */
+static long emu_prlimit(pid_t pid, int res, const struct rlimit *nl, struct rlimit *ol)
+{
+	if (pid < 0)
+		return -ESRCH;
+	if (pid && pid != sys_rv2(S(getpid), 0)) {
+		long r = __syscall(S(kill), pid, 0);
+		return r == -ESRCH ? -ESRCH : -EPERM;
 	}
-	if (all)
-		return __syscall(S(processor_bind), SIEOS_P_LWPID, SIEOS_P_MYID, SIEOS_PBIND_NONE, 0);
-	if (count == 1)
-		return __syscall(S(processor_bind), SIEOS_P_LWPID, SIEOS_P_MYID, one, 0);
-	return -EINVAL;                              /* a set of several processors cannot be expressed */
+	long r = 0;
+	if (ol && (r = __syscall(S(getrlimit), res, ol)) < 0)
+		return r;
+	if (nl)
+		r = __syscall(S(setrlimit), res, nl);
+	return r;
+}
+
+/* epoll_pwait: epoll_wait with sigs as the signal mask meanwhile */
+static long emu_epoll_pwait(int fd, void *ev, int cnt, int to, const sigset_t *sigs)
+{
+	sigset_t old;
+	if (sigs && __syscall(SYS_rt_sigprocmask, SIG_SETMASK, sigs, &old, _NSIG/8) < 0)
+		return -EINVAL;
+	long r = __syscall(S(epoll_wait), fd, ev, cnt, to);
+	if (sigs)
+		__syscall(SYS_rt_sigprocmask, SIG_SETMASK, &old, 0, _NSIG/8);
+	return r;
 }
 
 /* ---------------- dispatch ---------------- */
@@ -880,6 +902,8 @@ hidden long __sieos_emu(long n, long a, long b, long c, long d, long e, long f)
 		long pol = emu_getscheduler(a);
 		return pol < 0 ? pol : emu_setscheduler(a, pol, (const struct sched_param *)b);
 	}
+	case __EMU_epoll_pwait:     return emu_epoll_pwait(a, (void *)b, c, d, (const sigset_t *)e);
+	case __EMU_prlimit64:       return emu_prlimit(a, b, (const struct rlimit *)c, (struct rlimit *)d);
 	case __EMU_sched_rr_get_interval: {
 		sieos_pcparms_t pp;
 		long r = emu_getparms(a, &pp);

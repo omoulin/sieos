@@ -9,7 +9,7 @@
  * duplicate ACKs, fast recovery with partial ACKs), round-trip estimation
  * with Karn's rule (RFC 6298), retransmission with exponential backoff,
  * zero-window probes, orderly release (FIN) in both directions, TIME_WAIT,
- * and RST handling.  Not implemented: SACK, timestamps, urgent data,
+ * and RST handling, urgent data (MSG_OOB, as BSD).  Not implemented: SACK, timestamps,
  * keepalives.
  *
  * Copyright (C) 2026 Olivier Moulin
@@ -23,7 +23,7 @@
 #include "sieos/socket.h"
 #include "sieos/sysinfo.h"
 
-#define NTCB     64
+#define NTCB     1024
 #define TCP_BUF  131072        /* each direction */
 #define RCV_WSCALE 2           /* our window scale: TCP_BUF >> 2 fits 16 bits */
 #define RTO_MIN  200           /* ms */
@@ -33,13 +33,14 @@
 #define SYN_RETRIES 5
 #define TIME_WAIT_MS 2000
 #define FIN_WAIT2_ORPHAN_MS 60000
-#define BACKLOG  16
+#define SOMAXCONN 4096        /* the largest listen() backlog, as Linux's */
 
 #define F_FIN 0x01
 #define F_SYN 0x02
 #define F_RST 0x04
 #define F_PSH 0x08
 #define F_ACK 0x10
+#define F_URG 0x20
 
 struct tcb {
     bool used;
@@ -76,6 +77,14 @@ struct tcb {
     uint32_t rto;
     int retries;
     uint64_t deadline;          /* TIME_WAIT / orphan FIN_WAIT_2 expiry */
+    int backlog;                /* LISTEN: connections waiting for accept() at most */
+    bool snd_urg;               /* urgent data sent: segments before snd_up carry URG */
+    uint32_t snd_up;            /* the sequence number after the urgent data */
+    bool urg_valid;             /* the peer sent urgent data: its last byte is urg_seq */
+    uint32_t urg_seq;
+    bool oob_taken;             /* ... read with MSG_OOB already */
+    bool oob_have;              /* ... taken out of the stream, kept in oob_byte */
+    uint8_t oob_byte;
     int err;
     struct socket *owner;
     struct tcb *listener;       /* parent while not yet accepted */
@@ -218,7 +227,8 @@ static uint16_t mss_for(const naddr_t *rip)
 
 /* synopt: 0 no options, 1 MSS, 2 MSS and window scale (RCV_WSCALE) */
 static void send_raw(const naddr_t *lip, const naddr_t *rip, uint16_t lport, uint16_t rport, uint32_t seq,
-                     uint32_t ack, uint8_t flags, uint16_t wnd, const void *data, size_t len, int synopt)
+                     uint32_t ack, uint8_t flags, uint16_t wnd, const void *data, size_t len, int synopt,
+                     uint16_t urp)
 {
     uint8_t seg[ETH_MTU];
     size_t hlen = synopt == 2 ? 28 : synopt ? 24 : 20;
@@ -236,7 +246,8 @@ static void send_raw(const naddr_t *lip, const naddr_t *rip, uint16_t lport, uin
     seg[14] = wnd >> 8;
     seg[15] = wnd;
     seg[16] = seg[17] = 0;                /* checksum */
-    seg[18] = seg[19] = 0;                /* urgent pointer */
+    seg[18] = urp >> 8;                   /* urgent pointer (with F_URG) */
+    seg[19] = urp;
     if (synopt) {
         seg[20] = 2;
         seg[21] = 4;
@@ -264,8 +275,13 @@ static void send_seg(struct tcb *t, uint8_t flags, uint32_t seq, const void *dat
     if (!(flags & F_SYN) && t->ws_ok)
         w >>= t->rcv_ws;                  /* (a SYN's window is never scaled) */
     int synopt = !(flags & F_SYN) ? 0 : (t->state == TCP_SYN_SENT || t->peer_ws) ? 2 : 1;
+    uint16_t urp = 0;
+    if (t->snd_urg && seq_lt(seq, t->snd_up) && t->snd_up - seq <= 0xFFFF) {
+        flags |= F_URG;                   /* urgent data up to snd_up (BSD's pointer: the byte after it) */
+        urp = t->snd_up - seq;
+    }
     send_raw(&t->lip, &t->rip, t->lport, t->rport, seq, t->rcv_nxt, flags | (t->state == TCP_SYN_SENT ? 0 : F_ACK),
-             w > 65535 ? 65535 : w, data, len, synopt);
+             w > 65535 ? 65535 : w, data, len, synopt, urp);
 }
 
 static void send_ack(struct tcb *t)
@@ -359,10 +375,10 @@ static void send_reset(const naddr_t *src, const naddr_t *dst, uint16_t sport, u
     if (flags & F_RST)
         return;
     if (flags & F_ACK)
-        send_raw(dst, src, dport, sport, ack, 0, F_RST, 0, NULL, 0, 0);
+        send_raw(dst, src, dport, sport, ack, 0, F_RST, 0, NULL, 0, 0, 0);
     else
         send_raw(dst, src, dport, sport, 0, seq + len + ((flags & F_SYN) ? 1 : 0) + ((flags & F_FIN) ? 1 : 0),
-                 F_RST | F_ACK, 0, NULL, 0, 0);
+                 F_RST | F_ACK, 0, NULL, 0, 0, 0);
 }
 
 /* Does a listener bound to lip take connections to dst?  0.0.0.0 takes
@@ -546,6 +562,7 @@ void tcp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_
     size_t hlen = (seg[12] >> 4) * 4;
     uint8_t flags = seg[13];
     uint16_t wnd = (seg[14] << 8) | seg[15];
+    uint16_t urp = (seg[18] << 8) | seg[19];
     if (hlen < 20 || hlen > len)
         return;
     const uint8_t *data = seg + hlen;
@@ -565,7 +582,7 @@ void tcp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_
             send_reset(src, dst, sport, dport, seq, ack, flags, dlen);
             return;
         }
-        if (!(flags & F_SYN) || pending_children(t) >= BACKLOG)
+        if (!(flags & F_SYN) || pending_children(t) >= t->backlog)
             return;
         struct tcb *c = tcp_alloc();
         if (!c)
@@ -694,6 +711,8 @@ void tcp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_
             t->fin_acked = true;
         }
         t->retries = 0;
+        if (t->snd_urg && seq_le(t->snd_up, t->snd_una))
+            t->snd_urg = false;                      /* the urgent data arrived */
         if (t->srtt)                                 /* undo the backoff */
             t->rto = MIN(RTO_MAX, MAX(RTO_MIN, t->srtt + MAX(4 * t->rttvar, 10U)));
         if (t->in_fr) {                              /* a partial ACK: the next hole */
@@ -721,6 +740,28 @@ void tcp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_
         t->snd_wnd = swnd;                   /* only from a newer segment (RFC 793 WL1/WL2) */
         t->snd_wl1 = seq;
         t->snd_wl2 = ack;
+    }
+    if (t->snd_wnd == 0 && ack == t->snd_una && t->retries)
+        t->retries = 0;                      /* a zero-window probe answered: probe on (RFC 1122 4.2.2.17) */
+
+    /* Urgent data: the pointer is the byte after it (BSD); a newer one replaces it */
+    if ((flags & F_URG) && urp &&
+        (t->state == TCP_ESTABLISHED || t->state == TCP_FIN_WAIT_1 || t->state == TCP_FIN_WAIT_2)) {
+        uint32_t last = seq + urp - 1, rd = t->rcv_nxt - t->rlen;   /* (rd: the next byte to read) */
+        if (seq_le(rd, last) && (!t->urg_valid || seq_lt(t->urg_seq, last))) {
+            t->urg_valid = true;
+            t->urg_seq = last;
+            t->oob_taken = t->oob_have = false;
+            wake(t);
+        }
+    }
+
+    /* Data for a connection closed here: nobody will read it, reset (as Linux) */
+    if (dlen && !t->owner && !t->listener &&
+        (t->state == TCP_FIN_WAIT_1 || t->state == TCP_FIN_WAIT_2 || t->state == TCP_CLOSING)) {
+        send_seg(t, F_RST, t->snd_nxt, NULL, 0);
+        set_closed(t, 0);
+        return;
     }
 
     /* Data */
@@ -853,6 +894,12 @@ int tcp_listen(struct tcb *t, const naddr_t *lip, uint16_t lport, bool v6only)
     return 0;
 }
 
+/* listen()'s backlog: 1 to SOMAXCONN connections waiting for accept() */
+void tcp_set_backlog(struct tcb *t, int backlog)
+{
+    t->backlog = backlog < 1 ? 1 : backlog > SOMAXCONN ? SOMAXCONN : backlog;
+}
+
 struct tcb *tcp_accept_ready(struct tcb *l)
 {
     for (int i = 0; i < NTCB; i++) {
@@ -893,8 +940,9 @@ int tcp_connect(struct tcb *t, const naddr_t *lip, uint16_t lport, const naddr_t
     return -(t->err ? t->err : ECONNREFUSED);
 }
 
-long tcp_send(struct tcb *t, const void *buf, size_t n, bool nonblock)
+static long send_data(struct tcb *t, const void *buf, size_t n, int flags)
 {
+    bool nonblock = flags & MSG_DONTWAIT;
     size_t done = 0;
     while (done < n) {
         if (t->err)
@@ -908,7 +956,7 @@ long tcp_send(struct tcb *t, const void *buf, size_t n, bool nonblock)
             continue;
         }
         if (t->state != TCP_ESTABLISHED && t->state != TCP_CLOSE_WAIT) {
-            if (!done)
+            if (!done && !(flags & MSG_NOSIGNAL))
                 signal_send(current, SIGPIPE);
             return done ? (long)done : -EPIPE;
         }
@@ -932,10 +980,84 @@ long tcp_send(struct tcb *t, const void *buf, size_t n, bool nonblock)
     return done;
 }
 
-long tcp_recv(struct tcb *t, void *buf, size_t n, bool nonblock, int timeout_ms)
+/* Send; with MSG_OOB the data is urgent: the urgent pointer ends after it. */
+long tcp_send(struct tcb *t, const void *buf, size_t n, int flags)
 {
+    if (!(flags & MSG_OOB) || n == 0)
+        return send_data(t, buf, n, flags);
+    bool urg = t->snd_urg;
+    uint32_t up = t->snd_up;
+    t->snd_urg = true;                               /* (before the segments go out) */
+    t->snd_up = t->snd_una + t->slen + n;
+    long r = send_data(t, buf, n, flags);
+    if (r <= 0) {
+        t->snd_urg = urg;
+        t->snd_up = up;
+    } else if ((size_t)r < n) {
+        t->snd_up = t->snd_una + t->slen;            /* what went in */
+    }
+    return r;
+}
+
+/* The urgent byte's index in the receive ring, if it is there and out of the stream. */
+static bool urg_index(struct tcb *t, bool oobinline, uint32_t *k)
+{
+    if (!t->urg_valid || oobinline)
+        return false;
+    *k = t->urg_seq - (t->rcv_nxt - t->rlen);
+    return *k < t->rlen;
+}
+
+bool tcp_urgent(struct tcb *t)
+{
+    return t->oob_have || (t->urg_valid && !t->oob_taken);
+}
+
+/*
+ * Receive.  Urgent data (BSD's way): unless SO_OOBINLINE, its byte leaves the
+ * stream (MSG_OOB reads it, once), and a read stops before it, at the mark.
+ * MSG_PEEK leaves what it reads.
+ */
+long tcp_recv(struct tcb *t, void *buf, size_t n, int flags, int timeout_ms, bool oobinline)
+{
+    bool nonblock = flags & MSG_DONTWAIT, peek = flags & MSG_PEEK;
+    uint32_t k;
+    if (flags & MSG_OOB) {
+        if (oobinline)
+            return -EINVAL;
+        if (t->oob_have) {
+            if (n)
+                *(uint8_t *)buf = t->oob_byte;
+            if (!peek) {
+                t->oob_have = false;
+                t->oob_taken = true;
+            }
+            return n ? 1 : 0;
+        }
+        if (!t->urg_valid || t->oob_taken)
+            return -EINVAL;                          /* no urgent data */
+        if (!urg_index(t, false, &k))
+            return -EAGAIN;                          /* announced, not arrived */
+        if (n)
+            *(uint8_t *)buf = t->rbuf[(t->rhead + k) % TCP_BUF];
+        if (!peek)
+            t->oob_taken = true;
+        return n ? 1 : 0;
+    }
     uint64_t deadline = timeout_ms > 0 ? ticks + ms_to_ticks(timeout_ms) + 1 : 0;
-    while (t->rlen == 0) {
+    for (;;) {
+        if (!peek && urg_index(t, oobinline, &k) && k == 0) {
+            if (!t->oob_taken) {                     /* at the mark: the urgent byte goes aside */
+                t->oob_byte = t->rbuf[t->rhead];
+                t->oob_have = true;
+            }
+            t->rhead = (t->rhead + 1) % TCP_BUF;
+            t->rlen--;
+            t->urg_valid = false;
+        }
+        uint32_t skip = peek && urg_index(t, oobinline, &k) && k == 0 ? 1 : 0;
+        if (t->rlen > skip)
+            break;
         if (t->fin_rcvd || t->state == TCP_CLOSED || t->state == TCP_TIME_WAIT)
             return t->err && !t->fin_rcvd ? -t->err : 0;
         if (t->state == TCP_LISTEN)
@@ -948,9 +1070,14 @@ long tcp_recv(struct tcb *t, void *buf, size_t n, bool nonblock, int timeout_ms)
         sleep_on(t->owner);
         curlwp->wake_tick = 0;
     }
-    size_t c = MIN(n, (size_t)t->rlen);
+    uint32_t start = peek && urg_index(t, oobinline, &k) && k == 0 ? 1 : 0;
+    size_t c = MIN(n, (size_t)(t->rlen - start));
+    if (urg_index(t, oobinline, &k) && k > start)
+        c = MIN(c, (size_t)(k - start));             /* up to the mark */
     for (size_t i = 0; i < c; i++)
-        ((uint8_t *)buf)[i] = t->rbuf[(t->rhead + i) % TCP_BUF];
+        ((uint8_t *)buf)[i] = t->rbuf[(t->rhead + start + i) % TCP_BUF];
+    if (peek)
+        return c;
     t->rhead = (t->rhead + c) % TCP_BUF;
     t->rlen -= c;
     /* Window update if we had been advertising a small window. */
@@ -997,6 +1124,10 @@ void tcp_close(struct tcb *t)
     case TCP_SYN_RCVD:
     case TCP_ESTABLISHED:
     case TCP_CLOSE_WAIT:
+        if (t->rlen) {                           /* data nobody will read: reset, as Linux (RFC 2525) */
+            tcp_abort(t);
+            return;
+        }
         t->fin_queued = true;
         output(t);
         if (t->state == TCP_FIN_WAIT_2 && !t->owner)

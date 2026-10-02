@@ -31,6 +31,7 @@
 #include "fs.h"
 #include "abi2.h"
 #include "sieos/mman.h"
+#include "sieos/fdext.h"
 #include "sieos/time.h"
 
 #define MMAP_FLOOR_GAP (64UL * 1024 * 1024)   /* room left above the heap for brk */
@@ -282,7 +283,63 @@ static bool zero_page(uint64_t pml4, uint64_t va, uint64_t flags, uint64_t *fram
     return true;
 }
 
-static bool fault(struct proc *p, uint64_t addr, uint64_t err, uint64_t *frame);
+static bool fault(struct proc *p, uint64_t addr, uint64_t err, uint64_t *frame, bool *file);
+
+/*
+ * A file mapping's page table entry flags: the file's page-cache page as it is
+ * (shared), or copy-on-write (private: a write, or mprotect to writable,
+ * copies the page first).
+ */
+static uint64_t file_pte_flags(const struct vm_area *a)
+{
+    bool shared = a->flags & SIEOS_MAP_SHARED;
+    uint64_t fl = prot_flags(a->prot) | (shared ? PTE_SHARED : 0);
+    if (shared && (a->prot & SIEOS_PROT_WRITE))
+        fl |= PTE_WANTW;
+    if (!shared) {
+        if (fl & PTE_W)
+            fl |= PTE_WANTW;
+        fl = (fl & ~PTE_W) | PTE_COW;
+    }
+    return fl;
+}
+
+/*
+ * A file mapping's page, on its first touch: the file system may read it from
+ * disk (with the kernel lock: trap.c's slow path), without the address
+ * space's lock, which is taken again to map it (unless the area changed
+ * meanwhile).
+ */
+static bool file_fault(struct proc *p, uint64_t va)
+{
+    vm_space_lock(p);
+    struct vm_area *a = find_area(p, va);
+    struct inode *ip = a ? a->ip : NULL;
+    uint64_t idx = a ? (a->off + (va - a->start)) / PAGE_SIZE : 0;
+    if (ip)
+        idup(ip);
+    vm_space_unlock(p);
+    bool ok = false;
+    uint64_t pa;
+    if (ip && vfs_getpage(ip, idx, &pa) >= 0) {
+        vm_space_lock(p);
+        a = find_area(p, va);
+        uint64_t *pte = vmm_pte(p->pml4, va, false);
+        if (pte && (*pte & PTE_P)) {
+            ok = true;                           /* another LWP mapped it meanwhile */
+            pmm_unref(pa);
+        } else if (a && a->ip == ip && (a->off + (va - a->start)) / PAGE_SIZE == idx &&
+                   a->prot != SIEOS_PROT_NONE && vmm_map(p->pml4, va, pa, file_pte_flags(a)) >= 0) {
+            ok = true;
+        } else {
+            pmm_unref(pa);
+        }
+        vm_space_unlock(p);
+    }
+    if (ip)
+        iput(ip);
+    return ok;
+}
 
 /* Also called without the kernel lock, for faults from user mode (see above). */
 bool vm_fault(uint64_t addr, uint64_t err, bool from_user)
@@ -297,15 +354,18 @@ bool vm_fault(uint64_t addr, uint64_t err, bool from_user)
     uint64_t frame = 0;
     if (!(err & 1) && p->pml4)
         frame = pmm_alloc();
+    bool file = false;
     vm_space_lock(p);
-    bool ok = fault(p, addr, err, &frame);
+    bool ok = fault(p, addr, err, &frame, &file);
     vm_space_unlock(p);
     if (frame)
         pmm_free(frame);                         /* not needed after all */
+    if (file)                                    /* (without the kernel lock: the slow path's turn) */
+        ok = bkl_held() && file_fault(p, PAGE_ALIGN_DOWN(addr));
     return ok;
 }
 
-static bool fault(struct proc *p, uint64_t addr, uint64_t err, uint64_t *frame)
+static bool fault(struct proc *p, uint64_t addr, uint64_t err, uint64_t *frame, bool *file)
 {
     uint64_t pml4 = p->pml4, va = PAGE_ALIGN_DOWN(addr);
     if (!pml4 || pml4 == kernel_pml4_phys)
@@ -330,6 +390,12 @@ static bool fault(struct proc *p, uint64_t addr, uint64_t err, uint64_t *frame)
     if (va >= USER_STACK_TOP - limit && va < USER_STACK_TOP)
         return zero_page(pml4, va, PTE_U | PTE_W | pte_nx, frame);
     struct vm_area *a = find_area(p, va);
+    if (a && a->ip && a->prot != SIEOS_PROT_NONE) {
+        if ((err & 2) && !(a->prot & SIEOS_PROT_WRITE))
+            return false;
+        *file = true;                            /* file_fault maps it, without our lock */
+        return false;
+    }
     if (a && a->prot != SIEOS_PROT_NONE && !(a->flags & SIEOS_MAP_SHARED)) {
         if ((err & 2) && !(a->prot & SIEOS_PROT_WRITE))
             return false;
@@ -572,8 +638,9 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
     if (type == SIEOS_MAP_PRIVATE && (prot & SIEOS_PROT_WRITE) && !(flags & SIEOS_MAP_NORESERVE) &&
         len / PAGE_SIZE > pmm_total_pages())
         return -ENOMEM;
-    /* shared anonymous and file mappings are filled now: they must fit in memory */
-    if ((type == SIEOS_MAP_SHARED || !anon) && len / PAGE_SIZE + 64 > pmm_free_pages())
+    /* shared anonymous mappings are filled now: they must fit in memory (file mappings
+     * are demand-paged: vm_fault maps the file's pages as they are touched) */
+    if (type == SIEOS_MAP_SHARED && anon && len / PAGE_SIZE + 64 > pmm_free_pages())
         return -ENOMEM;
     struct vm_area *a = kmalloc(sizeof(*a));
     if (!a)
@@ -593,56 +660,21 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
         merge_area(p, a);                        /* (a may be gone: private anonymous memory is not filled below) */
     vm_space_unlock(p);
 
-    /*
-     * Shared anonymous and all file mappings are filled now; private anonymous
-     * on demand.  A file mapping maps the file's page-cache pages: shared ones
-     * as they are, private ones copy-on-write (always PTE_COW, so that a write,
-     * or mprotect to writable, copies the page first).
-     */
-    if (type == SIEOS_MAP_SHARED || !anon) {
-        uint64_t fl = prot_flags(prot) | (type == SIEOS_MAP_SHARED ? PTE_SHARED : 0);
-        if (type == SIEOS_MAP_SHARED && (prot & SIEOS_PROT_WRITE))
+    /* Shared anonymous memory is filled now; private anonymous memory and files on demand. */
+    if (type == SIEOS_MAP_SHARED && anon) {
+        uint64_t fl = prot_flags(prot) | PTE_SHARED;
+        if (prot & SIEOS_PROT_WRITE)
             fl |= PTE_WANTW;
-        if (type != SIEOS_MAP_SHARED && f) {
-            if (fl & PTE_W)
-                fl |= PTE_WANTW;
-            fl = (fl & ~PTE_W) | PTE_COW;
-        }
         if (prot == SIEOS_PROT_NONE)
             fl = (fl & ~PTE_U) | PTE_NOACC;
-        uint64_t fsize = f ? inode_size(f->ip) : 0;
         for (uint64_t va = start; va < start + len; va += PAGE_SIZE) {
-            uint64_t pa = 0;
-            if (a->ip) {                             /* the file's page */
-                if (vfs_getpage(a->ip, (off + (va - start)) / PAGE_SIZE, &pa) < 0)
-                    pa = 0;
-                if (pa && map_locked(p, va, pa, fl) < 0) {
-                    pmm_unref(pa);
-                    pa = 0;
-                }
-                if (!pa) {
-                    unmap_pages(p, start, start + len);
-                    cut_areas(p, start, start + len);
-                    return -ENOMEM;
-                }
-                continue;
-            }
-            pa = pmm_alloc();
+            uint64_t pa = pmm_alloc();
             if (!pa || map_locked(p, va, pa, fl) < 0) {
                 if (pa)
                     pmm_free(pa);
                 unmap_pages(p, start, start + len);
                 cut_areas(p, start, start + len);
                 return -ENOMEM;
-            }
-            uint64_t fo = off + (va - start);
-            if (f && fo < fsize) {
-                long n = readi(f->ip, P2V(pa), fo, MIN(PAGE_SIZE, fsize - fo));
-                if (n < 0) {
-                    unmap_pages(p, start, start + len);
-                    cut_areas(p, start, start + len);
-                    return -EIO;
-                }
             }
         }
     }
@@ -657,6 +689,114 @@ long vm_munmap(uint64_t addr, uint64_t len)
     len = PAGE_ALIGN_UP(len);
     unmap_pages(p, addr, addr + len);
     return cut_areas(p, addr, addr + len);
+}
+
+/* [start, end) of a shared anonymous area: its pages, now (as mmap does). */
+static int fill_shared_anon(struct proc *p, uint64_t start, uint64_t end, int prot)
+{
+    uint64_t fl = prot_flags(prot) | PTE_SHARED;
+    if (prot & SIEOS_PROT_WRITE)
+        fl |= PTE_WANTW;
+    if (prot == SIEOS_PROT_NONE)
+        fl = (fl & ~PTE_U) | PTE_NOACC;
+    for (uint64_t va = start; va < end; va += PAGE_SIZE) {
+        uint64_t pa = pmm_alloc();
+        if (!pa || map_locked(p, va, pa, fl) < 0) {
+            if (pa)
+                pmm_free(pa);
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
+static bool shared_anon(const struct vm_area *a)
+{
+    return !a->ip && !a->shm && (a->flags & SIEOS_MAP_TYPE) == SIEOS_MAP_SHARED;
+}
+
+/*
+ * mremap(old, oldlen, newlen, flags, newaddr): [old, old + oldlen) of one area,
+ * to newlen bytes.  Smaller: the end is unmapped.  Larger: the area grows in
+ * place when what follows is free; else, with MREMAP_MAYMOVE, its pages move
+ * (their page table entries: the pages themselves stay, shared or
+ * copy-on-write as they were) to a new range, which then grows.
+ * MREMAP_FIXED is not supported.
+ */
+long vm_mremap(uint64_t old, uint64_t oldlen, uint64_t newlen, int flags, uint64_t newaddr)
+{
+    struct proc *p = current;
+    (void)newaddr;
+    if ((old & (PAGE_SIZE - 1)) || !newlen || !oldlen || (flags & ~SIEOS_MREMAP_MAYMOVE))
+        return -EINVAL;
+    oldlen = PAGE_ALIGN_UP(oldlen);
+    newlen = PAGE_ALIGN_UP(newlen);
+    if (old + oldlen < old || old + newlen < old)
+        return -EINVAL;
+    struct vm_area *a = find_area(p, old);
+    if (!a || old + oldlen > a->end)
+        return -EFAULT;
+    if (newlen == oldlen)
+        return (long)old;
+    if (newlen < oldlen) {
+        long r = vm_munmap(old + newlen, oldlen - newlen);
+        return r < 0 ? r : (long)old;
+    }
+    if (a->shm)
+        return -EINVAL;                              /* (a System V segment keeps its size) */
+    uint64_t grow = newlen - oldlen;
+    if (!vm_vmem_ok(p, grow))
+        return -ENOMEM;
+    if (old + oldlen == a->end && old + newlen <= USER_MMAP_TOP && range_free(p, a->end, a->end + grow)) {
+        vm_space_lock(p);
+        a->end = old + newlen;                       /* in place */
+        vm_space_unlock(p);
+        if (shared_anon(a) && fill_shared_anon(p, old + oldlen, old + newlen, a->prot) < 0) {
+            unmap_pages(p, old + oldlen, old + newlen);
+            cut_areas(p, old + oldlen, old + newlen);
+            return -ENOMEM;
+        }
+        return (long)old;
+    }
+    if (!(flags & SIEOS_MREMAP_MAYMOVE))
+        return -ENOMEM;
+    uint64_t to = find_space(p, newlen, PAGE_SIZE);
+    struct vm_area *n = to ? kmalloc(sizeof(*n)) : NULL;
+    if (!n)
+        return -ENOMEM;
+    *n = *a;
+    n->start = to;
+    n->end = to + newlen;
+    n->off = a->off + (old - a->start);
+    n->next = NULL;
+    area_hold(n);
+    uint64_t pml4 = p->pml4;
+    long r = 0;
+    vm_space_lock(p);
+    for (uint64_t va = old; va < old + oldlen; va += PAGE_SIZE) {
+        uint64_t *pte = vmm_pte(pml4, va, false);
+        if (!pte || !(*pte & PTE_P))
+            continue;
+        uint64_t *np = vmm_pte(pml4, to + (va - old), true);
+        if (!np) {
+            r = -ENOMEM;
+            break;
+        }
+        *np = *pte;
+        *pte = 0;
+    }
+    insert_area(p, n);
+    flush_if_current(pml4);
+    vm_space_unlock(p);
+    cut_areas(p, old, old + oldlen);                 /* (its entries moved: nothing to unmap) */
+    if (r == 0 && shared_anon(n))
+        r = fill_shared_anon(p, to + oldlen, to + newlen, n->prot);
+    if (r < 0) {
+        unmap_pages(p, to, to + newlen);
+        cut_areas(p, to, to + newlen);
+        return r;
+    }
+    return (long)to;
 }
 
 /* Is every page of [start, end) mapped, inside an area, or in the stack region? */

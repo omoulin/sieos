@@ -376,6 +376,34 @@ static long do_pgrpsys(int op, int pid, int pgid)
 
 /* ---------------- dispatch ---------------- */
 
+/*
+ * setreuid/setregid: the real and effective ids, -1 leaving one as it is.  Not
+ * root, the real id may become the effective one, and the effective id the
+ * real or saved one.  The saved id follows the effective id when the real id
+ * is set or the effective id becomes other than the real one.
+ */
+static long sys2_setreid(bool gid, int r, int e)
+{
+    struct proc *p = current;
+    int *rid = gid ? &p->gid : &p->uid, *eid = gid ? &p->egid : &p->euid, *sid = gid ? &p->sgid : &p->suid;
+    if (r < -1 || e < -1)
+        return -EINVAL;
+    if (p->euid != 0) {
+        if (r != -1 && r != *rid && r != *eid)
+            return -EPERM;
+        if (e != -1 && e != *rid && e != *eid && e != *sid)
+            return -EPERM;
+    }
+    int old_r = *rid;
+    if (r != -1)
+        *rid = r;
+    if (e != -1)
+        *eid = e;
+    if (r != -1 || (e != -1 && e != old_r))
+        *sid = *eid;
+    return 0;
+}
+
 long syscall_dispatch_v2(struct trapframe *tf)
 {
     uint64_t a1 = tf->rdi, a2 = tf->rsi, a3 = tf->rdx, a4 = tf->r10;
@@ -385,6 +413,9 @@ long syscall_dispatch_v2(struct trapframe *tf)
     if (handled)
         return fr;
     fr = syscall_misc_v2(tf, &handled);
+    if (handled)
+        return fr;
+    fr = syscall_fdext_v2(tf, &handled);
     if (handled)
         return fr;
     fr = syscall_sock_v2(tf, &handled);
@@ -456,6 +487,8 @@ long syscall_dispatch_v2(struct trapframe *tf)
     case SIEOS_SYS_setgid:    return v1(tf, SYS_setgid, a1, 0, 0);
     case SIEOS_SYS_seteuid:   return v1(tf, SYS_seteuid, a1, 0, 0);
     case SIEOS_SYS_setegid:   return v1(tf, SYS_setegid, a1, 0, 0);
+    case SIEOS_SYS_setreuid:  return sys2_setreid(false, (int)a1, (int)a2);
+    case SIEOS_SYS_setregid:  return sys2_setreid(true, (int)a1, (int)a2);
     case SIEOS_SYS_getgroups: return v1(tf, SYS_getgroups, a1, a2, 0);
     case SIEOS_SYS_setgroups: return v1(tf, SYS_setgroups, a1, a2, 0);
     /* time */
@@ -463,6 +496,7 @@ long syscall_dispatch_v2(struct trapframe *tf)
     /* memory */
     case SIEOS_SYS_mmap:      return vm_mmap(a1, a2, (int)a3, (int)a4, (int)tf->r8, tf->r9);
     case SIEOS_SYS_munmap:    return vm_munmap(a1, a2);
+    case SIEOS_SYS_mremap:    return vm_mremap(a1, a2, a3, (int)tf->r10, tf->r8);
     case SIEOS_SYS_mprotect:  return vm_mprotect(a1, a2, (int)a3);
     case SIEOS_SYS_mincore:   return vm_mincore(a1, a2, (char *)a3);
     case SIEOS_SYS_memcntl:   return vm_memcntl(a1, a2, (int)a3, a4);

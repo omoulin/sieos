@@ -281,10 +281,12 @@ static void system_prompt(struct sia_session *s, struct sbuf *b)
                 "the panel.\n"
                 "- Do not ask for confirmation for harmless actions; just do them and say what you did.\n");
     if (s->role != SIA_ROLE_APP) {
-        sb_puts(&p, s->compact ? "- Only the programs listed here exist on this system (there is no editor or Python). Use "
-                                 "write_file to create files and cd to change directory."
-                               : "- Only the commands available as tools exist on this system (there is no editor or "
-                                 "Python). Use write_file to create files and cd to change directory.");
+        bool python = access("/usr/pkg/bin/python3", X_OK) == 0;   /* (the python package) */
+        sb_printf(&p, "- Only the %s exist on this system (there is no editor%s). Use write_file to create files and "
+                      "cd to change directory.",
+                  s->compact ? "programs listed here" : "commands available as tools", python ? "" : " or Python");
+        if (python)
+            sb_puts(&p, " Python 3 is installed (python3, pip3): run Python scripts and one-liners with the sh tool.");
         if (s->compact) {                              /* a local model: the programs through sh */
             sb_puts(&p, " Facts about this computer (memory, disks, files, processes, network) come from "
                         "running a program: never guess them. Run programs with the sh tool; they are:");

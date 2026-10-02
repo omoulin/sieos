@@ -180,6 +180,10 @@ bool inode_owner_or_root(struct inode *ip);
 #define NAMEI_NOFOLLOW 1           /* do not follow a final symbolic link */
 #define MAXSYMLINKS    20
 #define SYMLINK_MAX    4095        /* longest target (paths passed in: MAXPATH - 1) */
+
+/* A MAXPATH buffer (a page: kernel stacks are too small for them); NULL if none. */
+char *path_get(void);
+void path_put(char *p);
 struct inode *namei(const char *path, int *err);
 struct inode *nameiparent(const char *path, char *name, int *err);
 struct inode *namei_at(struct inode *start, const char *path, int flags, int *err);
@@ -202,6 +206,17 @@ struct inode *nameiparent_at(struct inode *start, const char *path, char *name, 
 #define FD_LOFICTL 12          /* /dev/lofictl */
 #define FD_BLK   13            /* a block device (/dev/dsk/...): f->minor, f->off */
 #define FD_POWER 14            /* /dev/power */
+#define FD_OPS   15            /* its own operations (f->ops, f->priv): eventfd, timerfd, pidfd, epoll */
+
+struct file;
+/* The operations of an FD_OPS file (fdext.c); a NULL one: EINVAL. */
+struct file_ops {
+    const char *name;                            /* for /proc's fd links: "eventfd"... */
+    long (*read)(struct file *f, void *buf, size_t n);
+    long (*write)(struct file *f, const void *buf, size_t n);
+    short (*poll)(struct file *f);               /* POLLIN, POLLOUT, POLLHUP... ready now */
+    void (*close)(struct file *f);               /* the last close: f->priv goes */
+};
 
 struct pipe;
 struct pty;
@@ -230,6 +245,9 @@ struct file {
     struct socket *sock;
     struct usock *usock;       /* FD_UNIX */
     int minor;                 /* FD_FB: the display */
+    const struct file_ops *ops;  /* FD_OPS */
+    void *priv;
+    uint64_t gen;              /* which use of this entry (epoll tells a reused one apart) */
 };
 
 struct file *file_alloc(void);
@@ -303,6 +321,6 @@ long unix_write(struct file *f, const void *buf, size_t n);
 short unix_poll(struct usock *u);
 void unix_close(struct usock *u);
 long pipe_read(struct pipe *p, char *buf, size_t n);
-long pipe_write(struct pipe *p, const char *buf, size_t n);
+long pipe_write(struct pipe *p, const char *buf, size_t n, bool nonblock);
 
 #endif

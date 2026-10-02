@@ -417,6 +417,7 @@ struct pollfd {
     short revents;
 };
 #define POLLIN   0x001
+#define POLLPRI  0x002                /* urgent data (TCP) */
 #define POLLOUT  0x004
 #define POLLERR  0x008
 #define POLLHUP  0x010
@@ -506,7 +507,10 @@ struct sockaddr_in {
 #define SO_RCVTIMEO  20              /* value: int milliseconds */
 #define SO_SNDTIMEO  21
 
+#define MSG_OOB      0x01            /* urgent data (TCP) */
+#define MSG_PEEK     0x02
 #define MSG_DONTWAIT 0x40
+#define MSG_NOSIGNAL 0x4000          /* no SIGPIPE */
 
 struct netinfo {
     char name[8];                /* "eth0" */

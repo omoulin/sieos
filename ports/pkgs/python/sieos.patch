@@ -1,0 +1,272 @@
+--- a/configure
++++ b/configure
+@@ -4130,6 +4130,9 @@
+ 	*-*-wasi*)
+ 	    ac_sys_system=WASI
+ 	    ;;
++	*-*-sieos*)
++		ac_sys_system=SIEOS
++		;;
+ 	*)
+ 		# for now, limit cross builds to known configurations
+ 		MACHDEP="unknown"
+@@ -4634,6 +4637,9 @@
+ 	wasm32-*-* | wasm64-*-*)
+ 		_host_ident=$host_cpu
+ 		;;
++	*-*-sieos*)
++		_host_ident=$host_cpu
++		;;
+ 	*)
+ 		# for now, limit cross builds to known configurations
+ 		MACHDEP="unknown"
+@@ -7740,7 +7746,7 @@
+         PY3LIBRARY=libpython3.so
+       fi
+       ;;
+-    Linux*|GNU*|NetBSD*|FreeBSD*|DragonFly*|OpenBSD*|VxWorks*)
++    Linux*|GNU*|NetBSD*|FreeBSD*|DragonFly*|OpenBSD*|VxWorks*|SIEOS*)
+       LDLIBRARY='libpython$(LDVERSION).so'
+       BLDLIBRARY='-L. -lpython$(LDVERSION)'
+       RUNSHARED=LD_LIBRARY_PATH=`pwd`${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+@@ -13755,7 +13761,7 @@
+ 	Emscripten*|WASI*)
+ 		LDSHARED='$(CC) -shared'
+ 		LDCXXSHARED='$(CXX) -shared';;
+-	Linux*|GNU*|QNX*|VxWorks*|Haiku*)
++	Linux*|GNU*|QNX*|VxWorks*|Haiku*|SIEOS*)
+ 		LDSHARED='$(CC) -shared'
+ 		LDCXXSHARED='$(CXX) -shared';;
+ 	FreeBSD*)
+@@ -13840,7 +13846,7 @@
+ 		 then CCSHARED="-fPIC";
+ 		 else CCSHARED="+z";
+ 		 fi;;
+-	Linux*|GNU*) CCSHARED="-fPIC";;
++	Linux*|GNU*|SIEOS*) CCSHARED="-fPIC";;
+ 	Emscripten*|WASI*)
+ 		if test "x$enable_wasm_dynamic_linking" = xyes
+ then :
+@@ -13878,7 +13884,7 @@
+ 	    LINKFORSHARED="-Wl,-E -Wl,+s";;
+ #	    LINKFORSHARED="-Wl,-E -Wl,+s -Wl,+b\$(BINLIBDEST)/lib-dynload";;
+ 	Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
+-	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
++	Linux*|GNU*|SIEOS*) LINKFORSHARED="-Xlinker -export-dynamic";;
+ 	# -u libsys_s pulls in all symbols in libsys
+ 	Darwin/*|iOS/*)
+ 		LINKFORSHARED="$extra_undefs -framework CoreFoundation"
+--- a/configure.ac
++++ b/configure.ac
+@@ -342,6 +342,9 @@
+ 	*-*-wasi*)
+ 	    ac_sys_system=WASI
+ 	    ;;
++	*-*-sieos*)
++		ac_sys_system=SIEOS
++		;;
+ 	*)
+ 		# for now, limit cross builds to known configurations
+ 		MACHDEP="unknown"
+@@ -812,6 +815,9 @@
+ 	wasm32-*-* | wasm64-*-*)
+ 		_host_ident=$host_cpu
+ 		;;
++	*-*-sieos*)
++		_host_ident=$host_cpu
++		;;
+ 	*)
+ 		# for now, limit cross builds to known configurations
+ 		MACHDEP="unknown"
+@@ -1581,7 +1587,7 @@
+         PY3LIBRARY=libpython3.so
+       fi
+       ;;
+-    Linux*|GNU*|NetBSD*|FreeBSD*|DragonFly*|OpenBSD*|VxWorks*)
++    Linux*|GNU*|NetBSD*|FreeBSD*|DragonFly*|OpenBSD*|VxWorks*|SIEOS*)
+       LDLIBRARY='libpython$(LDVERSION).so'
+       BLDLIBRARY='-L. -lpython$(LDVERSION)'
+       RUNSHARED=LD_LIBRARY_PATH=`pwd`${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+@@ -3566,7 +3572,7 @@
+ 	Emscripten*|WASI*)
+ 		LDSHARED='$(CC) -shared'
+ 		LDCXXSHARED='$(CXX) -shared';;
+-	Linux*|GNU*|QNX*|VxWorks*|Haiku*)
++	Linux*|GNU*|QNX*|VxWorks*|Haiku*|SIEOS*)
+ 		LDSHARED='$(CC) -shared'
+ 		LDCXXSHARED='$(CXX) -shared';;
+ 	FreeBSD*)
+@@ -3647,7 +3653,7 @@
+ 		 then CCSHARED="-fPIC";
+ 		 else CCSHARED="+z";
+ 		 fi;;
+-	Linux*|GNU*) CCSHARED="-fPIC";;
++	Linux*|GNU*|SIEOS*) CCSHARED="-fPIC";;
+ 	Emscripten*|WASI*)
+ 		AS_VAR_IF([enable_wasm_dynamic_linking], [yes], [
+ 			CCSHARED="-fPIC"
+@@ -3680,7 +3686,7 @@
+ 	    LINKFORSHARED="-Wl,-E -Wl,+s";;
+ #	    LINKFORSHARED="-Wl,-E -Wl,+s -Wl,+b\$(BINLIBDEST)/lib-dynload";;
+ 	Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
+-	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
++	Linux*|GNU*|SIEOS*) LINKFORSHARED="-Xlinker -export-dynamic";;
+ 	# -u libsys_s pulls in all symbols in libsys
+ 	Darwin/*|iOS/*)
+ 		LINKFORSHARED="$extra_undefs -framework CoreFoundation"
+--- a/Lib/sysconfig/__init__.py
++++ b/Lib/sysconfig/__init__.py
+@@ -717,6 +717,9 @@
+         # i386, etc.
+         # XXX what about Alpha, SPARC, etc?
+         return  f"{osname}-{machine}"
++    elif osname == "sieos":
++        # SIEOS runs on x86-64 only (uname -m says i86pc, as Solaris does)
++        return f"{osname}-x86_64"
+     elif osname[:5] == "sunos":
+         if release[0] >= "5":           # SunOS 5 == Solaris 2
+             osname = "solaris"
+--- a/Tools/build/generate-build-details.py
++++ b/Tools/build/generate-build-details.py
+@@ -59,7 +59,10 @@
+     data['implementation']['version'] = version_info_to_dict(sys.implementation.version)
+     # Fix cross-compilation
+     if '_multiarch' in data['implementation']:
+-        data['implementation']['_multiarch'] = sysconfig.get_config_var('MULTIARCH')
++        if sysconfig.get_config_var('MULTIARCH'):
++            data['implementation']['_multiarch'] = sysconfig.get_config_var('MULTIARCH')
++        else:                               # (a target without one: SIEOS)
++            del data['implementation']['_multiarch']
+ 
+     data['abi']['flags'] = list(sys.abiflags)
+ 
+--- a/configure
++++ b/configure
+@@ -31626,6 +31626,7 @@
+ case "$ac_sys_system" in
+   Linux*) _PYTHREAD_NAME_MAXLEN=15;;  # Linux and Android
+   SunOS*) _PYTHREAD_NAME_MAXLEN=31;;
++  SIEOS*) _PYTHREAD_NAME_MAXLEN=15;;
+   NetBSD*) _PYTHREAD_NAME_MAXLEN=15;; # gh-131268
+   Darwin) _PYTHREAD_NAME_MAXLEN=63;;
+   iOS) _PYTHREAD_NAME_MAXLEN=63;;
+--- a/configure.ac
++++ b/configure.ac
+@@ -7871,6 +7871,7 @@
+ case "$ac_sys_system" in
+   Linux*) _PYTHREAD_NAME_MAXLEN=15;;  # Linux and Android
+   SunOS*) _PYTHREAD_NAME_MAXLEN=31;;
++  SIEOS*) _PYTHREAD_NAME_MAXLEN=15;;
+   NetBSD*) _PYTHREAD_NAME_MAXLEN=15;; # gh-131268
+   Darwin) _PYTHREAD_NAME_MAXLEN=63;;
+   iOS) _PYTHREAD_NAME_MAXLEN=63;;
+--- a/Lib/test/support/__init__.py
++++ b/Lib/test/support/__init__.py
+@@ -3340,8 +3340,8 @@
+         _linked_to_musl = (0, 0, 0)
+         return _linked_to_musl
+ 
+-    # On all other non-linux platforms assume no musl.
+-    if sys.platform != 'linux':
++    # On all other non-linux platforms assume no musl (SIEOS's C library is musl).
++    if sys.platform not in ('linux', 'sieos'):
+         _linked_to_musl = False
+         return _linked_to_musl
+ 
+--- a/Lib/test/test_os.py
++++ b/Lib/test/test_os.py
+@@ -3976,7 +3976,7 @@
+ 
+     DATA = b"12345abcde" * 16 * 1024  # 160 KiB
+     SUPPORT_HEADERS_TRAILERS = (
+-        not sys.platform.startswith(("linux", "android", "solaris", "sunos")))
++        not sys.platform.startswith(("linux", "android", "solaris", "sunos", "sieos")))
+     requires_headers_trailers = unittest.skipUnless(SUPPORT_HEADERS_TRAILERS,
+             'requires headers and trailers support')
+     requires_32b = unittest.skipUnless(sys.maxsize < 2**32,
+--- a/Lib/shutil.py
++++ b/Lib/shutil.py
+@@ -55,7 +55,7 @@
+ # This should never be removed, see rationale in:
+ # https://bugs.python.org/issue43743#msg393429
+ _USE_CP_SENDFILE = (hasattr(os, "sendfile")
+-                    and sys.platform.startswith(("linux", "android", "sunos")))
++                    and sys.platform.startswith(("linux", "android", "sunos", "sieos")))
+ _USE_CP_COPY_FILE_RANGE = hasattr(os, "copy_file_range")
+ _HAS_FCOPYFILE = posix and hasattr(posix, "_fcopyfile")  # macOS
+ 
+--- a/Modules/posixmodule.c
++++ b/Modules/posixmodule.c
+@@ -10329,7 +10329,7 @@
+ 
+ 
+ // This system call always crashes on older Android versions.
+-#if defined(__linux__) && defined(__NR_pidfd_open) && \
++#if (defined(__linux__) || defined(__sieos__)) && defined(__NR_pidfd_open) && \
+     !(defined(__ANDROID__) && __ANDROID_API__ < 31)
+ /*[clinic input]
+ os.pidfd_open
+--- a/Modules/clinic/posixmodule.c.h
++++ b/Modules/clinic/posixmodule.c.h
+@@ -6264,7 +6264,7 @@
+ 
+ #endif /* defined(HAVE_WAIT) */
+ 
+-#if (defined(__linux__) && defined(__NR_pidfd_open) && !(defined(__ANDROID__) && __ANDROID_API__ < 31))
++#if ((defined(__linux__) || defined(__sieos__)) && defined(__NR_pidfd_open) && !(defined(__ANDROID__) && __ANDROID_API__ < 31))
+ 
+ PyDoc_STRVAR(os_pidfd_open__doc__,
+ "pidfd_open($module, /, pid, flags=0)\n"
+@@ -6339,7 +6339,7 @@
+     return return_value;
+ }
+ 
+-#endif /* (defined(__linux__) && defined(__NR_pidfd_open) && !(defined(__ANDROID__) && __ANDROID_API__ < 31)) */
++#endif /* ((defined(__linux__) || defined(__sieos__)) && defined(__NR_pidfd_open) && !(defined(__ANDROID__) && __ANDROID_API__ < 31)) */
+ 
+ #if defined(HAVE_SETNS)
+ 
+--- a/Modules/posixmodule.c
++++ b/Modules/posixmodule.c
+@@ -150,8 +150,8 @@
+ #ifdef HAVE_LINUX_RANDOM_H
+ #  include <linux/random.h>       // GRND_RANDOM
+ #endif
+-#ifdef HAVE_GETRANDOM_SYSCALL
+-#  include <sys/syscall.h>        // syscall()
++#if defined(HAVE_GETRANDOM_SYSCALL) || defined(__sieos__)
++#  include <sys/syscall.h>        // syscall(); SIEOS: __NR_pidfd_open
+ #endif
+ 
+ #ifdef HAVE_POSIX_SPAWN
+--- a/Modules/signalmodule.c
++++ b/Modules/signalmodule.c
+@@ -1309,7 +1309,7 @@
+ 
+ 
+ // This system call always crashes on older Android versions.
+-#if defined(__linux__) && defined(__NR_pidfd_send_signal) && \
++#if (defined(__linux__) || defined(__sieos__)) && defined(__NR_pidfd_send_signal) && \
+     !(defined(__ANDROID__) && __ANDROID_API__ < 31)
+ /*[clinic input]
+ signal.pidfd_send_signal
+--- a/Modules/clinic/signalmodule.c.h
++++ b/Modules/clinic/signalmodule.c.h
+@@ -674,7 +674,7 @@
+ 
+ #endif /* defined(HAVE_PTHREAD_KILL) */
+ 
+-#if (defined(__linux__) && defined(__NR_pidfd_send_signal) && !(defined(__ANDROID__) && __ANDROID_API__ < 31))
++#if ((defined(__linux__) || defined(__sieos__)) && defined(__NR_pidfd_send_signal) && !(defined(__ANDROID__) && __ANDROID_API__ < 31))
+ 
+ PyDoc_STRVAR(signal_pidfd_send_signal__doc__,
+ "pidfd_send_signal($module, pidfd, signalnum, siginfo=None, flags=0, /)\n"
+@@ -727,7 +727,7 @@
+     return return_value;
+ }
+ 
+-#endif /* (defined(__linux__) && defined(__NR_pidfd_send_signal) && !(defined(__ANDROID__) && __ANDROID_API__ < 31)) */
++#endif /* ((defined(__linux__) || defined(__sieos__)) && defined(__NR_pidfd_send_signal) && !(defined(__ANDROID__) && __ANDROID_API__ < 31)) */
+ 
+ #ifndef SIGNAL_ALARM_METHODDEF
+     #define SIGNAL_ALARM_METHODDEF

@@ -1,0 +1,12 @@
+# libffi: calls to C functions whose signature is known only at run time
+# (Python's ctypes, and others).  FFI_MMAP_EXEC_WRIT: closures (callbacks) in
+# memory mapped executable, as on Linux (__linux__ chooses it); without it,
+# libffi took them from malloc, whose memory SIEOS does not execute.
+name     = libffi
+version  = 3.8.0-2
+summary  = libffi: calls to C functions described at run time (Python's ctypes)
+source   = https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz
+sha256   = 7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4
+build    = $CONFIGURE --disable-static --disable-docs --disable-multi-os-directory CPPFLAGS="$CPPFLAGS -D_GNU_SOURCE -DFFI_MMAP_EXEC_WRIT=1"
+           make -j$JOBS
+install  = make install DESTDIR=$DESTDIR

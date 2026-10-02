@@ -30,8 +30,10 @@ unpacked in WORK/deps).  A value continues on lines that start with blanks.
 The staged tree is stripped (programs and shared libraries), its libtool
 archives and documentation dropped, and packed as REPO/NAME-VERSION.spkg:
 a gzip-compressed ustar archive, +MANIFEST first, then usr/pkg/... (pkg's
-format).  Archive members are sorted, owned by root, dated 0: a package
-rebuilt from the same inputs is the same file.
+format).  Archive members are sorted, owned by root, dated SOURCE_DATE_EPOCH
+(2026-01-01 unless the environment sets it; recipes see it too): a package
+rebuilt from the same inputs is the same file.  (Not 0: zip archives cannot
+hold files from before 1980, and tools compare files' times.)
 """
 import gzip
 import hashlib
@@ -48,6 +50,7 @@ from build import teach_config_sub, teach_libtool                 # noqa: E402
 
 TARGET = 'x86_64-pc-sieos'
 PREFIX = '/usr/pkg'
+EPOCH = int(os.environ.get('SOURCE_DATE_EPOCH', 1767225600))     # 2026-01-01 00:00 UTC
 FIELDS = ('name', 'version', 'summary', 'source', 'sha256', 'depends', 'build', 'install')
 
 
@@ -156,7 +159,7 @@ def pack(r, stage, out):
     with open(out, 'wb') as fh, gzip.GzipFile(filename='', mode='wb', fileobj=fh, mtime=0, compresslevel=9) as gz, \
             tarfile.open(fileobj=gz, mode='w', format=tarfile.USTAR_FORMAT) as t:
         ti = tarfile.TarInfo('+MANIFEST')
-        ti.size, ti.mode, ti.mtime, ti.uname, ti.gname = len(manifest), 0o644, 0, 'root', 'root'
+        ti.size, ti.mode, ti.mtime, ti.uname, ti.gname = len(manifest), 0o644, EPOCH, 'root', 'root'
         t.addfile(ti, io.BytesIO(manifest))
         for m in members:
             ti = t.gettarinfo(os.path.join(stage, m), arcname=m)
@@ -164,7 +167,7 @@ def pack(r, stage, out):
                 sys.exit('%s: %s: only files, directories and symbolic links can be packaged' % (r['name'], m))
             ti.uid = ti.gid = 0
             ti.uname = ti.gname = 'root'
-            ti.mtime = 0
+            ti.mtime = EPOCH
             ti.mode &= 0o7777
             ti.mode = ti.mode & ~0o022 if ti.isfile() or ti.isdir() else ti.mode
             if ti.isfile():
@@ -204,6 +207,7 @@ def main():
     os.makedirs(stage)
     dp = deps + PREFIX
     env = dict(os.environ, HOST=TARGET, PREFIX=PREFIX, DESTDIR=stage, JOBS=str(os.cpu_count()),
+               SOURCE_DATE_EPOCH=str(EPOCH),
                CC=TARGET + '-gcc', CXX=TARGET + '-g++', AR=TARGET + '-ar', RANLIB=TARGET + '-ranlib',
                STRIP=TARGET + '-strip', PATH=cross + ':' + os.environ['PATH'],
                CFLAGS='-O2', CXXFLAGS='-O2',

@@ -105,7 +105,8 @@ starts there, with `AT_BASE` set to its load address (milestone 9).
 - **`mmap`.** `SIEOS_MAP_PRIVATE`/`SIEOS_MAP_SHARED`, `SIEOS_MAP_ANON`, `SIEOS_MAP_FIXED` and
   `SIEOS_MAP_ALIGN` (with `addr` giving the alignment) are supported, and
   `SIEOS_MAP_NORESERVE` is accepted.
-  - Anonymous memory is zero-filled on demand.
+  - Anonymous memory is zero-filled on demand; files are mapped on demand too (each page
+    as it is first touched: milestone 73).
   - `fork` is copy-on-write.
   - `MAP_SHARED` anonymous memory stays shared across `fork`.
 - **Other calls.**
@@ -480,16 +481,23 @@ Milestone 6 (done):
   - `processor_bind`: `P_LWPID`/`P_PID`, `P_MYID`, `PBIND_NONE`/`PBIND_QUERY`. The
     scheduler honours bindings, forked children inherit them, and `lwpsinfo` shows
     `pr_bindpro`.
+  - `lwp_affinity(idtype, id, op, uint64_t *mask)` (165, milestone 73): the processors an
+    LWP or a process may run on, any set of them (`SIEOS_AFF_GET`, `SIEOS_AFF_SET`); new
+    LWPs and children inherit it.
   - `getloadavg`: 1/5/15-minute averages in thousandths, updated every 5 s.
 - **Sockets.**
   - Solaris constants over the IPv4 stack: `so_socket` (with `SOCK_CLOEXEC`/`NONBLOCK`),
     `bind`, `listen`, `accept` (with flags), `connect`, `shutdown`,
-    `sendto`/`recvfrom` (`MSG_DONTWAIT`, `MSG_WAITALL`), `sendmsg`/`recvmsg`, and
+    `sendto`/`recvfrom` (`MSG_DONTWAIT`, `MSG_WAITALL`, `MSG_PEEK`, `MSG_NOSIGNAL`, and
+    TCP's urgent data, `MSG_OOB`), `sendmsg`/`recvmsg`, and
     `getsockname`/`getpeername`.
-  - `getsockopt`/`setsockopt`: `SO_TYPE`, `SO_ERROR`, `SO_ACCEPTCONN`,
-    `SO_RCVTIMEO`/`SO_SNDTIMEO` as `timeval`, and `SO_RCVBUF`/`SO_SNDBUF`/`SO_LINGER`/
-    `TCP_NODELAY`, `IP_TOS` (1, level `IPPROTO_IP`) and `IPV6_TCLASS` (`0x43`) (accepted,
-    not applied).
+  - `getsockopt`/`setsockopt`: `SO_TYPE`, `SO_ERROR`, `SO_ACCEPTCONN`, `SO_DOMAIN`,
+    `SO_PROTOCOL`, `SO_RCVTIMEO`/`SO_SNDTIMEO` as `timeval`; the flags `SO_REUSEADDR`,
+    `SO_REUSEPORT`, `SO_KEEPALIVE`, `SO_BROADCAST`, `SO_DONTROUTE`, `SO_OOBINLINE`,
+    `SO_DEBUG` and `TCP_NODELAY` (kept and reported, not applied: milestone 72); and
+    `SO_RCVBUF`/`SO_SNDBUF`/`SO_LINGER`, `IP_TOS` (1, level `IPPROTO_IP`) and
+    `IPV6_TCLASS` (`0x43`) (accepted, not applied; milestone 73 applies `IPV6_TCLASS` and
+    `IPV6_UNICAST_HOPS`, and adds RFC 3542's ancillary data).
   - `O_NONBLOCK` applies to sockets. `sendmsg` and `recvmsg` take several buffers for
     streams only.
   - `AF_UNIX` and `so_socketpair` were reserved; they arrived with milestone 10.
@@ -534,7 +542,7 @@ Milestone 7 (done):
     - process and thread calls: futex → umtx, `set_tid_address` → exit word,
       `wait4`/`waitid` → `waitid` with siginfo translation, `fork`, `uname` → `sysinfo`,
       `sysinfo`, `setpgid`/`getsid`… → `pgrpsys`, `setres*id`/`getres*id` (saved IDs from
-      `/proc/self/cred`), `getrandom` → `/dev/urandom`, affinity → `processor_bind`,
+      `/proc/self/cred`), `getrandom` → `/dev/urandom`, affinity → `lwp_affinity`,
       `reboot` → `uadmin`;
     - signals: `rt_sigaction` → `sigaction` with a wrapper that translates the siginfo and
       finishes with `context(SETCONTEXT)`;
@@ -2837,6 +2845,155 @@ Milestone 34 (done): Facet skins.
 - The GNU utilities' configure knows that `fchownat(AT_SYMLINK_NOFOLLOW)` works: `cp -a` keeps
   symbolic links' owners.
 
+### Milestone 72: Python (CPython 3.14)
+
+- **Python 3.14** (package `python`, see [python.md](python.md)), with the library packages
+  `libffi`, `sqlite`, `bzip2`, `xz`, `ncurses` (and the `sieos` terminfo entry) and
+  `readline`. CPython knows SIEOS as `sieos` (`sys.platform`; `sysconfig` platform
+  `sieos-x86_64`).
+- **Larger tables**, which Python's test suite filled: open files per process (`NOFILE`)
+  1024, in the system 8192; sockets and TCP connections 1024 each; ext4 inodes in use
+  1024 per volume (when the 64 were in use, opening and listing files failed with `EIO`).
+- **`getsockopt`** answers `SO_DOMAIN` (0x100c) and `SO_PROTOCOL` (0x1016), for every
+  socket family.
+- **Fixes the test suite found:**
+  - a process's exit freed its page tables before writing its shared mappings back,
+    which may sleep: dispatched again meanwhile, the exiting LWP loaded the freed tables
+    into CR3 and its processor hung holding the kernel lock;
+  - tmpfs counted a file's blocks by scanning all its pages at every write: writing a
+    large file was quadratic, with the kernel lock held;
+  - a non-blocking write to a pipe blocked once the pipe was full;
+  - a signal sent to a process did not wake an LWP waiting for it in `sigtimedwait`
+    (`sigwait`), blocked as the signal is there: the wait lasted forever;
+  - `setreuid` and `setregid` were missing (`ENOSYS`): now with -1 for "unchanged", and
+    the saved id following the effective one as on Linux;
+  - `tcflow` takes only `TCOOFF` to `TCION`.
+- **CPU clocks of a process or thread by id** (`clock_getcpuclockid`,
+  `pthread_getcpuclockid`), as the C library encodes them: this process's and its own
+  threads'.
+- **Pipes** hold 64 KiB (were 4 KiB); writes of up to `PIPE_BUF` (4096) bytes are not
+  split; `F_GETPIPE_SZ` and `F_SETPIPE_SZ` are not offered.
+- **TCP:**
+  - `listen()`'s backlog is kept, up to `SOMAXCONN` (4096); it was always 16;
+  - a connection closed with unread data, or receiving data after it was closed, is
+    reset, as Linux does: the peer's writes fail with `ECONNRESET` instead of waiting.
+- **Socket options:** the flags (`SO_REUSEADDR`, `SO_REUSEPORT` (0x100e, new),
+  `SO_KEEPALIVE`, `SO_BROADCAST`, `SO_DONTROUTE`, `SO_OOBINLINE`, `SO_DEBUG`,
+  `TCP_NODELAY`) are kept per socket and reported by `getsockopt`, which reported 0 (and
+  `TCP_NODELAY` 1); the stack's behaviour does not change.
+- **Ptys:** the slave's output goes through `ONLCR` (a newline as CR LF, with `OPOST`), and
+  `tcflush(TCOFLUSH)` on the slave drops what the master has not read.
+- **`/etc/services`**: the well-known services, for `getaddrinfo`'s service names.
+- **The C library:**
+  - `pthread_getattr_np` reports the main thread's stack (`RLIMIT_STACK` below the
+    arguments);
+  - `pthread_setname_np` and `pthread_getname_np` keep a thread's name in libc;
+  - `<fcntl.h>` defines `FASYNC` only where `O_ASYNC` exists (it does not on SIEOS);
+  - `strerror(EOPNOTSUPP)` has its message (it is not `ENOTSUP` on SIEOS).
+- **Packages** are dated `SOURCE_DATE_EPOCH` (2026-01-01), not 0, which recipes see too:
+  zip archives cannot hold files from before 1980, and Python's bytecode is checked by
+  hash.
+- **libffi's closures** are in executable mappings (`FFI_MMAP_EXEC_WRIT`): SIEOS does not
+  run code in `malloc`'s memory.
+
+### Milestone 73: the limits Python's tests showed; the locale database
+
+- **Paths** of up to 4096 bytes (`PATH_MAX`, as the C library always said; they were
+  1024). The kernel's path buffers are pages, not stack.
+- **TCP urgent data** (`MSG_OOB`, as BSD): sent, it sets the urgent pointer after it;
+  received, its byte leaves the stream (unless `SO_OOBINLINE`), `recv(MSG_OOB)` reads it,
+  a read stops at the mark, and `poll` shows `POLLPRI`. `MSG_PEEK` works on TCP and UDP
+  sockets, and `MSG_NOSIGNAL` on TCP ones.
+- **IPv6 ancillary data (RFC 3542), UDP:** `IPV6_RECVHOPLIMIT` (0x33) and
+  `IPV6_RECVTCLASS` (0x42) make `recvmsg` give each datagram's `IPV6_HOPLIMIT` (0x34) and
+  `IPV6_TCLASS` as control messages (cut short with `MSG_CTRUNC` as Linux's); `sendmsg`
+  takes them for one datagram, and `IPV6_UNICAST_HOPS` and `IPV6_TCLASS` (options, which
+  were accepted and ignored) for all.
+- **Processor sets:** `lwp_affinity` (165): an LWP may run on any set of processors
+  (`sched_setaffinity`); `processor_bind` still binds to one.
+- **File mappings are demand-paged:** `mmap` of a file no longer reads it all (nor needs
+  as much free memory as it is long): its pages are mapped as they are first touched. A
+  4 GiB sparse file maps.
+- **`prlimit`** (the C library): the calling process's limits; another process's,
+  `EPERM` (`ESRCH` if there is none).
+- **`posix_spawn`'s scheduling attributes** (`POSIX_SPAWN_SETSCHEDULER`,
+  `POSIX_SPAWN_SETSCHEDPARAM`) are set in the child.
+- **The C library's locales:** the UTF-8 locales of glibc's locale data (350; `fr_FR`,
+  `de_DE.UTF-8`, `ja_JP.utf8`, `sr_RS@latin`...), in `/usr/lib/locale` (catalogs made by
+  `tools/mklocales.py`):
+  - `localeconv` and `nl_langinfo`: their numbers, money, dates and times, eras and
+    alternative digits (lists semicolon-separated, as POSIX has them);
+  - `strftime` and `strptime`: their day and month names and formats;
+  - `strcoll`, `strxfrm`, `wcscoll`, `wcsxfrm`: Unicode's order (base letters, then
+    accents, then case);
+  - a locale without data, or of another character set (`en_US.ISO-8859-1`), is refused,
+    as glibc does; `C`, `POSIX` and `C.UTF-8` (`C.utf8`) are built in;
+  - `strftime`: the `E` and `O` modifiers, as glibc has them (the locale's eras and
+    alternative digits), glibc's `%k`, `%l` and `%P`, which locales' formats use, and
+    `%Z` from the program's `struct tm` (`tm_zone`); a conversion may be 400 bytes long.
+  printf and strtod keep the C locale's decimal point (as musl's).
+- **Fixes:**
+  - `poll` on a pipe: the read end reports `POLLHUP` once no writer is left, the write end
+    `POLLERR` once no reader is (as Linux: asyncio waits for these to see a child's
+    standard input closed, and waited for ever);
+  - `lseek` on `/dev/null`, `/dev/zero` and `/dev/urandom` answers 0 (it failed with
+    `ESPIPE`);
+  - `open("missing/", O_CREAT)` fails with `EISDIR` (it created a file named "missing");
+  - `chown` takes IDs of 2^31 and more (uid_t is unsigned: only -1 means "unchanged");
+  - several `SCM_RIGHTS` messages in one `sendmsg` pass all their descriptors (the second
+    was refused);
+  - the socket calls on a descriptor that is not open fail with `EBADF` (not `ENOTSOCK`);
+  - TCP keeps probing a zero window while the peer answers (RFC 1122): a full receiver
+    made the sender give up (`ETIMEDOUT`);
+  - `read` and `write` on a socket honour `O_NONBLOCK` (a write into a nearly full buffer
+    waited for room);
+  - a user mutex (`lwp_umtx_wait`) in a process's own memory is keyed by its address, not
+    its page, as Linux does: after `fork`, the store that released a lock copied the page
+    (copy-on-write) and its wake missed the waiter, which waited for ever;
+  - `recvmsg` sets `MSG_TRUNC` for a datagram longer than the buffer; `TCP_QUICKACK` is
+    kept and reported, as the flag options;
+  - the C library: `sendmsg` and `recvmsg` with several buffers on a datagram socket
+    (gathered into one datagram, scattered back); `if_nameindex`, `if_nametoindex` and
+    `if_indextoname` (`lo` is 1, `eth0`, `eth1`... 2, 3...; musl asks Linux's netlink);
+    `sched_getscheduler` and the others refuse a negative pid;
+  - Backspace sends DEL (the erase character, `VERASE`) to the console's and the Facet
+    terminal's ttys, and a tty erases with `VERASE` only, as Linux does (it erased with
+    `^H` too: input written ahead of readline lost its `^H`); the `sieos` terminfo entry's
+    `kbs` is DEL.
+
+### Milestone 74: Linux's descriptors and transfers
+
+System calls 213 to 227 (`sieos/syscall.h`, `sieos/fdext.h`), with Linux's arguments and
+values (SIEOS's open flags, clocks and signals), which the C library calls as Linux's:
+- **epoll** (`epoll_create1`, `epoll_ctl`, `epoll_wait`; `epoll_pwait` in the C library): a
+  set of descriptors and the events wanted, polled as `poll` does. Level-triggered, or
+  `EPOLLET` (reported when an event appears, with all that is ready, as Linux),
+  `EPOLLONESHOT`; an entry goes with its
+  descriptor's file; regular files refused (`EPERM`), as Linux does.
+- **eventfd** (`eventfd2`): a counter, `EFD_SEMAPHORE`.
+- **timerfd** (`timerfd_create`, `timerfd_settime`, `timerfd_gettime`): a timer on
+  `CLOCK_REALTIME` or `CLOCK_MONOTONIC`, absolute or relative, periodic; read gives the
+  expirations; the clock tick wakes its waiters.
+- **memfd** (`memfd_create`): a tmpfs file no directory names (`/proc`'s link
+  `memfd:NAME`); no seals.
+- **pidfd** (`pidfd_open`, `pidfd_send_signal`): a process, readable when it ends.
+- **`splice`** (one end a pipe) and **`copy_file_range`** (regular files): copies in the
+  kernel, through a 64 KiB buffer.
+- **`preadv`, `pwritev`**: several buffers at an offset.
+- **`mremap`**: a mapping shrunk, grown in place, or moved (`MREMAP_MAYMOVE`: its page
+  table entries move); the C library's `realloc` of large blocks uses it.
+- Descriptor kinds of their own (`FD_OPS`: read, write, poll and close), named in
+  `/proc/PID/fd` as Linux names them (`anon_inode:[eventfd]`...).
+- **`lchmod`**: a symbolic link's mode can change (`fchmodat` with
+  `AT_SYMLINK_NOFOLLOW`), as BSD's; access to a link ignores it.
+- **Not done:** namespaces (`unshare`, `setns`), `preadv2`/`pwritev2`,
+  `process_vm_readv`.
+- **Fix:** a user mutex's wake counts a waiter a signal has made runnable (it skipped it,
+  and the waiter went back to sleep: Python's lock waits hung).
+- **Fix:** `exec` ends the process's other LWPs only once the new program is loaded, as
+  Linux does: an `exec` that failed (`ENOENT`) ended them all the same (Python's
+  `faulthandler` thread went, and waiting for it hung).
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -2903,6 +3060,9 @@ Milestone 34 (done): Facet skins.
 | 60 | the AX201's start for the integrated 22000 family: persistence bit, forced power gating, boot LTR, ALIVE handshake (done; ALIVE confirmed on the Surface) |
 | 61 | Wi-Fi stage 2: receive processing, the command queue, INIT/NVM commands, the NVM's information, the MAC address (done) |
 | 62 | Wi-Fi stage 3: the runtime configuration (antennas, SoC, power, regulatory domain), UMAC scans, the wifi() call, dladm, the Settings Wi-Fi page (done) |
+| 74 | epoll, eventfd, timerfd, memfd, pidfd, `splice`, `copy_file_range`, `preadv`/`pwritev`, `mremap`, `lchmod` (done) |
+| 73 | 4096-byte paths, TCP urgent data and `MSG_PEEK`, processor sets (`lwp_affinity`), demand-paged file mappings, `posix_spawn` scheduling, the locale database (done) |
+| 72 | Python 3.14 and its libraries; larger file, socket and inode tables; exit, tmpfs and pipe fixes; 64 KiB pipes; listen backlogs; socket options kept; pty output processing; `setreuid`, `sigwait`, CPU clocks; `SO_DOMAIN`, `SO_PROTOCOL`; `pthread_getattr_np`, thread names (done) |
 | 71 | OpenGL, EGL and Vulkan in software (Mesa: llvmpipe, lavapipe; LLVM 22), EGL's Facet platform, the Vulkan loader (done) |
 | 70 | the local model (sia-brain, llama.cpp); AVX (XSAVE) in programs and signal frames; USB drives (mass storage); faster disk writes; `mount -L` (done) |
 | 69 | NetSurf (the web browser); the mouse wheel (`EV_WHEEL`); `FCT_WIN_POINTER`; pressed buttons; non-blocking connect (done) |

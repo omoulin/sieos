@@ -22,8 +22,17 @@ void poll_wakeup(void)
     wakeup(&poll_chan);
 }
 
+/* Sleep until poll_wakeup, or the tick deadline (0: none). */
+void poll_sleep(uint64_t deadline)
+{
+    curlwp->wake_tick = deadline;
+    sleep_on(&poll_chan);
+    curlwp->wake_tick = 0;
+}
+
 bool pipe_readable(struct pipe *p);
 bool pipe_writable(struct pipe *p);
+short pipe_hangup(struct pipe *p, int acc);
 
 short file_poll(struct file *f, short events)
 {
@@ -46,6 +55,7 @@ short file_poll(struct file *f, short events)
             r |= POLLIN;
         if ((f->flags & O_ACCMODE) != O_RDONLY && pipe_writable(f->pipe))
             r |= POLLOUT;
+        r |= pipe_hangup(f->pipe, f->flags & O_ACCMODE);
         break;
     case FD_EVENTS:
         if (input_readable())
@@ -56,11 +66,16 @@ short file_poll(struct file *f, short events)
             r |= POLLIN;
         if (socket_writable(f->sock))
             r |= POLLOUT;
+        if (socket_urgent(f->sock))
+            r |= POLLPRI;
         if (socket_failed(f->sock))
             r |= POLLERR;
         break;
     case FD_UNIX:
         r |= unix_poll(f->usock);
+        break;
+    case FD_OPS:
+        r |= f->ops->poll ? f->ops->poll(f) : 0;
         break;
     default:
         r |= POLLIN | POLLOUT;

@@ -19,7 +19,7 @@
 #include "sieos/socket.h"
 #include "sieos/sysinfo.h"
 
-#define NSOCK 64
+#define NSOCK 1024
 #define UDP_QMAX (256 * 1024)            /* queued datagrams per socket (a few at 64 KB) */
 #define EPHEMERAL_LO 49152
 
@@ -27,6 +27,7 @@ struct dgram {
     struct dgram *next;
     naddr_t ip;
     uint16_t port;
+    short hops, tclass;              /* its IP header's hop limit (TTL) and traffic class, -1 none */
     size_t len;
     uint8_t data[];
 };
@@ -44,6 +45,11 @@ struct socket {
     size_t qbytes;
     struct tcb *tcb;
     int rcvtimeo, sndtimeo;          /* ms, 0 = forever */
+    int opts;                        /* flag options set (sock2.c's opt_bit) */
+    int hops, tclass;                /* IPV6_UNICAST_HOPS, IPV6_TCLASS of what it sends; -1 default */
+    int snd_hops, snd_tclass;        /* ... of the next datagram only (sendmsg's ancillary data); -1 none */
+    int rx_hops, rx_tclass;          /* of the datagram last received (recvmsg's ancillary data) */
+    bool rx_trunc;                   /* ... longer than the buffer it was read into (MSG_TRUNC) */
 };
 
 static struct socket socks[NSOCK];
@@ -64,6 +70,8 @@ struct socket *socket_alloc(int type, int proto)
             socks[i].type = type;
             socks[i].proto = proto;
             socks[i].uid = current ? current->euid : 0;
+            socks[i].hops = socks[i].tclass = socks[i].snd_hops = socks[i].snd_tclass = -1;
+            socks[i].rx_hops = socks[i].rx_tclass = -1;
             return &socks[i];
         }
     }
@@ -135,7 +143,8 @@ void socket_close(struct socket *s)
 /* UDP and raw ICMP input                                              */
 /* ------------------------------------------------------------------ */
 
-static void enqueue(struct socket *s, const naddr_t *ip, uint16_t port, const uint8_t *data, size_t len)
+static void enqueue(struct socket *s, const naddr_t *ip, uint16_t port, const uint8_t *data, size_t len,
+                    int hops, int tclass)
 {
     if (s->qbytes + len > UDP_QMAX) {
         net_count_drop();
@@ -147,6 +156,8 @@ static void enqueue(struct socket *s, const naddr_t *ip, uint16_t port, const ui
     d->next = NULL;
     d->ip = *ip;
     d->port = port;
+    d->hops = hops;
+    d->tclass = tclass;
     d->len = len;
     memcpy(d->data, data, len);
     if (s->qt)
@@ -166,7 +177,7 @@ static bool family_ok(struct socket *s, const naddr_t *a)
     return !(s->v6only && na_is_v4(a));
 }
 
-void udp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_t len)
+void udp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_t len, int hops, int tclass)
 {
     if (len < 8)
         return;
@@ -192,7 +203,7 @@ void udp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_
             continue;
         if (s->connected && (!na_eq(&s->rip, src) || s->rport != sport))
             continue;
-        enqueue(s, src, sport, seg + 8, ulen - 8);
+        enqueue(s, src, sport, seg + 8, ulen - 8, hops, tclass);
         return;
     }
 }
@@ -202,7 +213,7 @@ void icmp_deliver_raw(const naddr_t *src, int proto, const uint8_t *msg, size_t 
     for (int i = 0; i < NSOCK; i++) {
         struct socket *s = &socks[i];
         if (s->used && s->type == SOCK_RAW && s->proto == proto)
-            enqueue(s, src, 0, msg, len);
+            enqueue(s, src, 0, msg, len, -1, -1);
     }
 }
 
@@ -246,7 +257,9 @@ static int udp_send(struct socket *s, const naddr_t *dst, uint16_t dport, const 
     if (c == 0)
         c = 0xFFFF;
     memcpy(seg + 6, &c, 2);
-    int r = net_send(&src, dst, IPPROTO_UDP, seg, ulen);
+    int hops = s->snd_hops >= 0 ? s->snd_hops : s->hops, tc = s->snd_tclass >= 0 ? s->snd_tclass : s->tclass;
+    s->snd_hops = s->snd_tclass = -1;            /* (sendmsg's: this datagram only) */
+    int r = net_send_opts(&src, dst, IPPROTO_UDP, seg, ulen, (hops > 0 ? hops : 0) | (tc > 0 ? tc << 8 : 0));
     if (seg != small)
         kfree(seg);
     return r < 0 ? r : (int)len;
@@ -256,8 +269,10 @@ static int udp_send(struct socket *s, const naddr_t *dst, uint16_t dport, const 
 /* Generic socket I/O                                                  */
 /* ------------------------------------------------------------------ */
 
-static long dgram_recv(struct socket *s, void *buf, size_t n, bool nonblock, naddr_t *ip, uint16_t *port)
+/* A datagram; flags: MSG_DONTWAIT, MSG_PEEK (it stays queued) */
+static long dgram_recv(struct socket *s, void *buf, size_t n, int flags, naddr_t *ip, uint16_t *port)
 {
+    bool nonblock = flags & MSG_DONTWAIT;
     uint64_t deadline = s->rcvtimeo ? ticks + (uint64_t)s->rcvtimeo * TIMER_HZ / 1000 + 1 : 0;
     while (!s->qh) {
         if (nonblock)
@@ -271,36 +286,42 @@ static long dgram_recv(struct socket *s, void *buf, size_t n, bool nonblock, nad
         curlwp->wake_tick = 0;
     }
     struct dgram *d = s->qh;
-    s->qh = d->next;
-    if (!s->qh)
-        s->qt = NULL;
-    s->qbytes -= d->len;
     size_t c = MIN(n, d->len);
     memcpy(buf, d->data, c);
     if (ip)
         *ip = d->ip;
     if (port)
         *port = d->port;
+    s->rx_hops = d->hops;
+    s->rx_tclass = d->tclass;
+    s->rx_trunc = d->len > n;
+    if (flags & MSG_PEEK)
+        return c;
+    s->qh = d->next;
+    if (!s->qh)
+        s->qt = NULL;
+    s->qbytes -= d->len;
     kfree(d);
     return c;
 }
 
-long socket_read(struct socket *s, void *buf, size_t n)
+long socket_read(struct socket *s, void *buf, size_t n, bool nonblock)
 {
+    int fl = nonblock ? MSG_DONTWAIT : 0;
     if (s->type == SOCK_STREAM) {
         if (!s->tcb)
             return -ENOTCONN;
-        return tcp_recv(s->tcb, buf, n, false, s->rcvtimeo);
+        return tcp_recv(s->tcb, buf, n, fl, s->rcvtimeo, s->opts & SOPT_OOBINLINE);
     }
-    return dgram_recv(s, buf, n, false, NULL, NULL);
+    return dgram_recv(s, buf, n, fl, NULL, NULL);
 }
 
-long socket_write(struct socket *s, const void *buf, size_t n)
+long socket_write(struct socket *s, const void *buf, size_t n, bool nonblock)
 {
     if (s->type == SOCK_STREAM) {
         if (!s->tcb)
             return -ENOTCONN;
-        return tcp_send(s->tcb, buf, n, false);
+        return tcp_send(s->tcb, buf, n, nonblock ? MSG_DONTWAIT : 0);   /* (O_NONBLOCK: what fits) */
     }
     if (!s->connected)
         return -EDESTADDRREQ;
@@ -314,6 +335,11 @@ bool socket_readable(struct socket *s)
     if (s->type == SOCK_STREAM)
         return s->tcb && tcp_readable(s->tcb);
     return s->qh != NULL;
+}
+
+bool socket_urgent(struct socket *s)
+{
+    return s->type == SOCK_STREAM && s->tcb && tcp_urgent(s->tcb);
 }
 
 bool socket_writable(struct socket *s)
@@ -490,14 +516,17 @@ static long sys_bind(int fd, const void *ua, unsigned int len)
 
 static long sys_listen(int fd, int backlog)
 {
-    (void)backlog;
     struct socket *s = sockfd(fd, NULL);
     if (!s)
         return -ENOTSOCK;
     if (s->type != SOCK_STREAM)
         return -EOPNOTSUPP;
-    if (s->tcb)
-        return tcp_state(s->tcb) == TCP_LISTEN ? 0 : -EISCONN;
+    if (s->tcb) {
+        if (tcp_state(s->tcb) != TCP_LISTEN)
+            return -EISCONN;
+        tcp_set_backlog(s->tcb, backlog);        /* listening already: the new backlog */
+        return 0;
+    }
     if (!s->bound) {
         s->lport = ephemeral_port(true);
         s->bound = true;
@@ -506,6 +535,7 @@ static long sys_listen(int fd, int backlog)
     if (!s->tcb)
         return -ENOBUFS;
     tcp_set_owner(s->tcb, s);
+    tcp_set_backlog(s->tcb, backlog);
     return tcp_listen(s->tcb, &s->lip, s->lport, s->v6only);
 }
 
@@ -616,9 +646,11 @@ static long sys_sendto(int fd, const void *buf, size_t n, int flags, const void 
         return -EFAULT;
     if (f->flags & O_NONBLOCK_K)
         flags |= MSG_DONTWAIT;
+    if ((flags & MSG_OOB) && s->type != SOCK_STREAM)
+        return -EOPNOTSUPP;
     if (s->type == SOCK_STREAM || !ua)
-        return s->type == SOCK_STREAM && s->tcb ? tcp_send(s->tcb, buf, n, flags & MSG_DONTWAIT)
-                                                : socket_write(s, buf, n);
+        return s->type == SOCK_STREAM && s->tcb ? tcp_send(s->tcb, buf, n, flags)
+                                                : socket_write(s, buf, n, flags & MSG_DONTWAIT);
     naddr_t ip;
     uint16_t port;
     int r = get_addr(s, ua, alen, &ip, &port);
@@ -643,14 +675,17 @@ static long sys_recvfrom(int fd, void *buf, size_t n, int flags, void *ua, unsig
     if (s->type == SOCK_STREAM) {
         if (!s->tcb)
             return -ENOTCONN;
-        long r = tcp_recv(s->tcb, buf, n, nb, s->rcvtimeo);
+        long r = tcp_recv(s->tcb, buf, n, (flags & (MSG_OOB | MSG_PEEK)) | (nb ? MSG_DONTWAIT : 0), s->rcvtimeo,
+                          s->opts & SOPT_OOBINLINE);
         if (r >= 0 && ua)
             put_addr(s->family, ua, alen, &s->rip, s->rport);
         return r;
     }
     naddr_t ip = { { 0 } };
     uint16_t port = 0;
-    long r = dgram_recv(s, buf, n, nb, &ip, &port);
+    if (flags & MSG_OOB)
+        return -EOPNOTSUPP;
+    long r = dgram_recv(s, buf, n, (flags & MSG_PEEK) | (nb ? MSG_DONTWAIT : 0), &ip, &port);
     if (r >= 0 && ua) {
         int e = put_addr(s->family, ua, alen, &ip, port);
         if (e < 0)
@@ -745,6 +780,38 @@ long socket_kopt(int fd, int which, bool set, int *val)
     case 6:                                      /* SO_ERROR (ABI v1 errno), cleared */
         *val = s->type == SOCK_STREAM && s->tcb ? tcp_take_error(s->tcb) : 0;
         return 0;
+    case 7:                                      /* SO_PROTOCOL */
+        *val = s->proto;
+        return 0;
+    case 8:                                      /* the flag options (sock2.c) */
+        if (set)
+            s->opts = *val;
+        else
+            *val = s->opts;
+        return 0;
+    case 9:                                      /* IPV6_UNICAST_HOPS, IPV6_TCLASS: -1..255 */
+    case 10:
+    case 11:                                     /* ... of the next datagram (sendmsg) */
+    case 12: {
+        int *slot = which == 9 ? &s->hops : which == 10 ? &s->tclass : which == 11 ? &s->snd_hops : &s->snd_tclass;
+        if (!set) {
+            *val = *slot;
+            return 0;
+        }
+        if (*val < -1 || *val > 255)
+            return -EINVAL;
+        *slot = *val;
+        return 0;
+    }
+    case 13:                                     /* the last datagram's hop limit, traffic class */
+        *val = s->rx_hops;
+        return 0;
+    case 14:
+        *val = s->rx_tclass;
+        return 0;
+    case 15:                                     /* ... was cut short (MSG_TRUNC) */
+        *val = s->rx_trunc;
+        return 0;
     }
     return -EINVAL;
 }
@@ -800,7 +867,7 @@ static int collect(struct sieos_sockinfo6 *out, int max)
     return n + tcp_info(out + n, max - n);
 }
 
-#define NSOCKINFO (NSOCK + 64)                   /* sockets and TCP connections */
+#define NSOCKINFO (2 * NSOCK)                    /* sockets and TCP connections (NTCB = NSOCK) */
 
 long socket_netstat6(struct sieos_sockinfo6 *uout, int max)
 {

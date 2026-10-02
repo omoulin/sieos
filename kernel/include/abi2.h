@@ -38,6 +38,7 @@ struct file;
 
 long syscall_dispatch_v2(struct trapframe *tf);
 long syscall_file_v2(struct trapframe *tf, bool *handled);    /* sysfile2.c */
+long syscall_fdext_v2(struct trapframe *tf, bool *handled);   /* fdext.c */
 long syscall_misc_v2(struct trapframe *tf, bool *handled);    /* sysmisc2.c */
 long syscall_sock_v2(struct trapframe *tf, bool *handled);    /* sock2.c */
 extern char sys_hostname[65];

@@ -31,6 +31,7 @@ uint64_t vm_space_copy(struct proc *child, struct proc *parent);   /* fork: new 
 void     vm_space_free(struct proc *p, uint64_t pml4);
 void     vm_exec_reset(struct proc *p);                            /* drop mmap areas at exec */
 long     vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off);
+long     vm_mremap(uint64_t old, uint64_t oldlen, uint64_t newlen, int flags, uint64_t newaddr);
 long     vm_munmap(uint64_t addr, uint64_t len);
 bool     vm_vmem_ok(struct proc *p, uint64_t n);    /* RLIMIT_VMEM allows n more bytes */
 bool     vm_brk_ok(struct proc *p, uint64_t old, uint64_t new);

@@ -79,7 +79,7 @@ void kbd_key(uint16_t code, bool release)
     if (input_grabbed())
         input_key(sc, true, c, mods);
     else
-        tty_input(&console_tty, c);
+        tty_input(&console_tty, sc == 0x0E ? 127 : c);   /* Backspace: DEL, the erase character (VERASE) */
 }
 
 static void serial_irq(struct trapframe *tf)
@@ -89,8 +89,6 @@ static void serial_irq(struct trapframe *tf)
     while ((c = serial_getc_nonblock()) >= 0) {
         if (c == '\r')
             c = '\n';
-        else if (c == 127)
-            c = '\b';
         tty_input(&console_tty, (char)c);
     }
 }
