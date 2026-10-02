@@ -2976,7 +2976,8 @@ values (SIEOS's open flags, clocks and signals), which the C library calls as Li
   expirations; the clock tick wakes its waiters.
 - **memfd** (`memfd_create`): a tmpfs file no directory names (`/proc`'s link
   `memfd:NAME`); no seals.
-- **pidfd** (`pidfd_open`, `pidfd_send_signal`): a process, readable when it ends.
+- **pidfd** (`pidfd_open`, `pidfd_send_signal`): a process, readable when it ends;
+  `pidfd_send_signal` also takes an open `/proc/PID` directory, as Linux's does.
 - **`splice`** (one end a pipe) and **`copy_file_range`** (regular files): copies in the
   kernel, through a 64 KiB buffer.
 - **`preadv`, `pwritev`**: several buffers at an offset.

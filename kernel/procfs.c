@@ -538,6 +538,12 @@ static const struct fs_ops procfs_ops = {
     .destroy = procfs_destroy,
 };
 
+/* The process a /proc/PID directory is, or 0 (pidfd_send_signal takes one, as Linux). */
+int procfs_dir_pid(struct inode *ip)
+{
+    return ip && ip->fs && ip->fs->ops == &procfs_ops && PTYPE(ip) == PN_PID ? PPID(ip) : 0;
+}
+
 struct fs *procfs_create(void)
 {
     struct fs *fs = kzalloc(sizeof(*fs));

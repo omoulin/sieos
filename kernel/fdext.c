@@ -356,7 +356,9 @@ static long do_pidfd_open(int pid, long flags)
 {
     if (flags & ~(long)SIEOS_O_NONBLOCK)
         return -EINVAL;
-    struct proc *p = pid > 0 ? proc_find(pid) : NULL;
+    if (pid <= 0)
+        return -EINVAL;
+    struct proc *p = proc_find(pid);
     if (!p || p->state == PSTATE_UNUSED || p->state == PSTATE_EMBRYO)
         return -ESRCH;
     struct pidfd *d = kzalloc(sizeof(*d));
@@ -373,13 +375,15 @@ static long do_pidfd_open(int pid, long flags)
 static long do_pidfd_send_signal(long fd, int sig, const void *info, long flags)
 {
     struct pidfd *d = ops_priv(fd, &pidfd_ops);
-    if (!d)
-        return fsys_file(fd) ? -EBADF : -EBADF;
+    struct file *f = fsys_file(fd);
+    int dirpid = !d && f && f->type == FD_INODE ? procfs_dir_pid(f->ip) : 0;   /* an open /proc/PID */
+    if (!d && !dirpid)
+        return -EBADF;
     if (info || flags)
         return -EINVAL;
     if (sig < 0 || sig >= KNSIG)
         return -EINVAL;
-    struct proc *p = pidfd_proc(d);
+    struct proc *p = d ? pidfd_proc(d) : proc_find(dirpid);
     if (!p || p->state != PSTATE_RUNNING)
         return -ESRCH;
     if (current->euid != 0 && current->euid != p->uid && current->uid != p->uid)

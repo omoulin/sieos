@@ -169,6 +169,7 @@ struct fs *ext4_mount(int dev, bool ro);           /* the ext4 file system on a 
 /* tmpfs.c, procfs.c, devpts.c */
 struct fs *tmpfs_create(void);
 struct fs *procfs_create(void);
+int procfs_dir_pid(struct inode *ip);
 struct fs *devpts_create(void);
 
 /* perm.c */

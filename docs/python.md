@@ -65,26 +65,14 @@ The modules' libraries are packages of their own, which other software can use t
 ## Python's test suite
 
 The package leaves Python's own tests out (`--disable-test-modules`). Run on SIEOS
-(`python3 -m test -j4`, network and subprocess resources on), the whole suite runs:
-484 test files in 13 minutes on 4 processors, 44,635 tests; 431 files pass, 20 have
-failures (130 tests, 0.3%), 37 are skipped (other systems', or test modules the package
-leaves out). Python 3.14.8, October 2026.
+(`python3 -m test -j4`, network, cpu and subprocess resources on), the whole suite
+passes: 488 test files in 6½ minutes on 4 processors, 46,367 tests; 452 files pass,
+32 are skipped (other systems' features: Windows, macOS, Android, kqueue, `/dev/poll`,
+gdb, DTrace, perf; or modules the package leaves out: tkinter, `dbm.gnu`,
+`dbm.ndbm`, zstd), 4 need resources not given (a terminal for curses, a sound
+device, older Pythons, 4 GiB of disk). Python 3.14.8, October 2026.
 
-What still fails is mostly known and not SIEOS's to change:
-- **musl, not glibc:** locales (`test__locale`, `test_locale`, `test_c_locale_coercion`,
-  `test_re`'s and `test_strptime`'s locale cases), `%Z` in `time.strftime` (musl
-  trusts only its own zone names);
-- **the tests' view of the platform:** `os.sendfile` headers and trailers (BSD's) are
-  expected on any system that is not Linux or Solaris;
-- **SIEOS's limits:** paths of at most 1024 bytes (`test_tarfile`), no TCP urgent data
-  (`MSG_OOB`, `test_ftplib`), a processor set of one or all processors
-  (`sched_setaffinity`), no `posix_spawn` scheduling (musl's), mappings of 4 GiB
-  (`test_mmap`);
-- **not explained yet:** under the suite's parallel load, a test that waits for a child
-  process sometimes times out (`test_events`' `test_subprocess_kill`,
-  `test_multiprocessing_main_handling`); they pass in other runs.
-
-Bugs it found in SIEOS were fixed for it: see milestone 72 in [abi-v2.md](abi-v2.md).
+Bugs it found in SIEOS were fixed for it: see milestones 72 to 74 in [abi-v2.md](abi-v2.md).
 
 ## How it is built
 
