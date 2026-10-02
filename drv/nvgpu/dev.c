@@ -39,6 +39,7 @@ struct va { uint64_t addr, size; };
 struct sync { bool used; uint64_t value; };
 
 struct client {
+    kmutex_t lock;                               /* (its LWPs share the file) */
     struct mem mem[NMEM];
     struct va va[NVA];
     int nva;
@@ -93,9 +94,19 @@ static void mem_free(struct client *c, uint32_t h)
 }
 
 /* mmap's page: the object's page at the offset (handle in the high bits). */
+static uint64_t page_locked(struct client *c, uint64_t off, bool *wc);
+
 static uint64_t dev_page(struct file *f, uint64_t off, bool *wc)
 {
     struct client *c = client(f);
+    mutex_enter(&c->lock);
+    uint64_t pa = page_locked(c, off, wc);
+    mutex_exit(&c->lock);
+    return pa;
+}
+
+static uint64_t page_locked(struct client *c, uint64_t off, bool *wc)
+{
     uint64_t h = off >> MAP_SHIFT, o = off & ((1ULL << MAP_SHIFT) - 1);
     if (h >= NMEM || !c->mem[h].used || o >= c->mem[h].size)
         return 0;
@@ -164,17 +175,22 @@ static long sync_wait(struct client *c, struct sieos_nvgpu_wait *w)
         deadline = ticks + (uint64_t)left / (1000000000 / TIMER_HZ) + 1;
     }
     for (;;) {
+        uint64_t gen = poll_generation();
         uint32_t reached = 0, first = ~0U;
+        mutex_enter(&c->lock);
         for (uint32_t i = 0; i < w->count; i++) {
             struct sync *s = sync_of(c, pts[i].handle);
-            if (!s)
+            if (!s) {
+                mutex_exit(&c->lock);
                 return -EINVAL;
+            }
             if (s->value >= pts[i].value) {
                 reached++;
                 if (first == ~0U)
                     first = i;
             }
         }
+        mutex_exit(&c->lock);
         if ((w->flags & SIEOS_NVGPU_WAIT_ALL) ? reached == w->count : reached > 0) {
             w->first = first;
             return 0;
@@ -183,11 +199,13 @@ static long sync_wait(struct client *c, struct sieos_nvgpu_wait *w)
             return -ETIME;
         if (signal_pending(current))
             return -EINTR;
-        poll_sleep(deadline);
+        poll_sleep(gen, deadline);
     }
 }
 
 /* ---------------------------------------------------------------- the device's file */
+
+static long ioctl_locked(struct client *c, unsigned long cmd, void *arg, size_t sz);
 
 static long dev_ioctl(struct file *f, unsigned long cmd, void *arg)
 {
@@ -208,6 +226,16 @@ static long dev_ioctl(struct file *f, unsigned long cmd, void *arg)
     }
     if (!user_ok(arg, sz, true))
         return -EFAULT;
+    if (cmd == SIEOS_NVGPU_SYNC_WAIT)
+        return sync_wait(c, arg);                /* (takes the lock between its sleeps) */
+    mutex_enter(&c->lock);
+    long r = ioctl_locked(c, cmd, arg, sz);
+    mutex_exit(&c->lock);
+    return r;
+}
+
+static long ioctl_locked(struct client *c, unsigned long cmd, void *arg, size_t sz)
+{
     switch (cmd) {
     case SIEOS_NVGPU_INFO:
         memcpy(arg, nvgpu_info(), sz);

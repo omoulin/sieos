@@ -163,10 +163,10 @@ so it can be written to a USB stick.
 | Console     | VGA text mode, or a GOP/VBE linear framebuffer with an 8x16 font. Both handle ANSI colours and are mirrored to COM1. The kernel's messages are kept for `dmesg`. |
 | Display     | QEMU's standard VGA (Bochs VBE), and Intel integrated graphics with its own mode setting (display versions 11 to 14: Ice Lake, Raptor Lake-S, Arrow Lake-P); the screen's resolution is chosen in Settings. |
 | Input       | PS/2 keyboard and mouse (i8042, with the wheel in IntelliMouse mode); USB keyboards, mice and tablets on every xHCI controller (the chipset's and Thunderbolt ones), directly or through USB 2 hubs, plugged in at any time (mouse wheels included); HID-over-I2C touchpads and keyboards on the Intel LPSS I2C controllers (Raptor Lake, Ice Lake, Tiger/Alder/Meteor/Arrow Lake), found through the ACPI tables. Boot options `nousb`, `noi2c`, `usbdebug`, `i2cdebug`. |
-| SMP         | Up to 64 CPUs, found through the ACPI MADT and started with INIT-SIPI-SIPI via a real-mode trampoline. Per-CPU GDT/TSS/idle process reached through `%gs` (`swapgs`). Local APIC timers preempt on every CPU, and idle CPUs are woken by reschedule IPIs. A big kernel lock serialises kernel code while user processes run in parallel. |
+| SMP         | Up to 64 CPUs, found through the ACPI MADT and started with INIT-SIPI-SIPI via a real-mode trampoline. Per-CPU GDT/TSS/idle process reached through `%gs` (`swapgs`). Local APIC timers preempt on every CPU, and idle CPUs are woken by reschedule IPIs. No big kernel lock: the kernel runs on every CPU at once, each subsystem with its own locks (Solaris's adaptive mutexes, condition variables and reader/writer locks; [docs/locking.md](docs/locking.md)), and device interrupts, the clock and the network run in kernel threads. |
 | Memory      | Bitmap frame allocator over all RAM (up to 256 GiB), 4-level paging with a per-process address space, direct map of physical memory, kernel heap. |
 | System calls | ABI v2, Solaris-inspired (Solaris errno values, signal numbers, flags and structure layouts), entered with the `syscall` instruction; specified in [`docs/abi-v2.md`](docs/abi-v2.md) and `abi/include/sieos/`. |
-| Processes   | Processes with LWPs (threads), preemptive priority scheduling across CPUs with the Solaris TS, FX and RT classes (`priocntl`), page faults and simple system calls without the big kernel lock, copy-on-write `fork`, demand paging, `mmap` (private and shared, anonymous and file), `execve` of static, PIE and dynamically linked ELF64 programs (the kernel loads `PT_INTERP`), set-user-ID/set-group-ID, `waitid`, rlimits (with `RLIMIT_VMEM`) and rusage, ELF core files (`RLIMIT_CORE`), System V IPC, `/proc` (Solaris layout), `mount`/`umount2` of tmpfs and proc, `nanosleep` to the microsecond. |
+| Processes   | Processes with LWPs (threads), preemptive priority scheduling across CPUs with the Solaris TS, FX and RT classes (`priocntl`), copy-on-write `fork`, demand paging, `mmap` (private and shared, anonymous and file), `execve` of static, PIE and dynamically linked ELF64 programs (the kernel loads `PT_INTERP`), set-user-ID/set-group-ID, `waitid`, rlimits (with `RLIMIT_VMEM`) and rusage, ELF core files (`RLIMIT_CORE`), System V IPC, `/proc` (Solaris layout), `mount`/`umount2` of tmpfs and proc, `nanosleep` to the microsecond. |
 | Signals     | Solaris numbering (1-41, real-time 42-73, queued). Default actions: terminate, core, stop, continue, ignore. `sigaction` handlers get a `ucontext`/`siginfo` frame, with `SA_RESTART`, `SA_RESETHAND`, `SA_NODEFER`, `SA_ONSTACK`; per-LWP masks, `sigtimedwait`, `sigqueue`, and system-call restart. |
 | C library   | musl 1.2.5 adapted to ABI v2 (`libc/`), shared (`/usr/lib/libc.so`, which is also the dynamic linker `/lib/ld-musl-sieos64.so.1`) and static, with POSIX threads, the Solaris extensions (`thr_*`, `_lwp_*`, `gethrtime`, `processor_bind`, `sig2str`, ...) and a locale database (`/usr/lib/locale`: 350 UTF-8 locales, from glibc's data: `localeconv`, `nl_langinfo`, `strftime`, Unicode collation). libstdc++ and libgcc_s are shared too. |
 | Toolchain   | An `x86_64-pc-sieos` cross compiler (GCC 15.2 C/C++, binutils 2.45) built by `make`, and the same compiler hosted on SIEOS (`make native`): SIEOS can compile programs, including its own. |
@@ -508,10 +508,9 @@ nsgenbind (built for the build machine, with flex and bison) generates from WebI
   curl (below) uses Mbed TLS, which also speaks TLS 1.2.
 - The C library has `eventfd()`, but the kernel has no `eventfd2` system call yet: it
   fails with `ENOSYS` (ports must be configured without it, as curl is).
-- SMP uses a big kernel lock. User code, page faults and simple system calls run in
-  parallel across CPUs, and disk I/O releases the lock while it waits; the rest of the
-  kernel does not run in parallel. Device interrupts go to the
-  boot CPU through the I/O APIC.
+- SMP: the dispatcher has one lock and no per-CPU run queues, there is no priority
+  inheritance, and the network stack, the terminals, AF_UNIX sockets and ext4 each have
+  one lock (docs/locking.md). Device interrupts go to the boot CPU through the I/O APIC.
 
 ## MiR: applications made by sia
 

@@ -45,6 +45,7 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include "pci.h"
+#include "smp.h"
 #include "mm.h"
 #include "fs.h"
 #include "ddi.h"
@@ -755,7 +756,7 @@ static bool dev_lock(bool wait)
     while (__atomic_exchange_n(&wf.busy, 1, __ATOMIC_ACQUIRE)) {
         if (!wait)
             return false;
-        __builtin_ia32_pause();
+        cpu_relax();
     }
     return true;
 }
@@ -1454,7 +1455,7 @@ static int send_data(const uint8_t *eth, uint32_t len, bool eapol)
 {
     if (len < 14 || len - 14 + 8 > PAGE_SIZE - TX_BODY)
         return -1;
-    static uint8_t b[PAGE_SIZE - TX_BODY];      /* (the kernel runs one thing at a time: the big lock) */
+    static uint8_t b[PAGE_SIZE - TX_BODY];      /* (the device's lock is held) */
     static uint16_t qseq;                        /* (TID 0's sequence numbers) */
     uint8_t h[26];
     memset(h, 0, 26);
@@ -1475,12 +1476,16 @@ static int send_data(const uint8_t *eth, uint32_t len, bool eapol)
 }
 
 /* The network stack's interface. */
+/* (the network thread's, with net_lock; the device's lock: wifi_poll's EAPOL frames use the queue too) */
 static int nic_send(struct netif *ifp, const void *frame, size_t len)
 {
     (void)ifp;
     if (jn.link != LINK_UP)
         return -1;
-    return send_data(frame, len, false);
+    dev_lock(true);
+    int r = jn.link == LINK_UP ? send_data(frame, len, false) : -1;
+    dev_unlock();
+    return r;
 }
 
 static void nic_poll(struct netif *ifp) { (void)ifp; }   /* (frames come from wifi_poll) */

@@ -72,6 +72,7 @@ void console_write(const char *s, size_t n);
 void console_set_color(uint8_t fg, uint8_t bg);
 bool console_logo(int px, int py, int size);    /* SIEOS logo on the framebuffer console */
 void console_clear(void);
+void console_panic(void);              /* panic: the console's lock, whoever holds it */
 void serial_init(void);
 void serial_putc(char c);
 int  serial_getc_nonblock(void);

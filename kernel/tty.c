@@ -9,6 +9,11 @@
  * background processes that read (or write with TOSTOP) get SIGTTIN /
  * SIGTTOU.
  *
+ * Locking: tty_lock covers every terminal (and pty.c's pseudo-terminals);
+ * a terminal's readers wait on its condition variable.  The process groups
+ * it signals are looked up under pidlock, which comes after it.  Finding a
+ * session's terminal (procfs, under pidlock) reads the table without it.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -22,11 +27,19 @@
 
 struct tty console_tty;
 static struct tty *ttys[MAX_TTYS];
+kmutex_t tty_lock;
 
+/* (s may be user memory: copied first, the console's lock being a spin lock) */
 static size_t console_output(struct tty *t, const char *s, size_t n)
 {
     UNUSED(t);
-    console_write(s, n);
+    char k[256];
+    for (size_t done = 0; done < n;) {
+        size_t c = MIN(n - done, sizeof(k));
+        memcpy(k, s + done, c);
+        console_write(k, c);
+        done += c;
+    }
     return n;
 }
 
@@ -49,6 +62,7 @@ void tty_setup(struct tty *t, size_t (*output)(struct tty *, const char *, size_
     t->priv = priv;
 }
 
+/* tty_lock held */
 void tty_register(struct tty *t)
 {
     for (int i = 0; i < MAX_TTYS; i++)
@@ -58,6 +72,7 @@ void tty_register(struct tty *t)
         }
 }
 
+/* tty_lock held */
 void tty_unregister(struct tty *t)
 {
     for (int i = 0; i < MAX_TTYS; i++)
@@ -79,6 +94,7 @@ int tty_foreground_pgrp(void)
     return t ? t->pgrp : console_tty.pgrp;
 }
 
+/* Without tty_lock (procfs calls it under pidlock): the terminals are static, the answer a hint. */
 struct tty *tty_of_session(int sid)
 {
     for (int i = 0; i < MAX_TTYS; i++)
@@ -103,7 +119,7 @@ static void echo(struct tty *t, const char *s, size_t n)
 
 static void ready(struct tty *t)
 {
-    wakeup(t);
+    cv_broadcast(&t->cv);
     poll_wakeup();
 }
 
@@ -148,7 +164,24 @@ static void signal_char(struct tty *t, int sig, const char *echo_str)
     ready(t);
 }
 
+static void input_locked(struct tty *t, char c);
+
+/* A character typed (the keyboard's, the serial line's, a pty master's). */
 void tty_input(struct tty *t, char c)
+{
+    mutex_enter(&tty_lock);
+    input_locked(t, c);
+    mutex_exit(&tty_lock);
+}
+
+/* tty_lock held: several characters. */
+void tty_input_locked(struct tty *t, const char *s, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        input_locked(t, s[i]);
+}
+
+static void input_locked(struct tty *t, char c)
 {
     struct termios *tm = &t->t;
     if (c == '\r' && (tm->c_iflag & ICRNL))
@@ -231,17 +264,21 @@ long tty_read(struct tty *t, char *buf, size_t n)
 {
     if (n == 0)
         return 0;
+    mutex_enter(&tty_lock);
     if (is_background(t)) {
+        mutex_exit(&tty_lock);
         if (signal_ignored_or_blocked(current, SIGTTIN))
             return -EIO;
         signal_pgrp(current->pgid, SIGTTIN);
         return -ERESTART;
     }
     while (!tty_readable(t)) {
-        if (signal_pending(current))
+        if (!cv_wait_sig(&t->cv, &tty_lock)) {
+            mutex_exit(&tty_lock);
             return -ERESTART;
-        sleep_on(t);
+        }
         if (is_background(t) && !signal_pending(current)) {
+            mutex_exit(&tty_lock);
             signal_pgrp(current->pgid, SIGTTIN);
             return -ERESTART;
         }
@@ -257,27 +294,34 @@ long tty_read(struct tty *t, char *buf, size_t n)
     }
     if (got == 0 && t->eof_pending)
         t->eof_pending--;
+    mutex_exit(&tty_lock);
     return got;                            /* 0 = EOF (or hang-up) */
 }
 
 long tty_write(struct tty *t, const char *buf, size_t n)
 {
+    mutex_enter(&tty_lock);
+    long r = n;
     if (t->hungup)
-        return -EIO;
-    if ((t->t.c_lflag & TOSTOP) && is_background(t) && !signal_ignored_or_blocked(current, SIGTTOU)) {
+        r = -EIO;
+    else if ((t->t.c_lflag & TOSTOP) && is_background(t) && !signal_ignored_or_blocked(current, SIGTTOU))
+        r = -ERESTART;
+    else if (tty_is_pty(t))
+        r = pty_slave_write(t, buf, n);
+    else
+        t->output(t, buf, n);
+    mutex_exit(&tty_lock);
+    if (r == -ERESTART)
         signal_pgrp(current->pgid, SIGTTOU);
-        return -ERESTART;
-    }
-    if (tty_is_pty(t))
-        return pty_slave_write(t, buf, n);
-    t->output(t, buf, n);
-    return n;
+    return r;
 }
 
+/* tty_lock held */
 void tty_hangup(struct tty *t)
 {
     t->hungup = true;
     if (t->session) {
+        mutex_enter(&pidlock);
         for (int i = 1; i < NPROC; i++) {
             struct proc *p = &proc_table[i];
             if (p->state != PSTATE_UNUSED && p->state != PSTATE_ZOMBIE && p->sid == t->session) {
@@ -285,6 +329,7 @@ void tty_hangup(struct tty *t)
                 signal_send(p, SIGCONT);
             }
         }
+        mutex_exit(&pidlock);
     }
     t->session = 0;
     t->pgrp = 0;
@@ -293,21 +338,27 @@ void tty_hangup(struct tty *t)
 
 void tty_session_exit(int sid)
 {
+    mutex_enter(&tty_lock);
     for (int i = 0; i < MAX_TTYS; i++) {
         if (ttys[i] && ttys[i]->session == sid) {
             ttys[i]->session = 0;
             ttys[i]->pgrp = 0;
         }
     }
+    mutex_exit(&tty_lock);
 }
 
-/* Set the terminal attributes from a kernel copy (TCSETS, TCSETSW, TCSETSF). */
-long tty_set_termios(struct tty *t, const struct termios *kt, unsigned long cmd)
+void tty_get_termios(struct tty *t, struct termios *out)
 {
-    if (is_background(t) && !signal_ignored_or_blocked(current, SIGTTOU)) {
-        signal_pgrp(current->pgid, SIGTTOU);
-        return -ERESTART;
-    }
+    mutex_enter(&tty_lock);
+    *out = t->t;
+    mutex_exit(&tty_lock);
+}
+
+static long set_termios_locked(struct tty *t, const struct termios *kt, unsigned long cmd)
+{
+    if (is_background(t) && !signal_ignored_or_blocked(current, SIGTTOU))
+        return -ERESTART;                    /* (the caller sends SIGTTOU, without tty_lock) */
     memcpy(&t->t, kt, sizeof(struct termios));
     if (cmd == TCSETSF) {
         t->r_head = t->r_tail;
@@ -316,21 +367,46 @@ long tty_set_termios(struct tty *t, const struct termios *kt, unsigned long cmd)
     return 0;
 }
 
+/* Set the terminal attributes from a kernel copy (TCSETS, TCSETSW, TCSETSF). */
+long tty_set_termios(struct tty *t, const struct termios *kt, unsigned long cmd)
+{
+    mutex_enter(&tty_lock);
+    long r = set_termios_locked(t, kt, cmd);
+    mutex_exit(&tty_lock);
+    if (r == -ERESTART)
+        signal_pgrp(current->pgid, SIGTTOU);
+    return r;
+}
+
 /* tcflush: 0 input, 1 output, 2 both (output is queued by a pty only). */
 long tty_flush(struct tty *t, int which)
 {
     if (which < 0 || which > 2)
         return -EINVAL;
+    mutex_enter(&tty_lock);
     if (which != 1) {
         t->r_head = t->r_tail;
         t->line_len = 0;
     }
     if (which != 0 && t->oflush)
         t->oflush(t);
+    mutex_exit(&tty_lock);
     return 0;
 }
 
+static long ioctl_locked(struct tty *t, unsigned long cmd, uint64_t arg);
+
 long tty_ioctl(struct tty *t, unsigned long cmd, uint64_t arg)
+{
+    mutex_enter(&tty_lock);
+    long r = ioctl_locked(t, cmd, arg);
+    mutex_exit(&tty_lock);
+    if (r == -ERESTART)
+        signal_pgrp(current->pgid, SIGTTOU);     /* (a background process's change) */
+    return r;
+}
+
+static long ioctl_locked(struct tty *t, unsigned long cmd, uint64_t arg)
 {
     uint64_t pml4 = current->pml4;
     switch (cmd) {
@@ -344,7 +420,7 @@ long tty_ioctl(struct tty *t, unsigned long cmd, uint64_t arg)
     case TCSETSF:
         if (!user_range_ok(pml4, arg, sizeof(struct termios), false))
             return -EFAULT;
-        return tty_set_termios(t, (const struct termios *)arg, cmd);
+        return set_termios_locked(t, (const struct termios *)arg, cmd);
     case TIOCGPGRP:
         if (!user_range_ok(pml4, arg, sizeof(int), true))
             return -EFAULT;
@@ -358,11 +434,12 @@ long tty_ioctl(struct tty *t, unsigned long cmd, uint64_t arg)
         int pgrp = *(int *)arg;
         if (!t->session || current->sid != t->session)
             return -ENOTTY;
-        if (is_background(t) && !signal_ignored_or_blocked(current, SIGTTOU)) {
-            signal_pgrp(current->pgid, SIGTTOU);
+        if (is_background(t) && !signal_ignored_or_blocked(current, SIGTTOU))
             return -ERESTART;
-        }
-        if (pgrp <= 0 || !pgrp_exists_in_session(pgrp, t->session))
+        mutex_enter(&pidlock);
+        bool ok = pgrp > 0 && pgrp_exists_in_session(pgrp, t->session);
+        mutex_exit(&pidlock);
+        if (!ok)
             return -EPERM;
         t->pgrp = pgrp;
         return 0;
@@ -384,7 +461,11 @@ long tty_ioctl(struct tty *t, unsigned long cmd, uint64_t arg)
         if (current->sid != t->session)
             return -ENOTTY;
         if (current->sid == current->pid)
-            tty_session_exit(current->sid);
+            for (int i = 0; i < MAX_TTYS; i++)
+                if (ttys[i] && ttys[i]->session == current->sid) {
+                    ttys[i]->session = 0;
+                    ttys[i]->pgrp = 0;
+                }
         return 0;
     case TIOCGWINSZ:
         if (!user_range_ok(pml4, arg, sizeof(struct winsize), true))

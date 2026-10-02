@@ -12,6 +12,7 @@
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
  */
+#include "smp.h"
 #include "net.h"
 #include "ddi.h"
 #include "pci.h"
@@ -84,6 +85,7 @@ struct e1000 {
     uint32_t rx_next, tx_next;
     int irq;                                     /* 0: polled only */
     uint64_t interrupts;
+    struct spinlock rxlock;                      /* the receive ring: its interrupt, and the network thread's poll */
 };
 
 #define MAX_CARDS 4
@@ -127,6 +129,7 @@ static int e1000_send(struct netif *ifp, const void *frame, size_t len)
 static void e1000_poll(struct netif *ifp)
 {
     struct e1000 *c = ifp->drv;
+    spin_lock(&c->rxlock);
     for (int budget = 0; budget < NRX; budget++) {
         struct rx_desc *d = &c->rx[c->rx_next];
         if (!(d->status & 1))
@@ -139,6 +142,7 @@ static void e1000_poll(struct netif *ifp)
         wr(c, REG_RDT, c->rx_next);              /* give the descriptor back */
         c->rx_next = (c->rx_next + 1) % NRX;
     }
+    spin_unlock(&c->rxlock);
 }
 
 #define ICR_LSC    (1 << 2)

@@ -183,8 +183,8 @@ void pmm_init(uint64_t mb_info_phys)
 }
 
 /*
- * The frame allocator has its own lock (the innermost one: page faults on
- * anonymous memory allocate without the big kernel lock).  Callers run with
+ * The frame allocator has its own lock (the innermost one, a spin lock: page
+ * faults allocate under the address space's spin lock).  Callers run with
  * interrupts disabled.
  */
 static struct spinlock pmm_lock;

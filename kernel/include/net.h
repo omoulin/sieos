@@ -15,6 +15,7 @@
 
 #include "kernel.h"
 #include "abi.h"
+#include "sync.h"
 
 struct sieos_sockinfo6;
 struct sieos_netinfo6;
@@ -143,6 +144,7 @@ struct netif {
     uint32_t dhcp_xid, dhcp_offer_ip, dhcp_server;
     uint64_t dhcp_next_send;
     struct net6_state v6;
+    bool attach_pending;                       /* net_attach: for the network thread */
 };
 extern struct netif netifs[NETIF_MAX];
 extern int nnetif;
@@ -192,8 +194,18 @@ void net_attach(struct netif *ifp);           /* an interface registered after n
 int  net_configure(int index, bool dhcp, uint32_t ip, uint32_t mask, uint32_t gw, uint32_t dns);
 extern bool net_started;
 bool net_wait_config(int max_ticks);
-void net_poll(void);                          /* called every timer tick on the BSP */
-void net_rx(struct netif *ifp, const uint8_t *frame, size_t len);
+void net_poll(void);                          /* the boot's tick (then: the network thread's) */
+void net_rx(struct netif *ifp, const uint8_t *frame, size_t len);   /* a card received a frame: queued */
+void netisr_kick(void);                       /* the network thread has work (a tick ...) */
+void netisr_start(void);
+extern kmutex_t net_lock;                     /* the network stack (net.c) */
+/* net_lock held: sleep on chan (the caller sets curlwp->wake_tick for a deadline), net_lock held again after. */
+static inline void net_sleep(const void *chan)
+{
+    sleepq_block(chan, &net_lock, true);
+    mutex_enter(&net_lock);
+}
+#define net_wakeup(chan) sleepq_wakeup((chan), -1)
 int  ip_send(uint32_t src, uint32_t dst, uint8_t proto, const void *payload, size_t len);
 void ip_input(struct netif *in, const uint8_t *pkt, size_t len);     /* in: NULL for loopback */
 uint32_t csum_add(uint32_t sum, const void *data, size_t len);
@@ -249,6 +261,7 @@ void udp_input(const naddr_t *src, const naddr_t *dst, const uint8_t *seg, size_
 void icmp_deliver_raw(const naddr_t *src, int proto, const uint8_t *msg, size_t len);
 struct socket *socket_alloc(int type, int proto);
 void socket_close(struct socket *s);
+void socket_fd_closed(struct socket *s);     /* a descriptor of it was closed (accept sees it) */
 long socket_read(struct socket *s, void *buf, size_t n, bool nonblock);
 long socket_write(struct socket *s, const void *buf, size_t n, bool nonblock);
 bool socket_readable(struct socket *s);

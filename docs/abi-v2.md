@@ -3086,6 +3086,70 @@ values (SIEOS's open flags, clocks and signals), which the C library calls as Li
   6. llama.cpp's Vulkan backend: sia-brain on the GPU.
   Stages 1 to 4 can only be tried on the hardware; Mesa's side is built and checked in QEMU.
 
+### Milestone 77: no big kernel lock
+
+The kernel no longer has a lock that serialises it: as on Solaris, every subsystem has
+its own locks, taken in a fixed order ([locking.md](locking.md)), and the kernel runs on
+every processor at once.
+
+- **Synchronization (`sync.h`).** Solaris's interfaces:
+  - adaptive mutexes (`mutex_enter`/`mutex_exit`), which spin while the owner runs and
+    block when it is blocked, and spin mutexes;
+  - condition variables (`cv_wait`, `cv_wait_sig`, `cv_timedwait`, `cv_signal`,
+    `cv_broadcast`);
+  - reader/writer locks (`rw_enter`);
+  - recursive mutexes, for the file systems.
+
+  Blocking LWPs wait on sleep queues hashed by address. A wake-up between a test and the
+  sleep is never lost: the LWP joins the queue before its interlock is released, and any
+  wake-up takes it off.
+- **The dispatcher (`disp.c`).**
+  - One lock for the LWPs' states and the choice of the next to run, held across the
+    switch and released by the LWP switched to.
+  - An LWP is not run elsewhere, and its stack not freed, until the switch away from it
+    is complete.
+  - Wake-ups go to an idle processor that may run the LWP, the one it last ran on first.
+  - TLB shootdowns are answered by processors spinning with interrupts off.
+- **Kernel threads.** LWPs of process 0, in the SYS class:
+  - `intr`: the trap masks and acknowledges a device's line, the thread runs its
+    handlers;
+  - `clock`: the tick's work beyond the dispatcher's;
+  - `netisr`: the network's received frames and timers;
+  - `fsflush`: ext4's journal commits and disks that arrive late.
+
+  The timer interrupt only keeps the time, wakes sleepers and accounts processor time.
+  The signals it causes (`RLIMIT_CPU`, `ITIMER_VIRTUAL`, `ITIMER_PROF`) are sent on the
+  LWP's way back to user mode.
+- **The subsystems' locks:**
+  - Processes: `pidlock`, each process's `p_lock`, its address space's `as_lock`
+    (faults keep their spin lock), its descriptors' `p_fdlock`.
+  - Files and file systems: files used through references; each file system's lock,
+    taken by the VFS (all ext4 volumes share one); the mount table, the block cache, the
+    block devices, record locks.
+  - Pipes, terminals, the input queue.
+  - The network stack, with received frames queued for its thread; AF_UNIX sockets.
+  - eventfd and timerfd, each epoll set, System V IPC, user mutexes (hashed).
+  - Displays, power, driver loading, the console and the kernel log, the allocators,
+    PCI configuration space, the I/O APIC.
+  - The drivers: ATA, virtio-blk, the NIC receive rings, iwlwifi's transmissions,
+    nvgpu's clients.
+- **An NMI** (QEMU's `inject-nmi`) prints every processor's position and stack, and
+  every LWP with its state and wait channel, on the serial line.
+- **Tested on 8 processors in QEMU:**
+  - CPython's whole test suite (`-j8`): 452 files OK, 46,367 tests, in 4 min 3 s. It took
+    6 min 27 s under the big lock (at `-j4`).
+  - grep built natively with `make -j8`; its own tests give the same results as on the
+    previous kernel.
+  - 16 threads sharing a mutex (3.2 million increments, exact).
+  - Parallel pipelines and compiles.
+
+  The tests found these bugs, all fixed:
+  - an internal call that entered `net_lock` twice;
+  - a process's last LWP freeing detached LWPs while its parent freed the same LWPs;
+  - edge-triggered interrupt lines masked while waiting for their thread, which lost
+    the disk's completions;
+  - user-mutex wakes lost between an LWP joining a sleep queue and going to sleep.
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -3155,6 +3219,8 @@ values (SIEOS's open flags, clocks and signals), which the C library calls as Li
 | 74 | epoll, eventfd, timerfd, memfd, pidfd, `splice`, `copy_file_range`, `preadv`/`pwritev`, `mremap`, `lchmod` (done) |
 | 75 | a laptop's hardware: 64 processors, RTL8111/8168 Ethernet, Wi-Fi 6E AX210, `hwreport` (done; not tested on the hardware) |
 | 76 | NVIDIA RTX 50 (Blackwell) for Vulkan compute: Rust for SIEOS, GSP-RM, `/dev/nvgpu0`, NVK (in progress) |
+| 77 | no big kernel lock: Solaris's mutexes, condition variables, reader/writer locks and sleep queues; the dispatcher's lock; kernel threads for interrupts, the clock, the network and fsflush; every subsystem with its own locks ([locking.md](locking.md)) (done) |
+| 78 | Chromium's needs, Solaris's way (planned, [chromium.md](chromium.md)): POSIX timers, `getpeerucred`, event ports with file events, `backtrace`/`printstack`, `arc4random`, `pthread_cond_clockwait`, the mappings in a tree; Linux-only needs translated in the Chromium package (`liblxcompat`) |
 | 73 | 4096-byte paths, TCP urgent data and `MSG_PEEK`, processor sets (`lwp_affinity`), demand-paged file mappings, `posix_spawn` scheduling, the locale database (done) |
 | 72 | Python 3.14 and its libraries; larger file, socket and inode tables; exit, tmpfs and pipe fixes; 64 KiB pipes; listen backlogs; socket options kept; pty output processing; `setreuid`, `sigwait`, CPU clocks; `SO_DOMAIN`, `SO_PROTOCOL`; `pthread_getattr_np`, thread names (done) |
 | 71 | OpenGL, EGL and Vulkan in software (Mesa: llvmpipe, lavapipe; LLVM 22), EGL's Facet platform, the Vulkan loader (done) |

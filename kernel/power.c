@@ -588,9 +588,11 @@ static void thermal_policy(void)
     if (t >= pw.critical) {
         if (++pw.hot_seconds == 3) {
             kprintf("power: %d C, at the critical %d C: shutting down\n", t, pw.critical);
+            mutex_enter(&pidlock);
             struct proc *init = proc_find(1);
             if (init)
                 signal_send(init, SIGPWR);
+            mutex_exit(&pidlock);
         }
     } else {
         pw.hot_seconds = 0;
@@ -607,20 +609,21 @@ static void power_button(void)
         return;
     pw.button_quiet = ticks + 2 * TIMER_HZ;
     kprintf("power: the power button: shutting down\n");
+    mutex_enter(&pidlock);
     struct proc *init = proc_find(1);
     if (init)
         signal_send(init, SIGPWR);
+    mutex_exit(&pidlock);
 }
 
 /* Every local timer tick, on every processor (lapic_timer_irq). */
+/* Each processor's timer interrupt: its own frequency and temperature. */
 void power_cpu_tick(void)
 {
     struct cpu *c = mycpu();
     if (!pw.ready || c->id < 0 || c->id >= NCPU)
         return;                                  /* (the processors tick before power_init) */
     struct pcpu *pc = &pcpu[c->id];
-    if (c->id == 0 && pw.pwrbtn_fixed)
-        power_button();
     if (ticks < pc->next)
         return;
     pc->next = ticks + POLL_TICKS;
@@ -629,11 +632,26 @@ void power_cpu_tick(void)
         cpu_apply();
     }
     cpu_sample(pc);
-    if (c->id == 0) {
-        thermal_policy();
-        if (pw.sio_kind && ticks / POLL_TICKS % 2 == 0)
-            fans_read();
-    }
+}
+
+/* The clock thread, every tick: the power button, the thermal policy, the fans. */
+static kmutex_t pw_lock;                         /* the policy, the thresholds (power_tick, power_ioctl) */
+
+void power_tick(void)
+{
+    static uint64_t next;
+    if (!pw.ready)
+        return;
+    if (pw.pwrbtn_fixed)
+        power_button();
+    if (ticks < next)
+        return;
+    next = ticks + POLL_TICKS;
+    mutex_enter(&pw_lock);
+    thermal_policy();
+    if (pw.sio_kind && ticks / POLL_TICKS % 2 == 0)
+        fans_read();
+    mutex_exit(&pw_lock);
 }
 
 /* The idle loop's wait (interrupts are off; on for the wait). */
@@ -728,15 +746,19 @@ long power_ioctl(unsigned long cmd, void *arg)
         if (ps.dps_policy > SIEOS_POWER_POWERSAVE || ps.dps_passive > 125 || ps.dps_critical > 130 ||
             (ps.dps_passive > 0 && ps.dps_passive < 40) || (ps.dps_critical > 0 && ps.dps_critical < 50))
             return -EINVAL;
+        mutex_enter(&pw_lock);
         int passive = ps.dps_passive < 0 ? pw.passive : ps.dps_passive ? ps.dps_passive : default_passive();
         int critical = ps.dps_critical < 0 ? pw.critical : ps.dps_critical ? ps.dps_critical : default_critical();
-        if (passive >= critical)
+        if (passive >= critical) {
+            mutex_exit(&pw_lock);
             return -EINVAL;
+        }
         if (ps.dps_policy >= 0)
             pw.policy = ps.dps_policy;
         pw.passive = passive;
         pw.critical = critical;
         pw.gen++;
+        mutex_exit(&pw_lock);
         return 0;
     }
     return -ENOTTY;

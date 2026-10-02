@@ -9,6 +9,11 @@
  * the descriptors arrive with the first byte of their message.  A datagram
  * socket has a queue of messages.  Writers wait on the receiving socket.
  *
+ * Locking: unix_lock covers every AF_UNIX socket (sleepers wait on their
+ * socket with it as the interlock).  Descriptors in messages that go away
+ * are closed after it is released (unix_unlock), as closing one may close
+ * a socket; descriptors are installed without it.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -77,6 +82,57 @@ struct usock {
 };
 
 static struct usock *bound_list;
+static kmutex_t unix_lock;
+
+/* Files to close once unix_lock is released. */
+static struct dclose {
+    struct dclose *next;
+    struct urights *r;
+    struct file *f;
+} *dclose_list;
+static kmutex_t dclose_lock = MUTEX_SPIN_INITIALIZER;
+
+static void unix_sleep(const void *chan)
+{
+    sleepq_block(chan, &unix_lock, true);
+    mutex_enter(&unix_lock);
+}
+
+static void unix_unlock(void)
+{
+    mutex_exit(&unix_lock);
+    mutex_enter(&dclose_lock);
+    struct dclose *d = dclose_list;
+    dclose_list = NULL;
+    mutex_exit(&dclose_lock);
+    while (d) {
+        struct dclose *next = d->next;
+        for (struct urights *r = d->r, *rn; r; r = rn) {
+            rn = r->next;
+            for (int i = 0; i < r->n; i++)
+                if (r->f[i])
+                    file_close(r->f[i]);
+            kfree(r);
+        }
+        if (d->f)
+            file_close(d->f);
+        kfree(d);
+        d = next;
+    }
+}
+
+static void defer_close(struct urights *r, struct file *f)
+{
+    struct dclose *d = kmalloc(sizeof(*d));
+    if (!d)
+        panic("unix: no memory to close a descriptor");
+    d->r = r;
+    d->f = f;
+    mutex_enter(&dclose_lock);
+    d->next = dclose_list;
+    dclose_list = d;
+    mutex_exit(&dclose_lock);
+}
 
 /* ------------------------------------------------------------------ */
 /* Sockets and descriptors                                             */
@@ -108,26 +164,31 @@ static void usock_put(struct usock *u)
     }
 }
 
+/* unix_lock held: the descriptors are closed after it is released. */
 static void rights_free(struct urights *r)
 {
-    while (r) {
-        struct urights *next = r->next;
-        for (int i = 0; i < r->n; i++)
-            if (r->f[i])
-                file_close(r->f[i]);
-        kfree(r);
-        r = next;
-    }
+    if (r)
+        defer_close(r, NULL);
 }
 
 static void wake(struct usock *u)
 {
-    wakeup(u);
+    sleepq_wakeup(u, -1);
     poll_wakeup();
 }
 
-/* The socket's file is gone (or a pending connection is dropped). */
+static void close_locked(struct usock *u);
+
+/* The socket's file is gone. */
 void unix_close(struct usock *u)
+{
+    mutex_enter(&unix_lock);
+    close_locked(u);
+    unix_unlock();
+}
+
+/* unix_lock held: the socket's file is gone (or a pending connection is dropped). */
+static void close_locked(struct usock *u)
 {
     u->closed = true;
     if (u->bound)
@@ -144,7 +205,7 @@ void unix_close(struct usock *u)
         u->peer = NULL;
     }
     for (int i = 0; i < u->nback; i++)
-        unix_close(u->backlog[i]);
+        close_locked(u->backlog[i]);
     u->nback = 0;
     u->state = US_NEW;
     rights_free(u->rights);
@@ -170,6 +231,7 @@ static struct file *unix_file(struct usock *u)
     return f;
 }
 
+/* (without unix_lock) */
 static long install(struct usock *u)
 {
     struct file *f = unix_file(u);
@@ -223,11 +285,12 @@ long unix_socketpair(int type, int *usv)
 
 static struct usock *ufd(long fd, struct file **fp)
 {
-    if (fd < 0 || fd >= NOFILE || !current->ofile[fd] || current->ofile[fd]->type != FD_UNIX)
+    struct file *f = fd_file((int)fd);
+    if (!f || f->type != FD_UNIX)
         return NULL;
     if (fp)
-        *fp = current->ofile[fd];
-    return current->ofile[fd]->usock;
+        *fp = f;
+    return f->usock;
 }
 
 bool unix_fd(long fd)
@@ -381,7 +444,7 @@ static long do_connect(struct usock *u, struct file *f, const void *uaddr, long 
             r = -ERESTART;
         if (r)
             break;
-        sleep_on(l);
+        unix_sleep(l);
     }
     if (!r && (l->closed || l->state != US_LISTEN))
         r = -ECONNREFUSED;
@@ -415,7 +478,7 @@ static long do_accept(struct usock *u, struct file *f, void *uaddr, unsigned int
             return -EAGAIN;
         if (signal_pending(current))
             return -ERESTART;
-        sleep_on(u);
+        unix_sleep(u);
         if (u->state != US_LISTEN)
             return -EINVAL;
     }
@@ -426,15 +489,18 @@ static long do_accept(struct usock *u, struct file *f, void *uaddr, unsigned int
     struct usock *p = n->peer;
     int r = put_name(uaddr, ulen, p ? &p->addr : &none, p ? p->addrlen : ADDR_HDR);
     if (r < 0) {
-        unix_close(n);
+        close_locked(n);
         return r;
     }
+    unix_unlock();                               /* (installing may close: without the lock) */
     long fd = install(n);
-    if (fd >= 0) {
+    mutex_enter(&unix_lock);
+    struct file *nf = fd >= 0 ? fd_file((int)fd) : NULL;
+    if (nf) {
         if (flags & (SIEOS_SOCK_NONBLOCK | SIEOS_SOCK_NDELAY))
-            current->ofile[fd]->flags |= O_NONBLOCK_K;
+            nf->flags |= O_NONBLOCK_K;
         if (flags & SIEOS_SOCK_CLOEXEC)
-            current->fdflags[fd] = FD_CLOEXEC;
+            fd_setflags(current, (int)fd, FD_CLOEXEC);
     }
     return fd;
 }
@@ -548,13 +614,13 @@ static long get_rights(const void *ctl, unsigned int clen, struct urights **out)
                 *out = NULL;
             }
             for (int i = 0; i < n; i++) {
-                int fd = fds[i];
-                if (fd < 0 || fd >= NOFILE || !current->ofile[fd]) {
+                struct file *pf = getf(fds[i]);
+                if (!pf) {
                     rights_free(r);
                     *out = NULL;
                     return -EBADF;
                 }
-                r->f[r->n++] = file_dup(current->ofile[fd]);
+                r->f[r->n++] = pf;               /* (getf's reference: the message's now) */
             }
             *out = r;
         }
@@ -645,7 +711,7 @@ static long stream_send(struct usock *u, struct file *f, struct uio *io, struct 
                 r = -ERESTART;
             if (r)
                 break;
-            sleep_on(p);
+            unix_sleep(p);
             continue;
         }
         if (rights) {                            /* the descriptors go with this message's first byte */
@@ -685,7 +751,7 @@ static long stream_recv(struct usock *u, struct file *f, struct uio *io, struct 
             return -EAGAIN;
         if (signal_pending(current))
             return -ERESTART;
-        sleep_on(u);
+        unix_sleep(u);
     }
     bool peek = flags & SIEOS_MSG_PEEK;
     uint64_t limit = u->wn;
@@ -784,7 +850,7 @@ static long dgram_send(struct usock *u, struct file *f, struct uio *io, const vo
             r = -ERESTART;
         if (r)
             break;
-        sleep_on(t);
+        unix_sleep(t);
     }
     if (!r && t->closed)
         r = -ECONNREFUSED;
@@ -812,7 +878,7 @@ static long dgram_recv(struct usock *u, struct file *f, struct uio *io, void *ua
             return -EAGAIN;
         if (signal_pending(current))
             return -ERESTART;
-        sleep_on(u);
+        unix_sleep(u);
     }
     struct umsg *m = u->q;
     size_t n = m->len < io->resid ? m->len : io->resid;
@@ -896,16 +962,32 @@ static long do_recv(struct usock *u, struct file *f, const struct sieos_iovec *i
 long unix_read(struct file *f, void *buf, size_t n)
 {
     struct sieos_iovec v = { buf, n };
-    return do_recv(f->usock, f, &v, 1, NULL, NULL, NULL, 0);
+    mutex_enter(&unix_lock);
+    long r = do_recv(f->usock, f, &v, 1, NULL, NULL, NULL, 0);
+    unix_unlock();
+    return r;
 }
 
 long unix_write(struct file *f, const void *buf, size_t n)
 {
     struct sieos_iovec v = { (void *)buf, n };
-    return do_send(f->usock, f, &v, 1, NULL, 0, NULL, 0, 0);
+    mutex_enter(&unix_lock);
+    long r = do_send(f->usock, f, &v, 1, NULL, 0, NULL, 0, 0);
+    unix_unlock();
+    return r;
 }
 
+static short poll_locked(struct usock *u);
+
 short unix_poll(struct usock *u)
+{
+    mutex_enter(&unix_lock);
+    short r = poll_locked(u);
+    mutex_exit(&unix_lock);
+    return r;
+}
+
+static short poll_locked(struct usock *u)
 {
     short r = 0;
     if (u->state == US_LISTEN)
@@ -1007,6 +1089,9 @@ static long do_msg(struct usock *u, struct file *f, struct sieos_msghdr *um, lon
     return do_recv(u, f, m.msg_iov, m.msg_iovlen, m.msg_name, m.msg_name ? &um->msg_namelen : NULL, um, flags);
 }
 
+static long syscall_locked(struct usock *u, struct file *f, uint64_t nr, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5, uint64_t a6);
+
 /* A socket call on an AF_UNIX descriptor (a1 is the descriptor). */
 long unix_syscall(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
 {
@@ -1014,6 +1099,15 @@ long unix_syscall(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a
     struct usock *u = ufd(a1, &f);
     if (!u)
         return -ENOTSOCK;
+    mutex_enter(&unix_lock);
+    long r = syscall_locked(u, f, nr, a2, a3, a4, a5, a6);
+    unix_unlock();
+    return r;
+}
+
+static long syscall_locked(struct usock *u, struct file *f, uint64_t nr, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5, uint64_t a6)
+{
     switch (nr) {
     case SIEOS_SYS_bind:        return do_bind(u, (const void *)a2, a3);
     case SIEOS_SYS_listen:      return do_listen(u, a2);

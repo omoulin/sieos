@@ -23,8 +23,11 @@
  *   DDI_PHASE_BOOT     before the root is mounted (input, disks, USB),
  *   DDI_PHASE_ROOT     after (network cards, what needs firmware files).
  * _init finds its devices itself (pci_find_all, pci_count/pci_at) and
- * registers them with their framework; it runs once, from the boot thread,
- * under the big kernel lock.  Drivers are not unloaded.
+ * registers them with their framework; it runs once, from the boot thread
+ * (or modload, one load at a time).  The kernel runs on every processor at
+ * once: a driver locks its own state (sync.h) where its entry points (its
+ * interrupt handler, in the interrupt thread; its poll, in the clock
+ * thread; its framework's calls) can meet.  Drivers are not unloaded.
  *
  * Build one on SIEOS:
  *   gcc -c -O2 -ffreestanding -fno-pic -mcmodel=kernel -mno-red-zone -mgeneral-regs-only \

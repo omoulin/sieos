@@ -19,6 +19,7 @@ void power_off(void);                    /* returns only if the machine did not 
 void power_reset(void);
 void power_idle(void);                   /* the idle loop's wait: HLT or MWAIT */
 void power_cpu_tick(void);               /* every local timer tick, on every processor */
+void power_tick(void);                   /* the clock thread's, every tick */
 bool msr_fixup(struct trapframe *tf);    /* #GP in kernel mode on a probed MSR: skipped */
 long power_ioctl(unsigned long cmd, void *arg);
 

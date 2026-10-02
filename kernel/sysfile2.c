@@ -374,11 +374,12 @@ static long do_fcntl(long fd, long cmd, uint64_t arg)
     case SIEOS_F_DUP2FD:
     case SIEOS_F_DUP2FD_CLOEXEC:
         return fsys_dup2(fd, (int)arg, cmd == SIEOS_F_DUP2FD_CLOEXEC);
-    case SIEOS_F_GETFD:
-        return (current->fdflags[fd] & FD_CLOEXEC) ? SIEOS_FD_CLOEXEC : 0;
+    case SIEOS_F_GETFD: {
+        int fl = fd_getflags(current, fd);
+        return fl < 0 ? fl : (fl & FD_CLOEXEC) ? SIEOS_FD_CLOEXEC : 0;
+    }
     case SIEOS_F_SETFD:
-        current->fdflags[fd] = (arg & SIEOS_FD_CLOEXEC) ? FD_CLOEXEC : 0;
-        return 0;
+        return fd_setflags(current, fd, (arg & SIEOS_FD_CLOEXEC) ? FD_CLOEXEC : 0);
     case SIEOS_F_GETFL:
         return k_oflags_to_sieos(f->flags);
     case SIEOS_F_SETFL: {
@@ -602,7 +603,7 @@ static long mount_at(const char *uspec, const char *udir, long mflag, const char
         r = -EBUSY;                                    /* already a mount point */
     else if (!(mflag & SIEOS_MS_OVERLAY) && ip->fs->ops->readdir) {
         uint64_t off = 0;
-        ip->fs->ops->readdir(ip, &off, nonempty_cb, &ne);
+        vfs_readdir(ip, &off, nonempty_cb, &ne);
         if (ne.any)
             r = -EBUSY;                                /* covering files needs MS_OVERLAY */
     }
@@ -673,11 +674,9 @@ static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
     int *ip = (int *)arg;
     switch (cmd) {
     case SIEOS_FIOCLEX:
-        current->fdflags[fd] = FD_CLOEXEC;
-        return 0;
+        return fd_setflags(current, fd, FD_CLOEXEC);
     case SIEOS_FIONCLEX:
-        current->fdflags[fd] = 0;
-        return 0;
+        return fd_setflags(current, fd, 0);
     case SIEOS_FIONBIO:
         if (!user_ok(ip, sizeof(int), false))
             return -EFAULT;
@@ -758,7 +757,9 @@ static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
         if (!user_ok(u, sizeof(*u), true))
             return -EFAULT;
         struct sieos_termios v;
-        termios_to_v2(&t->t, &v);
+        struct termios kt;
+        tty_get_termios(t, &kt);
+        termios_to_v2(&kt, &v);
         memcpy(u, &v, sizeof(v));
         return 0;
     }
@@ -768,8 +769,8 @@ static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
         const struct sieos_termios *u = (const struct sieos_termios *)arg;
         if (!user_ok(u, sizeof(*u), false))
             return -EFAULT;
-        static struct termios kt;                    /* under the big kernel lock */
-        kt = t->t;
+        struct termios kt;
+        tty_get_termios(t, &kt);
         termios_from_v2(u, &kt);
         unsigned long kc = cmd == SIEOS_TCSETS ? TCSETS : cmd == SIEOS_TCSETSW ? TCSETSW : TCSETSF;
         return tty_set_termios(t, &kt, kc);
@@ -845,9 +846,8 @@ long syscall_file_v2(struct trapframe *tf, bool *handled)
     case SIEOS_SYS_splice:    return do_splice(a1, (int64_t *)a2, a3, (int64_t *)a4, a5, (long)a6);
     case SIEOS_SYS_writev:    return do_rwv(a1, (const struct sieos_iovec *)a2, (int)a3, true);
     case SIEOS_SYS_close:
-        if (!fsys_file(a1))
+        if (!fd_close(current, a1))
             return -EBADF;
-        fd_close(current, a1);
         return 0;
     case SIEOS_SYS_lseek:     return fsys_lseek(a1, (int64_t)a2, (int)a3);
     case SIEOS_SYS_openat:
@@ -938,21 +938,21 @@ long syscall_file_v2(struct trapframe *tf, bool *handled)
         long r = pipe_create(&rf, &wf);
         if (r < 0)
             return r;
-        int fd0 = fsys_fdalloc(rf, 0);
-        int fd1 = fd0 >= 0 ? fsys_fdalloc(wf, 0) : -EMFILE;
-        if (fd0 < 0 || fd1 < 0) {
-            if (fd0 >= 0)
-                current->ofile[fd0] = NULL;
-            file_close(rf);
-            file_close(wf);
-            return -EMFILE;
-        }
         if (a2 & SIEOS_O_NONBLOCK) {
             rf->flags |= O_NONBLOCK_K;
             wf->flags |= O_NONBLOCK_K;
         }
-        if (a2 & SIEOS_O_CLOEXEC)
-            current->fdflags[fd0] = current->fdflags[fd1] = FD_CLOEXEC;
+        int fdfl = (a2 & SIEOS_O_CLOEXEC) ? FD_CLOEXEC : 0;
+        int fd0 = fd_alloc(current, rf, 0, fdfl);
+        int fd1 = fd0 >= 0 ? fd_alloc(current, wf, 0, fdfl) : -EMFILE;
+        if (fd0 < 0 || fd1 < 0) {
+            if (fd0 >= 0)
+                fd_close(current, fd0);
+            else
+                file_close(rf);
+            file_close(wf);
+            return -EMFILE;
+        }
         ufds[0] = fd0;
         ufds[1] = fd1;
         return 0;

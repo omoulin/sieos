@@ -50,8 +50,10 @@ static uint64_t tv_to_ticks(const struct sieos_timeval *tv)
 }
 
 /* CPU ticks of the calling process: exited LWPs plus the live ones. */
+/* (the caller's process: its p_lock is taken here) */
 static void proc_times(struct proc *p, uint64_t *total, uint64_t *sys)
 {
+    mutex_enter(&p->p_lock);
     uint64_t t = p->ticks, s = p->ru.sticks;
     for (int i = 0; i < NLWP; i++) {
         struct lwp *l = &lwp_table[i];
@@ -60,6 +62,7 @@ static void proc_times(struct proc *p, uint64_t *total, uint64_t *sys)
             s += l->sticks;
         }
     }
+    mutex_exit(&p->p_lock);
     *total = t;
     *sys = s;
 }
@@ -202,7 +205,9 @@ static long do_getitimer(long which, struct sieos_itimerval *u)
     if (!user_ok(u, sizeof(*u), true))
         return -EFAULT;
     struct sieos_itimerval v;
+    mutex_enter(&current->p_lock);
     itimer_get(current, i, &v);
+    mutex_exit(&current->p_lock);
     memcpy(u, &v, sizeof(v));
     return 0;
 }
@@ -215,16 +220,21 @@ static long do_setitimer(long which, const struct sieos_itimerval *un, struct si
     if ((un && !user_ok(un, sizeof(*un), false)) || (uo && !user_ok(uo, sizeof(*uo), true)))
         return -EFAULT;
     struct proc *p = current;
-    struct sieos_itimerval old;
-    itimer_get(p, i, &old);
+    struct sieos_itimerval old, n = { { 0, 0 }, { 0, 0 } };
     if (un) {
-        struct sieos_itimerval n = *un;
+        n = *un;
         if (n.it_value.tv_sec < 0 || n.it_value.tv_usec < 0 || n.it_value.tv_usec >= 1000000 ||
             n.it_interval.tv_sec < 0 || n.it_interval.tv_usec < 0 || n.it_interval.tv_usec >= 1000000)
             return -EINVAL;
-        p->itimer_value[i] = tv_to_ticks(&n.it_value);
-        p->itimer_interval[i] = p->itimer_value[i] ? tv_to_ticks(&n.it_interval) : 0;
     }
+    mutex_enter(&p->p_lock);
+    itimer_get(p, i, &old);
+    if (un) {
+        uint64_t v = tv_to_ticks(&n.it_value);
+        p->itimer_interval[i] = v ? tv_to_ticks(&n.it_interval) : 0;
+        __atomic_store_n(&p->itimer_value[i], v, __ATOMIC_RELAXED);   /* (the clock counts it down) */
+    }
+    mutex_exit(&p->p_lock);
     if (uo)
         memcpy(uo, &old, sizeof(old));
     return 0;
@@ -240,8 +250,10 @@ static long do_times(struct sieos_tms *u)
         struct sieos_tms v;
         v.tms_utime = t - s;
         v.tms_stime = s;
+        mutex_enter(&current->p_lock);
         v.tms_cutime = current->child_ticks - current->cru.sticks;
         v.tms_cstime = current->cru.sticks;
+        mutex_exit(&current->p_lock);
         memcpy(u, &v, sizeof(v));
     }
     return ticks;                                /* elapsed time since boot, in CLK_TCK units */
@@ -275,10 +287,14 @@ static long do_getrlimit(long res, struct sieos_rlimit *u)
         return -EINVAL;
     if (!user_ok(u, sizeof(*u), true))
         return -EFAULT;
+    mutex_enter(&current->p_lock);
     struct sieos_rlimit r = { current->rlim_cur[res], current->rlim_max[res] };
+    mutex_exit(&current->p_lock);
     memcpy(u, &r, sizeof(r));
     return 0;
 }
+
+static long setrlimit_locked(struct proc *p, long res, struct sieos_rlimit r);
 
 static long do_setrlimit(long res, const struct sieos_rlimit *u)
 {
@@ -288,6 +304,14 @@ static long do_setrlimit(long res, const struct sieos_rlimit *u)
         return -EFAULT;
     struct sieos_rlimit r = *u;
     struct proc *p = current;
+    mutex_enter(&p->p_lock);
+    long e = setrlimit_locked(p, res, r);
+    mutex_exit(&p->p_lock);
+    return e;
+}
+
+static long setrlimit_locked(struct proc *p, long res, struct sieos_rlimit r)
+{
     if (r.rlim_cur == SIEOS_RLIM_SAVED_CUR)
         r.rlim_cur = p->rlim_cur[res];
     else if (r.rlim_cur == SIEOS_RLIM_SAVED_MAX)
@@ -325,6 +349,7 @@ static long do_getrusage(long who, struct sieos_rusage *u)
     switch (who) {
     case SIEOS_RUSAGE_SELF:
         proc_times(p, &t, &s);
+        mutex_enter(&p->p_lock);
         r.ru_nvcsw = p->ru.nvcsw;
         r.ru_nivcsw = p->ru.nivcsw;
         r.ru_minflt = p->ru.minflt;
@@ -337,13 +362,16 @@ static long do_getrusage(long who, struct sieos_rusage *u)
             }
         }
         r.ru_maxrss = p->maxrss_kb;
+        mutex_exit(&p->p_lock);
         break;
     case SIEOS_RUSAGE_CHILDREN:
+        mutex_enter(&p->p_lock);
         t = p->child_ticks;
         s = p->cru.sticks;
         r.ru_nvcsw = p->cru.nvcsw;
         r.ru_nivcsw = p->cru.nivcsw;
         r.ru_minflt = p->cru.minflt;
+        mutex_exit(&p->p_lock);
         break;
     case SIEOS_RUSAGE_LWP: {
         struct lwp *l = curlwp;
@@ -512,12 +540,19 @@ static long do_p_online(long id, long flag)
         for (int i = 0; i < ncpu; i++)
             if (cpus[i].online && !cpus[i].offline && &cpus[i] != c)
                 others |= 1ULL << cpus[i].id;
+        disp_enter();
         for (int i = 0; i < NLWP; i++) {
             struct lwp *l = &lwp_table[i];
-            if (l->state != LWP_UNUSED && (l->bound == c->id + 1 || (l->affinity && !(l->affinity & others))))
+            if (l->state != LWP_UNUSED && (l->bound == c->id + 1 || (l->affinity && !(l->affinity & others)))) {
+                disp_exit();
                 return -EBUSY;                   /* LWPs are bound to it, or may run on it only */
+            }
         }
         c->offline = true;
+        c->need_resched = true;
+        disp_exit();
+        if (c != mycpu())
+            smp_resched(c);                      /* (it leaves its LWP at its next reschedule) */
         return old;
     }
     }
@@ -538,6 +573,8 @@ static long do_lwp_affinity(long idtype, long id, long op, uint64_t *umask)
         return -EFAULT;
     if (op != SIEOS_AFF_GET && op != SIEOS_AFF_SET)
         return -EINVAL;
+    if (idtype != SIEOS_P_LWPID && idtype != SIEOS_P_PID)
+        return -EINVAL;
     uint64_t online = 0, set = 0;
     for (int i = 0; i < ncpu; i++)
         if (cpus[i].online && !cpus[i].offline)
@@ -548,40 +585,49 @@ static long do_lwp_affinity(long idtype, long id, long op, uint64_t *umask)
             return -EINVAL;
         set = (m & online) == online ? 0 : (m & online);
     }
-    struct proc *p;
-    if (idtype == SIEOS_P_LWPID) {
-        p = current;
-    } else if (idtype == SIEOS_P_PID) {
-        p = id == SIEOS_P_MYID ? current : proc_find(id);
-        if (!p || p->state != PSTATE_RUNNING)
-            return -ESRCH;
-    } else {
-        return -EINVAL;
+    mutex_enter(&pidlock);
+    struct proc *p = idtype == SIEOS_P_LWPID || id == SIEOS_P_MYID ? current : proc_find(id);
+    long r = 0;
+    if (!p || p->state != PSTATE_RUNNING)
+        r = -ESRCH;
+    else if (op == SIEOS_AFF_SET && p != current && !is_root() && current->euid != p->uid && current->euid != p->euid)
+        r = -EPERM;
+    if (r) {
+        mutex_exit(&pidlock);
+        return r;
     }
-    if (op == SIEOS_AFF_SET && p != current && !is_root() && current->euid != p->uid && current->euid != p->euid)
-        return -EPERM;
     bool found = false;
+    uint64_t got = 0;
+    mutex_enter(&p->p_lock);
+    disp_enter();                                    /* (the dispatcher reads the affinities) */
     for (int i = 0; i < NLWP; i++) {
         struct lwp *l = &lwp_table[i];
         if (l->proc != p || l->state == LWP_UNUSED || l->state == LWP_ZOMBIE)
             continue;
         if (idtype == SIEOS_P_LWPID && l->lwpid != (id == SIEOS_P_MYID ? curlwp->lwpid : id))
             continue;
+        found = true;
         if (op == SIEOS_AFF_GET) {
-            *umask = l->affinity ? (l->affinity & online) : online;
-            return 0;
+            got = l->affinity ? (l->affinity & online) : online;
+            break;
         }
         l->affinity = set;
-        found = true;
         if (l != curlwp && l->state == LWP_RUNNING)
             for (int c = 0; c < ncpu; c++)
                 if (cpus[c].lwp == l && set && !(set & (1ULL << cpus[c].id)))
                     cpus[c].need_resched = true; /* (it moves at its next reschedule) */
     }
+    disp_exit();
+    mutex_exit(&p->p_lock);
+    mutex_exit(&pidlock);
     if (!found)
         return -ESRCH;
+    if (op == SIEOS_AFF_GET) {
+        *umask = got;
+        return 0;
+    }
     if (curlwp->affinity && !(curlwp->affinity & (1ULL << mycpu()->id)))
-        schedule();                              /* move to an allowed processor now */
+        preempt();                              /* move to an allowed processor now */
     return 0;
 }
 
@@ -595,19 +641,22 @@ static long do_processor_bind(long idtype, long id, long cpu, int *uobind)
         if (!c || c->offline)
             return -EINVAL;
     }
-    struct proc *p;
-    if (idtype == SIEOS_P_LWPID) {
-        p = current;
-    } else if (idtype == SIEOS_P_PID) {
-        p = id == SIEOS_P_MYID ? current : proc_find(id);
-        if (!p || p->state != PSTATE_RUNNING)
-            return -ESRCH;
-    } else {
+    if (idtype != SIEOS_P_LWPID && idtype != SIEOS_P_PID)
         return -EINVAL;
+    mutex_enter(&pidlock);
+    struct proc *p = idtype == SIEOS_P_LWPID || id == SIEOS_P_MYID ? current : proc_find(id);
+    long r = 0;
+    if (!p || p->state != PSTATE_RUNNING)
+        r = -ESRCH;
+    else if (p != current && !is_root() && current->euid != p->uid && current->euid != p->euid)
+        r = -EPERM;
+    if (r) {
+        mutex_exit(&pidlock);
+        return r;
     }
-    if (p != current && !is_root() && current->euid != p->uid && current->euid != p->euid)
-        return -EPERM;
     int old = -2;
+    mutex_enter(&p->p_lock);
+    disp_enter();
     for (int i = 0; i < NLWP; i++) {
         struct lwp *l = &lwp_table[i];
         if (l->proc != p || l->state == LWP_UNUSED || l->state == LWP_ZOMBIE)
@@ -619,12 +668,15 @@ static long do_processor_bind(long idtype, long id, long cpu, int *uobind)
         if (cpu != SIEOS_PBIND_QUERY)
             l->bound = cpu == SIEOS_PBIND_NONE ? 0 : (int)cpu + 1;
     }
+    disp_exit();
+    mutex_exit(&p->p_lock);
+    mutex_exit(&pidlock);
     if (old == -2)
         return -ESRCH;
     if (uobind)
         *uobind = old;
     if (cpu >= 0 && curlwp->bound && curlwp->bound != mycpu()->id + 1)
-        schedule();                              /* move to the new processor now */
+        preempt();                              /* move to the new processor now */
     return 0;
 }
 

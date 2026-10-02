@@ -10,6 +10,7 @@
 
 #include "kernel.h"
 #include "abi.h"
+#include "sync.h"
 
 #define TTY_BUF 1024
 
@@ -30,15 +31,19 @@ struct tty {
     size_t (*output)(struct tty *t, const char *s, size_t n);
     void (*oflush)(struct tty *t);   /* tcflush(TCOFLUSH): drop queued output; NULL: none queued */
     void *priv;
+    kcondvar_t cv;             /* its readers wait (with tty_lock) */
 };
 
 extern struct tty console_tty;
+extern kmutex_t tty_lock;                  /* every terminal and pseudo-terminal (tty.c) */
 
 void tty_init(void);
 void tty_setup(struct tty *t, size_t (*output)(struct tty *, const char *, size_t), void *priv);
 void tty_register(struct tty *t);
 void tty_unregister(struct tty *t);
 void tty_input(struct tty *t, char c);
+void tty_input_locked(struct tty *t, const char *s, size_t n);
+void tty_get_termios(struct tty *t, struct termios *out);
 long tty_read(struct tty *t, char *buf, size_t n);
 long tty_write(struct tty *t, const char *buf, size_t n);
 long tty_ioctl(struct tty *t, unsigned long cmd, uint64_t arg);

@@ -12,11 +12,13 @@
  */
 #include "kernel.h"
 #include "random.h"
+#include "smp.h"
 
 static uint64_t pool[8];
 static unsigned pool_idx;
 static uint32_t key[8];
 static uint64_t counter;
+static struct spinlock key_lock;                    /* the key and the counter (the pool is mixed without it) */
 static bool have_rdrand, have_rdseed;
 
 static inline uint64_t rdtsc(void)
@@ -99,21 +101,33 @@ static void reseed(void)
     memcpy(key, out, sizeof(key));
 }
 
+/*
+ * The key and a range of counters are taken under the lock (and the key
+ * replaced: earlier output cannot be recomputed); the keystream is made
+ * outside it, into buf (a user buffer, perhaps).
+ */
 void random_bytes(void *buf, size_t n)
 {
     uint8_t *p = buf;
+    uint32_t k[8], out[16];
+    uint64_t blocks = (n + sizeof(out) - 1) / sizeof(out);
+    spin_lock(&key_lock);
     reseed();
-    uint32_t out[16];
+    memcpy(k, key, sizeof(k));
+    uint64_t ctr = counter;
+    counter += blocks;
+    chacha20_block(key, ++counter, out);            /* fresh key */
+    memcpy(key, out + 8, sizeof(key));
+    spin_unlock(&key_lock);
     while (n) {
-        chacha20_block(key, ++counter, out);
+        chacha20_block(k, ++ctr, out);
         size_t chunk = MIN(n, sizeof(out));
         memcpy(p, out, chunk);
         p += chunk;
         n -= chunk;
     }
-    chacha20_block(key, ++counter, out);            /* fresh key: earlier output cannot be recomputed */
-    memcpy(key, out + 8, sizeof(key));
     memset(out, 0, sizeof(out));
+    memset(k, 0, sizeof(k));
 }
 
 void random_init(void)
@@ -133,7 +147,9 @@ void random_init(void)
         hw_random(&hw);
         random_add_entropy(hw ^ ((uint64_t)i << 56));
     }
+    spin_lock(&key_lock);
     reseed();
+    spin_unlock(&key_lock);
 }
 
 bool random_hw_available(void)

@@ -52,6 +52,8 @@ void sched_init_lwp(struct lwp *l, struct lwp *from)
 
 int sched_gpri(const struct lwp *l)
 {
+    if (l->kthread)
+        return l->kpri;
     switch (l->cid) {
     case SIEOS_CID_RT:
         return RT_BASE + l->rtpri;
@@ -99,8 +101,8 @@ static void preempt_for(struct lwp *l)
             best = i;
         }
     }
-    if (best < 0)
-        return;
+    if (best < 0 || cpus[best].lwp->kthread)
+        return;                                    /* (kernel threads run until they block) */
     cpus[best].need_resched = true;
     if (&cpus[best] != mycpu())
         smp_resched(&cpus[best]);
@@ -117,12 +119,14 @@ void sched_woke(struct lwp *l)
 /* Every second: TS LWPs that waited a second without running are raised. */
 void sched_second(void)
 {
+    disp_enter();
     for (int i = 0; i < NLWP; i++) {
         struct lwp *l = &lwp_table[i];
         if (l->state == LWP_RUNNABLE && l->cid == SIEOS_CID_TS && ticks - l->last_run >= TIMER_HZ &&
             l->cpupri < TS_LWAIT)
             l->cpupri = TS_LWAIT;
     }
+    disp_exit();
 }
 
 const char *sched_class_name(int cid)
@@ -238,8 +242,21 @@ static void get_parms(const struct lwp *l, sieos_pcparms_t *pp)
     }
 }
 
-/* The LWPs an (idtype, id) names; the callback returns <0 to stop. */
+/* The LWPs an (idtype, id) names; the callback returns <0 to stop.  It runs
+ * under pidlock and the dispatcher's lock (it changes what swtch reads). */
+static long for_each_locked(int idtype, long id, long (*fn)(struct lwp *, void *), void *arg);
+
 static long for_each(int idtype, long id, long (*fn)(struct lwp *, void *), void *arg)
+{
+    mutex_enter(&pidlock);
+    disp_enter();
+    long r = for_each_locked(idtype, id, fn, arg);
+    disp_exit();
+    mutex_exit(&pidlock);
+    return r;
+}
+
+static long for_each_locked(int idtype, long id, long (*fn)(struct lwp *, void *), void *arg)
 {
     long r = -ESRCH, any = 0;
     for (int i = 0; i < NLWP; i++) {

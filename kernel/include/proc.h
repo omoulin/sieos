@@ -13,6 +13,7 @@
 #include "ksig.h"
 #include "smp.h"
 #include "cpu.h"
+#include "sync.h"
 
 #define NPROC       256
 #define NOFILE      1024        /* open files a process may have (as Linux's default) */
@@ -53,7 +54,13 @@ struct lwp {
     struct fpu_state fpu;       /* x87/SSE registers while switched out */
     uint64_t fsbase;            /* TLS pointer */
 
-    void *chan;                 /* sleep channel */
+    const void *wchan;          /* the sleep queue it is on (sync.c), NULL if none */
+    struct lwp *sq_next, *sq_prev;
+    bool sleep_sig;             /* its sleep ends on a signal */
+    volatile int oncpu;         /* on a processor, until the switch away from it is complete */
+    bool kthread;               /* a kernel thread (SYS class, kpri) */
+    short kpri;                 /* its global priority */
+    volatile uint32_t ast;      /* AST_*: for the way back to user mode (set by the clock) */
     uint64_t wake_tick;         /* for timed sleeps */
     uint64_t wake_ns;           /* high-resolution sleeps: the hrtime to wake at */
     uint64_t ticks;             /* CPU time */
@@ -86,10 +93,16 @@ struct lwp {
     uint64_t umtx_key;          /* physical address waited on (lwp_umtx_wait) */
     bool must_exit;             /* the process is exiting or exec'ing */
     uint64_t exit_word;         /* lwp_private(EXITWORD): cleared and woken at exit */
+    struct file *fheld[8];      /* descriptors' files held for the system call in progress (file.c) */
+    int nfheld;
     uint64_t robust_list;       /* lwp_private(ROBUSTLIST): robust mutexes held */
 };
 
 struct proc {
+    kmutex_t p_lock;            /* signals, LWPs, stop and exit state, limits, credentials (proc.c) */
+    kcondvar_t p_cv;            /* its children changed state (with pidlock) */
+    kcondvar_t p_lwpcv;         /* an LWP exited (with p_lock) */
+    kmutex_t p_fdlock;          /* ofile, fdflags (file.c) */
     int pid;
     int state;                  /* PSTATE_UNUSED, PSTATE_EMBRYO, PSTATE_RUNNING (alive), PSTATE_ZOMBIE */
     struct proc *parent;
@@ -100,7 +113,8 @@ struct proc {
 
     uint64_t pml4;              /* physical address of page tables */
     uint64_t heap_start;
-    struct spinlock vmlock;     /* the address space: areas and page tables (vm.c) */
+    krwlock_t as_lock;          /* the address space's areas and brk, against their changes (vm.c) */
+    struct spinlock vmlock;     /* the address space: areas and page tables, for faults (vm.c) */
     uint64_t brk;
     struct vm_area *areas;      /* mmap regions (vm.c) */
 
@@ -149,20 +163,43 @@ struct proc {
     uint64_t rlim_cur[16], rlim_max[16];
 };
 
+#define AST_XCPU   1            /* RLIMIT_CPU: SIGXCPU */
+#define AST_KILL   2            /* RLIMIT_CPU's hard limit: SIGKILL */
+#define AST_VTALRM 4            /* ITIMER_VIRTUAL */
+#define AST_PROF   8            /* ITIMER_PROF */
+
 #define curlwp (mycpu()->lwp)
 #define current (curlwp->proc)
 extern struct proc proc_table[NPROC];
+extern kmutex_t pidlock;                 /* the process table, parents, groups, sessions (proc.c) */
 #define NLWP 512
 extern struct lwp lwp_table[NLWP];
 
 void proc_init_cpu(struct cpu *c);
 void cpu_idle(void) __attribute__((noreturn));
-void schedule(void);
-void sleep_on(void *chan);
-void wakeup(void *chan);
-void make_runnable(struct lwp *l);
+
+/* disp.c: the dispatcher */
+void disp_enter(void);                   /* the dispatcher's lock: LWP states, the run queue */
+void disp_exit(void);
+bool swtch(void);                        /* disp held: run the best LWP; returns (disp released) when we run again */
+void switch_finish(void);                /* the LWP switched to: complete the switch */
+void preempt(void);                      /* give the processor to a better LWP, if any */
+void setrun_locked(struct lwp *l);       /* disp held: a sleeping LWP becomes runnable */
+void make_runnable(struct lwp *l);       /* an embryo, sleeping, stopped or suspended LWP becomes runnable */
+void lwp_wake_sig(struct lwp *l);        /* a signal (or its end) for l: wake it from an interruptible sleep */
+bool lwp_sig_pending(struct lwp *l);     /* a signal it takes now (or its end) */
+bool sleep_due(struct lwp *l);           /* disp held: nothing to sleep for (a signal, a deadline passed) */
+void lwp_wait_offcpu(struct lwp *l);     /* before freeing an exited LWP's stack */
+struct lwp *kthread_create(void (*fn)(void *), void *arg, const char *name, int pri);
+void kthreads_start(void);               /* the kernel threads (main, at the end of the boot) */
+bool kthreads_running(void);
+void clock_thread_kick(void);            /* timer interrupt: the clock thread runs the tick's work */
+void intr_thread_post(int irq, bool masked);   /* a device interrupt for the interrupt thread (masked: unmask after) */
+extern struct proc *p0;                  /* the kernel's process (its threads') */
 void sched_tick(struct trapframe *tf);   /* per-CPU timer: accounting + preemption */
-void clock_tick(uint64_t n);             /* global clock: n ticks passed; timed sleepers */
+void clock_tick(uint64_t n);             /* global clock (clock thread): n ticks passed */
+void clock_wake_sleepers(void);          /* timer interrupt: LWPs whose deadline passed */
+void ast_deliver(struct lwp *l);         /* the clock's signals for l, on its way to user mode */
 int  proc_state(struct proc *p);         /* PSTATE_* summary of a process and its LWPs */
 extern unsigned long loadavg[3];         /* fixed point, 1.0 = 2048 */
 
@@ -183,6 +220,7 @@ bool pgrp_exists_in_session(int pgid, int sid);
 long proc_setpgid(int pid, int pgid);
 long proc_setsid(void);
 struct lwp *lwp_alloc(struct proc *p);
+void lwp_free(struct lwp *l);            /* p_lock (or pidlock) held: an exited LWP's slot */
 
 /* sched.c: scheduling classes */
 void sched_init_lwp(struct lwp *l, struct lwp *from);

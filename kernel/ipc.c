@@ -5,6 +5,12 @@
  * object's id stops working.  Semaphore SEM_UNDO adjustments are applied
  * when the process exits.
  *
+ * Locking: ipc_lock covers the three tables (sleepers wait on their queue or
+ * set with it as the interlock).  A segment's attach count is atomic (the
+ * address spaces' areas hold it, some under their spin lock); one that was
+ * removed is freed, under ipc_lock, when it falls to 0.  shmat maps the
+ * segment without ipc_lock (the address-space lock comes before it).
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -25,6 +31,14 @@
 #define SEMOPM    32               /* operations per semop */
 #define SHMMAX    (64UL << 20)
 #define NUNDO     256
+
+static kmutex_t ipc_lock;
+
+static void ipc_sleep(const void *chan)
+{
+    sleepq_block(chan, &ipc_lock, true);
+    mutex_enter(&ipc_lock);
+}
 
 struct ipcobj {
     bool used;
@@ -155,7 +169,7 @@ static void msgq_free(struct msgq *q)
     int gen = q->o.gen;
     memset(q, 0, sizeof(*q));
     q->o.gen = gen;
-    wakeup(q);
+    sleepq_wakeup(q, -1);
 }
 
 static long msg_get(long key, long flags)
@@ -252,14 +266,14 @@ static long msg_snd(long id, const void *umsg, size_t size, long flags)
             q->qnum++;
             q->lspid = current->pid;
             q->stime = kernel_time();
-            wakeup(q);
+            sleepq_wakeup(q, -1);
             return 0;
         }
         if (flags & SIEOS_IPC_NOWAIT)
             return -EAGAIN;
         if (signal_pending(current))
             return -EINTR;
-        sleep_on(q);
+        ipc_sleep(q);
         waited = true;
     }
 }
@@ -302,14 +316,14 @@ static long msg_rcv(long id, void *umsg, size_t size, long type, long flags)
             q->lrpid = current->pid;
             q->rtime = kernel_time();
             kfree(m);
-            wakeup(q);
+            sleepq_wakeup(q, -1);
             return n;
         }
         if (flags & SIEOS_IPC_NOWAIT)
             return -ENOMSG_K;
         if (signal_pending(current))
             return -EINTR;
-        sleep_on(q);
+        ipc_sleep(q);
         waited = true;
     }
 }
@@ -397,7 +411,7 @@ static void semset_free(int slot)
     int gen = s->o.gen;
     memset(s, 0, sizeof(*s));
     s->o.gen = gen;
-    wakeup(s);
+    sleepq_wakeup(s, -1);
 }
 
 static long sem_ctl(long id, long num, long cmd, uint64_t arg)
@@ -455,7 +469,7 @@ static long sem_ctl(long id, long num, long cmd, uint64_t arg)
         s->sems[num].pid = current->pid;
         s->o.ctime = kernel_time();
         undo_clear(slot, num);
-        wakeup(s);
+        sleepq_wakeup(s, -1);
         return 0;
     case SIEOS_GETALL:
     case SIEOS_SETALL: {
@@ -478,7 +492,7 @@ static long sem_ctl(long id, long num, long cmd, uint64_t arg)
         if (cmd == SIEOS_SETALL) {
             undo_clear(slot, -1);
             s->o.ctime = kernel_time();
-            wakeup(s);
+            sleepq_wakeup(s, -1);
         }
         return 0;
     }
@@ -552,7 +566,7 @@ static long sem_op(long id, const struct sieos_sembuf *uops, long n, const struc
                     undo_add(slot, ops[k].sem_num, -ops[k].sem_op);
             }
             s->otime = kernel_time();
-            wakeup(s);
+            sleepq_wakeup(s, -1);
             return 0;
         }
         if (ops[w].sem_flg & SIEOS_IPC_NOWAIT)
@@ -566,7 +580,7 @@ static long sem_op(long id, const struct sieos_sembuf *uops, long n, const struc
         zero ? m->zcnt++ : m->ncnt++;
         int gen = s->o.gen;
         curlwp->wake_tick = deadline;
-        sleep_on(s);
+        ipc_sleep(s);
         curlwp->wake_tick = 0;
         waited = true;
         if (s->o.used && s->o.gen == gen)
@@ -580,7 +594,7 @@ struct shmseg {
     struct ipcobj o;
     uint64_t *frames;
     size_t npages, size;
-    unsigned long nattch;
+    unsigned long nattch;                        /* (atomic) */
     bool removed;
     sieos_pid_t cpid, lpid;
     sieos_time_t atime, dtime;
@@ -600,9 +614,10 @@ static void shm_destroy(struct shmseg *g)
     g->o.gen = gen;
 }
 
+/* An attachment more or less (delta > 0: never the last one going, so no lock: vm.c may hold a spin lock). */
 void shm_attach_ref(struct shmseg *g, int delta)
 {
-    g->nattch += delta;
+    unsigned long n = __atomic_add_fetch(&g->nattch, (unsigned long)(long)delta, __ATOMIC_ACQ_REL);
     if (delta > 0) {
         g->atime = kernel_time();
     } else {
@@ -610,8 +625,12 @@ void shm_attach_ref(struct shmseg *g, int delta)
     }
     if (current)
         g->lpid = current->pid;
-    if (g->removed && g->nattch == 0)
-        shm_destroy(g);
+    if (delta < 0 && n == 0) {
+        mutex_enter(&ipc_lock);
+        if (g->removed && __atomic_load_n(&g->nattch, __ATOMIC_ACQUIRE) == 0 && g->frames)
+            shm_destroy(g);
+        mutex_exit(&ipc_lock);
+    }
 }
 
 uint64_t shm_frame(struct shmseg *g, uint64_t idx)
@@ -654,6 +673,7 @@ static long shm_get(long key, uint64_t size, long flags)
     return ipc_id(i, &g->o);
 }
 
+/* ipc_lock held: released before mapping (the segment held by an attachment meanwhile). */
 static long shm_at(long id, uint64_t addr, long flags)
 {
     int i = ipc_lookup(shmobj, id);
@@ -671,7 +691,13 @@ static long shm_at(long id, uint64_t addr, long flags)
             return -EINVAL;
     }
     int prot = SIEOS_PROT_READ | (ro ? 0 : SIEOS_PROT_WRITE);
-    return vm_map_shm(g, addr, g->npages * PAGE_SIZE, prot, addr != 0);
+    __atomic_add_fetch(&g->nattch, 1, __ATOMIC_ACQ_REL);
+    size_t len = g->npages * PAGE_SIZE;
+    mutex_exit(&ipc_lock);
+    long r2 = vm_map_shm(g, addr, len, prot, addr != 0);
+    shm_attach_ref(g, -1);
+    mutex_enter(&ipc_lock);
+    return r2;
 }
 
 static long shm_ctl(long id, long cmd, struct sieos_shmid_ds *u)
@@ -709,7 +735,7 @@ static long shm_ctl(long id, long cmd, struct sieos_shmid_ds *u)
             return -EPERM;
         g->removed = true;
         g->o.perm.key = SIEOS_IPC_PRIVATE;           /* no new shmget finds it */
-        if (g->nattch == 0)
+        if (__atomic_load_n(&g->nattch, __ATOMIC_ACQUIRE) == 0)
             shm_destroy(g);
         return 0;
     case SIEOS_SHM_LOCK:
@@ -727,6 +753,7 @@ static long shm_ctl(long id, long cmd, struct sieos_shmid_ds *u)
 /* Apply the exiting process's SEM_UNDO adjustments. */
 void ipc_proc_exit(struct proc *p)
 {
+    mutex_enter(&ipc_lock);
     for (int i = 0; i < NUNDO; i++) {
         struct undo *u = &undos[i];
         if (u->pid != p->pid)
@@ -736,41 +763,52 @@ void ipc_proc_exit(struct proc *p)
             int v = s->sems[u->num].val + u->adj;
             s->sems[u->num].val = v < 0 ? 0 : v > SIEOS_SEMVMX ? SIEOS_SEMVMX : v;
             s->sems[u->num].pid = p->pid;
-            wakeup(s);
+            sleepq_wakeup(s, -1);
         }
         u->pid = 0;
     }
+    mutex_exit(&ipc_lock);
 }
 
 long sys2_msgsys(long op, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5)
 {
+    long r = -EINVAL;
+    mutex_enter(&ipc_lock);
     switch (op) {
-    case SIEOS_MSGGET: return msg_get(a1, a2);
-    case SIEOS_MSGCTL: return msg_ctl(a1, a2 & ~0x100, (struct sieos_msqid_ds *)a3);
-    case SIEOS_MSGRCV: return msg_rcv(a1, (void *)a2, a3, a4, a5);
-    case SIEOS_MSGSND: return msg_snd(a1, (const void *)a2, a3, a4);
+    case SIEOS_MSGGET: r = msg_get(a1, a2); break;
+    case SIEOS_MSGCTL: r = msg_ctl(a1, a2 & ~0x100, (struct sieos_msqid_ds *)a3); break;
+    case SIEOS_MSGRCV: r = msg_rcv(a1, (void *)a2, a3, a4, a5); break;
+    case SIEOS_MSGSND: r = msg_snd(a1, (const void *)a2, a3, a4); break;
     }
-    return -EINVAL;
+    mutex_exit(&ipc_lock);
+    return r;
 }
 
 long sys2_semsys(long op, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4)
 {
+    long r = -EINVAL;
+    mutex_enter(&ipc_lock);
     switch (op) {
-    case SIEOS_SEMCTL:     return sem_ctl(a1, a2, a3 & ~0x100, a4);
-    case SIEOS_SEMGET:     return sem_get(a1, a2, a3);
-    case SIEOS_SEMOP:      return sem_op(a1, (const struct sieos_sembuf *)a2, a3, NULL);
-    case SIEOS_SEMTIMEDOP: return sem_op(a1, (const struct sieos_sembuf *)a2, a3, (const struct sieos_timespec *)a4);
+    case SIEOS_SEMCTL:     r = sem_ctl(a1, a2, a3 & ~0x100, a4); break;
+    case SIEOS_SEMGET:     r = sem_get(a1, a2, a3); break;
+    case SIEOS_SEMOP:      r = sem_op(a1, (const struct sieos_sembuf *)a2, a3, NULL); break;
+    case SIEOS_SEMTIMEDOP: r = sem_op(a1, (const struct sieos_sembuf *)a2, a3, (const struct sieos_timespec *)a4); break;
     }
-    return -EINVAL;
+    mutex_exit(&ipc_lock);
+    return r;
 }
 
 long sys2_shmsys(long op, uint64_t a1, uint64_t a2, uint64_t a3)
 {
+    if (op == SIEOS_SHMDT)
+        return vm_unmap_shm(a1);                     /* (the address space's lock, then ipc_lock if it goes) */
+    long r = -EINVAL;
+    mutex_enter(&ipc_lock);
     switch (op) {
-    case SIEOS_SHMAT:  return shm_at(a1, a2, a3);
-    case SIEOS_SHMCTL: return shm_ctl(a1, a2 & ~0x100, (struct sieos_shmid_ds *)a3);
-    case SIEOS_SHMDT:  return vm_unmap_shm(a1);
-    case SIEOS_SHMGET: return shm_get(a1, a2, a3);
+    case SIEOS_SHMAT:  r = shm_at(a1, a2, a3); break;
+    case SIEOS_SHMCTL: r = shm_ctl(a1, a2 & ~0x100, (struct sieos_shmid_ds *)a3); break;
+    case SIEOS_SHMGET: r = shm_get(a1, a2, a3); break;
     }
-    return -EINVAL;
+    mutex_exit(&ipc_lock);
+    return r;
 }

@@ -68,9 +68,11 @@ struct inode *tmpfs_unnamed(struct fs *fs, int uid, int gid)
 {
     if (!fs || fs->ops != &tmpfs_ops)
         return NULL;
+    fs_enter(fs);
     struct inode *ip = tnode_new(fs, S_IFREG | 0600, uid, gid);
     if (ip)
         DI(ip)->i_links_count = 0;
+    fs_exit(fs);
     return ip;
 }
 
@@ -544,12 +546,13 @@ struct fs *tmpfs_create(void)
     struct tmpfs *t = kzalloc(sizeof(*t));
     if (!fs || !t)
         return NULL;
+    fs_lock_init(fs);
     t->next_ino = 2;
     t->max_pages = pmm_total_pages() / 2;
     fs->ops = &tmpfs_ops;
     fs->priv = t;
     fs->dev_major = 20;
-    fs->dev_minor = instance++;
+    fs->dev_minor = __atomic_fetch_add(&instance, 1, __ATOMIC_RELAXED);
     fs->bsize = PAGE_SIZE;
     fs->root = tnode_new(fs, S_IFDIR | 01777, 0, 0);
     if (!fs->root)

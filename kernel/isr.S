@@ -143,12 +143,20 @@ syscall_entry:
     cld
     jmp isr_save
 
-/* First run of a new process: drop the big kernel lock, then return to user. */
+/* First run of a new LWP: complete the switch to it, then return to user. */
     .global forkret
 forkret:
+    call switch_finish
     call lwp_first_run
-    call bkl_unlock
     jmp trapret
+
+/* First run of a kernel thread: complete the switch, then fn(arg) (r12, r13). */
+    .global kthread_start
+kthread_start:
+    call switch_finish
+    movq %r13, %rdi
+    call *%r12
+    call kthread_exit
 
 /*
  * void switch_context(uint64_t *old_rsp, uint64_t new_rsp)

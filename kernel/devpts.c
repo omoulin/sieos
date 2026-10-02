@@ -93,6 +93,7 @@ struct fs *devpts_create(void)
     struct fs *fs = kzalloc(sizeof(*fs));
     if (!fs)
         return NULL;
+    fs_lock_init(fs);
     fs->ops = &devpts_ops;
     fs->dev_major = 22;
     fs->bsize = 1024;

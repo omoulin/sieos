@@ -6,14 +6,19 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include "pci.h"
+#include "smp.h"
+
+static struct spinlock cf8_lock;                 /* the address port, then the data port */
 
 uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t off)
 {
     uint32_t addr = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) |
                     ((uint32_t)func << 8) | (off & 0xFC);
-    __asm__ volatile("outl %0, %1" :: "a"(addr), "Nd"((uint16_t)0xCF8));
     uint32_t v;
+    spin_lock(&cf8_lock);
+    __asm__ volatile("outl %0, %1" :: "a"(addr), "Nd"((uint16_t)0xCF8));
     __asm__ volatile("inl %1, %0" : "=a"(v) : "Nd"((uint16_t)0xCFC));
+    spin_unlock(&cf8_lock);
     return v;
 }
 
@@ -21,8 +26,10 @@ void pci_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t off, uint32_t v
 {
     uint32_t addr = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) |
                     ((uint32_t)func << 8) | (off & 0xFC);
+    spin_lock(&cf8_lock);
     __asm__ volatile("outl %0, %1" :: "a"(addr), "Nd"((uint16_t)0xCF8));
     __asm__ volatile("outl %0, %1" :: "a"(v), "Nd"((uint16_t)0xCFC));
+    spin_unlock(&cf8_lock);
 }
 
 static void fill(struct pci_dev *d, uint8_t bus, uint8_t dev, uint8_t func)

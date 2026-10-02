@@ -164,7 +164,10 @@ static long sys_netconfig(const struct sieos_netconfig *u)
         return -EFAULT;
     struct sieos_netconfig nc;
     memcpy(&nc, u, sizeof(nc));
-    return net_configure(nc.nc_index, nc.nc_dhcp, nc.nc_ip, nc.nc_netmask, nc.nc_gateway, nc.nc_dns);
+    mutex_enter(&net_lock);
+    long r = net_configure(nc.nc_index, nc.nc_dhcp, nc.nc_ip, nc.nc_netmask, nc.nc_gateway, nc.nc_dns);
+    mutex_exit(&net_lock);
+    return r;
 }
 
 /* The Wi-Fi driver's operation, if one is loaded (else: no device). */
@@ -208,11 +211,11 @@ static long sys_modload(const char *upath)
 /* wifi: the Wi-Fi device's status, a scan (anyone), the networks found. */
 static long sys_wifi(long op, void *u, long n)
 {
-    static union { struct sieos_wifi_status st; struct sieos_wifi_bss bss[64]; } kb;
+    union wifi_buf { struct sieos_wifi_status st; struct sieos_wifi_bss bss[64]; };
     size_t sz;
     switch (op) {
     case SIEOS_WIFI_OP_STATUS:
-        sz = sizeof(kb.st);
+        sz = sizeof(struct sieos_wifi_status);
         break;
     case SIEOS_WIFI_OP_RESULTS:
         if (n < 0)
@@ -249,9 +252,13 @@ static long sys_wifi(long op, void *u, long n)
     }
     if (!user_range_ok(current->pml4, (uint64_t)u, sz, true))
         return -EFAULT;
-    long r = wifi_op((int)op, &kb, op == SIEOS_WIFI_OP_STATUS ? (long)sz : n);
+    union wifi_buf *kb = kzalloc(sizeof(*kb));
+    if (!kb)
+        return -ENOMEM;
+    long r = wifi_op((int)op, kb, op == SIEOS_WIFI_OP_STATUS ? (long)sz : n);
     if (r >= 0)
-        memcpy(u, &kb, op == SIEOS_WIFI_OP_STATUS ? sz : r * sizeof(struct sieos_wifi_bss));
+        memcpy(u, kb, op == SIEOS_WIFI_OP_STATUS ? sz : r * sizeof(struct sieos_wifi_bss));
+    kfree(kb);
     return r;
 }
 
@@ -284,6 +291,8 @@ static long sys_devinfo(struct sieos_devinfo *u, long idx)
     return 0;
 }
 
+static kmutex_t hostname_lock;
+
 static long do_sysinfo(long cmd, char *ubuf, long count)
 {
     char tmp[160];
@@ -295,12 +304,19 @@ static long do_sysinfo(long cmd, char *ubuf, long count)
         int r = user_fetch_str(ubuf, name, sizeof(name));
         if (r < 0)
             return r == -ENAMETOOLONG ? -EINVAL : r;
+        mutex_enter(&hostname_lock);
         strlcpy(sys_hostname, name, sizeof(sys_hostname));
-        return strlen(sys_hostname) + 1;
+        mutex_exit(&hostname_lock);
+        return strlen(name) + 1;
     }
     switch (cmd) {
     case SIEOS_SI_SYSNAME:          v = OS_NAME; break;
-    case SIEOS_SI_HOSTNAME:         v = sys_hostname; break;
+    case SIEOS_SI_HOSTNAME:
+        mutex_enter(&hostname_lock);
+        strlcpy(tmp, sys_hostname, sizeof(tmp));
+        mutex_exit(&hostname_lock);
+        v = tmp;
+        break;
     case SIEOS_SI_RELEASE:          v = OS_RELEASE; break;
     case SIEOS_SI_VERSION:          v = OS_LONGNAME; break;
     case SIEOS_SI_MACHINE:          v = "i86pc"; break;
@@ -315,7 +331,8 @@ static long do_sysinfo(long cmd, char *ubuf, long count)
     case SIEOS_SI_SRPC_DOMAIN:      v = ""; break;
     default:                        return -EINVAL;
     }
-    snprintf(tmp, sizeof(tmp), "%s", v);
+    if (v != tmp)
+        snprintf(tmp, sizeof(tmp), "%s", v);
     long len = strlen(tmp) + 1;
     if (count < 0 || (count && !user_ok(ubuf, count, true)))
         return -EFAULT;
@@ -361,11 +378,13 @@ static long do_pgrpsys(int op, int pid, int pgid)
         proc_setsid();                          /* Solaris setpgrp: leader of a new session if possible */
         return current->pgid;
     case SIEOS_PGRP_GETSID:
-    case SIEOS_PGRP_GETPGID:
+    case SIEOS_PGRP_GETPGID: {
+        mutex_enter(&pidlock);
         p = pid ? proc_find(pid) : current;
-        if (!p || p->state != PSTATE_RUNNING)
-            return -ESRCH;
-        return op == SIEOS_PGRP_GETSID ? p->sid : p->pgid;
+        long r = !p || p->state != PSTATE_RUNNING ? -ESRCH : op == SIEOS_PGRP_GETSID ? p->sid : p->pgid;
+        mutex_exit(&pidlock);
+        return r;
+    }
     case SIEOS_PGRP_SETSID:
         return proc_setsid();
     case SIEOS_PGRP_SETPGID:
@@ -487,8 +506,13 @@ long syscall_dispatch_v2(struct trapframe *tf)
     case SIEOS_SYS_setgid:    return v1(tf, SYS_setgid, a1, 0, 0);
     case SIEOS_SYS_seteuid:   return v1(tf, SYS_seteuid, a1, 0, 0);
     case SIEOS_SYS_setegid:   return v1(tf, SYS_setegid, a1, 0, 0);
-    case SIEOS_SYS_setreuid:  return sys2_setreid(false, (int)a1, (int)a2);
-    case SIEOS_SYS_setregid:  return sys2_setreid(true, (int)a1, (int)a2);
+    case SIEOS_SYS_setreuid:
+    case SIEOS_SYS_setregid: {
+        mutex_enter(&p->p_lock);
+        long r = sys2_setreid(tf->rax == SIEOS_SYS_setregid, (int)a1, (int)a2);
+        mutex_exit(&p->p_lock);
+        return r;
+    }
     case SIEOS_SYS_getgroups: return v1(tf, SYS_getgroups, a1, a2, 0);
     case SIEOS_SYS_setgroups: return v1(tf, SYS_setgroups, a1, a2, 0);
     /* time */

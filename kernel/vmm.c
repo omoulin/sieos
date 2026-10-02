@@ -10,6 +10,7 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include "mm.h"
+#include "smp.h"
 #include "vm.h"
 #include "cpu.h"
 
@@ -63,22 +64,29 @@ void vmm_direct_map(uint64_t start, uint64_t end, uint64_t (*alloc)(void))
 #define MMIO_BASE (PHYS_OFFSET + (256UL << 30))   /* in the direct map's PML4 slot: every space shares it */
 #define MMIO_SIZE (64UL << 30)
 static uint64_t mmio_next = MMIO_BASE;
+static struct spinlock kmap_lock;                /* the kernel's half of the page tables, the window */
 
 static uint64_t *walk(uint64_t pml4, uint64_t va, bool create);
 
 static void *window_map(uint64_t pa, size_t size, uint64_t cache)
 {
     uint64_t start = PAGE_ALIGN_DOWN(pa), end = PAGE_ALIGN_UP(pa + size);
-    if (mmio_next + (end - start) > MMIO_BASE + MMIO_SIZE)
+    spin_lock(&kmap_lock);
+    if (mmio_next + (end - start) > MMIO_BASE + MMIO_SIZE) {
+        spin_unlock(&kmap_lock);
         return NULL;
+    }
     uint64_t va = mmio_next;
     for (uint64_t a = start; a < end; a += PAGE_SIZE) {
         uint64_t *pte = walk(kernel_pml4_phys, va + (a - start), true);
-        if (!pte)
+        if (!pte) {
+            spin_unlock(&kmap_lock);
             return NULL;
+        }
         *pte = a | PTE_P | PTE_W | cache | pte_nx;
     }
     mmio_next += end - start + PAGE_SIZE;               /* (a guard page between mappings) */
+    spin_unlock(&kmap_lock);
     return (void *)(va + (pa - start));
 }
 
@@ -86,8 +94,10 @@ void *mmio_map(uint64_t pa, size_t size)
 {
     uint64_t start = PAGE_ALIGN_DOWN(pa), end = PAGE_ALIGN_UP(pa + size);
     if (end <= DIRECT_MAP_SIZE) {
+        spin_lock(&kmap_lock);
         for (uint64_t a = start & ~((2UL << 20) - 1); a < end; a += 2UL << 20)
             vmm_set_uncached(a);
+        spin_unlock(&kmap_lock);
         return P2V(pa);
     }
     return window_map(pa, size, 0x18);                  /* PCD | PWT: uncached */

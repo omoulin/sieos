@@ -7,8 +7,8 @@
  * contiguous bounce buffer (the callers' buffers may be anywhere in kernel
  * memory, stacks included) described by a PRD table.  Once the channels'
  * interrupts (IRQ 14, 15) are set up, a caller in process context sleeps
- * until a DMA transfer or a cache flush completes: the big kernel lock is
- * free meanwhile, so the rest of the kernel runs during disk I/O.  At boot,
+ * until a DMA transfer or a cache flush completes; the processor runs other
+ * LWPs meanwhile.  At boot,
  * and for PIO, completion is polled.  A sleeping mutex serialises the
  * callers (one bounce buffer, one PRD table).
  *
@@ -22,7 +22,7 @@
 #include "pci.h"
 #include "mm.h"
 #include "arch.h"
-#include "kmutex.h"
+#include "proc.h"
 #include "blkdev.h"
 #include "ddi.h"
 
@@ -79,7 +79,7 @@ static uint16_t bm_base;              /* the controller's (primary bus) register
 static uint64_t bounce_pa, prdt_pa;
 static struct prd *prdt;
 
-static struct kmutex ata_lock;
+static kmutex_t ata_lock;
 static bool irq_ok;                   /* IRQ 14/15 handled: callers may sleep */
 static volatile bool chan_done[2];    /* the channel interrupted since the command started */
 uint64_t ata_sleeps;                  /* transfers waited for by sleeping */
@@ -92,6 +92,8 @@ static bool can_sleep(void)
     return irq_ok && kernel_running && curlwp && !curlwp->is_idle && curlwp->state == LWP_RUNNING;
 }
 
+static kmutex_t irq_lock = MUTEX_SPIN_INITIALIZER;   /* chan_done, between the interrupt and the waiter */
+
 static void ata_irq(struct trapframe *tf)
 {
     int c = tf->int_no - IRQ_BASE - 14;          /* 0 primary, 1 secondary */
@@ -99,8 +101,10 @@ static void ata_irq(struct trapframe *tf)
     if (bm_base)
         outb(bm_base + (c ? 8 : 0) + 2, 0x04);    /* clear the bus master's interrupt bit */
     (void)inb(io + 7);                           /* reading the status acknowledges the device */
+    mutex_enter(&irq_lock);
     chan_done[c] = true;
-    wakeup((void *)&chan_done[c]);
+    sleepq_wakeup((void *)&chan_done[c], -1);
+    mutex_exit(&irq_lock);
 }
 
 /* Sleep until u's channel interrupts, or 5 s pass (then the caller polls).  Short
@@ -117,11 +121,14 @@ static void wait_irq(struct ata_unit *u)
         __builtin_ia32_pause();
     }
     uint64_t deadline = ticks + 5 * TIMER_HZ;
+    mutex_enter(&irq_lock);
     while (!chan_done[c] && ticks < deadline) {
         curlwp->wake_tick = deadline;
-        sleep_on((void *)&chan_done[c]);
+        sleepq_block((void *)&chan_done[c], &irq_lock, false);
         curlwp->wake_tick = 0;
+        mutex_enter(&irq_lock);
     }
+    mutex_exit(&irq_lock);
     ata_sleeps++;
 }
 
@@ -251,7 +258,7 @@ static int dma_xfer(struct ata_unit *u, uint64_t lba, uint16_t n, bool write)
     outb(u->io + ATA_COMMAND, write ? CMD_WRITE_DMA_EXT : CMD_READ_DMA_EXT);
     outb(u->bm + BM_CMD, (write ? 0 : BMC_READ) | BMC_START);
     if (sleep)
-        wait_irq(u);                                         /* the kernel lock is free meanwhile */
+        wait_irq(u);                                         /* (other LWPs run meanwhile) */
     uint8_t bst = 0;
     int r = -EIO;
     for (long i = 0; i < 200000000L; i++) {
@@ -315,17 +322,17 @@ static int ata_write_locked(int unit, uint64_t lba, size_t count, const void *bu
 
 int ata_read(int unit, uint64_t lba, size_t count, void *buf)
 {
-    kmutex_lock(&ata_lock);
+    mutex_enter(&ata_lock);
     int r = ata_read_locked(unit, lba, count, buf);
-    kmutex_unlock(&ata_lock);
+    mutex_exit(&ata_lock);
     return r;
 }
 
 int ata_write(int unit, uint64_t lba, size_t count, const void *buf)
 {
-    kmutex_lock(&ata_lock);
+    mutex_enter(&ata_lock);
     int r = ata_write_locked(unit, lba, count, buf);
-    kmutex_unlock(&ata_lock);
+    mutex_exit(&ata_lock);
     return r;
 }
 

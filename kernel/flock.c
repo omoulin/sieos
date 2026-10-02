@@ -6,6 +6,8 @@
  * replaces (and splits) its existing locks in the range.  All of a
  * process's locks on a file go when it closes any descriptor of that file.
  * F_SETLKW sleeps; a wait that would close a cycle fails with EDEADLK.
+ * The locks and the waits are under flock_mx (then pidlock, for the waits'
+ * cycle).
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -25,7 +27,8 @@ struct lk {
 };
 
 static struct lk *locks;
-static int lock_chan;
+static kmutex_t flock_mx;
+static kcondvar_t flock_cv;
 static int waits_for[NPROC];          /* proc_table index -> pid it waits for (0: none) */
 
 static bool overlap(const struct lk *a, const struct kflock *b)
@@ -44,25 +47,29 @@ static struct lk *conflict(struct inode *ip, const struct kflock *l)
 
 int flock_get(struct inode *ip, struct kflock *l)
 {
+    mutex_enter(&flock_mx);
     struct lk *c = conflict(ip, l);
     if (!c) {
         l->type = F_UNLCK_K;
-        return 0;
+    } else {
+        l->type = c->type;
+        l->start = c->start;
+        l->end = c->end;
+        l->pid = c->pid;
     }
-    l->type = c->type;
-    l->start = c->start;
-    l->end = c->end;
-    l->pid = c->pid;
+    mutex_exit(&flock_mx);
     return 0;
 }
 
 static int pindex(int pid)
 {
+    mutex_enter(&pidlock);
     struct proc *p = proc_find(pid);
+    mutex_exit(&pidlock);
     return p ? p - proc_table : -1;
 }
 
-/* Would 'me' waiting for 'owner' close a cycle of waiters? */
+/* flock_mx held: would 'me' waiting for 'owner' close a cycle of waiters? */
 static bool deadlock(int me, int owner)
 {
     for (int steps = 0; owner && steps < NPROC; steps++) {
@@ -89,10 +96,20 @@ static struct lk *lk_new(struct inode *ip, int pid, short type, uint64_t start, 
     return k;
 }
 
+static int flock_set_locked(struct inode *ip, struct kflock *l, bool wait);
+
 int flock_set(struct inode *ip, struct kflock *l, bool wait)
 {
     if (l->start > l->end)
         return -EINVAL;
+    mutex_enter(&flock_mx);
+    int r = flock_set_locked(ip, l, wait);
+    mutex_exit(&flock_mx);
+    return r;
+}
+
+static int flock_set_locked(struct inode *ip, struct kflock *l, bool wait)
+{
     if (l->type != F_UNLCK_K) {
         struct lk *c;
         int me = pindex(l->pid);
@@ -101,13 +118,13 @@ int flock_set(struct inode *ip, struct kflock *l, bool wait)
                 return -EAGAIN;
             if (deadlock(l->pid, c->pid))
                 return -EDEADLK;
-            if (signal_pending(current))
-                return -EINTR;
             if (me >= 0)
                 waits_for[me] = c->pid;
-            sleep_on(&lock_chan);
+            int ok = cv_wait_sig(&flock_cv, &flock_mx);
             if (me >= 0)
                 waits_for[me] = 0;
+            if (!ok)
+                return -EINTR;
         }
     }
     /* Carve the range out of the process's own locks. */
@@ -135,13 +152,14 @@ int flock_set(struct inode *ip, struct kflock *l, bool wait)
     }
     if (l->type != F_UNLCK_K && !lk_new(ip, l->pid, l->type, l->start, l->end))
         return -ENOLCK;
-    wakeup(&lock_chan);
+    cv_broadcast(&flock_cv);
     return 0;
 }
 
 void flock_release(struct inode *ip, int pid)
 {
     bool any = false;
+    mutex_enter(&flock_mx);
     for (struct lk **pp = &locks; *pp;) {
         struct lk *k = *pp;
         if (same_inode(k->ip, ip) && k->pid == pid) {
@@ -153,5 +171,6 @@ void flock_release(struct inode *ip, int pid)
         }
     }
     if (any)
-        wakeup(&lock_chan);
+        cv_broadcast(&flock_cv);
+    mutex_exit(&flock_mx);
 }

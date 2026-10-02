@@ -26,17 +26,16 @@
 #include "mm.h"
 #include "abi2.h"
 #include "jbd2.h"
-#include "kmutex.h"
+#include "sync.h"
 
 #define NINODE 1024                     /* inodes in use at once (open, mapped, cwd), per volume */
 
 /*
  * One mounted ext4 volume.  The code below works on the volume V points to:
  * each entry point (the fs_ops, mount, unmount) sets it from the inode or
- * file system it is given, and holds the volume's mutex: block I/O sleeps
- * (the big kernel lock is free meanwhile, for other volumes and the rest of
- * the kernel), so the block I/O wrappers restore V afterwards; a lofi
- * device's I/O also goes through the volume holding its file.
+ * file system it is given, and holds ext4_lock; a lofi device's I/O goes
+ * through the volume holding its file, so the block I/O wrappers restore V
+ * afterwards.
  */
 struct ext4_vol {
     int dev;                            /* block device */
@@ -57,8 +56,13 @@ struct ext4_vol {
     bool journaled;                     /* metadata goes through jnl */
     bool recover_on;                    /* INCOMPAT_RECOVER is set on disk */
     struct jbd jnl;
-    struct kmutex lock;                 /* the volume: operations sleep in disk I/O holding it */
 };
+
+/* Every ext4 volume's, and the VFS's lock for them (fs->lockp): the code below
+ * works on the volume V, one LWP at a time; operations sleep in disk I/O
+ * holding it, and a lofi device's I/O enters it again for the volume holding
+ * its file. */
+static krmutex_t ext4_lock;
 
 #define MAXVOL 16
 static struct ext4_vol *vols[MAXVOL];   /* mounted volumes, for ext4_journal_tick */
@@ -673,7 +677,7 @@ static struct inode *ext4_iget(uint32_t ino)
     for (int i = 0; i < NINODE; i++) {
         struct inode *ip = &icache[i];
         if (ip->valid && ip->ino == ino) {
-            ip->ref++;
+            idup(ip);
             return ip;
         }
         /* (not one whose last iput waits for the volume to delete it: links 0) */
@@ -2228,11 +2232,10 @@ void ext4_journal_tick(bool force)
     for (int i = 0; i < MAXVOL; i++)
         if (vols[i] && vols[i]->journaled && (force || jbd_due(&vols[i]->jnl))) {
             struct ext4_vol *v = vols[i];
-            if (v->lock.depth && !kmutex_held(&v->lock))
+            if (!rmutex_tryenter(&ext4_lock))
                 continue;                    /* busy: it commits at the end of that operation */
-            kmutex_lock(&v->lock);
             ext4_commit(v);
-            kmutex_unlock(&v->lock);
+            rmutex_exit(&ext4_lock);
         }
     recompute_deadline();
     V = saved;
@@ -2254,10 +2257,10 @@ static void ext4_fs_sync_locked(struct fs *fs);
 static void ext4_fs_sync(struct fs *fs)
 {
     struct ext4_vol *v = VOL(fs);
-    kmutex_lock(&v->lock);
+    rmutex_enter(&ext4_lock);
     ext4_fs_sync_locked(fs);
     V = v;
-    kmutex_unlock(&v->lock);
+    rmutex_exit(&ext4_lock);
 }
 
 static void ext4_fs_sync_locked(struct fs *fs)
@@ -2285,7 +2288,7 @@ static void ext4_fs_sync_locked(struct fs *fs)
 static struct ext4_vol *enter(struct fs *fs)
 {
     struct ext4_vol *v = VOL(fs);
-    kmutex_lock(&v->lock);
+    rmutex_enter(&ext4_lock);
     V = v;
     return v;
 }
@@ -2296,7 +2299,7 @@ static void leave(struct ext4_vol *v, bool changed)
     if (changed)
         op_done();
     V = v;
-    kmutex_unlock(&v->lock);
+    rmutex_exit(&ext4_lock);
 }
 
 static long op_read(struct inode *ip, void *dst, uint64_t off, size_t n)
@@ -2487,7 +2490,7 @@ static int journal_setup(struct ext4_vol *v)
 }
 
 /* Mount the ext4 file system on block device dev (read-only if ro). */
-struct fs *ext4_mount(int dev, bool ro)
+static struct fs *ext4_mount_locked(int dev, bool ro)
 {
     struct ext4_vol *v = kzalloc(sizeof(*v));
     if (!v)
@@ -2496,6 +2499,7 @@ struct fs *ext4_mount(int dev, bool ro)
     v->dev = dev;
     v->fs.ops = &ext4_ops;
     v->fs.priv = v;
+    v->fs.lockp = &ext4_lock;
     if (ext4_mount_sb() < 0) {
         kfree(gds);
         kfree(gd_dirty);
@@ -2537,10 +2541,21 @@ struct fs *ext4_mount(int dev, bool ro)
     return &v->fs;
 }
 
+struct fs *ext4_mount(int dev, bool ro)
+{
+    rmutex_enter(&ext4_lock);
+    struct ext4_vol *saved = V;
+    struct fs *fs = ext4_mount_locked(dev, ro);
+    V = saved;
+    rmutex_exit(&ext4_lock);
+    return fs;
+}
+
 /* Unmounted (nothing uses it any more): write back, forget its blocks, free it. */
 static void ext4_destroy(struct fs *fs)
 {
     struct ext4_vol *v = VOL(fs);
+    rmutex_enter(&ext4_lock);
     V = v;
     iput(fs->root);
     V = v;
@@ -2559,6 +2574,7 @@ static void ext4_destroy(struct fs *fs)
     jbd_close(&v->jnl);
     kfree(v);
     V = NULL;
+    rmutex_exit(&ext4_lock);
 }
 
 static int ext4_mount_sb(void)

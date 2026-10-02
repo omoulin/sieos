@@ -6,6 +6,12 @@
  * file holds the generic attribute code, the dispatchers, the mount table
  * and path reconstruction (getcwd).  Path lookup is in namei.c.
  *
+ * Locking: the dispatchers hold the inode's file system's lock (fs_enter)
+ * around its operation; references are counted atomically, and the last
+ * one is dropped under that lock (the file system may free the inode then).
+ * The mount table has a reader/writer lock.  Order: a file system's lock,
+ * then pidlock (procfs, unmount), the block cache's, the devices'.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -18,14 +24,16 @@
 struct fs *root_fs;
 static void now_ts(int64_t *s, long *ns);
 static struct fs *mounts;             /* every mounted file system, root first */
+static krwlock_t mount_lock;          /* mounts and each fs's next, covered */
 
 /* ------------------------------------------------------------------ */
 /* References                                                          */
 /* ------------------------------------------------------------------ */
 
+/* Another reference to an inode the caller holds one of. */
 struct inode *idup(struct inode *ip)
 {
-    ip->ref++;
+    __atomic_add_fetch(&ip->ref, 1, __ATOMIC_RELAXED);
     return ip;
 }
 
@@ -33,19 +41,30 @@ void iput(struct inode *ip)
 {
     if (!ip)
         return;
-    if (ip->ref <= 0)
+    int r = __atomic_load_n(&ip->ref, __ATOMIC_RELAXED);
+    while (r > 1)                                /* not the last one: no lock */
+        if (__atomic_compare_exchange_n(&ip->ref, &r, r - 1, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED))
+            return;
+    struct fs *fs = ip->fs;
+    if (fs)
+        fs_enter(fs);
+    r = __atomic_sub_fetch(&ip->ref, 1, __ATOMIC_ACQ_REL);
+    if (r < 0)
         panic("iput: refcount underflow on inode %u", ip->ino);
-    if (--ip->ref > 0)
-        return;
-    if (ip->fs && ip->fs->ops->release)
-        ip->fs->ops->release(ip);
+    if (r == 0 && fs && fs->ops->release)
+        fs->ops->release(ip);
+    if (fs)
+        fs_exit(fs);
 }
 
 int iupdate(struct inode *ip)
 {
     if (ip->fs->rdonly)
         return -EROFS;
-    return ip->fs->ops->update ? ip->fs->ops->update(ip) : 0;
+    fs_enter(ip->fs);
+    int r = ip->fs->ops->update ? ip->fs->ops->update(ip) : 0;
+    fs_exit(ip->fs);
+    return r;
 }
 
 /* An inode for the in-memory file systems (tmpfs, procfs, devpts). */
@@ -177,6 +196,7 @@ int inode_setattr(struct inode *ip, int mode, int uid, int gid)
     struct ext4_inode *di = DI(ip);
     if (ip->fs->rdonly)
         return -EROFS;
+    fs_enter(ip->fs);
     if (mode >= 0)
         di->i_mode = (di->i_mode & S_IFMT) | (mode & 07777);
     if (uid != -1) {                             /* (IDs are 32-bit unsigned: -1 alone means "unchanged") */
@@ -188,7 +208,9 @@ int inode_setattr(struct inode *ip, int mode, int uid, int gid)
         di->i_gid_high = (uint32_t)gid >> 16;
     }
     inode_touch(ip, false, true);
-    return iupdate(ip);
+    int r = iupdate(ip);
+    fs_exit(ip->fs);
+    return r;
 }
 
 /* Set the access and modification times; a negative ns leaves that time alone. */
@@ -196,18 +218,22 @@ int inode_settimes(struct inode *ip, int64_t as, long ans, int64_t ms, long mns)
 {
     if (ip->fs->rdonly)
         return -EROFS;
+    fs_enter(ip->fs);
     if (ans >= 0)
         inode_time_set(ip, 0, as, ans);
     if (mns >= 0)
         inode_time_set(ip, 1, ms, mns);
     inode_touch(ip, false, true);
-    return iupdate(ip);
+    int r = iupdate(ip);
+    fs_exit(ip->fs);
+    return r;
 }
 
 void inode_getstat(struct inode *ip, struct kstat *st)
 {
     struct ext4_inode *di = DI(ip);
     memset(st, 0, sizeof(*st));
+    fs_enter(ip->fs);
     st->dev_major = ip->fs->dev_major;
     st->dev_minor = ip->fs->dev_minor;
     st->ino = ip->ino;
@@ -227,6 +253,7 @@ void inode_getstat(struct inode *ip, struct kstat *st)
     time_get(ip, di->i_ctime, di->i_ctime_extra, &st->ctime, &st->ctime_ns);
     st->blksize = ip->fs->bsize ? ip->fs->bsize : PAGE_SIZE;
     st->fstype = ip->fs->ops->name;
+    fs_exit(ip->fs);
 }
 
 
@@ -255,9 +282,11 @@ long readi(struct inode *ip, void *dst, uint64_t off, size_t n)
 {
     if (!ip->fs->ops->read)
         return -EINVAL;
+    fs_enter(ip->fs);
     long r = ip->fs->ops->read(ip, dst, off, n);
     if (r > 0 && ip->pcache)
         pcache_copy(ip, dst, off, r, false);     /* shared mappings may hold newer data */
+    fs_exit(ip->fs);
     return r;
 }
 
@@ -267,15 +296,27 @@ long writei(struct inode *ip, const void *src, uint64_t off, size_t n)
         return -EROFS;
     if (!ip->fs->ops->write)
         return -EINVAL;
+    fs_enter(ip->fs);
     long r = ip->fs->ops->write(ip, src, off, n);
     if (r > 0 && ip->pcache)
         pcache_copy(ip, (uint8_t *)src, off, r, true);
+    fs_exit(ip->fs);
     return r;
 }
 
 /* ---------------- pages shared by MAP_SHARED mappings ---------------- */
 
+static int getpage_locked(struct inode *ip, uint64_t idx, uint64_t *pa);
+
 int vfs_getpage(struct inode *ip, uint64_t idx, uint64_t *pa)
+{
+    fs_enter(ip->fs);
+    int r = getpage_locked(ip, idx, pa);
+    fs_exit(ip->fs);
+    return r;
+}
+
+static int getpage_locked(struct inode *ip, uint64_t idx, uint64_t *pa)
 {
     if (ip->fs->ops->getpage)
         return ip->fs->ops->getpage(ip, idx, pa);
@@ -311,15 +352,28 @@ int vfs_getpage(struct inode *ip, uint64_t idx, uint64_t *pa)
 /* Write a cached page back to the file (the part inside the file). */
 void vfs_writeback(struct inode *ip, uint64_t idx)
 {
-    if (ip->fs->ops->getpage || idx >= ip->npcache || !ip->pcache[idx] || ip->fs->rdonly)
+    if (ip->fs->ops->getpage || ip->fs->rdonly)
         return;
-    uint64_t size = inode_size(ip), fo = idx * PAGE_SIZE;
-    if (fo < size)
-        ip->fs->ops->write(ip, P2V(ip->pcache[idx]), fo, MIN(PAGE_SIZE, size - fo));
+    fs_enter(ip->fs);
+    if (idx < ip->npcache && ip->pcache[idx]) {
+        uint64_t size = inode_size(ip), fo = idx * PAGE_SIZE;
+        if (fo < size)
+            ip->fs->ops->write(ip, P2V(ip->pcache[idx]), fo, MIN(PAGE_SIZE, size - fo));
+    }
+    fs_exit(ip->fs);
 }
+
+static void pcache_trim_locked(struct inode *ip);
 
 /* Drop cached pages nobody maps any more. */
 void vfs_pcache_trim(struct inode *ip)
+{
+    fs_enter(ip->fs);
+    pcache_trim_locked(ip);
+    fs_exit(ip->fs);
+}
+
+static void pcache_trim_locked(struct inode *ip)
 {
     bool any = false;
     for (size_t i = 0; i < ip->npcache; i++) {
@@ -340,28 +394,38 @@ int itruncate(struct inode *ip, uint64_t len)
 {
     if (ip->fs->rdonly)
         return -EROFS;
+    if (!ip->fs->ops->truncate)
+        return -EINVAL;
+    fs_enter(ip->fs);
     for (size_t i = (len + PAGE_SIZE - 1) / PAGE_SIZE; i < ip->npcache; i++)
         if (ip->pcache[i]) {                     /* mappings keep their frames */
             pmm_unref(ip->pcache[i]);
             ip->pcache[i] = 0;
         }
-    if (!ip->fs->ops->truncate)
-        return -EINVAL;
-    return ip->fs->ops->truncate(ip, len);
+    int r = ip->fs->ops->truncate(ip, len);
+    fs_exit(ip->fs);
+    return r;
 }
 
 int vfs_lookup(struct inode *dir, const char *name, size_t len, struct inode **out)
 {
     if (!S_ISDIR(inode_mode(dir)))
         return -ENOTDIR;
-    return dir->fs->ops->lookup(dir, name, len, out);
+    fs_enter(dir->fs);
+    int r = dir->fs->ops->lookup(dir, name, len, out);
+    fs_exit(dir->fs);
+    return r;
 }
 
+/* (fill runs under the file system's lock: it must not touch user memory or sleep) */
 int vfs_readdir(struct inode *dir, uint64_t *off, filldir_t fill, void *arg)
 {
     if (!S_ISDIR(inode_mode(dir)))
         return -ENOTDIR;
-    return dir->fs->ops->readdir(dir, off, fill, arg);
+    fs_enter(dir->fs);
+    int r = dir->fs->ops->readdir(dir, off, fill, arg);
+    fs_exit(dir->fs);
+    return r;
 }
 
 /* Checks shared by the operations that add a name to a directory. */
@@ -388,19 +452,34 @@ int vfs_create(struct inode *dir, const char *name, uint16_t mode, uint32_t rdev
                struct inode **out)
 {
     int r = may_modify(dir, dir->fs->ops->create != NULL);
-    return r < 0 ? r : dir->fs->ops->create(dir, name, mode, rdev, uid, gid, out);
+    if (r < 0)
+        return r;
+    fs_enter(dir->fs);
+    r = dir->fs->ops->create(dir, name, mode, rdev, uid, gid, out);
+    fs_exit(dir->fs);
+    return r;
 }
 
 int vfs_mkdir(struct inode *dir, const char *name, uint16_t mode, int uid, int gid)
 {
     int r = may_modify(dir, dir->fs->ops->mkdir != NULL);
-    return r < 0 ? r : dir->fs->ops->mkdir(dir, name, mode, uid, gid);
+    if (r < 0)
+        return r;
+    fs_enter(dir->fs);
+    r = dir->fs->ops->mkdir(dir, name, mode, uid, gid);
+    fs_exit(dir->fs);
+    return r;
 }
 
 int vfs_unlink(struct inode *dir, const char *name, bool is_dir)
 {
     int r = may_modify(dir, dir->fs->ops->unlink != NULL);
-    return r < 0 ? r : dir->fs->ops->unlink(dir, name, is_dir);
+    if (r < 0)
+        return r;
+    fs_enter(dir->fs);
+    r = dir->fs->ops->unlink(dir, name, is_dir);
+    fs_exit(dir->fs);
+    return r;
 }
 
 int vfs_rename(struct inode *od, const char *on, struct inode *nd, const char *nn)
@@ -408,7 +487,12 @@ int vfs_rename(struct inode *od, const char *on, struct inode *nd, const char *n
     if (od->fs != nd->fs)
         return -EXDEV;
     int r = may_modify(od, od->fs->ops->rename != NULL);
-    return r < 0 ? r : od->fs->ops->rename(od, on, nd, nn);
+    if (r < 0)
+        return r;
+    fs_enter(od->fs);
+    r = od->fs->ops->rename(od, on, nd, nn);
+    fs_exit(od->fs);
+    return r;
 }
 
 int vfs_link(struct inode *dir, const char *name, struct inode *ip)
@@ -416,13 +500,23 @@ int vfs_link(struct inode *dir, const char *name, struct inode *ip)
     if (dir->fs != ip->fs)
         return -EXDEV;
     int r = may_modify(dir, dir->fs->ops->link != NULL);
-    return r < 0 ? r : dir->fs->ops->link(dir, name, ip);
+    if (r < 0)
+        return r;
+    fs_enter(dir->fs);
+    r = dir->fs->ops->link(dir, name, ip);
+    fs_exit(dir->fs);
+    return r;
 }
 
 int vfs_symlink(struct inode *dir, const char *name, const char *target, int uid, int gid)
 {
     int r = may_modify(dir, dir->fs->ops->symlink != NULL);
-    return r < 0 ? r : dir->fs->ops->symlink(dir, name, target, uid, gid);
+    if (r < 0)
+        return r;
+    fs_enter(dir->fs);
+    r = dir->fs->ops->symlink(dir, name, target, uid, gid);
+    fs_exit(dir->fs);
+    return r;
 }
 
 /* Read a symbolic link's target (not NUL-terminated). */
@@ -438,17 +532,25 @@ int vfs_statvfs(struct inode *ip, struct kstatvfs *sv)
     memset(sv, 0, sizeof(*sv));
     sv->bsize = ip->fs->bsize ? ip->fs->bsize : PAGE_SIZE;
     sv->namemax = 255;
-    if (ip->fs->ops->statvfs)
+    if (ip->fs->ops->statvfs) {
+        fs_enter(ip->fs);
         ip->fs->ops->statvfs(ip->fs, sv);
+        fs_exit(ip->fs);
+    }
     sv->rdonly = sv->rdonly || ip->fs->rdonly;
     return 0;
 }
 
 void vfs_sync(void)
 {
+    rw_enter(&mount_lock, RW_READER);
     for (struct fs *fs = mounts; fs; fs = fs->next)
-        if (fs->ops->sync)
+        if (fs->ops->sync) {
+            fs_enter(fs);
             fs->ops->sync(fs);
+            fs_exit(fs);
+        }
+    rw_exit(&mount_lock);
 }
 
 /* ------------------------------------------------------------------ */
@@ -468,10 +570,13 @@ struct inode *vfs_root(void)
 struct inode *vfs_covering(struct inode *ip)
 {
     struct fs *top = NULL;
+    rw_enter(&mount_lock, RW_READER);
     for (struct fs *fs = mounts; fs; fs = fs->next)
         if (fs->covered && same_inode(fs->covered, ip))
             top = fs;                            /* the most recent mount wins */
-    return top ? idup(top->root) : NULL;
+    struct inode *r = top ? idup(top->root) : NULL;
+    rw_exit(&mount_lock);
+    return r;
 }
 
 int vfs_mount(struct fs *fs, const char *path)
@@ -484,40 +589,52 @@ int vfs_mount(struct fs *fs, const char *path)
         iput(ip);
         return -ENOTDIR;
     }
+    fs_lock_init(fs);
     fs->covered = ip;
     strlcpy(fs->mntpoint, path, sizeof(fs->mntpoint));
     if (!fs->special[0])
         strlcpy(fs->special, fs->ops->name, sizeof(fs->special));
     fs->mount_time = kernel_time();
+    rw_enter(&mount_lock, RW_WRITER);
     struct fs **pp = &mounts;
     while (*pp)
         pp = &(*pp)->next;
     *pp = fs;
+    rw_exit(&mount_lock);
     return 0;
 }
 
 struct fs *vfs_mounted_on(struct inode *ip)
 {
-    for (struct fs *fs = mounts; fs; fs = fs->next)
+    struct fs *r = NULL;
+    rw_enter(&mount_lock, RW_READER);
+    for (struct fs *fs = mounts; fs && !r; fs = fs->next)
         if (fs->root == ip)
-            return fs;
-    return NULL;
+            r = fs;
+    rw_exit(&mount_lock);
+    return r;
 }
 
 int vfs_umount(struct fs *fs)
 {
     if (fs == root_fs || !fs->ops->destroy)
         return -EBUSY;
+    rw_enter(&mount_lock, RW_WRITER);
     for (struct fs *o = mounts; o; o = o->next)
-        if (o->covered && o->covered->fs == fs)
+        if (o->covered && o->covered->fs == fs) {
+            rw_exit(&mount_lock);
             return -EBUSY;                       /* something is mounted inside */
-    if (file_table_uses(fs) || proc_table_uses(fs))
+        }
+    if (file_table_uses(fs) || proc_table_uses(fs)) {
+        rw_exit(&mount_lock);
         return -EBUSY;
+    }
     for (struct fs **pp = &mounts; *pp; pp = &(*pp)->next)
         if (*pp == fs) {
             *pp = fs->next;
             break;
         }
+    rw_exit(&mount_lock);
     iput(fs->covered);
     fs->ops->destroy(fs);
     return 0;
@@ -526,6 +643,7 @@ int vfs_umount(struct fs *fs)
 long vfs_mnttab(char *buf, size_t size)
 {
     size_t n = 0;
+    rw_enter(&mount_lock, RW_READER);
     for (struct fs *fs = mounts; fs; fs = fs->next) {
         char line[224];
         int k = snprintf(line, sizeof(line), "%s\t%s\t%s\t%s%s,dev=%x\t%ld\n",
@@ -536,6 +654,7 @@ long vfs_mnttab(char *buf, size_t size)
             memcpy(buf + n, line, k);
         n += k;
     }
+    rw_exit(&mount_lock);
     if (size)
         buf[n < size ? n : size - 1] = 0;
     return n;
@@ -543,6 +662,7 @@ long vfs_mnttab(char *buf, size_t size)
 
 void vfs_init(void)
 {
+    fs_lock_init(root_fs);
     mounts = root_fs;
     root_fs->next = NULL;
 }
@@ -701,7 +821,7 @@ static int dir_path(struct inode *dir, char *buf, size_t size, char *tmp)
     char name[256];
     size_t pos = MAXPATH - 1;
     tmp[pos] = 0;
-    struct inode *root = current && current->root ? current->root : root_fs->root;
+    struct inode *root = proc_root();
     struct inode *cur = idup(dir);
     int r = 0;
     for (int depth = 0; !same_inode(cur, root); depth++) {
@@ -741,6 +861,7 @@ static int dir_path(struct inode *dir, char *buf, size_t size, char *tmp)
         tmp[--pos] = '/';
     }
     iput(cur);
+    iput(root);
     if (r < 0)
         return r;
     if (pos == MAXPATH - 1)

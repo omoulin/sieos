@@ -10,6 +10,7 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include "mm.h"
+#include "smp.h"
 
 #define HDR_MAGIC 0xA1E05A11
 #define NCLASSES  8                 /* 32 .. 4096 bytes including header */
@@ -26,6 +27,7 @@ struct freeblk {
 
 static struct freeblk *freelist[NCLASSES];
 static size_t heap_used;
+static struct spinlock kmem_lock;           /* the free lists and the count (then the frame allocator's lock) */
 
 static size_t class_size(int c) { return 32UL << c; }
 
@@ -35,24 +37,33 @@ void *kmalloc(size_t size)
     for (int c = 0; c < NCLASSES - 1; c++) {
         if (need > class_size(c))
             continue;
+        spin_lock(&kmem_lock);
         if (!freelist[c]) {
-            uint64_t pa = pmm_alloc();
+            spin_unlock(&kmem_lock);
+            uint64_t pa = pmm_alloc();               /* (a page cut in blocks: outside the lock) */
             if (!pa)
                 return NULL;
             char *page = P2V(pa);
+            struct freeblk *first = NULL, *last = NULL;
             for (size_t off = 0; off + class_size(c) <= PAGE_SIZE; off += class_size(c)) {
                 struct freeblk *b = (struct freeblk *)(page + off);
-                b->next = freelist[c];
-                freelist[c] = b;
+                b->next = first;
+                first = b;
+                if (!last)
+                    last = b;
             }
+            spin_lock(&kmem_lock);
+            last->next = freelist[c];
+            freelist[c] = first;
         }
         struct freeblk *b = freelist[c];
         freelist[c] = b->next;
+        __atomic_add_fetch(&heap_used, class_size(c), __ATOMIC_RELAXED);
+        spin_unlock(&kmem_lock);
         struct header *h = (struct header *)b;
         h->magic = HDR_MAGIC;
         h->cls = c;
         h->npages = 0;
-        heap_used += class_size(c);
         return h + 1;
     }
     size_t npages = PAGE_ALIGN_UP(need) / PAGE_SIZE;
@@ -63,7 +74,7 @@ void *kmalloc(size_t size)
     h->magic = HDR_MAGIC;
     h->cls = NCLASSES;
     h->npages = npages;
-    heap_used += npages * PAGE_SIZE;
+    __atomic_add_fetch(&heap_used, npages * PAGE_SIZE, __ATOMIC_RELAXED);
     return h + 1;
 }
 
@@ -84,15 +95,17 @@ void kfree(void *p)
         panic("kfree: bad pointer %p", p);
     h->magic = 0;
     if (h->cls == NCLASSES) {
-        heap_used -= h->npages * PAGE_SIZE;
+        __atomic_sub_fetch(&heap_used, h->npages * PAGE_SIZE, __ATOMIC_RELAXED);
         pmm_free_contig(V2P(h), h->npages);
         return;
     }
     int c = h->cls;
-    heap_used -= class_size(c);
     struct freeblk *b = (struct freeblk *)h;
+    spin_lock(&kmem_lock);
+    __atomic_sub_fetch(&heap_used, class_size(c), __ATOMIC_RELAXED);
     b->next = freelist[c];
     freelist[c] = b;
+    spin_unlock(&kmem_lock);
 }
 
 size_t kheap_used(void)

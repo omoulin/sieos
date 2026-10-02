@@ -100,17 +100,22 @@ static int nmods;
 
 static void (*polls[16])(void);
 static int npolls;
+static kmutex_t mod_lock;                        /* loading drivers (modload; the boot loads alone) */
 long (*ddi_wifi_op)(int op, void *buf, long n);
 
+/* (under mod_lock: the clock thread reads the list without it, entries are only added) */
 void ddi_poll_register(void (*fn)(void))
 {
-    if (npolls < (int)ARRAY_SIZE(polls))
-        polls[npolls++] = fn;
+    if (npolls < (int)ARRAY_SIZE(polls)) {
+        polls[npolls] = fn;
+        __atomic_store_n(&npolls, npolls + 1, __ATOMIC_RELEASE);
+    }
 }
 
 void ddi_poll(void)
 {
-    for (int i = 0; i < npolls; i++)
+    int n = __atomic_load_n(&npolls, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n; i++)
         polls[i]();
 }
 
@@ -534,20 +539,27 @@ int modload_path(const char *path)
         return -EIO;
     }
     iput(ip);
+    mutex_enter(&mod_lock);                      /* (one load, and one driver's _init, at a time) */
     int before = nmods;
     struct module *m = mod_add(img, size, "modload");
+    int r;
     if (!m) {
         kfree(img);
-        return -ENOEXEC;
+        r = -ENOEXEC;
+    } else {
+        if (nmods == before)
+            kfree(img);                          /* (known already: that one) */
+        if (m->state == SIEOS_MOD_LOADED) {
+            r = -EEXIST;
+        } else {
+            modules_attach(DDI_PHASE_ROOT);
+            if (m->state == SIEOS_MOD_KNOWN)
+                mod_load(m);
+            r = m->state == SIEOS_MOD_LOADED ? 0 : -ENOEXEC;
+        }
     }
-    if (nmods == before)
-        kfree(img);                              /* (known already: that one) */
-    if (m->state == SIEOS_MOD_LOADED)
-        return -EEXIST;
-    modules_attach(DDI_PHASE_ROOT);
-    if (m->state == SIEOS_MOD_KNOWN)
-        mod_load(m);
-    return m->state == SIEOS_MOD_LOADED ? 0 : -ENOEXEC;
+    mutex_exit(&mod_lock);
+    return r;
 }
 
 int modinfo_get(int i, struct sieos_modinfo *mi)

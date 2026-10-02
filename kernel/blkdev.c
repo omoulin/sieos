@@ -10,6 +10,13 @@
  * line ("root=c4t0d0s2", ext4); else on the first ATA disk that holds ext4
  * (changes persist); otherwise on the RAM disk.
  *
+ * Locking: blk_lock covers changes to the table (devices registered,
+ * partitions read again, lofi devices attached and detached, mounts
+ * counted); I/O reads a device's entry without it (a device is not torn
+ * down while mounted or open), and the drivers serialise their own
+ * hardware.  The /dev/dsk nodes are made with the lock released (the root
+ * file system's lock comes before it).
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -43,6 +50,7 @@ struct blkdev {
 };
 
 static struct blkdev devs[NBLKDEV];
+static kmutex_t blk_lock;
 static int root_dev = -1;
 static uint8_t *ramdisk;
 static uint64_t ramdisk_sectors;
@@ -74,13 +82,26 @@ static int slot_alloc(void)
     return -1;
 }
 
+static int register_at(int dev, const char *name, uint64_t sectors, const struct blk_ops *ops, void *drv);
+
 int blk_register(const char *name, uint64_t sectors, const struct blk_ops *ops, void *drv)
 {
-    return blk_register_at(slot_alloc(), name, sectors, ops, drv);
+    mutex_enter(&blk_lock);
+    int r = register_at(slot_alloc(), name, sectors, ops, drv);
+    mutex_exit(&blk_lock);
+    return r;
 }
 
 /* At a given device number (the ATA units' 0-3: c0d0p0 ... c1d1p0), or -1. */
 int blk_register_at(int dev, const char *name, uint64_t sectors, const struct blk_ops *ops, void *drv)
+{
+    mutex_enter(&blk_lock);
+    int r = register_at(dev, name, sectors, ops, drv);
+    mutex_exit(&blk_lock);
+    return r;
+}
+
+static int register_at(int dev, const char *name, uint64_t sectors, const struct blk_ops *ops, void *drv)
 {
     if (dev < 0 || dev >= NBLKDEV || devs[dev].kind != BK_NONE)
         return -1;
@@ -292,8 +313,10 @@ bool blk_readonly(int dev)
 /* A file system is mounted on dev (delta +1), or no longer (-1). */
 void blk_use(int dev, int delta)
 {
+    mutex_enter(&blk_lock);
     if (valid(dev))
         devs[dev].users += delta;
+    mutex_exit(&blk_lock);
 }
 
 bool blk_in_use(int dev)
@@ -359,32 +382,45 @@ int blk_write(int dev, uint64_t lba, size_t count, const void *buf)
 
 int blk_lofi_attach(struct inode *ip, const char *path, bool ro)
 {
+    uint64_t sectors = inode_size(ip) / SECTOR_SIZE;
+    mutex_enter(&blk_lock);
     for (int dev = BLK_LOFI0; dev < BLK_LOFI0 + NLOFI; dev++)
-        if (valid(dev) && same_inode(devs[dev].ip, ip))
+        if (valid(dev) && same_inode(devs[dev].ip, ip)) {
+            mutex_exit(&blk_lock);
             return -EBUSY;                           /* the file is attached already */
+        }
     for (int dev = BLK_LOFI0; dev < BLK_LOFI0 + NLOFI; dev++) {
         struct blkdev *d = &devs[dev];
         if (d->kind != BK_NONE)
             continue;
         memset(d, 0, sizeof(*d));
-        d->kind = BK_LOFI;
         d->ip = idup(ip);
         d->ro = ro;
-        d->sectors = inode_size(ip) / SECTOR_SIZE;
+        d->sectors = sectors;
         strlcpy(d->file, path, sizeof(d->file));
+        __atomic_store_n(&d->kind, BK_LOFI, __ATOMIC_RELEASE);
+        mutex_exit(&blk_lock);
         return dev;
     }
+    mutex_exit(&blk_lock);
     return -EBUSY;                                   /* all lofi devices in use */
 }
 
 int blk_lofi_detach(int dev)
 {
-    if (dev < BLK_LOFI0 || dev >= BLK_LOFI0 + NLOFI || !valid(dev))
+    mutex_enter(&blk_lock);
+    if (dev < BLK_LOFI0 || dev >= BLK_LOFI0 + NLOFI || !valid(dev)) {
+        mutex_exit(&blk_lock);
         return -ENXIO;
-    if (devs[dev].users)
+    }
+    if (devs[dev].users) {
+        mutex_exit(&blk_lock);
         return -EBUSY;
-    iput(devs[dev].ip);
+    }
+    struct inode *ip = devs[dev].ip;
     memset(&devs[dev], 0, sizeof(devs[dev]));
+    mutex_exit(&blk_lock);
+    iput(ip);
     return 0;
 }
 
@@ -506,11 +542,12 @@ int blk_info(int dev, struct sieos_dk_info *di)
 /*
  * Disks registered after blk_init (a USB drive that connected late, or was
  * plugged in): their partitions and /dev/dsk nodes.  Their driver registers
- * them from the timer tick, where no disk can be read; this runs at the end
- * of the next system call, with the kernel lock.
+ * them from their polling, where no disk can be read; this runs in the
+ * fsflush thread, within a second.
  */
 void blk_scan_late(void)
 {
+    mutex_enter(&blk_lock);
     blk_late_pending = false;
     bool any = false;
     for (int dev = 0; dev < NBLKDEV; dev++) {
@@ -524,16 +561,22 @@ void blk_scan_late(void)
             if (devs[i].kind == BK_PART && devs[i].parent == dev)
                 kprintf("disk: %s: partition of %s, %lu MiB\n", devs[i].name, devs[dev].name, devs[i].sectors / 2048);
     }
+    mutex_exit(&blk_lock);
     if (any)
         vfs_blk_nodes();
 }
 
 int blk_reread(int dev)
 {
-    if (!valid(dev) || devs[dev].kind != BK_DRV)
+    mutex_enter(&blk_lock);
+    if (!valid(dev) || devs[dev].kind != BK_DRV) {
+        mutex_exit(&blk_lock);
         return -EINVAL;
-    if (busy_tree(dev))
+    }
+    if (busy_tree(dev)) {
+        mutex_exit(&blk_lock);
         return -EBUSY;
+    }
     forget_tree(dev);
     for (int i = 0; i < NBLKDEV; i++)
         if (devs[i].kind == BK_PART && devs[i].parent == dev)
@@ -542,6 +585,7 @@ int blk_reread(int dev)
     for (int i = 0; i < NBLKDEV; i++)
         if (devs[i].kind == BK_PART && devs[i].parent == dev)
             kprintf("disk: %s: partition of %s, %lu MiB\n", devs[i].name, devs[dev].name, devs[i].sectors / 2048);
+    mutex_exit(&blk_lock);
     vfs_blk_nodes();
     return 0;
 }

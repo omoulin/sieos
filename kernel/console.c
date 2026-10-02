@@ -11,6 +11,7 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include "kernel.h"
+#include "smp.h"
 
 #define COM1 0x3F8
 #define FONT_W 8
@@ -169,7 +170,14 @@ static void screen_putc(char c)
         scroll();
 }
 
-void console_clear(void)
+/*
+ * The console's state (the cells, the cursor, the escapes, the serial line)
+ * is shared by every processor: kprintf from anywhere (interrupts too), the
+ * console terminal's output, the displays' mode changes.
+ */
+static struct spinlock cons_lock;
+
+static void clear_locked(void)
 {
     for (int y = 0; y < rows; y++)
         for (int x = 0; x < cols; x++)
@@ -259,23 +267,32 @@ static bool setup_framebuffer(struct mb2_fb_tag *t)
  * deferred framebuffer comes into use here. */
 void console_fb_remap(void *kva)
 {
-    if (!kva || (scr != SCR_FB && !fb_deferred))
+    if (!kva)
         return;
+    spin_lock(&cons_lock);
+    if (scr != SCR_FB && !fb_deferred) {
+        spin_unlock(&cons_lock);
+        return;
+    }
     fb = kva;
     if (fb_deferred) {
         fb_deferred = false;
         cols = MIN((int)(fb_width / FONT_W), MAX_COLS);
         rows = MIN((int)(fb_height / FONT_H), MAX_ROWS);
         scr = SCR_FB;
-        console_clear();
+        clear_locked();
     }
+    spin_unlock(&cons_lock);
 }
 
 /* The display's mode changed: the console follows it (a clear screen). */
 void console_fb_mode(void *kva, uint32_t width, uint32_t height, uint32_t pitch)
 {
-    if (scr != SCR_FB)
+    spin_lock(&cons_lock);
+    if (scr != SCR_FB) {
+        spin_unlock(&cons_lock);
         return;
+    }
     fb = kva;
     fb_width = width;
     fb_height = height;
@@ -284,7 +301,8 @@ void console_fb_mode(void *kva, uint32_t width, uint32_t height, uint32_t pitch)
     cols = MIN((int)(fb_width / FONT_W), MAX_COLS);
     rows = MIN((int)(fb_height / FONT_H), MAX_ROWS);
     if (!suspended)
-        console_clear();
+        clear_locked();
+    spin_unlock(&cons_lock);
 }
 
 void console_init(uint64_t mb_info_phys)
@@ -309,7 +327,7 @@ void console_init(uint64_t mb_info_phys)
         rows = 25;
         scr = SCR_VGA;
     }
-    console_clear();
+    clear_locked();
 }
 
 const char *console_mode(void)
@@ -343,6 +361,7 @@ bool console_fb_info(struct fb_info *fi, uint64_t *phys)
 /* Stop drawing while a graphical program owns the screen; repaint after. */
 void console_suspend(bool on)
 {
+    spin_lock(&cons_lock);
     suspended = on;
     if (!on && scr == SCR_FB) {
         memset(fb, 0, (size_t)fb_pitch * fb_height);
@@ -352,6 +371,7 @@ void console_suspend(bool on)
         cursor_drawn_x = -1;
         update_cursor();
     }
+    spin_unlock(&cons_lock);
 }
 
 void console_set_color(uint8_t fg, uint8_t bg)
@@ -430,7 +450,7 @@ static bool ansi_filter(char c)
         break;
     case 'J':
         if (esc_param[0] == 2)
-            console_clear();
+            clear_locked();
         break;
     case 'H':
         cur_x = cur_y = 0;
@@ -444,10 +464,10 @@ static bool ansi_filter(char c)
     return true;
 }
 
-void console_putc(char c)
+static void putc_locked(char c)
 {
     if (c == '\f') {             /* form feed clears the screen */
-        console_clear();
+        clear_locked();
         const char *esc = "\033[2J\033[H";
         while (*esc)
             serial_putc(*esc++);
@@ -462,9 +482,29 @@ void console_putc(char c)
 
 void console_write(const char *s, size_t n)
 {
+    spin_lock(&cons_lock);
     for (size_t i = 0; i < n; i++)
-        console_putc(s[i]);
+        putc_locked(s[i]);
     update_cursor();
+    spin_unlock(&cons_lock);
+}
+
+void console_putc(char c)
+{
+    console_write(&c, 1);
+}
+
+void console_clear(void)
+{
+    spin_lock(&cons_lock);
+    clear_locked();
+    spin_unlock(&cons_lock);
+}
+
+/* panic: the lock may be held by the processor that failed. */
+void console_panic(void)
+{
+    spin_unlock(&cons_lock);
 }
 
 /*

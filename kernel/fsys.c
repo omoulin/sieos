@@ -16,25 +16,15 @@
 #include "display.h"
 #include "abi2.h"
 
+/* The caller's file on fd, held until the system call returns. */
 struct file *fsys_file(int fd)
 {
-    if (fd < 0 || fd >= NOFILE)
-        return NULL;
-    return current->ofile[fd];
+    return fd_file(fd);
 }
 
 int fsys_fdalloc(struct file *f, int from)
 {
-    uint64_t lim = current->rlim_cur[5];             /* SIEOS_RLIMIT_NOFILE */
-    int max = lim < NOFILE ? (int)lim : NOFILE;
-    for (int fd = from < 0 ? 0 : from; fd < max; fd++) {
-        if (!current->ofile[fd]) {
-            current->ofile[fd] = f;
-            current->fdflags[fd] = 0;
-            return fd;
-        }
-    }
-    return -EMFILE;
+    return fd_alloc(current, f, from, 0);
 }
 
 static bool is_root(void)
@@ -368,16 +358,14 @@ static long open_at(int dirfd, const char *upath, int flags, int mode, char *pat
     f->off = 0;
     f->pname = kstrdup(path);
     if (path[0] != '/')
-        f->pdir = idup(start ? start : current->cwd);
+        f->pdir = start ? idup(start) : proc_cwd();
     if ((S_ISCHR(m) && (r = open_device(f, ip, flags)) < 0) || (S_ISBLK(m) && (r = open_blk(f, ip, flags)) < 0) || (S_ISFIFO(m) && (r = fifo_open(f, ip, flags)) < 0)) {
         file_close(f);
         return r;
     }
-    int fd = fsys_fdalloc(f, 0);
+    int fd = fd_alloc(current, f, 0, (flags & O_CLOEXEC_K) ? FD_CLOEXEC : 0);
     if (fd < 0)
         file_close(f);
-    else if (flags & O_CLOEXEC_K)
-        current->fdflags[fd] = FD_CLOEXEC;
     return fd;
 }
 
@@ -746,8 +734,11 @@ static long set_dir(struct inode *ip, struct inode **slot)
         iput(ip);
         return r;
     }
-    iput(*slot);
+    mutex_enter(&current->p_lock);
+    struct inode *old = *slot;
     *slot = ip;
+    mutex_exit(&current->p_lock);
+    iput(old);
     return 0;
 }
 
@@ -782,7 +773,9 @@ long fsys_getcwd(char *ubuf, size_t n)
     char *path = path_get();
     if (!path)
         return -ENOMEM;
-    long len = vfs_dir_path(current->cwd, path, MAXPATH);
+    struct inode *cwd = proc_cwd();
+    long len = vfs_dir_path(cwd, path, MAXPATH);
+    iput(cwd);
     if (len >= 0 && n < (size_t)len)
         len = -ERANGE;
     else if (len >= 0 && !user_ok(ubuf, len, true))
@@ -858,11 +851,10 @@ long fsys_dup(int fd, int from, bool cloexec)
         return -EBADF;
     if (from < 0 || from >= NOFILE)
         return -EINVAL;
-    int nfd = fsys_fdalloc(f, from);
-    if (nfd >= 0) {
-        file_dup(f);
-        current->fdflags[nfd] = cloexec ? FD_CLOEXEC : 0;
-    }
+    file_dup(f);
+    int nfd = fd_alloc(current, f, from, cloexec ? FD_CLOEXEC : 0);
+    if (nfd < 0)
+        file_close(f);
     return nfd;
 }
 
@@ -873,9 +865,11 @@ long fsys_dup2(int fd, int to, bool cloexec)
         return -EBADF;
     if (fd == to)
         return to;
-    file_dup(f);
-    fd_close(current, to);
-    current->ofile[to] = f;
-    current->fdflags[to] = cloexec ? FD_CLOEXEC : 0;
+    struct file *old = fd_replace(current, to, file_dup(f), cloexec ? FD_CLOEXEC : 0);
+    if (old) {
+        if (old->ip)
+            flock_release(old->ip, current->pid);
+        file_close(old);
+    }
     return to;
 }

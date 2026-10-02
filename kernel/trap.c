@@ -16,6 +16,7 @@
 #include "jbd2.h"
 #include "net.h"
 #include "blkdev.h"
+#include "fs.h"
 #include "sieos/syscall.h"
 #include "sieos/time.h"
 
@@ -35,6 +36,7 @@ struct idt_ptr {
 } __attribute__((packed));
 
 static struct idt_entry idt[256];
+uint64_t irq_seen[16], irq_run[16];              /* (the NMI dump prints them) */
 static irq_handler_t irq_handlers[16];
 #define IRQ_SHARE 4
 static struct {
@@ -82,10 +84,51 @@ static void pic_init(void)
     outb(0xA1, 0xFF);
 }
 
+static struct spinlock pic_lock;              /* the PICs' mask registers (read, changed, written) */
+
 void pic_unmask(int irq)
 {
     uint16_t port = irq < 8 ? 0x21 : 0xA1;
+    spin_lock(&pic_lock);
     outb(port, inb(port) & ~(1 << (irq & 7)));
+    spin_unlock(&pic_lock);
+}
+
+static void pic_mask(int irq)
+{
+    uint16_t port = irq < 8 ? 0x21 : 0xA1;
+    spin_lock(&pic_lock);
+    outb(port, inb(port) | (1 << (irq & 7)));
+    spin_unlock(&pic_lock);
+}
+
+void irq_mask(int irq)
+{
+    if (ioapic_ok)
+        ioapic_mask(irq);
+    else
+        pic_mask(irq);
+}
+
+void irq_unmask(int irq)
+{
+    if (ioapic_ok)
+        ioapic_unmask(irq);
+    else
+        pic_unmask(irq);
+}
+
+/* The line's handlers (they get a frame with only int_no). */
+void irq_dispatch(int irq)
+{
+    __atomic_add_fetch(&irq_run[irq], 1, __ATOMIC_RELAXED);
+    struct trapframe tf;
+    memset(&tf, 0, sizeof(tf));
+    tf.int_no = IRQ_BASE + irq;
+    if (irq_handlers[irq])
+        irq_handlers[irq](&tf);
+    for (int i = 0; i < IRQ_SHARE && irq_shared[irq][i].fn; i++)
+        irq_shared[irq][i].fn(&tf, irq_shared[irq][i].arg);
 }
 
 static void pic_eoi(int irq)
@@ -183,8 +226,8 @@ static int fault_signal(struct trapframe *tf, int *code, uint64_t *addr)
 }
 
 /*
- * System calls that read only the caller's own state or the clocks run
- * without the kernel lock: false for everything else.
+ * System calls that read only the caller's own state or the clocks, answered
+ * at once without the dispatch: false for everything else.
  */
 static bool fast_syscall(struct trapframe *tf)
 {
@@ -216,7 +259,7 @@ static bool fast_syscall(struct trapframe *tf)
             return false;                               /* (the slow path says EFAULT) */
         ts.tv_sec = ns / 1000000000L;
         ts.tv_nsec = ns % 1000000000L;
-        memcpy(u, &ts, sizeof(ts));                     /* a fault here takes the kernel lock */
+        memcpy(u, &ts, sizeof(ts));
         r = 0;
         break;
     }
@@ -235,51 +278,151 @@ static bool nothing_pending(void)
 {
     struct lwp *l = curlwp;
     struct proc *p = l->proc;
-    return !mycpu()->need_resched && !l->must_exit && !l->suspend_req && !p->stopped &&
+    return !mycpu()->need_resched && !l->must_exit && !l->suspend_req && !p->stopped && !l->ast &&
            !((l->sig_pending | p->sig_pending) & ~l->sig_blocked);
+}
+
+/*
+ * An NMI (QEMU's inject-nmi, a watchdog): each processor prints where it is
+ * and its stack's return addresses on the serial line, raw (the console's
+ * lock may be what it is stuck on); the boot processor also prints every
+ * LWP.  For finding deadlocks: addresses resolve with build/kernel.nm.
+ */
+static struct spinlock nmi_lock;
+
+static void nmi_printf(const char *fmt, ...)
+{
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    for (int i = 0; i < n && i < (int)sizeof(buf) - 1; i++) {
+        if (buf[i] == '\n')
+            serial_putc('\r');
+        serial_putc(buf[i]);
+    }
+}
+
+static void nmi_dump(struct trapframe *tf)
+{
+    while (__atomic_exchange_n(&nmi_lock.locked, 1, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause");
+    struct cpu *c = mycpu();
+    struct lwp *l = c->lwp;
+    nmi_printf("NMI cpu%d %s %d/%d st%d rip %lx cs %lx:", c->id, l ? l->name : "-",
+               l && l->proc ? l->proc->pid : -1, l ? l->lwpid : -1, l ? l->state : -1, tf->rip, tf->cs);
+    if (!(tf->cs & 3)) {
+        uint64_t fp = tf->rbp;
+        for (int i = 0; i < 24 && fp >= 0xffff800000000000UL && !(fp & 7); i++) {
+            uint64_t ret = ((uint64_t *)fp)[1];
+            nmi_printf(" %lx", ret);
+            uint64_t nfp = ((uint64_t *)fp)[0];
+            if (nfp <= fp)
+                break;
+            fp = nfp;
+        }
+    }
+    nmi_printf("\n");
+    if (c->id == 0) {
+        for (int i = 0; i < NLWP; i++) {
+            struct lwp *w = &lwp_table[i];
+            if (w->state == LWP_UNUSED)
+                continue;
+            uint64_t ret = 0, fp = 0;
+            if (!w->oncpu && w->ctx_rsp) {           /* its saved context: rbp, then switch_context's caller */
+                uint64_t *sp = (uint64_t *)w->ctx_rsp;
+                fp = sp[5];
+                ret = sp[6];
+            }
+            nmi_printf("  %d/%d %s st%d oncpu%d cpu%d wchan %lx tick%lu ns%lu sig%d ret %lx", w->proc->pid,
+                       w->lwpid, w->name, w->state, w->oncpu, w->cpu, (uint64_t)w->wchan,
+                       w->wake_tick, w->wake_ns, w->sleep_sig, ret);
+            for (int k = 0; k < 10 && fp >= 0xffff800000000000UL && !(fp & 7); k++) {
+                nmi_printf(" %lx", ((uint64_t *)fp)[1]);
+                uint64_t nfp = ((uint64_t *)fp)[0];
+                if (nfp <= fp)
+                    break;
+                fp = nfp;
+            }
+            nmi_printf("\n");
+        }
+        nmi_printf("  ticks %lu irqs", ticks);
+        for (int i = 0; i < 16; i++)
+            if (irq_seen[i] || irq_run[i])
+                nmi_printf(" %d:%lu/%lu", i, irq_seen[i], irq_run[i]);
+        nmi_printf("\n");
+    }
+    __atomic_store_n(&nmi_lock.locked, 0, __ATOMIC_RELEASE);
 }
 
 void trap_handler(struct trapframe *tf)
 {
     bool from_user = (tf->cs & 3) == 3;
 
+    if (tf->int_no == 2) {
+        nmi_dump(tf);
+        return;
+    }
+
     if (tf->int_no == T_SPURIOUS)
         return;                               /* no EOI for spurious interrupts */
-    if (tf->int_no == T_IPI_TLB) {            /* no kernel lock: the sender holds it */
-        write_cr3(read_cr3());
-        mycpu()->tlb_flush = 0;
+    if (tf->int_no == T_IPI_TLB) {
+        tlb_service();
         lapic_eoi();
         return;
     }
 
-    /* A page fault from user mode needs only the address space's own lock
-     * (vm.c): demand-zero and copy-on-write faults of different LWPs and
-     * processes run in parallel; so do the system calls of fast_syscall.
-     * Anything else to do on the way back to
-     * user mode (rescheduling, signals, exit) takes the slow path. */
-    if (from_user && ((tf->int_no == 14 && vm_fault(read_cr2(), tf->err_code, true) && ++curlwp->minflt) ||
-                      (tf->int_no == T_SYSCALL2 && fast_syscall(tf)))) {
-        if (nothing_pending())
-            return;
-        bkl_lock();
-        goto to_user;
-    }
-
-    /* Kernel code runs under the big kernel lock.  A trap from user mode
-     * always needs it; a trap from kernel mode only interrupts the idle
-     * loop's hlt (or a boot-time wait) and takes it if not already held. */
-    bool took = false;
-    if (!bkl_held()) {
-        bkl_lock();
-        took = true;
-    }
-
+    /*
+     * Interrupts arrive in user mode and in the idle loop (kernel code runs
+     * with them off): the clock's work that needs more than spin locks is
+     * the clock thread's, the devices' the interrupt thread's (until the
+     * boot is over, they run here).
+     */
     if (tf->int_no == T_LAPIC_TIMER) {
         lapic_eoi();
         lapic_timer_irq(tf);
-    } else if (tf->int_no == T_IPI_RESCHED) {
-        lapic_eoi();                          /* idle loop reschedules after hlt */
-    } else if (tf->int_no == T_SYSCALL2) {
+        goto out;
+    }
+    if (tf->int_no == T_IPI_RESCHED) {
+        lapic_eoi();                          /* the idle loop or the way to user mode reschedules */
+        goto out;
+    }
+    if (tf->int_no >= IRQ_BASE && tf->int_no < IRQ_BASE + 16) {
+        int irq = tf->int_no - IRQ_BASE;
+        __atomic_add_fetch(&irq_seen[irq], 1, __ATOMIC_RELAXED);
+        random_add_entropy(tf->rip ^ ((uint64_t)irq << 48));
+        if (irq == IRQ_TIMER || !kthreads_running()) {
+            if (!ioapic_ok)
+                pic_eoi(irq);
+            irq_dispatch(irq);
+            if (ioapic_ok)
+                lapic_eoi();                  /* after the handler: level lines are quiet now */
+        } else {
+            /* A level-triggered line is masked until the interrupt thread has quietened the
+             * device; an edge-triggered one is not (the I/O APIC would drop an edge meanwhile). */
+            bool level = ioapic_ok && ioapic_is_level(irq);
+            if (level)
+                irq_mask(irq);
+            if (ioapic_ok)
+                lapic_eoi();
+            else
+                pic_eoi(irq);
+            intr_thread_post(irq, level);
+        }
+        goto out;
+    }
+
+    /* A page fault needs only the address space's own lock (vm.c; a file's
+     * page, its file system's); the clocks' calls nothing (fast_syscall). */
+    if (tf->int_no == 14 && vm_fault(read_cr2(), tf->err_code, from_user)) {
+        curlwp->minflt++;
+        goto out;
+    }
+    if (from_user && tf->int_no == T_SYSCALL2 && fast_syscall(tf))
+        goto out;
+
+    if (tf->int_no == T_SYSCALL2) {
         /* ABI v2: carry flag + positive errno on failure (see syscall2.c) */
         curlwp->orig_rax = tf->rax;
         long r = syscall_dispatch_v2(tf);
@@ -293,26 +436,7 @@ void trap_handler(struct trapframe *tf)
             tf->rax = r;
             tf->rflags &= ~1UL;
         }
-        if (fs_commit_deadline && ticks >= fs_commit_deadline)
-            ext4_journal_tick(false);        /* an old ext4 transaction: commit it */
-        if (net_loop_pending)
-            net_loop_drain();                /* packets this call sent to ourselves */
-        if (blk_late_pending)
-            blk_scan_late();                 /* a disk that came after boot: its partitions */
-    } else if (tf->int_no >= IRQ_BASE && tf->int_no < IRQ_BASE + 16) {
-        int irq = tf->int_no - IRQ_BASE;
-        if (!ioapic_ok)
-            pic_eoi(irq);
-        random_add_entropy(tf->rip ^ ((uint64_t)irq << 48));
-        if (irq_handlers[irq])
-            irq_handlers[irq](tf);
-        for (int i = 0; i < IRQ_SHARE && irq_shared[irq][i].fn; i++)
-            irq_shared[irq][i].fn(tf, irq_shared[irq][i].arg);
-        if (ioapic_ok)
-            lapic_eoi();                      /* after the handler: level lines are quiet now */
-    } else if (tf->int_no == 14 && vm_fault(read_cr2(), tf->err_code, from_user)) {
-        curlwp->minflt++;
-        /* resolved: demand paging or copy-on-write */
+        fd_release_held();                   /* (the files the call used) */
     } else if (tf->int_no == 13 && !from_user && msr_fixup(tf)) {
         /* an MSR that is not there (power.c probes them) */
     } else {
@@ -329,13 +453,15 @@ void trap_handler(struct trapframe *tf)
         }
     }
 
-    if (from_user) {
-to_user:
+out:
+    /* Anything to do on the way back to user mode: rescheduling, the
+     * clock's signals, signals, stops, the LWP's end. */
+    if (from_user && !nothing_pending()) {
+        struct lwp *l = curlwp;
         if (mycpu()->need_resched)
-            schedule();                  /* a higher-priority LWP became runnable */
+            preempt();                       /* a higher-priority LWP became runnable */
+        if (l->ast)
+            ast_deliver(l);
         signal_deliver(tf);
-        bkl_unlock();
-    } else if (took) {
-        bkl_unlock();
     }
 }

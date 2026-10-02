@@ -7,7 +7,7 @@
  * configuration structures through the PCI vendor capabilities.  One split
  * virtqueue (0); a request is three descriptors: the header (type, sector),
  * the data (64 KiB at most, through a bounce buffer) and the status byte.
- * Requests are synchronous and polled, one at a time (the kernel lock), as
+ * Requests are synchronous and polled, one at a time (the device's lock), as
  * NVMe's: the device is told not to interrupt.  Features: VERSION_1, RO (a
  * read-only image: the disk is read-only), BLK_SIZE (other than 512 bytes:
  * not used).
@@ -17,6 +17,7 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include "ddi.h"
+#include "sync.h"
 #include "pci.h"
 #include "arch.h"
 #include "mm.h"
@@ -72,6 +73,7 @@ struct vq_desc {
 } __attribute__((packed));
 
 struct vblk {
+    kmutex_t lock;                               /* one request at a time */
     volatile uint8_t *common, *devcfg, *notify_base;
     uint32_t notify_mult;
     volatile struct vq_desc *desc;
@@ -159,10 +161,19 @@ static int rw(void *drv, uint64_t lba, size_t count, void *buf, bool write)
     return 0;
 }
 
-static int vb_read(void *drv, uint64_t lba, size_t count, void *buf) { return rw(drv, lba, count, buf, false); }
+static int rw_locked(void *drv, uint64_t lba, size_t count, void *buf, bool write)
+{
+    struct vblk *v = drv;
+    mutex_enter(&v->lock);
+    int r = rw(drv, lba, count, buf, write);
+    mutex_exit(&v->lock);
+    return r;
+}
+
+static int vb_read(void *drv, uint64_t lba, size_t count, void *buf) { return rw_locked(drv, lba, count, buf, false); }
 static int vb_write(void *drv, uint64_t lba, size_t count, const void *buf)
 {
-    return rw(drv, lba, count, (void *)buf, true);
+    return rw_locked(drv, lba, count, (void *)buf, true);
 }
 static const struct blk_ops vb_ops = { vb_read, vb_write };
 

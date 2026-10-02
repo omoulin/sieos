@@ -45,6 +45,9 @@ typedef void (*irq_shared_t)(struct trapframe *tf, void *arg);
 bool irq_register_shared(int irq, irq_shared_t h, void *arg);
 void irq_use_ioapic(void);              /* boot: switch from the PICs to the I/O APIC */
 void pic_unmask(int irq);
+void irq_mask(int irq);                 /* the line, at the I/O APIC or the PIC */
+void irq_unmask(int irq);
+void irq_dispatch(int irq);             /* run the line's handlers (the interrupt thread) */
 
 /* isr.S */
 extern void trapret(void);

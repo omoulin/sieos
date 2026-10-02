@@ -12,6 +12,7 @@
 #include "net.h"
 #include "ddi.h"
 #include "mm.h"
+#include "power.h"
 
 volatile uint64_t ticks;
 static uint64_t boot_time;
@@ -30,6 +31,7 @@ static volatile uint64_t hr_last;
 static int64_t rt_offset_ns;                 /* realtime = boot_time + hrtime + offset */
 static int64_t adj_pending_ns;               /* adjtime: still to slew */
 #define ADJ_SLEW_PER_TICK (500000L / TIMER_HZ)   /* 500 us per second */
+static struct spinlock clock_lock;           /* rt_offset_ns, adj_pending_ns (the tick, clock_settime, adjtime) */
 
 static inline uint64_t rdtsc(void)
 {
@@ -267,16 +269,20 @@ int64_t realtime_ns(void)
 
 void realtime_set(int64_t ns)
 {
+    spin_lock(&clock_lock);
     rt_offset_ns = ns - (int64_t)boot_time * 1000000000L - (int64_t)hrtime();
     adj_pending_ns = 0;
+    spin_unlock(&clock_lock);
 }
 
 /* adjtime: slew by delta; returns the adjustment still pending before. */
 int64_t realtime_adjust(int64_t delta_ns, bool set)
 {
+    spin_lock(&clock_lock);
     int64_t old = adj_pending_ns;
     if (set)
         adj_pending_ns = delta_ns;
+    spin_unlock(&clock_lock);
     return old;
 }
 
@@ -292,15 +298,23 @@ static void timer_irq(struct trapframe *tf)
         return;                                  /* a late interrupt for a tick already counted */
     uint64_t n = now - ticks;
     ticks = now;
+    spin_lock(&clock_lock);
     for (uint64_t i = 0; i < n && adj_pending_ns; i++) {
         int64_t step = adj_pending_ns > 0 ? MIN(adj_pending_ns, ADJ_SLEW_PER_TICK)
                                           : -MIN(-adj_pending_ns, ADJ_SLEW_PER_TICK);
         rt_offset_ns += step;
         adj_pending_ns -= step;
     }
-    clock_tick(n);
-    net_poll();
-    ddi_poll();                    /* the drivers' polled devices (USB, I2C HID, Wi-Fi) */
+    spin_unlock(&clock_lock);
+    clock_wake_sleepers();
+    if (kthreads_running()) {
+        clock_thread_kick();       /* the rest: the clock thread's */
+    } else {                       /* (the boot) */
+        clock_tick(n);
+        net_poll();
+        ddi_poll();                /* the drivers' polled devices (USB, I2C HID, Wi-Fi) */
+        power_tick();
+    }
     if (!lapic_ok)
         sched_tick(tf);            /* no local APIC timer: the PIT schedules */
 }

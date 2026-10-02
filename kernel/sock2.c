@@ -40,12 +40,13 @@ static int type_from_k(int t)
 
 static void fd_flags(long fd, long flags)
 {
-    if (fd < 0)
+    struct file *f = fd >= 0 ? fd_file(fd) : NULL;
+    if (!f)
         return;
     if (flags & (SIEOS_SOCK_NONBLOCK | SIEOS_SOCK_NDELAY))
-        current->ofile[fd]->flags |= O_NONBLOCK_K;
+        f->flags |= O_NONBLOCK_K;
     if (flags & SIEOS_SOCK_CLOEXEC)
-        current->fdflags[fd] = FD_CLOEXEC;
+        fd_setflags(current, fd, FD_CLOEXEC);
 }
 
 static long msg_flags(long f, bool *ok)
@@ -241,9 +242,10 @@ static int opt_bit(long level, long name)
 
 static long do_setsockopt(long fd, long level, long name, const void *val, long len)
 {
-    if (fd < 0 || fd >= NOFILE || !current->ofile[fd])
+    struct file *f = fd_file(fd);
+    if (!f)
         return -EBADF;
-    if (current->ofile[fd]->type != FD_SOCKET)
+    if (f->type != FD_SOCKET)
         return -ENOTSOCK;
     int bit = opt_bit(level, name);
     if (bit) {
@@ -306,9 +308,10 @@ static long do_setsockopt(long fd, long level, long name, const void *val, long 
 
 static long do_getsockopt(long fd, long level, long name, void *val, unsigned int *ulen)
 {
-    if (fd < 0 || fd >= NOFILE || !current->ofile[fd])
+    struct file *f = fd_file(fd);
+    if (!f)
         return -EBADF;
-    if (current->ofile[fd]->type != FD_SOCKET)
+    if (f->type != FD_SOCKET)
         return -ENOTSOCK;
     if (!user_ok(ulen, sizeof(*ulen), true))
         return -EFAULT;
@@ -390,6 +393,7 @@ static long do_getsockopt(long fd, long level, long name, void *val, unsigned in
 }
 
 static long sock_call(struct trapframe *tf, bool *handled);
+static long inet_call(struct trapframe *tf, bool *handled);
 
 /* A call on a descriptor holds its file while it runs (it may sleep: accept,
  * connect, recv ...): another thread closing the descriptor meanwhile must not
@@ -402,8 +406,7 @@ long syscall_sock_v2(struct trapframe *tf, bool *handled)
     case SIEOS_SYS_shutdown: case SIEOS_SYS_recvfrom: case SIEOS_SYS_sendto: case SIEOS_SYS_recvmsg:
     case SIEOS_SYS_sendmsg: case SIEOS_SYS_getsockname: case SIEOS_SYS_getpeername:
     case SIEOS_SYS_setsockopt: case SIEOS_SYS_getsockopt:
-        if ((long)tf->rdi >= 0 && (long)tf->rdi < NOFILE && current->ofile[tf->rdi])
-            held = file_dup(current->ofile[tf->rdi]);
+        held = getf((int)tf->rdi);
         break;
     }
     long r = sock_call(tf, handled);
@@ -421,12 +424,39 @@ static long sock_call(struct trapframe *tf, bool *handled)
     case SIEOS_SYS_shutdown: case SIEOS_SYS_recvfrom: case SIEOS_SYS_sendto: case SIEOS_SYS_recvmsg:
     case SIEOS_SYS_sendmsg: case SIEOS_SYS_getsockname: case SIEOS_SYS_getpeername:
     case SIEOS_SYS_setsockopt: case SIEOS_SYS_getsockopt:
-        if ((long)a1 < 0 || (long)a1 >= NOFILE || !current->ofile[a1])
+        if (!fd_file((int)a1))
             return -EBADF;                           /* (not open: before "not a socket") */
         if (unix_fd(a1))
             return unix_syscall(tf->rax, a1, a2, a3, a4, a5, a6);
         break;
     }
+    switch (tf->rax) {
+    case SIEOS_SYS_so_socket:
+        if (a1 == SIEOS_AF_UNIX)
+            return do_socket(a1, a2, a3);
+        break;
+    case SIEOS_SYS_so_socketpair:
+        return inet_call(tf, handled);               /* (AF_UNIX's, or an error) */
+    case SIEOS_SYS_bind: case SIEOS_SYS_listen: case SIEOS_SYS_accept: case SIEOS_SYS_connect:
+    case SIEOS_SYS_shutdown: case SIEOS_SYS_recvfrom: case SIEOS_SYS_sendto: case SIEOS_SYS_recvmsg:
+    case SIEOS_SYS_sendmsg: case SIEOS_SYS_getsockname: case SIEOS_SYS_getpeername:
+    case SIEOS_SYS_setsockopt: case SIEOS_SYS_getsockopt: case SIEOS_SYS_netinfo: case SIEOS_SYS_netstat:
+    case SIEOS_SYS_netinfo6: case SIEOS_SYS_netstat6:
+        break;
+    default:
+        *handled = false;                            /* not a socket call */
+        return -ENOSYS;
+    }
+    mutex_enter(&net_lock);                          /* the IP sockets' calls */
+    long r = inet_call(tf, handled);
+    mutex_exit(&net_lock);
+    return r;
+}
+
+static long inet_call(struct trapframe *tf, bool *handled)
+{
+    uint64_t a1 = tf->rdi, a2 = tf->rsi, a3 = tf->rdx, a4 = tf->r10, a5 = tf->r8, a6 = tf->r9;
+    *handled = true;
     switch (tf->rax) {
     case SIEOS_SYS_so_socket:   return do_socket(a1, a2, a3);
     case SIEOS_SYS_bind:        return net(SYS_bind, a1, a2, a3, 0, 0, 0);

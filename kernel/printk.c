@@ -6,6 +6,8 @@
  * (GPL-3.0); see the LICENSE file.
  */
 #include "kernel.h"
+#include "smp.h"
+#include "proc.h"
 
 struct outbuf {
     char *buf;
@@ -163,10 +165,14 @@ int snprintf(char *buf, size_t size, const char *fmt, ...)
 static char klog[KLOG_SIZE];
 static uint64_t klog_total;                          /* bytes ever written */
 
+static struct spinlock klog_lock;
+
 static void klog_add(const char *s, size_t n)
 {
+    spin_lock(&klog_lock);
     for (size_t i = 0; i < n; i++)
         klog[klog_total++ % KLOG_SIZE] = s[i];
+    spin_unlock(&klog_lock);
 }
 
 size_t klog_size(void)
@@ -206,8 +212,19 @@ void panic(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
+    console_panic();                       /* (this processor may have failed holding it) */
     console_set_color(15, 4);
-    kprintf("\n*** KERNEL PANIC: %s\n", buf);
+    kprintf("\n*** KERNEL PANIC: %s (CPU %d, LWP %s)\n", buf, mycpu()->id, mycpu()->lwp ? mycpu()->lwp->name : "-");
+    kprintf("    called from:");                 /* (the return addresses: build/kernel.nm resolves them) */
+    uint64_t *fp = __builtin_frame_address(0);
+    for (int i = 0; i < 16 && (uint64_t)fp >= 0xffff800000000000UL && !((uint64_t)fp & 7); i++) {
+        kprintf(" %lx", fp[1]);
+        uint64_t *next = (uint64_t *)fp[0];
+        if (next <= fp)
+            break;
+        fp = next;
+    }
+    kprintf("\n");
     for (;;)
         hlt();
 }

@@ -1112,7 +1112,7 @@ static bool stor_xfer(struct usbstor *s, uint64_t lba, uint32_t n, bool write)
 static void stor_lock(void)
 {
     while (__atomic_exchange_n(&busy, true, __ATOMIC_ACQUIRE))
-        __asm__ volatile("pause");
+        cpu_relax();
 }
 
 static void stor_unlock(void)

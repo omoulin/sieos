@@ -3,6 +3,10 @@
  * its inode (file system and inode number) while it is open, and goes away
  * with the last open descriptor, as on Solaris.
  *
+ * Locking: a pipe's state is under its mutex, and readers and writers wait
+ * on its condition variable; the list of open FIFOs has its own lock, taken
+ * before a pipe's.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -16,6 +20,8 @@
 #define PIPE_BUF  4096              /* writes up to this size are not split */
 
 struct pipe {
+    kmutex_t lock;
+    kcondvar_t cv;
     char buf[PIPE_SIZE];
     uint64_t nread, nwrite;        /* total bytes read / written */
     int readers, writers;
@@ -26,6 +32,7 @@ struct pipe {
 };
 
 static struct pipe *fifos;
+static kmutex_t fifo_lock;
 
 int pipe_create(struct file **rf, struct file **wf)
 {
@@ -72,27 +79,48 @@ bool pipe_writable(struct pipe *p)
     return PIPE_SIZE - (p->nwrite - p->nread) >= PIPE_BUF || p->readers == 0;
 }
 
-static void pipe_free(struct pipe *p)
+void pipe_close(struct pipe *p, int acc)
 {
-    if (p->fs)
+    bool named = p->fs != NULL;
+    if (named)
+        mutex_enter(&fifo_lock);
+    mutex_enter(&p->lock);
+    if (acc != O_WRONLY)
+        p->readers--;
+    if (acc != O_RDONLY)
+        p->writers--;
+    cv_broadcast(&p->cv);
+    bool gone = p->readers == 0 && p->writers == 0;
+    if (gone && named)
         for (struct pipe **pp = &fifos; *pp; pp = &(*pp)->next)
             if (*pp == p) {
                 *pp = p->next;
                 break;
             }
-    kfree(p);
+    mutex_exit(&p->lock);
+    if (named)
+        mutex_exit(&fifo_lock);
+    poll_wakeup();
+    if (gone)
+        kfree(p);
 }
 
-void pipe_close(struct pipe *p, int acc)
+/* A FIFO's pipe made by an open that failed at once: gone, unless another open took it meanwhile. */
+static void pipe_close_unused(struct pipe *p)
 {
-    if (acc != O_WRONLY)
-        p->readers--;
-    if (acc != O_RDONLY)
-        p->writers--;
-    wakeup(p);
-    poll_wakeup();
-    if (p->readers == 0 && p->writers == 0)
-        pipe_free(p);
+    mutex_enter(&fifo_lock);
+    mutex_enter(&p->lock);
+    bool gone = p->readers == 0 && p->writers == 0;
+    if (gone)
+        for (struct pipe **pp = &fifos; *pp; pp = &(*pp)->next)
+            if (*pp == p) {
+                *pp = p->next;
+                break;
+            }
+    mutex_exit(&p->lock);
+    mutex_exit(&fifo_lock);
+    if (gone)
+        kfree(p);
 }
 
 /*
@@ -105,19 +133,27 @@ int fifo_open(struct file *f, struct inode *ip, int flags)
     int acc = flags & O_ACCMODE;
     bool nonblock = flags & O_NONBLOCK_K;
     struct pipe *p;
+    mutex_enter(&fifo_lock);
     for (p = fifos; p; p = p->next)
         if (p->fs == ip->fs && p->ino == ip->ino)
             break;
     if (!p) {
-        if (acc == O_WRONLY && nonblock)
-            return -ENXIO;
-        if (!(p = kzalloc(sizeof(*p))))
-            return -ENOMEM;
+        if ((acc == O_WRONLY && nonblock) || !(p = kzalloc(sizeof(*p)))) {
+            mutex_exit(&fifo_lock);
+            return acc == O_WRONLY && nonblock ? -ENXIO : -ENOMEM;
+        }
         p->fs = ip->fs;
         p->ino = ip->ino;
         p->next = fifos;
         fifos = p;
-    } else if (acc == O_WRONLY && nonblock && p->readers == 0) {
+    }
+    mutex_enter(&p->lock);
+    mutex_exit(&fifo_lock);
+    if (acc == O_WRONLY && nonblock && p->readers == 0) {
+        bool gone = p->writers == 0;             /* (made for this open, unused: drop it) */
+        mutex_exit(&p->lock);
+        if (gone)
+            pipe_close_unused(p);
         return -ENXIO;
     }
     if (acc != O_WRONLY) {
@@ -130,32 +166,40 @@ int fifo_open(struct file *f, struct inode *ip, int flags)
     }
     f->type = FD_PIPE;
     f->pipe = p;
-    wakeup(p);
-    poll_wakeup();
-    if (acc == O_RDWR || nonblock)
+    cv_broadcast(&p->cv);
+    if (acc == O_RDWR || nonblock) {
+        mutex_exit(&p->lock);
+        poll_wakeup();
         return 0;
+    }
+    poll_wakeup();
     uint64_t *other = acc == O_RDONLY ? &p->wopens : &p->ropens, seen = *other;
     int *count = acc == O_RDONLY ? &p->writers : &p->readers;
     while (*count == 0 && *other == seen) {
-        if (signal_pending(current)) {
+        if (!cv_wait_sig(&p->cv, &p->lock)) {
+            mutex_exit(&p->lock);
             f->type = FD_NONE;
             f->pipe = NULL;
             pipe_close(p, acc);
             return -EINTR;
         }
-        sleep_on(p);
     }
+    mutex_exit(&p->lock);
     return 0;
 }
 
 long pipe_read(struct pipe *p, char *buf, size_t n)
 {
+    mutex_enter(&p->lock);
     while (p->nread == p->nwrite) {
-        if (p->writers == 0)
+        if (p->writers == 0) {
+            mutex_exit(&p->lock);
             return 0;                          /* EOF */
-        if (signal_pending(current))
+        }
+        if (!cv_wait_sig(&p->cv, &p->lock)) {
+            mutex_exit(&p->lock);
             return -ERESTART;
-        sleep_on(p);
+        }
     }
     size_t got = 0;
     while (got < n && p->nread < p->nwrite) {
@@ -165,7 +209,8 @@ long pipe_read(struct pipe *p, char *buf, size_t n)
         got += c;
         p->nread += c;
     }
-    wakeup(p);
+    cv_broadcast(&p->cv);
+    mutex_exit(&p->lock);
     poll_wakeup();
     return got;
 }
@@ -178,19 +223,24 @@ long pipe_read(struct pipe *p, char *buf, size_t n)
 long pipe_write(struct pipe *p, const char *buf, size_t n, bool nonblock)
 {
     size_t done = 0;
+    mutex_enter(&p->lock);
     while (done < n) {
         if (p->readers == 0) {
+            mutex_exit(&p->lock);
             signal_send(current, SIGPIPE);
             return done ? (long)done : -EPIPE;
         }
         size_t room = PIPE_SIZE - (p->nwrite - p->nread);
         if (room == 0 || (n <= PIPE_BUF && room < n)) {
-            if (nonblock)
+            if (nonblock) {
+                mutex_exit(&p->lock);
                 return done ? (long)done : -EAGAIN;
-            wakeup(p);
-            if (signal_pending(current))
+            }
+            cv_broadcast(&p->cv);
+            if (!cv_wait_sig(&p->cv, &p->lock)) {
+                mutex_exit(&p->lock);
                 return done ? (long)done : -ERESTART;
-            sleep_on(p);
+            }
             continue;
         }
         while (done < n && room) {
@@ -201,8 +251,11 @@ long pipe_write(struct pipe *p, const char *buf, size_t n, bool nonblock)
             room -= c;
             p->nwrite += c;
         }
-        wakeup(p);
+        cv_broadcast(&p->cv);
+        mutex_exit(&p->lock);
         poll_wakeup();
+        mutex_enter(&p->lock);
     }
+    mutex_exit(&p->lock);
     return done;
 }

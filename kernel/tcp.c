@@ -933,7 +933,7 @@ int tcp_connect(struct tcb *t, const naddr_t *lip, uint16_t lport, const naddr_t
     while (t->state == TCP_SYN_SENT) {
         if (signal_pending(current))
             return -EINTR;
-        sleep_on(t->owner);
+        net_sleep(t->owner);
     }
     if (t->state == TCP_ESTABLISHED || t->state == TCP_CLOSE_WAIT)
         return 0;
@@ -952,7 +952,7 @@ static long send_data(struct tcb *t, const void *buf, size_t n, int flags)
                 return -EAGAIN;
             if (signal_pending(current))
                 return -ERESTART;
-            sleep_on(t->owner);
+            net_sleep(t->owner);
             continue;
         }
         if (t->state != TCP_ESTABLISHED && t->state != TCP_CLOSE_WAIT) {
@@ -968,7 +968,7 @@ static long send_data(struct tcb *t, const void *buf, size_t n, int flags)
                 return done ? (long)done : -EAGAIN;
             if (signal_pending(current))
                 return done ? (long)done : -ERESTART;
-            sleep_on(t->owner);
+            net_sleep(t->owner);
             continue;
         }
         uint32_t c = MIN(space, (uint32_t)(n - done));
@@ -1067,7 +1067,7 @@ long tcp_recv(struct tcb *t, void *buf, size_t n, int flags, int timeout_ms, boo
         if (signal_pending(current))
             return -ERESTART;
         curlwp->wake_tick = deadline;
-        sleep_on(t->owner);
+        net_sleep(t->owner);
         curlwp->wake_tick = 0;
     }
     uint32_t start = peek && urg_index(t, oobinline, &k) && k == 0 ? 1 : 0;

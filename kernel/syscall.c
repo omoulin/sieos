@@ -32,13 +32,6 @@ static int fetch_str(const char *u, char *k, size_t max)
     return 0;
 }
 
-static struct file *getfile(int fd)
-{
-    if (fd < 0 || fd >= NOFILE)
-        return NULL;
-    return current->ofile[fd];
-}
-
 
 static bool is_root(void)
 {
@@ -192,16 +185,22 @@ static long sys_setegid(int gid)
     return 0;
 }
 
+/* (the user copies are made without p_lock: syscall_dispatch's cred_call holds it for the others) */
 static long sys_getgroups(int n, int *list)
 {
+    int k[NGROUPS_MAX], ng;
+    mutex_enter(&current->p_lock);
+    ng = current->ngroups;
+    memcpy(k, current->groups, ng * sizeof(int));
+    mutex_exit(&current->p_lock);
     if (n == 0)
-        return current->ngroups;
-    if (n < current->ngroups)
+        return ng;
+    if (n < ng)
         return -EINVAL;
-    if (!uok(list, current->ngroups * sizeof(int), true))
+    if (!uok(list, ng * sizeof(int), true))
         return -EFAULT;
-    memcpy(list, current->groups, current->ngroups * sizeof(int));
-    return current->ngroups;
+    memcpy(list, k, ng * sizeof(int));
+    return ng;
 }
 
 static long sys_setgroups(int n, const int *list)
@@ -210,10 +209,14 @@ static long sys_setgroups(int n, const int *list)
         return -EPERM;
     if (n < 0 || n > NGROUPS_MAX)
         return -EINVAL;
+    int k[NGROUPS_MAX];
     if (n && !uok(list, n * sizeof(int), false))
         return -EFAULT;
-    memcpy(current->groups, list, n * sizeof(int));
+    memcpy(k, list, n * sizeof(int));
+    mutex_enter(&current->p_lock);
+    memcpy(current->groups, k, n * sizeof(int));
     current->ngroups = n;
+    mutex_exit(&current->p_lock);
     return 0;
 }
 
@@ -252,7 +255,7 @@ static long sys_cpuinfo(struct cpuinfo *buf, int max)
     return n;
 }
 
-static long sys_sbrk(long incr)
+static long sbrk_locked(long incr)
 {
     uint64_t old = current->brk, nbrk = old + incr;
     if (nbrk < current->heap_start || nbrk >= USER_MMAP_TOP - (64UL << 20))
@@ -275,6 +278,14 @@ static long sys_sbrk(long incr)
     return old;
 }
 
+static long sys_sbrk(long incr)
+{
+    rw_enter(&current->as_lock, RW_WRITER);
+    long r = sbrk_locked(incr);
+    rw_exit(&current->as_lock);
+    return r;
+}
+
 /* ------------------------------------------------------------------ */
 /* System information                                                  */
 /* ------------------------------------------------------------------ */
@@ -295,11 +306,16 @@ static long sys_procinfo(struct procinfo *buf, int max)
         pi->ticks = cpus[i].idle_ticks;
         strlcpy(pi->name, l->name, sizeof(pi->name));
     }
+    struct procinfo *kb = kmalloc(NPROC * sizeof(*kb));   /* (filled under pidlock, copied out after) */
+    if (!kb)
+        return -ENOMEM;
+    int first = n;
+    mutex_enter(&pidlock);
     for (int i = 1; i < NPROC && n < max; i++) {
         struct proc *p = &proc_table[i];
         if (p->state == PSTATE_UNUSED || p->state == PSTATE_EMBRYO)
             continue;
-        struct procinfo *pi = &buf[n++];
+        struct procinfo *pi = &kb[n++ - first];
         pi->pid = p->pid;
         pi->ppid = p->parent ? p->parent->pid : 0;
         pi->pgid = p->pgid;
@@ -318,9 +334,16 @@ static long sys_procinfo(struct procinfo *buf, int max)
             if (l->state == LWP_RUNNING)
                 pi->cpu = l->cpu;
         }
-        pi->mem_kb = (p->pml4 && p->pml4 != kernel_pml4_phys) ? vmm_user_pages(p->pml4) * 4 : 0;
+        pi->mem_kb = 0;
+        if (p->pml4 && p->pml4 != kernel_pml4_phys && rw_tryenter(&p->as_lock, RW_READER)) {
+            pi->mem_kb = p->pml4 ? vmm_user_pages(p->pml4) * 4 : 0;
+            rw_exit(&p->as_lock);
+        }
         strlcpy(pi->name, p->name, sizeof(pi->name));
     }
+    mutex_exit(&pidlock);
+    memcpy(&buf[first], kb, (n - first) * sizeof(*kb));
+    kfree(kb);
     return n;
 }
 
@@ -361,24 +384,43 @@ long system_halt(bool restart)
  * calls them with a copy of the trap frame).  There is no user entry to
  * this table: the ABI v1 int $0x80 gate was removed in milestone 10.
  */
+/* The credentials' calls change them under the process's p_lock. */
+static long cred_call(struct trapframe *tf);
+
 long syscall_dispatch(struct trapframe *tf)
 {
     uint64_t a1 = tf->rdi, a2 = tf->rsi, a3 = tf->rdx;
+    switch (tf->rax) {
+    case SYS_getgroups:   return sys_getgroups(a1, (int *)a2);
+    case SYS_setgroups:   return sys_setgroups(a1, (const int *)a2);
+    case SYS_setuid: case SYS_setgid: case SYS_seteuid: case SYS_setegid: case SYS_umask: {
+        mutex_enter(&current->p_lock);
+        long r = cred_call(tf);
+        mutex_exit(&current->p_lock);
+        return r;
+    }
+    }
     switch (tf->rax) {
     case SYS_exit:        return sys_exit(a1);
     case SYS_exec:        return sys_exec((const char *)a1, (char *const *)a2, (char *const *)a3);
     case SYS_sbrk:        return sys_sbrk(a1);
     case SYS_procinfo:    return sys_procinfo((struct procinfo *)a1, a2);
     case SYS_meminfo:     return sys_meminfo((struct meminfo *)a1);
+    case SYS_cpuinfo:     return sys_cpuinfo((struct cpuinfo *)a1, a2);
+    case SYS_fbmap:       return sys_fbmap(a1);
+    }
+    return -ENOSYS;
+}
+
+static long cred_call(struct trapframe *tf)
+{
+    uint64_t a1 = tf->rdi;
+    switch (tf->rax) {
     case SYS_setuid:      return sys_setuid(a1);
     case SYS_setgid:      return sys_setgid(a1);
     case SYS_seteuid:     return sys_seteuid(a1);
     case SYS_setegid:     return sys_setegid(a1);
-    case SYS_getgroups:   return sys_getgroups(a1, (int *)a2);
-    case SYS_setgroups:   return sys_setgroups(a1, (const int *)a2);
     case SYS_umask:       return sys_umask(a1);
-    case SYS_cpuinfo:     return sys_cpuinfo((struct cpuinfo *)a1, a2);
-    case SYS_fbmap:       return sys_fbmap(a1);
     }
     return -ENOSYS;
 }
@@ -389,4 +431,3 @@ long syscall_dispatch(struct trapframe *tf)
 
 bool user_ok(const void *p, size_t n, bool write) { return uok(p, n, write); }
 int  user_fetch_str(const char *u, char *k, size_t max) { return fetch_str(u, k, max); }
-struct file *fd_file(int fd) { return getfile(fd); }

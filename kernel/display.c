@@ -13,6 +13,9 @@
  * display: the console stops drawing there, and only the owner may change
  * the mode.  When the owner exits, the console repaints.
  *
+ * Locking: display_lock covers the displays' owners and modes (the
+ * ioctls, fbmap, an owner's exit); the table is made at boot.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -30,6 +33,7 @@
 
 struct display displays[DISPLAY_MAX];
 int ndisplays;
+static kmutex_t display_lock;
 
 static const struct display_ops firmware_ops = { "firmware", DISPLAY_FIRMWARE, NULL, NULL };
 
@@ -146,10 +150,13 @@ int fb_open(int minor)
     return display_of(minor) ? 0 : -ENODEV;
 }
 
+/* display_lock held */
 static int owner_of(struct display *d)
 {
+    mutex_enter(&pidlock);
     if (d->owner && !proc_find(d->owner))
         d->owner = 0;
+    mutex_exit(&pidlock);
     return d->owner;
 }
 
@@ -163,7 +170,17 @@ static int list_modes(struct display *d, struct display_mode *out, int max)
     return n;
 }
 
+static long ioctl_locked(struct file *f, unsigned long cmd, uint64_t arg);
+
 long fb_ioctl(struct file *f, unsigned long cmd, uint64_t arg)
+{
+    mutex_enter(&display_lock);
+    long r = ioctl_locked(f, cmd, arg);
+    mutex_exit(&display_lock);
+    return r;
+}
+
+static long ioctl_locked(struct file *f, unsigned long cmd, uint64_t arg)
 {
     struct display *d = display_of(f->minor);
     if (!d)
@@ -255,11 +272,22 @@ long fb_ioctl(struct file *f, unsigned long cmd, uint64_t arg)
     return -ENOTTY;
 }
 
+static long fbmap_locked(int fd);
+
 long sys_fbmap(int fd)
 {
-    if (fd < 0 || fd >= NOFILE || !current->ofile[fd] || current->ofile[fd]->type != FD_FB)
+    mutex_enter(&display_lock);
+    long r = fbmap_locked(fd);
+    mutex_exit(&display_lock);
+    return r;
+}
+
+static long fbmap_locked(int fd)
+{
+    struct file *f = fd_file(fd);
+    if (!f || f->type != FD_FB)
         return -EBADF;
-    struct display *d = display_of(current->ofile[fd]->minor);
+    struct display *d = display_of(f->minor);
     if (!d)
         return -ENODEV;
     int own = owner_of(d);
@@ -267,13 +295,17 @@ long sys_fbmap(int fd)
         return -EBUSY;
     uint64_t va = FB_USER_VA + (uint64_t)d->index * FB_USER_SPAN;
     uint64_t cache = pat_wc ? PTE_WC : 0;
+    rw_enter(&current->as_lock, RW_WRITER);
     for (uint64_t off = 0; off < d->fb_size; off += PAGE_SIZE) {
         vm_space_lock(current);
         int r = vmm_map(current->pml4, va + off, d->fb_phys + off, PTE_U | PTE_W | PTE_DEVICE | cache | pte_nx);
         vm_space_unlock(current);
-        if (r < 0)
+        if (r < 0) {
+            rw_exit(&current->as_lock);
             return r;
+        }
     }
+    rw_exit(&current->as_lock);
     d->owner = current->pid;
     if (d->console)
         console_suspend(true);
@@ -282,6 +314,7 @@ long sys_fbmap(int fd)
 
 void fb_release_owner(int pid)
 {
+    mutex_enter(&display_lock);
     for (int i = 0; i < ndisplays; i++) {
         struct display *d = &displays[i];
         if (d->owner && d->owner == pid) {
@@ -290,4 +323,5 @@ void fb_release_owner(int pid)
                 console_suspend(false);
         }
     }
+    mutex_exit(&display_lock);
 }

@@ -19,6 +19,11 @@
  *             look), EPOLLONESHOT.  An entry goes when its descriptor is
  *             closed (it names the file, not only the number).
  *
+ * Locking: eventfds and timerfds are under fdext_lock (their sleepers wait
+ * on them with it as the interlock); each epoll set has its own lock, and
+ * holds a reference to a file while it polls it; pidfds look their process
+ * up under pidlock.  The poll functions read without the locks.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -45,13 +50,9 @@ static long ops_install(const struct file_ops *ops, void *priv, long oflags)
     f->ops = ops;
     f->priv = priv;
     f->flags = O_RDWR | ((oflags & SIEOS_O_NONBLOCK) ? O_NONBLOCK_K : 0);
-    int fd = fsys_fdalloc(f, 0);
-    if (fd < 0) {
+    int fd = fd_alloc(current, f, 0, (oflags & SIEOS_O_CLOEXEC) ? FD_CLOEXEC : 0);
+    if (fd < 0)
         file_close(f);
-        return fd;
-    }
-    if (oflags & SIEOS_O_CLOEXEC)
-        current->fdflags[fd] |= FD_CLOEXEC;
     return fd;
 }
 
@@ -59,6 +60,14 @@ static void *ops_priv(long fd, const struct file_ops *ops)
 {
     struct file *f = fsys_file(fd);
     return f && f->type == FD_OPS && f->ops == ops ? f->priv : NULL;
+}
+
+static kmutex_t fdext_lock;
+
+static void fdext_sleep(const void *chan)
+{
+    sleepq_block(chan, &fdext_lock, true);
+    mutex_enter(&fdext_lock);
 }
 
 static bool nonblock(struct file *f)
@@ -83,17 +92,20 @@ static long efd_read(struct file *f, void *buf, size_t n)
     struct efd *e = f->priv;
     if (n < 8)
         return -EINVAL;
+    mutex_enter(&fdext_lock);
     while (e->count == 0) {
-        if (nonblock(f))
-            return -EAGAIN;
-        if (signal_pending(current))
-            return -ERESTART;
-        sleep_on(e);
+        long r = nonblock(f) ? -EAGAIN : signal_pending(current) ? -ERESTART : 0;
+        if (r) {
+            mutex_exit(&fdext_lock);
+            return r;
+        }
+        fdext_sleep(e);
     }
     uint64_t v = e->semaphore ? 1 : e->count;
     e->count -= v;
+    sleepq_wakeup(e, -1);
+    mutex_exit(&fdext_lock);
     memcpy(buf, &v, 8);
-    wakeup(e);
     poll_wakeup();
     return 8;
 }
@@ -107,15 +119,18 @@ static long efd_write(struct file *f, const void *buf, size_t n)
     memcpy(&v, buf, 8);
     if (v == UINT64_MAX)
         return -EINVAL;
+    mutex_enter(&fdext_lock);
     while (e->count > UINT64_MAX - 1 - v) {      /* (the counter stops at 2^64 - 2) */
-        if (nonblock(f))
-            return -EAGAIN;
-        if (signal_pending(current))
-            return -ERESTART;
-        sleep_on(e);
+        long r = nonblock(f) ? -EAGAIN : signal_pending(current) ? -ERESTART : 0;
+        if (r) {
+            mutex_exit(&fdext_lock);
+            return r;
+        }
+        fdext_sleep(e);
     }
     e->count += v;
-    wakeup(e);
+    sleepq_wakeup(e, -1);
+    mutex_exit(&fdext_lock);
     poll_wakeup();
     return 8;
 }
@@ -194,15 +209,20 @@ static void tfd_update(struct tfd *t)
     t->pending += k;
 }
 
-/* The clock tick: wake the waiters of a timer that has expired. */
+/* The clock thread's tick: wake the waiters of a timer that has expired. */
 void timerfd_tick(void)
 {
+    bool any = false;
+    mutex_enter(&fdext_lock);
     for (struct tfd *t = armed; t; t = t->next)
         if (!t->signaled && clock_ns(t->clock) >= t->when) {
             t->signaled = true;
-            wakeup(t);
-            poll_wakeup();
+            sleepq_wakeup(t, -1);
+            any = true;
         }
+    mutex_exit(&fdext_lock);
+    if (any)
+        poll_wakeup();
 }
 
 static long tfd_read(struct file *f, void *buf, size_t n)
@@ -210,22 +230,26 @@ static long tfd_read(struct file *f, void *buf, size_t n)
     struct tfd *t = f->priv;
     if (n < 8)
         return -EINVAL;
+    mutex_enter(&fdext_lock);
     for (;;) {
         tfd_update(t);
         if (t->pending)
             break;
-        if (!t->armed || nonblock(f))
-            return -EAGAIN;
-        if (signal_pending(current))
-            return -ERESTART;
+        long r = !t->armed || nonblock(f) ? -EAGAIN : signal_pending(current) ? -ERESTART : 0;
+        if (r) {
+            mutex_exit(&fdext_lock);
+            return r;
+        }
         uint64_t now = clock_ns(t->clock);
         curlwp->wake_tick = ticks + ns_to_ticks(t->when > now ? t->when - now : 0);
-        sleep_on(t);
+        fdext_sleep(t);
         curlwp->wake_tick = 0;
     }
-    memcpy(buf, &t->pending, 8);
+    uint64_t v = t->pending;
     t->pending = 0;
     t->signaled = false;
+    mutex_exit(&fdext_lock);
+    memcpy(buf, &v, 8);
     return 8;
 }
 
@@ -238,7 +262,9 @@ static short tfd_poll(struct file *f)
 static void tfd_close(struct file *f)
 {
     struct tfd *t = f->priv;
+    mutex_enter(&fdext_lock);
     tfd_unlist(t);
+    mutex_exit(&fdext_lock);
     kfree(t);
 }
 
@@ -293,11 +319,9 @@ static long do_timerfd_settime(long fd, long flags, const struct sieos_itimerspe
     if (nv.it_value.tv_nsec < 0 || nv.it_value.tv_nsec >= 1000000000L || nv.it_value.tv_sec < 0 ||
         nv.it_interval.tv_nsec < 0 || nv.it_interval.tv_nsec >= 1000000000L || nv.it_interval.tv_sec < 0)
         return -EINVAL;
-    if (uold) {
-        struct sieos_itimerspec ov;
-        tfd_get(t, &ov);
-        *uold = ov;
-    }
+    struct sieos_itimerspec ov;
+    mutex_enter(&fdext_lock);
+    tfd_get(t, &ov);
     tfd_unlist(t);
     t->pending = 0;
     t->signaled = false;
@@ -309,6 +333,9 @@ static long do_timerfd_settime(long fd, long flags, const struct sieos_itimerspe
         t->next = armed;
         armed = t;
     }
+    mutex_exit(&fdext_lock);
+    if (uold)
+        *uold = ov;
     return 0;
 }
 
@@ -320,7 +347,9 @@ static long do_timerfd_gettime(long fd, struct sieos_itimerspec *ucur)
     if (!user_ok(ucur, sizeof(*ucur), true))
         return -EFAULT;
     struct sieos_itimerspec cur;
+    mutex_enter(&fdext_lock);
     tfd_get(t, &cur);
+    mutex_exit(&fdext_lock);
     *ucur = cur;
     return 0;
 }
@@ -332,6 +361,7 @@ struct pidfd {
     uint64_t start;                              /* the process's start_tick: the same one */
 };
 
+/* pidlock held */
 static struct proc *pidfd_proc(struct pidfd *d)
 {
     struct proc *p = proc_find(d->pid);
@@ -340,8 +370,11 @@ static struct proc *pidfd_proc(struct pidfd *d)
 
 static short pidfd_poll(struct file *f)
 {
+    mutex_enter(&pidlock);
     struct proc *p = pidfd_proc(f->priv);
-    return !p || p->state == PSTATE_ZOMBIE ? POLLIN : 0;
+    short r = !p || p->state == PSTATE_ZOMBIE ? POLLIN : 0;
+    mutex_exit(&pidlock);
+    return r;
 }
 
 static void pidfd_close(struct file *f)
@@ -357,14 +390,20 @@ static long do_pidfd_open(int pid, long flags)
         return -EINVAL;
     if (pid <= 0)
         return -EINVAL;
-    struct proc *p = proc_find(pid);
-    if (!p || p->state == PSTATE_UNUSED || p->state == PSTATE_EMBRYO)
-        return -ESRCH;
     struct pidfd *d = kzalloc(sizeof(*d));
     if (!d)
         return -ENOMEM;
+    mutex_enter(&pidlock);
+    struct proc *p = proc_find(pid);
+    bool ok = p && p->state != PSTATE_UNUSED && p->state != PSTATE_EMBRYO;
+    if (ok)
+        d->start = p->start_tick;
+    mutex_exit(&pidlock);
+    if (!ok) {
+        kfree(d);
+        return -ESRCH;
+    }
     d->pid = pid;
-    d->start = p->start_tick;
     long fd = ops_install(&pidfd_ops, d, flags | SIEOS_O_CLOEXEC);   /* (always close-on-exec, as Linux) */
     if (fd < 0)
         kfree(d);
@@ -382,14 +421,17 @@ static long do_pidfd_send_signal(long fd, int sig, const void *info, long flags)
         return -EINVAL;
     if (sig < 0 || sig >= KNSIG)
         return -EINVAL;
+    mutex_enter(&pidlock);
     struct proc *p = d ? pidfd_proc(d) : proc_find(dirpid);
+    long r = 0;
     if (!p || p->state != PSTATE_RUNNING)
-        return -ESRCH;
-    if (current->euid != 0 && current->euid != p->uid && current->uid != p->uid)
-        return -EPERM;
-    if (sig)
+        r = -ESRCH;
+    else if (current->euid != 0 && current->euid != p->uid && current->uid != p->uid)
+        r = -EPERM;
+    else if (sig)
         signal_send(p, sig);
-    return 0;
+    mutex_exit(&pidlock);
+    return r;
 }
 
 /* ---------------- memfd ---------------- */
@@ -424,13 +466,9 @@ static long do_memfd_create(const char *uname, long flags)
         strlcpy(f->pname, "memfd:", n);
         strlcat(f->pname, name, n);
     }
-    int fd = fsys_fdalloc(f, 0);
-    if (fd < 0) {
+    int fd = fd_alloc(current, f, 0, (flags & SIEOS_MFD_CLOEXEC) ? FD_CLOEXEC : 0);
+    if (fd < 0)
         file_close(f);
-        return fd;
-    }
-    if (flags & SIEOS_MFD_CLOEXEC)
-        current->fdflags[fd] |= FD_CLOEXEC;
     return fd;
 }
 
@@ -447,17 +485,22 @@ struct epitem {
 };
 
 struct epoll {
+    kmutex_t lock;
     int n, cap;
     struct epitem *items;
 };
 
 #define EP_POLLBITS (POLLIN | POLLPRI | POLLOUT | POLLERR | POLLHUP)
 
-/* The item's file, if its descriptor still names it; NULL: the item goes. */
+/* The item's file, referenced (releasef), if its descriptor still names it; NULL: the item goes. */
 static struct file *ep_file(struct epitem *it)
 {
-    struct file *f = it->fd >= 0 && it->fd < NOFILE ? current->ofile[it->fd] : NULL;
-    return f == it->f && f->gen == it->gen ? f : NULL;
+    struct file *f = getf(it->fd);
+    if (f && (f != it->f || f->gen != it->gen)) {
+        releasef(f);
+        f = NULL;
+    }
+    return f;
 }
 
 static void ep_remove(struct epoll *ep, int i)
@@ -465,7 +508,7 @@ static void ep_remove(struct epoll *ep, int i)
     ep->items[i] = ep->items[--ep->n];
 }
 
-/* The ready events: up to max into out (if out), each reported item updated. */
+/* ep's lock held: the ready events: up to max into out (if out), each reported item updated. */
 static int ep_scan(struct epoll *ep, struct sieos_epoll_event *out, int max, bool report)
 {
     int n = 0;
@@ -476,9 +519,12 @@ static int ep_scan(struct epoll *ep, struct sieos_epoll_event *out, int max, boo
             ep_remove(ep, i--);
             continue;
         }
-        if (it->off)
+        if (it->off) {
+            releasef(f);
             continue;
+        }
         short r = file_poll(f, (short)(it->events & EP_POLLBITS)), now = r;   /* (EPOLLRDHUP: as POLLHUP) */
+        releasef(f);
         if (it->events & SIEOS_EPOLLET) {
             if (!(r & ~it->last))                    /* an edge: something appeared since the last look */
                 r = 0;                               /* (then all that is ready, as Linux) */
@@ -501,7 +547,10 @@ static int ep_scan(struct epoll *ep, struct sieos_epoll_event *out, int max, boo
 static short ep_poll(struct file *f)
 {
     struct epoll *ep = f->priv;
-    return ep_scan(ep, NULL, 1, false) ? POLLIN : 0;
+    mutex_enter(&ep->lock);
+    short r = ep_scan(ep, NULL, 1, false) ? POLLIN : 0;
+    mutex_exit(&ep->lock);
+    return r;
 }
 
 static void ep_close(struct file *f)
@@ -526,6 +575,8 @@ static long do_epoll_create(long flags)
     return fd;
 }
 
+static long ctl_locked(struct epoll *ep, int op, int fd, struct file *f, const struct sieos_epoll_event *evp);
+
 static long do_epoll_ctl(long epfd, int op, int fd, const struct sieos_epoll_event *uev)
 {
     struct file *ef = fsys_file(epfd), *f = fsys_file(fd);
@@ -542,10 +593,25 @@ static long do_epoll_ctl(long epfd, int op, int fd, const struct sieos_epoll_eve
             return -EFAULT;
         memcpy(&ev, uev, sizeof(ev));
     }
+    mutex_enter(&ep->lock);
+    long r = ctl_locked(ep, op, fd, f, &ev);
+    mutex_exit(&ep->lock);
+    return r;
+}
+
+static long ctl_locked(struct epoll *ep, int op, int fd, struct file *f, const struct sieos_epoll_event *evp)
+{
+    struct sieos_epoll_event ev = *evp;
     int i;
-    for (i = 0; i < ep->n; i++)
-        if (ep->items[i].fd == fd && ep_file(&ep->items[i]))
+    for (i = 0; i < ep->n; i++) {
+        if (ep->items[i].fd != fd)
+            continue;
+        struct file *g = ep_file(&ep->items[i]);
+        if (g) {
+            releasef(g);
             break;
+        }
+    }
     switch (op) {
     case SIEOS_EPOLL_CTL_ADD:
         if (i < ep->n)
@@ -595,8 +661,19 @@ static long do_epoll_wait(long epfd, struct sieos_epoll_event *uev, int max, int
         deadline = ticks + (uint64_t)timeout_ms * TIMER_HZ / 1000 + 1;
     file_dup(ef);
     long n;
+    struct epoll *ep = ef->priv;
+    struct sieos_epoll_event *kev = kmalloc((size_t)max * sizeof(*kev));   /* (scanned under ep's lock, copied out after) */
+    if (!kev) {
+        file_close(ef);
+        return -ENOMEM;
+    }
     for (;;) {
-        n = ep_scan(ef->priv, uev, max, true);
+        uint64_t gen = poll_generation();
+        mutex_enter(&ep->lock);
+        n = ep_scan(ep, kev, max, true);
+        mutex_exit(&ep->lock);
+        if (n > 0)
+            memcpy(uev, kev, (size_t)n * sizeof(*kev));
         if (n || timeout_ms == 0)
             break;
         if (deadline && ticks >= deadline)
@@ -605,8 +682,9 @@ static long do_epoll_wait(long epfd, struct sieos_epoll_event *uev, int max, int
             n = -EINTR;
             break;
         }
-        poll_sleep(deadline);
+        poll_sleep(gen, deadline);
     }
+    kfree(kev);
     file_close(ef);
     return n;
 }

@@ -3,6 +3,8 @@
  *
  * Every event source calls poll_wakeup(); pollers re-check their file
  * descriptors each time.  Simple and adequate for a handful of pollers.
+ * A generation count, read before the check and compared under poll_mx
+ * before sleeping, keeps a wake-up between the two from being lost.
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -15,18 +17,32 @@
 #include "mm.h"
 #include "net.h"
 
-static int poll_chan;
+static volatile uint64_t poll_gen;
+static kmutex_t poll_mx = MUTEX_SPIN_INITIALIZER;
 
 void poll_wakeup(void)
 {
-    wakeup(&poll_chan);
+    mutex_enter(&poll_mx);
+    poll_gen++;
+    mutex_exit(&poll_mx);
+    sleepq_wakeup((const void *)&poll_gen, -1);
 }
 
-/* Sleep until poll_wakeup, or the tick deadline (0: none). */
-void poll_sleep(uint64_t deadline)
+uint64_t poll_generation(void)
 {
+    return __atomic_load_n(&poll_gen, __ATOMIC_ACQUIRE);
+}
+
+/* Sleep until a poll_wakeup after generation gen (none since: at once), a signal, or the tick deadline (0: none). */
+void poll_sleep(uint64_t gen, uint64_t deadline)
+{
+    mutex_enter(&poll_mx);
+    if (poll_gen != gen) {
+        mutex_exit(&poll_mx);
+        return;
+    }
     curlwp->wake_tick = deadline;
-    sleep_on(&poll_chan);
+    sleepq_block((const void *)&poll_gen, &poll_mx, true);
     curlwp->wake_tick = 0;
 }
 
@@ -96,12 +112,15 @@ long sys_poll(struct pollfd *fds, int nfds, int timeout_ms)
     }
     for (;;) {
         int n = 0;
+        uint64_t gen = poll_generation();
         for (int i = 0; i < nfds; i++) {
             fds[i].revents = 0;
             if (fds[i].fd < 0)
                 continue;
-            struct file *f = fds[i].fd < NOFILE ? current->ofile[fds[i].fd] : NULL;
+            struct file *f = getf(fds[i].fd);
             fds[i].revents = f ? file_poll(f, fds[i].events) : POLLNVAL;
+            if (f)
+                releasef(f);
             if (fds[i].revents)
                 n++;
         }
@@ -111,8 +130,6 @@ long sys_poll(struct pollfd *fds, int nfds, int timeout_ms)
             return 0;
         if (signal_pending(current))
             return -EINTR;
-        curlwp->wake_tick = deadline;
-        sleep_on(&poll_chan);
-        curlwp->wake_tick = 0;
+        poll_sleep(gen, deadline);
     }
 }

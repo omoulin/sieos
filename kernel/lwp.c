@@ -2,6 +2,10 @@
  * lwp.c - ABI v2 lightweight-process calls: create/exit/wait, suspend,
  * park/unpark, the TLS pointer, user-mutex wait/wake and names.
  *
+ * The process's LWPs are under its p_lock (proc.c).  User-mutex waiters
+ * wait on a hash of their keys: a bucket's mutex covers the test of the
+ * user word and the sleep, and the wakes for its keys.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -13,7 +17,16 @@
 #include "sieos/errno.h"
 #include "sieos/time.h"
 
-static int umtx_chan;
+#define UMTX_HASH 64
+static struct umtxq {
+    kmutex_t lock;
+    kcondvar_t cv;
+} umtxq[UMTX_HASH];
+
+static struct umtxq *umtxq_of(uint64_t key)
+{
+    return &umtxq[(key ^ (key >> 13) ^ (key >> 29)) % UMTX_HASH];
+}
 
 static uint64_t ts_to_ticks(const struct sieos_timespec *ts)
 {
@@ -27,7 +40,7 @@ long sys2_lwp_create(const sieos_ucontext_t *ucp, int flags, sieos_lwpid_t *idp)
         return -EFAULT;
     if (flags & ~(SIEOS_LWP_DAEMON | SIEOS_LWP_DETACHED | SIEOS_LWP_SUSPENDED))
         return -EINVAL;
-    static sieos_ucontext_t uc;                      /* under the big kernel lock */
+    sieos_ucontext_t uc;
     memcpy(&uc, ucp, sizeof(uc));
     uint64_t rip = uc.uc_mcontext.gregs[SIEOS_REG_RIP], rsp = uc.uc_mcontext.gregs[SIEOS_REG_RSP];
     if (rip >= USER_LIMIT || rsp >= USER_LIMIT)
@@ -41,10 +54,13 @@ long sys2_lwp_create(const sieos_ucontext_t *ucp, int flags, sieos_lwpid_t *idp)
     l->detached = flags & SIEOS_LWP_DETACHED;
     if (idp)
         *idp = l->lwpid;
-    if (flags & SIEOS_LWP_SUSPENDED)
+    if (flags & SIEOS_LWP_SUSPENDED) {
+        disp_enter();
         l->state = LWP_SUSPENDED;
-    else
+        disp_exit();
+    } else {
         make_runnable(l);
+    }
     return 0;
 }
 
@@ -56,6 +72,7 @@ long sys2_lwp_wait(int id, sieos_lwpid_t *departed)
         return -EFAULT;
     if (id == me->lwpid)
         return -EDEADLK;
+    mutex_enter(&p->p_lock);
     for (;;) {
         bool found = false;
         for (int i = 0; i < NLWP; i++) {
@@ -63,56 +80,72 @@ long sys2_lwp_wait(int id, sieos_lwpid_t *departed)
             if (l->state == LWP_UNUSED || l->proc != p || l == me || (id && l->lwpid != id))
                 continue;
             if (l->detached) {
-                if (id)
+                if (id) {
+                    mutex_exit(&p->p_lock);
                     return -EINVAL;
+                }
                 continue;
             }
             found = true;
             if (l->state == LWP_ZOMBIE) {
                 int who = l->lwpid;
-                pmm_free_contig(V2P(l->kstack), KSTACK_SIZE / PAGE_SIZE);
-                memset(l, 0, sizeof(*l));
+                lwp_free(l);                     /* (waits until it has switched away) */
+                mutex_exit(&p->p_lock);
                 if (departed)
                     *departed = who;
                 return 0;
             }
         }
-        if (!found)
+        if (!found) {
+            mutex_exit(&p->p_lock);
             return -ESRCH;
-        if (signal_pending(p))
+        }
+        if (!cv_wait_sig(&p->p_lwpcv, &p->p_lock)) {
+            mutex_exit(&p->p_lock);
             return -EINTR;
-        sleep_on(&p->nlwp);
+        }
     }
 }
 
 long sys2_lwp_suspend(int id)
 {
-    struct lwp *t = lwp_find(current, id);
-    if (!t || t->state == LWP_ZOMBIE)
-        return -ESRCH;
-    t->suspend_req = true;                           /* stops at its next return to user mode */
-    return 0;
+    struct proc *p = current;
+    mutex_enter(&p->p_lock);
+    struct lwp *t = lwp_find(p, id);
+    long r = !t || t->state == LWP_ZOMBIE ? -ESRCH : 0;
+    if (!r)
+        t->suspend_req = true;                       /* stops at its next return to user mode */
+    mutex_exit(&p->p_lock);
+    return r;
 }
 
 long sys2_lwp_continue(int id)
 {
-    struct lwp *t = lwp_find(current, id);
-    if (!t || t->state == LWP_ZOMBIE)
-        return -ESRCH;
-    t->suspend_req = false;
-    if (t->state == LWP_SUSPENDED)
-        make_runnable(t);
-    return 0;
+    struct proc *p = current;
+    mutex_enter(&p->p_lock);
+    struct lwp *t = lwp_find(p, id);
+    long r = !t || t->state == LWP_ZOMBIE ? -ESRCH : 0;
+    if (!r) {
+        t->suspend_req = false;
+        if (t->state == LWP_SUSPENDED)
+            make_runnable(t);
+    }
+    mutex_exit(&p->p_lock);
+    return r;
 }
 
 static long unpark(int id)
 {
-    struct lwp *t = lwp_find(current, id);
-    if (!t || t->state == LWP_ZOMBIE)
-        return -ESRCH;
-    t->park_token = true;
-    wakeup(&t->park_token);
-    return 0;
+    struct proc *p = current;
+    mutex_enter(&p->p_lock);
+    struct lwp *t = lwp_find(p, id);
+    long r = !t || t->state == LWP_ZOMBIE ? -ESRCH : 0;
+    if (!r) {
+        t->park_token = true;
+        sleepq_wakeup(&t->park_token, -1);
+    }
+    mutex_exit(&p->p_lock);
+    return r;
 }
 
 long sys2_lwp_park(const struct sieos_timespec *timeout, int unpark_first)
@@ -123,18 +156,26 @@ long sys2_lwp_park(const struct sieos_timespec *timeout, int unpark_first)
     if (unpark_first)
         unpark(unpark_first);
     uint64_t deadline = timeout ? ticks + ts_to_ticks(timeout) : 0;
+    struct proc *p = l->proc;
+    mutex_enter(&p->p_lock);
     for (;;) {
+        long r = 1;
         if (l->park_token) {
             l->park_token = false;
-            return 0;
+            r = 0;
+        } else if (signal_pending(p)) {
+            r = -EINTR;
+        } else if (timeout && ticks >= deadline) {
+            r = -ETIME;
         }
-        if (signal_pending(current))
-            return -EINTR;
-        if (timeout && ticks >= deadline)
-            return -ETIME;
+        if (r <= 0) {
+            mutex_exit(&p->p_lock);
+            return r;
+        }
         l->wake_tick = deadline;
-        sleep_on(&l->park_token);
+        sleepq_block(&l->park_token, &p->p_lock, true);
         l->wake_tick = 0;
+        mutex_enter(&p->p_lock);
     }
 }
 
@@ -205,8 +246,6 @@ long sys2_lwp_umtx_wait(uint64_t addr, int expected, const struct sieos_timespec
         return r;
     if (timeout && !user_ok(timeout, sizeof(*timeout), false))
         return -EFAULT;
-    if (*(volatile int *)addr != expected)
-        return -EAGAIN;
     uint64_t deadline = 0;
     if (timeout) {
         if (flags & SIEOS_UMTX_ABSTIME) {
@@ -220,22 +259,52 @@ long sys2_lwp_umtx_wait(uint64_t addr, int expected, const struct sieos_timespec
         }
     }
     struct lwp *l = curlwp;
+    struct umtxq *q = umtxq_of(key);
+    mutex_enter(&q->lock);
+    if (*(volatile int *)addr != expected) {         /* (tested under the bucket's lock: a wake cannot pass between) */
+        mutex_exit(&q->lock);
+        return -EAGAIN;
+    }
     l->umtx_key = key;
+    r = 0;
     for (;;) {
         l->wake_tick = deadline;
-        sleep_on(&umtx_chan);
+        sleepq_block(&l->umtx_key, &q->lock, true);
         l->wake_tick = 0;
-        if (!l->umtx_key)
-            return 0;                                /* woken by lwp_umtx_wake */
+        mutex_enter(&q->lock);
+        if (!l->umtx_key) {
+            r = 0;                                   /* woken by lwp_umtx_wake */
+            break;
+        }
         if (signal_pending(current)) {
-            l->umtx_key = 0;
-            return -EINTR;
+            r = -EINTR;
+            break;
         }
         if (timeout && ticks >= deadline) {
-            l->umtx_key = 0;
-            return -ETIMEDOUT;
+            r = -ETIMEDOUT;
+            break;
         }
     }
+    l->umtx_key = 0;
+    mutex_exit(&q->lock);
+    return r;
+}
+
+/* q's lock held: wake up to n waiters on key; how many. */
+static int umtx_wake_key(uint64_t key, int n)
+{
+    int woken = 0;
+    for (int i = 0; i < NLWP && woken < n; i++) {
+        struct lwp *l = &lwp_table[i];
+        /* (one inside the wait, asleep or not: a signal may have made it runnable,
+         * and skipping it then lost this wake when it went back to sleep) */
+        if (l->umtx_key == key && l->state != LWP_UNUSED && l->state != LWP_ZOMBIE) {
+            l->umtx_key = 0;
+            sleepq_wakeup(&l->umtx_key, -1);
+            woken++;
+        }
+    }
+    return woken;
 }
 
 long sys2_lwp_umtx_wake(uint64_t addr, int count, int flags)
@@ -244,44 +313,46 @@ long sys2_lwp_umtx_wake(uint64_t addr, int count, int flags)
     long r = umtx_key(addr, flags, &key);
     if (r < 0)
         return r;
-    int n = 0;
-    for (int i = 0; i < NLWP && n < count; i++) {
-        struct lwp *l = &lwp_table[i];
-        /* (one inside the wait, asleep or not: a signal may have made it runnable,
-         * and skipping it then lost this wake when it went back to sleep) */
-        if (l->umtx_key == key && l->state != LWP_UNUSED && l->state != LWP_ZOMBIE) {
-            l->umtx_key = 0;
-            if (l->state == LWP_SLEEPING)
-                make_runnable(l);
-            n++;
-        }
-    }
+    struct umtxq *q = umtxq_of(key);
+    mutex_enter(&q->lock);
+    int n = umtx_wake_key(key, count);
+    mutex_exit(&q->lock);
     return n;
 }
 
 long sys2_lwp_name(int op, int id, char *buf, size_t len)
 {
-    struct lwp *t = id ? lwp_find(current, id) : curlwp;
-    if (!t || t->state == LWP_ZOMBIE)
-        return -ESRCH;
+    struct proc *p = current;
+    char name[SIEOS_LWP_NAME_MAX];
     if (op == SIEOS_LWP_NAME_GET) {
         if (!user_ok(buf, len, true) || !len)
             return -EFAULT;
-        size_t n = strlen(t->name);
-        if (n + 1 > len)
-            return -ERANGE;
-        memcpy(buf, t->name, n + 1);
-        return 0;
-    }
-    if (op == SIEOS_LWP_NAME_SET) {
-        char name[SIEOS_LWP_NAME_MAX];
+    } else if (op == SIEOS_LWP_NAME_SET) {
         int r = user_fetch_str(buf, name, sizeof(name));
         if (r < 0)
             return r;
-        strlcpy(t->name, name, sizeof(t->name));
-        return 0;
+    } else {
+        return -EINVAL;
     }
-    return -EINVAL;
+    char cur[32];
+    mutex_enter(&p->p_lock);
+    struct lwp *t = id ? lwp_find(p, id) : curlwp;
+    if (!t || t->state == LWP_ZOMBIE) {
+        mutex_exit(&p->p_lock);
+        return -ESRCH;
+    }
+    if (op == SIEOS_LWP_NAME_SET)
+        strlcpy(t->name, name, sizeof(t->name));
+    else
+        strlcpy(cur, t->name, sizeof(cur));
+    mutex_exit(&p->p_lock);
+    if (op == SIEOS_LWP_NAME_GET) {
+        size_t n = strlen(cur);
+        if (n + 1 > len)
+            return -ERANGE;
+        memcpy(buf, cur, n + 1);
+    }
+    return 0;
 }
 
 /* Wake up to n waiters on a user word, whether they wait on its shared or private key. */
@@ -289,15 +360,15 @@ static void umtx_wake_both(struct proc *p, uint64_t addr, int n)
 {
     uint64_t pa = vmm_translate(p->pml4, addr, NULL);
     uint64_t shared = pa & ~1UL, priv = ((uint64_t)p->pid << 48) | addr | 1;
-    for (int i = 0; i < NLWP && n > 0; i++) {
-        struct lwp *w = &lwp_table[i];
-        if (w->umtx_key && (w->umtx_key == shared || w->umtx_key == priv) &&
-            w->state != LWP_UNUSED && w->state != LWP_ZOMBIE) {
-            w->umtx_key = 0;
-            if (w->state == LWP_SLEEPING)
-                make_runnable(w);
-            n--;
-        }
+    struct umtxq *q = umtxq_of(priv);
+    mutex_enter(&q->lock);
+    n -= umtx_wake_key(priv, n);
+    mutex_exit(&q->lock);
+    if (n > 0 && pa) {
+        q = umtxq_of(shared);
+        mutex_enter(&q->lock);
+        umtx_wake_key(shared, n);
+        mutex_exit(&q->lock);
     }
 }
 

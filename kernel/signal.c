@@ -10,6 +10,11 @@
  * through ABI v2, a Solaris ucontext + siginfo and return with
  * context(SETCONTEXT).
  *
+ * Locking: a process's signal state (dispositions, pending sets and
+ * siginfo, its LWPs' masks, the stop state) is under its p_lock; signalling
+ * another process needs it held stable (pidlock held, see proc.c).  The
+ * real-time queue has its own spin lock.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -105,16 +110,22 @@ static bool sigchld_nocldstop(struct proc *parent)
     return ka->flags & SIEOS_SA_NOCLDSTOP;
 }
 
+/* A child stopped or continued: its parent's SIGCHLD and waitid (not holding p's p_lock). */
 static void notify_parent(struct proc *p, int code, int status)
 {
+    bool held = mutex_owned(&pidlock);
+    if (!held)
+        mutex_enter(&pidlock);
     struct proc *parent = p->parent;
-    if (!parent)
-        return;
-    if (!sigchld_nocldstop(parent) && !p->nosigchld) {
-        struct ksiginfo info = { .code = code, .pid = p->pid, .uid = p->uid, .status = status };
-        signal_send_info(parent, SIGCHLD, &info);
+    if (parent) {
+        if (!sigchld_nocldstop(parent) && !p->nosigchld) {
+            struct ksiginfo info = { .code = code, .pid = p->pid, .uid = p->uid, .status = status };
+            signal_send_info(parent, SIGCHLD, &info);
+        }
+        cv_broadcast(&parent->p_cv);
     }
-    wakeup(parent);
+    if (!held)
+        mutex_exit(&pidlock);
 }
 
 static bool discarded(struct proc *p, int sig)
@@ -127,7 +138,7 @@ static bool discarded(struct proc *p, int sig)
     return h == (uint64_t)SIG_DFL && (default_action(sig) == ACT_IGN || default_action(sig) == ACT_CONT);
 }
 
-/* Continue a stopped process: every stopped LWP runs again. */
+/* p_lock held: continue a stopped process: every stopped LWP runs again. */
 static void continue_proc(struct proc *p)
 {
     p->stopped = false;
@@ -151,6 +162,7 @@ static struct rtq {
     struct ksiginfo info;
 } rtq[NRTQ];
 static uint64_t rtq_seq;
+static struct spinlock rtq_lock;
 
 static bool is_rt(int sig)
 {
@@ -159,38 +171,44 @@ static bool is_rt(int sig)
 
 static void rtq_add(struct proc *p, struct lwp *l, int sig, const struct ksiginfo *info)
 {
+    spin_lock(&rtq_lock);
     for (int i = 0; i < NRTQ; i++)
         if (!rtq[i].p) {
             rtq[i] = (struct rtq){ p, l, sig, ++rtq_seq, *info };
-            return;
+            break;
         }
+    spin_unlock(&rtq_lock);
 }
 
 static bool rtq_take(struct proc *p, struct lwp *l, int sig, struct ksiginfo *info)
 {
     struct rtq *best = NULL;
+    spin_lock(&rtq_lock);
     for (int i = 0; i < NRTQ; i++)
         if (rtq[i].p == p && rtq[i].l == l && rtq[i].sig == sig && (!best || rtq[i].seq < best->seq))
             best = &rtq[i];
-    if (!best)
-        return false;
-    *info = best->info;
-    best->p = NULL;
-    return true;
+    if (best) {
+        *info = best->info;
+        best->p = NULL;
+    }
+    spin_unlock(&rtq_lock);
+    return best != NULL;
 }
 
 /* Drop queued instances: of an LWP (l), of a process (l == NULL, all), or of one signal (sig > 0). */
 void signal_purge(struct proc *p, struct lwp *l, int sig)
 {
+    spin_lock(&rtq_lock);
     for (int i = 0; i < NRTQ; i++)
         if (rtq[i].p == p && (!l || rtq[i].l == l) && (!sig || rtq[i].sig == sig))
             rtq[i].p = NULL;
+    spin_unlock(&rtq_lock);
 }
 
-void signal_send_info(struct proc *p, int sig, const struct ksiginfo *info)
+/* p_lock held; returns true if the parent is to be told that p continued. */
+static bool sigtoproc(struct proc *p, int sig, const struct ksiginfo *info)
 {
-    if (!p || sig <= 0 || sig >= KNSIG || p->state != PSTATE_RUNNING)
-        return;
+    bool notify = false;
     if (sig == SIGCONT || sig == SIGKILL) {
         p->sig_pending &= ~STOP_SIGS;
         for (int i = 0; i < NLWP; i++)
@@ -200,14 +218,14 @@ void signal_send_info(struct proc *p, int sig, const struct ksiginfo *info)
             continue_proc(p);
             if (sig == SIGCONT) {
                 p->cont_pending = true;
-                notify_parent(p, SIEOS_CLD_CONTINUED, SIGCONT);
+                notify = true;
             }
         }
     }
     if (KSIGBIT(sig) & STOP_SIGS)
         p->sig_pending &= ~KSIGBIT(SIGCONT);
     if (discarded(p, sig))
-        return;
+        return notify;
 
     struct ksiginfo k = info ? *info : (struct ksiginfo){ .code = SIEOS_SI_USER, .pid = current->pid, .uid = current->uid };
     if (is_rt(sig) && (p->sig_pending & KSIGBIT(sig))) {
@@ -227,15 +245,28 @@ void signal_send_info(struct proc *p, int sig, const struct ksiginfo *info)
             continue;
         if (l->state == LWP_RUNNING || l->state == LWP_RUNNABLE) {
             if (sig != SIGKILL)
-                return;                              /* it will see the signal soon */
+                return notify;                       /* it will see the signal soon */
             continue;
         }
         if (l->state == LWP_SLEEPING || (sig == SIGKILL && (l->state == LWP_STOPPED || l->state == LWP_SUSPENDED))) {
             make_runnable(l);
             if (sig != SIGKILL)
-                return;
+                return notify;
         }
     }
+    return notify;
+}
+
+/* p must stay (pidlock held, or p is the caller's); takes p's p_lock. */
+void signal_send_info(struct proc *p, int sig, const struct ksiginfo *info)
+{
+    if (!p || sig <= 0 || sig >= KNSIG || p->state != PSTATE_RUNNING)
+        return;
+    mutex_enter(&p->p_lock);
+    bool notify = p->state == PSTATE_RUNNING && sigtoproc(p, sig, info);
+    mutex_exit(&p->p_lock);
+    if (notify)
+        notify_parent(p, SIEOS_CLD_CONTINUED, SIGCONT);
 }
 
 void signal_send(struct proc *p, int sig)
@@ -243,15 +274,10 @@ void signal_send(struct proc *p, int sig)
     signal_send_info(p, sig, NULL);
 }
 
-void signal_lwp(struct lwp *l, int sig, const struct ksiginfo *info)
+/* l's process's p_lock held. */
+static void signal_lwp_locked(struct lwp *l, int sig, const struct ksiginfo *info)
 {
     struct proc *p = l->proc;
-    if (sig <= 0 || sig >= KNSIG || p->state != PSTATE_RUNNING || l->state == LWP_ZOMBIE)
-        return;
-    if (sig == SIGKILL || sig == SIGSTOP || sig == SIGCONT) {
-        signal_send_info(p, sig, info);              /* these act on the whole process */
-        return;
-    }
     if (discarded(p, sig))
         return;
     struct ksiginfo k = info ? *info : (struct ksiginfo){ .code = SIEOS_SI_LWP, .pid = current->pid, .uid = current->uid };
@@ -261,8 +287,24 @@ void signal_lwp(struct lwp *l, int sig, const struct ksiginfo *info)
         l->sig_pending |= KSIGBIT(sig);
         l->siginfo[sig] = k;
     }
-    if (l->state == LWP_SLEEPING && (!(l->sig_blocked & KSIGBIT(sig)) || (l->sig_waiting & KSIGBIT(sig))))
-        make_runnable(l);
+    if (!(l->sig_blocked & KSIGBIT(sig)) || (l->sig_waiting & KSIGBIT(sig)))
+        make_runnable(l);                            /* (if asleep, or about to be) */
+}
+
+/* l's process must stay (it is the caller's, or pidlock is held). */
+void signal_lwp(struct lwp *l, int sig, const struct ksiginfo *info)
+{
+    struct proc *p = l->proc;
+    if (sig <= 0 || sig >= KNSIG || p->state != PSTATE_RUNNING || l->state == LWP_ZOMBIE)
+        return;
+    if (sig == SIGKILL || sig == SIGSTOP || sig == SIGCONT) {
+        signal_send_info(p, sig, info);              /* these act on the whole process */
+        return;
+    }
+    mutex_enter(&p->p_lock);
+    if (l->proc == p && l->state != LWP_ZOMBIE && l->state != LWP_UNUSED)
+        signal_lwp_locked(l, sig, info);
+    mutex_exit(&p->p_lock);
 }
 
 int signal_pgrp(int pgid, int sig)
@@ -270,6 +312,9 @@ int signal_pgrp(int pgid, int sig)
     int n = 0;
     if (pgid <= 0)
         return 0;
+    bool held = mutex_owned(&pidlock);
+    if (!held)
+        mutex_enter(&pidlock);
     for (int i = 1; i < NPROC; i++) {
         struct proc *p = &proc_table[i];
         if (p->state == PSTATE_RUNNING && p->pgid == pgid) {
@@ -277,9 +322,12 @@ int signal_pgrp(int pgid, int sig)
             n++;
         }
     }
+    if (!held)
+        mutex_exit(&pidlock);
     return n;
 }
 
+/* p_lock held */
 void signal_exec_reset(struct proc *p)
 {
     for (int s = 1; s < KNSIG; s++) {
@@ -306,6 +354,7 @@ long kill_pids(int pid, int sig, const struct ksiginfo *info)
     if (sig < 0 || sig >= KNSIG)
         return -EINVAL;
     int found = 0, permitted = 0;
+    mutex_enter(&pidlock);
     for (int i = 1; i < NPROC; i++) {
         struct proc *p = &proc_table[i];
         if (p->state != PSTATE_RUNNING)
@@ -330,6 +379,7 @@ long kill_pids(int pid, int sig, const struct ksiginfo *info)
         if (sig)
             signal_send_info(p, sig, info);
     }
+    mutex_exit(&pidlock);
     if (!found)
         return -ESRCH;
     return permitted ? 0 : -EPERM;
@@ -340,8 +390,10 @@ void signal_fault(int sig, int code, uint64_t addr)
 {
     struct proc *p = current;
     struct lwp *l = curlwp;
+    mutex_enter(&p->p_lock);
     struct ksigaction *ka = &p->sigact[sig];
     if (ka->handler <= (uint64_t)SIG_IGN || (l->sig_blocked & KSIGBIT(sig))) {
+        mutex_exit(&p->p_lock);
         kprintf("%s[%d/%d]: fatal signal %d (code %d) at rip %lx, address %lx\n", p->name, p->pid, l->lwpid,
                 sig, code, l->tf->rip, addr);
         proc_exit(sig | (default_action(sig) == ACT_CORE && core_dump(sig, l->tf) ? 0x80 : 0));
@@ -349,6 +401,7 @@ void signal_fault(int sig, int code, uint64_t addr)
     struct ksiginfo info = { .code = code, .addr = addr, .pid = p->pid, .uid = p->uid };
     l->sig_pending |= KSIGBIT(sig);
     l->siginfo[sig] = info;
+    mutex_exit(&p->p_lock);
 }
 
 /* ---------------- delivery ---------------- */
@@ -369,26 +422,13 @@ static void restart_or_eintr(struct trapframe *tf, bool restart)
     }
 }
 
-/* The mask to restore after the handler: sigsuspend's saved one, or the current one. */
-static ksigset_t previous_mask(struct lwp *l)
-{
-    if (l->saved_mask_valid) {
-        l->saved_mask_valid = false;
-        return l->saved_mask;
-    }
-    return l->sig_blocked;
-}
-
-static void apply_handler_mask(struct lwp *l, int sig, struct ksigaction *ka, bool nodefer, bool resethand)
+static void apply_handler_mask(struct lwp *l, int sig, const struct ksigaction *ka, bool nodefer, bool resethand)
 {
     if (!nodefer)
         l->sig_blocked |= KSIGBIT(sig);
     l->sig_blocked |= ka->mask;
     l->sig_blocked &= ~UNBLOCKABLE;
-    if (resethand) {
-        ka->handler = (uint64_t)SIG_DFL;
-        ka->flags = 0;
-    }
+    (void)resethand;                             /* (signal_deliver resets the action) */
 }
 
 static void tf_to_gregs(const struct trapframe *tf, sieos_greg_t *g, uint64_t fsbase)
@@ -444,7 +484,8 @@ static bool on_altstack(struct lwp *l, uint64_t sp)
     return !(l->altstack_flags & SIEOS_SS_DISABLE) && sp >= l->altstack_sp && sp < l->altstack_sp + l->altstack_size;
 }
 
-static bool setup_frame_v2(struct trapframe *tf, int sig, struct ksigaction *ka, const struct ksiginfo *info)
+/* The handler's frame on the user stack (ka: a copy of the action; the masks are the caller's to apply). */
+static bool setup_frame_v2(struct trapframe *tf, int sig, const struct ksigaction *ka, const struct ksiginfo *info)
 {
     struct lwp *l = curlwp;
     uint64_t sp = tf->rsp - 128;                 /* red zone */
@@ -466,8 +507,8 @@ static bool setup_frame_v2(struct trapframe *tf, int sig, struct ksigaction *ka,
     sp -= 8;                                     /* return address 0: handlers must not return */
     if (!user_range_ok(current->pml4, sp, top - sp, true))
         return false;
-    static sieos_ucontext_t uc;                  /* under the big kernel lock */
-    make_ucontext(l, tf, previous_mask(l), &uc);
+    sieos_ucontext_t uc;
+    make_ucontext(l, tf, l->saved_mask_valid ? l->saved_mask : l->sig_blocked, &uc);
     if (xsp) {                                   /* (make_ucontext saved it in l->fpu) */
         memcpy((void *)xsp, l->fpu.area, cpu_xsave_size);
         uc.uc_flags |= SIEOS_UC_XSAVE;
@@ -492,7 +533,6 @@ static bool setup_frame_v2(struct trapframe *tf, int sig, struct ksigaction *ka,
     /* the handler starts with clean FPU/SSE state */
     l->fpu = fpu_default;
     fpu_restore(&l->fpu);
-    apply_handler_mask(l, sig, ka, ka->flags & SIEOS_SA_NODEFER, ka->flags & SIEOS_SA_RESETHAND);
     return true;
 }
 
@@ -526,57 +566,85 @@ void signal_deliver(struct trapframe *tf)
     for (;;) {
         if (l->must_exit)
             lwp_exit_self();
+        mutex_enter(&p->p_lock);
         /* job-control stop: every LWP parks here until SIGCONT or SIGKILL */
         if (p->stopped && !((p->sig_pending | l->sig_pending) & KSIGBIT(SIGKILL))) {
+            disp_enter();
             l->state = LWP_STOPPED;
-            schedule();
+            disp_exit();
+            mutex_exit(&p->p_lock);
+            disp_enter();
+            swtch();                             /* (a SIGCONT meanwhile made it runnable: it goes on) */
             continue;
         }
         if (l->suspend_req) {                    /* lwp_suspend */
+            disp_enter();
             l->state = LWP_SUSPENDED;
-            schedule();
+            disp_exit();
+            mutex_exit(&p->p_lock);
+            disp_enter();
+            swtch();
             continue;
         }
         struct ksiginfo info;
         int sig = dequeue(l, ~(l->sig_blocked & ~UNBLOCKABLE), &info);
-        if (!sig)
+        if (!sig) {
+            mutex_exit(&p->p_lock);
             break;
-        struct ksigaction *ka = &p->sigact[sig];
+        }
+        struct ksigaction ka = p->sigact[sig];
         bool forced = sig == SIGKILL || sig == SIGSTOP;
 
-        if (!forced && ka->handler == (uint64_t)SIG_IGN)
+        if (!forced && ka.handler == (uint64_t)SIG_IGN) {
+            mutex_exit(&p->p_lock);
             continue;
-        if (forced || ka->handler == (uint64_t)SIG_DFL) {
+        }
+        if (forced || ka.handler == (uint64_t)SIG_DFL) {
             switch (default_action(sig)) {
             case ACT_IGN:
             case ACT_CONT:
+                mutex_exit(&p->p_lock);
                 continue;
             case ACT_STOP:
                 p->stopped = true;
                 p->stop_sig = sig;
                 p->stop_reported = false;
+                mutex_exit(&p->p_lock);
                 notify_parent(p, SIEOS_CLD_STOPPED, sig);
                 continue;                        /* parks at the top of the loop */
             case ACT_CORE:
+                mutex_exit(&p->p_lock);
                 proc_exit(sig | (core_dump(sig, tf) ? 0x80 : 0));
             default:
+                mutex_exit(&p->p_lock);
                 proc_exit(sig);
             }
         }
+        if (ka.flags & SIEOS_SA_RESETHAND) {
+            p->sigact[sig].handler = (uint64_t)SIG_DFL;
+            p->sigact[sig].flags = 0;
+        }
+        mutex_exit(&p->p_lock);
         /* user handler */
-        bool restart = ka->flags & SIEOS_SA_RESTART;
+        bool restart = ka.flags & SIEOS_SA_RESTART;
         restart_or_eintr(tf, restart);
-        bool ok = setup_frame_v2(tf, sig, ka, &info);
+        bool ok = setup_frame_v2(tf, sig, &ka, &info);
         if (!ok) {
             kprintf("%s[%d]: cannot deliver signal %d (bad stack), killed\n", p->name, p->pid, sig);
             proc_exit(SIGSEGV | 0x80);
         }
+        mutex_enter(&p->p_lock);
+        l->saved_mask_valid = false;             /* (the frame has the mask to restore) */
+        apply_handler_mask(l, sig, &ka, ka.flags & SIEOS_SA_NODEFER, false);
+        mutex_exit(&p->p_lock);
         return;
     }
     restart_or_eintr(tf, true);
     if (l->saved_mask_valid) {                   /* sigsuspend woke without a handler */
+        mutex_enter(&p->p_lock);
         l->sig_blocked = l->saved_mask;
         l->saved_mask_valid = false;
+        mutex_exit(&p->p_lock);
     }
 }
 
@@ -586,15 +654,18 @@ long sys2_sigaction(int sig, const struct sieos_sigaction *act, struct sieos_sig
 {
     if (sig <= 0 || sig >= KNSIG)
         return -EINVAL;
-    struct ksigaction *ka = &current->sigact[sig];
+    struct proc *p = current;
+    struct ksigaction *ka = &p->sigact[sig];
     if (old) {
         if (!user_ok(old, sizeof(*old), true))
             return -EFAULT;
         struct sieos_sigaction o;
         memset(&o, 0, sizeof(o));
+        mutex_enter(&p->p_lock);
         o.__sa_u.sa_handler = (void (*)(int))ka->handler;
         o.sa_flags = (int)ka->flags;
         sig_set_to_v2(ka->mask, &o.sa_mask);
+        mutex_exit(&p->p_lock);
         memcpy(old, &o, sizeof(o));
     }
     if (act) {
@@ -607,15 +678,17 @@ long sys2_sigaction(int sig, const struct sieos_sigaction *act, struct sieos_sig
         uint64_t h = (uint64_t)a.__sa_u.sa_handler;
         if (h == 2)                                  /* SIG_HOLD */
             return -EINVAL;
+        mutex_enter(&p->p_lock);
         ka->handler = h;
         ka->flags = (unsigned)a.sa_flags;
         ka->restorer = 0;
         ka->mask = sig_set_from_v2(&a.sa_mask) & ~UNBLOCKABLE;
-        if (discarded(current, sig)) {
-            current->sig_pending &= ~KSIGBIT(sig);
+        if (discarded(p, sig)) {
+            p->sig_pending &= ~KSIGBIT(sig);
             curlwp->sig_pending &= ~KSIGBIT(sig);
-            signal_purge(current, NULL, sig);
+            signal_purge(p, NULL, sig);
         }
+        mutex_exit(&p->p_lock);
     }
     return 0;
 }
@@ -623,26 +696,27 @@ long sys2_sigaction(int sig, const struct sieos_sigaction *act, struct sieos_sig
 long sys2_sigmask(int how, const sieos_sigset_t *set, sieos_sigset_t *old)
 {
     struct lwp *l = curlwp;
-    if (old) {
-        if (!user_ok(old, sizeof(*old), true))
-            return -EFAULT;
-        sieos_sigset_t o;
-        sig_set_to_v2(l->sig_blocked, &o);
-        memcpy(old, &o, sizeof(o));
-    }
-    if (set) {
-        if (!user_ok(set, sizeof(*set), false))
-            return -EFAULT;
-        sieos_sigset_t n;
+    struct proc *p = l->proc;
+    if ((old && !user_ok(old, sizeof(*old), true)) || (set && !user_ok(set, sizeof(*set), false)))
+        return -EFAULT;
+    if (set && how != SIEOS_SIG_BLOCK && how != SIEOS_SIG_UNBLOCK && how != SIEOS_SIG_SETMASK)
+        return -EINVAL;
+    sieos_sigset_t n, o;
+    if (set)
         memcpy(&n, set, sizeof(n));
+    mutex_enter(&p->p_lock);
+    sig_set_to_v2(l->sig_blocked, &o);
+    if (set) {
         ksigset_t s = sig_set_from_v2(&n) & ~UNBLOCKABLE;
         switch (how) {
         case SIEOS_SIG_BLOCK:   l->sig_blocked |= s; break;
         case SIEOS_SIG_UNBLOCK: l->sig_blocked &= ~s; break;
-        case SIEOS_SIG_SETMASK: l->sig_blocked = s; break;
-        default: return -EINVAL;
+        default:                l->sig_blocked = s; break;
         }
     }
+    mutex_exit(&p->p_lock);
+    if (old)
+        memcpy(old, &o, sizeof(o));
     return 0;
 }
 
@@ -651,8 +725,11 @@ long sys2_sigpending(int op, sieos_sigset_t *set)
     if (!user_ok(set, sizeof(*set), true))
         return -EFAULT;
     sieos_sigset_t o;
-    if (op == SIEOS_SIGPENDING)
+    if (op == SIEOS_SIGPENDING) {
+        mutex_enter(&current->p_lock);
         sig_set_to_v2((curlwp->sig_pending | current->sig_pending) & curlwp->sig_blocked, &o);
+        mutex_exit(&current->p_lock);
+    }
     else if (op == SIEOS_SIGFILLSET)
         sig_set_to_v2(VALID_SIGS, &o);
     else
@@ -668,12 +745,13 @@ long sys2_sigsuspend(const sieos_sigset_t *set)
     sieos_sigset_t n;
     memcpy(&n, set, sizeof(n));
     struct lwp *l = curlwp;
+    mutex_enter(&l->proc->p_lock);
     l->saved_mask = l->sig_blocked;
     l->saved_mask_valid = true;
     l->sig_blocked = sig_set_from_v2(&n) & ~UNBLOCKABLE;
-    static int suspend_chan;
-    while (!signal_pending(current))
-        sleep_on(&suspend_chan);
+    mutex_exit(&l->proc->p_lock);
+    while (!lwp_sig_pending(l))
+        sleepq_block(&l->saved_mask, NULL, true);    /* (a signal wakes it, or keeps it from sleeping) */
     return -EINTR;                                   /* the old mask comes back after delivery */
 }
 
@@ -731,10 +809,15 @@ long sys2_sigtimedwait(const sieos_sigset_t *set, sieos_siginfo_t *uinfo, const 
         uint64_t ns = (uint64_t)timeout->tv_sec * 1000000000UL + timeout->tv_nsec;
         deadline = ticks + (ns * TIMER_HZ + 999999999UL) / 1000000000UL;
     }
-    static int wait_chan;
+    struct proc *p = l->proc;
     for (;;) {
         struct ksiginfo info;
+        mutex_enter(&p->p_lock);
         int sig = dequeue(l, want, &info);
+        bool other = ((l->sig_pending | p->sig_pending) & ~(l->sig_blocked & ~UNBLOCKABLE) & ~want) || l->must_exit;
+        if (!sig && !other)
+            l->sig_waiting = want;                   /* a waited-for signal wakes us, blocked as it is */
+        mutex_exit(&p->p_lock);
         if (sig) {
             if (uinfo) {
                 sieos_siginfo_t si;
@@ -743,14 +826,15 @@ long sys2_sigtimedwait(const sieos_sigset_t *set, sieos_siginfo_t *uinfo, const 
             }
             return sig;
         }
-        if (timeout && ticks >= deadline)
+        if (timeout && ticks >= deadline) {
+            l->sig_waiting = 0;
             return -EAGAIN;
+        }
         /* another signal (not waited for, not blocked) interrupts the wait */
-        if (((l->sig_pending | current->sig_pending) & ~(l->sig_blocked & ~UNBLOCKABLE) & ~want) || l->must_exit)
+        if (other)
             return -EINTR;
         l->wake_tick = timeout ? deadline : 0;
-        l->sig_waiting = want;                       /* a waited-for signal wakes us, blocked as it is */
-        sleep_on(&wait_chan);
+        sleepq_block(&l->sig_waiting, NULL, true);
         l->sig_waiting = 0;
         l->wake_tick = 0;
     }
@@ -762,7 +846,7 @@ long sys2_context(int op, sieos_ucontext_t *ucp, struct trapframe *tf)
     struct lwp *l = curlwp;
     if (!user_ok(ucp, sizeof(*ucp), op == SIEOS_GETCONTEXT))
         return -EFAULT;
-    static sieos_ucontext_t uc;                      /* under the big kernel lock */
+    sieos_ucontext_t uc;
     if (op == SIEOS_GETCONTEXT) {
         struct trapframe t = *tf;                    /* resumes after the call, returning 0 */
         t.rax = 0;
@@ -777,8 +861,11 @@ long sys2_context(int op, sieos_ucontext_t *ucp, struct trapframe *tf)
     memcpy(&uc, ucp, sizeof(uc));
     if (uc.uc_flags & SIEOS_UC_CPU)
         sig_gregs_to_tf(uc.uc_mcontext.gregs, tf);
-    if (uc.uc_flags & SIEOS_UC_SIGMASK)
+    if (uc.uc_flags & SIEOS_UC_SIGMASK) {
+        mutex_enter(&l->proc->p_lock);
         l->sig_blocked = sig_set_from_v2(&uc.uc_sigmask) & ~UNBLOCKABLE;
+        mutex_exit(&l->proc->p_lock);
+    }
     bool restore = false;
     if ((uc.uc_flags & SIEOS_UC_XSAVE) && cpu_xsave && uc.uc_filler[0] == SIEOS_UC_XSAVE_MAGIC &&
         uc.uc_filler[2] == (long)cpu_xsave_size && user_ok((void *)uc.uc_filler[1], cpu_xsave_size, false)) {
@@ -810,10 +897,19 @@ long sys2_lwp_kill(int lwpid, int sig)
 {
     if (sig < 0 || sig >= KNSIG)
         return -EINVAL;
-    struct lwp *t = lwp_find(current, lwpid);
-    if (!t || t->state == LWP_ZOMBIE)
+    struct proc *p = current;
+    mutex_enter(&p->p_lock);
+    struct lwp *t = lwp_find(p, lwpid);
+    if (!t || t->state == LWP_ZOMBIE) {
+        mutex_exit(&p->p_lock);
         return -ESRCH;
+    }
+    if (sig && sig != SIGKILL && sig != SIGSTOP && sig != SIGCONT) {
+        signal_lwp_locked(t, sig, NULL);
+        sig = 0;
+    }
+    mutex_exit(&p->p_lock);
     if (sig)
-        signal_lwp(t, sig, NULL);
+        signal_send_info(p, sig, NULL);              /* these act on the whole process */
     return 0;
 }

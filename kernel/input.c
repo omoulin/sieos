@@ -4,6 +4,7 @@
  * While /dev/events is open, keyboard input is delivered as key events
  * instead of going to the console terminal (a "grab"), and the mice's
  * motion (drv/i8042, the USB and I2C HID drivers) as motion events.
+ * The queue is under input_lock (readers wait on input_cv).
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -18,6 +19,8 @@
 static struct input_event queue[QSIZE];
 static uint32_t q_head, q_tail;
 static int open_count;
+static kmutex_t input_lock;
+static kcondvar_t input_cv;
 
 bool input_grabbed(void)
 {
@@ -26,12 +29,16 @@ bool input_grabbed(void)
 
 static void push(struct input_event *e)
 {
-    if (!open_count)
+    mutex_enter(&input_lock);
+    if (!open_count) {
+        mutex_exit(&input_lock);
         return;
+    }
     if (q_tail - q_head == QSIZE)
         q_head++;                            /* drop the oldest */
     queue[q_tail++ % QSIZE] = *e;
-    wakeup(queue);
+    cv_broadcast(&input_cv);
+    mutex_exit(&input_lock);
     poll_wakeup();
 }
 
@@ -86,31 +93,38 @@ long input_read(char *buf, size_t n)
     size_t sz = sizeof(struct input_event);
     if (n < sz)
         return -EINVAL;
+    mutex_enter(&input_lock);
     while (q_head == q_tail) {
-        if (signal_pending(current))
+        if (!cv_wait_sig(&input_cv, &input_lock)) {
+            mutex_exit(&input_lock);
             return -ERESTART;
-        sleep_on(queue);
+        }
     }
     size_t got = 0;
     while (got + sz <= n && q_head != q_tail) {
         memcpy(buf + got, &queue[q_head++ % QSIZE], sz);
         got += sz;
     }
+    mutex_exit(&input_lock);
     return got;
 }
 
 int input_open(void)
 {
+    mutex_enter(&input_lock);
     if (open_count == 0)
         q_head = q_tail = 0;
     open_count++;
+    mutex_exit(&input_lock);
     return 0;
 }
 
 void input_close(void)
 {
+    mutex_enter(&input_lock);
     if (open_count > 0)
         open_count--;
+    mutex_exit(&input_lock);
 }
 
 /* The pointer is absolute (a hypervisor's): set by the i8042 driver (vmmouse). */

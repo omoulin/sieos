@@ -3,9 +3,18 @@
  * waiting, process groups and sessions.
  *
  * A process (struct proc) owns the address space and the other shared
- * resources; its LWPs (struct lwp) are what the scheduler runs.  Kernel code
- * runs under the big kernel lock with interrupts disabled; an LWP gives up
- * its CPU by sleeping, or when the timer fires while it is in user mode.
+ * resources; its LWPs (struct lwp) are what the dispatcher (disp.c) runs.
+ *
+ * Locking, as Solaris: pidlock protects the process table (allocation,
+ * process states, pids), the parent links, process groups and sessions, and
+ * waiting for children (each process's p_cv); it is held to use another
+ * process (signal it, read it), which then cannot be freed.  A process's
+ * p_lock protects its signals (with its LWPs' masks and pending sets), its
+ * LWPs (their list, must_exit, suspend), its stop and exit state, its
+ * interval timers, limits, credentials and working directories (p_lwpcv:
+ * LWPs exiting).  Order: pidlock, then p_lock (one process's at a time).
+ * The address space has its own lock (as_lock, vm.c), the descriptors theirs
+ * (p_fdlock, file.c).
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -30,10 +39,11 @@
 
 struct proc proc_table[NPROC];
 struct lwp lwp_table[NLWP];
+kmutex_t pidlock;
+static struct spinlock lwptab_lock;              /* lwp_table's free slots */
 static struct proc idle_proc;
 static struct lwp idle_lwps[NCPU];
 static int next_pid = 1;
-static int sleep_chan;
 
 
 void proc_init_cpu(struct cpu *c)
@@ -46,6 +56,7 @@ void proc_init_cpu(struct cpu *c)
     struct lwp *idle = &idle_lwps[c->id];
     memset(idle, 0, sizeof(*idle));
     idle->state = LWP_RUNNING;
+    idle->oncpu = 1;
     idle->is_idle = true;
     idle->cpu = c->id;
     idle->proc = &idle_proc;
@@ -55,6 +66,7 @@ void proc_init_cpu(struct cpu *c)
     c->idle = c->lwp = idle;
 }
 
+/* pidlock held: the process with this pid (alive or a zombie), or NULL. */
 struct proc *proc_find(int pid)
 {
     for (int i = 1; i < NPROC; i++)
@@ -63,6 +75,7 @@ struct proc *proc_find(int pid)
     return NULL;
 }
 
+/* p->p_lock held: its LWP lwpid. */
 struct lwp *lwp_find(struct proc *p, int lwpid)
 {
     for (int i = 0; i < NLWP; i++)
@@ -91,6 +104,7 @@ int proc_state(struct proc *p)
     return best;
 }
 
+/* pidlock held */
 static int alloc_pid(void)
 {
     for (;;) {
@@ -118,6 +132,7 @@ static void default_rlimits(struct proc *p)
     p->rlim_cur[SIEOS_RLIMIT_CORE] = 0;
 }
 
+/* pidlock held: a new process, EMBRYO. */
 static struct proc *alloc_proc(void)
 {
     for (int i = 1; i < NPROC; i++) {
@@ -134,33 +149,41 @@ static struct proc *alloc_proc(void)
     return NULL;
 }
 
+/* A new LWP of p, EMBRYO (made runnable by the caller). */
 struct lwp *lwp_alloc(struct proc *p)
 {
-    struct lwp *l = NULL;
-    for (int i = 0; i < NLWP; i++)
-        if (lwp_table[i].state == LWP_UNUSED) {
-            l = &lwp_table[i];
-            break;
-        }
-    if (!l)
-        return NULL;
     uint64_t kstack_pa = pmm_alloc_contig(KSTACK_SIZE / PAGE_SIZE);
     if (!kstack_pa)
         return NULL;
-    memset(l, 0, sizeof(*l));
-    l->state = LWP_EMBRYO;
-    l->proc = p;
-    l->lwpid = ++p->next_lwpid;
+    struct lwp *l = NULL;
+    spin_lock(&lwptab_lock);
+    for (int i = 0; i < NLWP; i++)
+        if (lwp_table[i].state == LWP_UNUSED) {
+            l = &lwp_table[i];
+            memset(l, 0, sizeof(*l));
+            l->state = LWP_EMBRYO;
+            break;
+        }
+    spin_unlock(&lwptab_lock);
+    if (!l) {
+        pmm_free_contig(kstack_pa, KSTACK_SIZE / PAGE_SIZE);
+        return NULL;
+    }
     l->cpu = -1;
     l->kstack = (uint64_t)P2V(kstack_pa);
     l->fpu = fpu_default;
     l->altstack_flags = SIEOS_SS_DISABLE;
-    strlcpy(l->name, p->name, sizeof(l->name));
     sched_init_lwp(l, curlwp);
+    mutex_enter(&p->p_lock);
+    strlcpy(l->name, p->name, sizeof(l->name));
+    l->lwpid = ++p->next_lwpid;
+    l->proc = p;
+    l->must_exit = p->exiting;           /* (created while the process exits: it ends at once) */
     p->nlwp++;
+    mutex_exit(&p->p_lock);
 
     /* Trap frame at the top; below it a context that "returns" to forkret,
-     * which releases the big kernel lock and enters user mode via trapret. */
+     * which completes the switch and enters user mode via trapret. */
     uint64_t sp = l->kstack + KSTACK_SIZE;
     sp -= sizeof(struct trapframe);
     l->tf = (struct trapframe *)sp;
@@ -175,14 +198,18 @@ struct lwp *lwp_alloc(struct proc *p)
     return l;
 }
 
-static void lwp_free(struct lwp *l)
+/* An exited (or never started) LWP's slot and stack (its process's p_lock, or pidlock, held). */
+void lwp_free(struct lwp *l)
 {
+    lwp_wait_offcpu(l);                          /* (an exited LWP may still be switching away) */
     pmm_free_contig(V2P(l->kstack), KSTACK_SIZE / PAGE_SIZE);
+    spin_lock(&lwptab_lock);
     memset(l, 0, sizeof(*l));
     l->state = LWP_UNUSED;
+    spin_unlock(&lwptab_lock);
 }
 
-/* Free a process slot and every LWP left of it. */
+/* pidlock held: free a process slot and every LWP left of it. */
 static void proc_free(struct proc *p)
 {
     for (int i = 0; i < NLWP; i++)
@@ -199,120 +226,14 @@ void lwp_first_run(void)
         lwp_exit_self();
 }
 
-/* Detached LWPs that have exited are freed here (never their own stack). */
-static void reap_detached(void)
+/* p->p_lock held: its detached LWPs that have exited are freed here (never the caller). */
+static void reap_detached(struct proc *p)
 {
     for (int i = 0; i < NLWP; i++) {
         struct lwp *l = &lwp_table[i];
-        if (l->state == LWP_ZOMBIE && l->detached && l != curlwp && l->proc->state == PSTATE_RUNNING)
+        if (l->proc == p && l->state == LWP_ZOMBIE && l->detached && l != curlwp)
             lwp_free(l);
     }
-}
-
-/* ------------------------------------------------------------------ */
-/* Scheduling (called with the big kernel lock held)                   */
-/* ------------------------------------------------------------------ */
-
-void schedule(void)
-{
-    struct cpu *c = mycpu();
-    struct lwp *cur = c->lwp, *next = NULL;
-    int best = -1;
-    c->need_resched = false;
-    for (int i = 1; i <= NLWP && !c->offline; i++) {   /* highest priority first, round robin among equals */
-        int idx = (c->rr + i) % NLWP;
-        struct lwp *l = &lwp_table[idx];
-        if (l->state == LWP_RUNNABLE && (!l->bound || l->bound == c->id + 1) &&
-            (!l->affinity || (l->affinity & (1ULL << c->id)))) {
-            int pri = sched_gpri(l);
-            if (pri > best) {
-                best = pri;
-                next = l;
-            }
-        }
-    }
-    bool cur_ok = cur->state == LWP_RUNNING && !cur->is_idle && !c->offline && (!cur->bound || cur->bound == c->id + 1) &&
-                  (!cur->affinity || (cur->affinity & (1ULL << c->id)));
-    if (cur_ok && (!next || sched_gpri(cur) > best || (sched_gpri(cur) == best && !c->slice_expired))) {
-        c->slice_expired = false;
-        return;                         /* it keeps the CPU: nobody ranks higher */
-    }
-    c->slice_expired = false;
-    if (next)
-        c->rr = next - lwp_table;
-    else
-        next = c->idle;
-    if (next == cur)
-        return;
-    if (!cur->is_idle) {
-        if (cur->state == LWP_RUNNING)
-            cur->nivcsw++;
-        else
-            cur->nvcsw++;
-    }
-    if (cur->state == LWP_RUNNING)
-        cur->state = LWP_RUNNABLE;
-    next->state = LWP_RUNNING;
-    next->cpu = c->id;
-    if (!next->is_idle)
-        tss_set_rsp0(next->kstack + KSTACK_SIZE);
-    uint64_t cr3 = next->proc->pml4 ? next->proc->pml4 : kernel_pml4_phys;
-    if (read_cr3() != cr3)
-        write_cr3(cr3);
-    fpu_save(&cur->fpu);                /* user FPU/SSE state follows the LWP */
-    fpu_restore(&next->fpu);
-    wrmsr(MSR_FS_BASE, next->fsbase);   /* its TLS pointer */
-    c->lwp = next;
-    c->slice_start = ticks;
-    next->last_run = ticks;
-    switch_context(&cur->ctx_rsp, next->ctx_rsp);
-    /* Note: we may now be running on a different CPU than before. */
-}
-
-/* Per-CPU idle loop; entered with the big kernel lock held. */
-void cpu_idle(void)
-{
-    struct lwp *idle = mycpu()->idle;
-    for (;;) {
-        idle->state = LWP_RUNNABLE;
-        schedule();
-        idle->state = LWP_RUNNING;
-        bkl_unlock();
-        power_idle();                        /* HLT, or MWAIT into a deep C-state */
-        cli();
-        bkl_lock();
-    }
-}
-
-void sleep_on(void *chan)
-{
-    struct lwp *l = curlwp;
-    l->chan = chan;
-    l->state = LWP_SLEEPING;
-    schedule();
-    l->chan = NULL;
-}
-
-void make_runnable(struct lwp *l)
-{
-    l->state = LWP_RUNNABLE;
-    sched_woke(l);
-    smp_kick_idle();
-}
-
-void wakeup(void *chan)
-{
-    bool woke = false;
-    for (int i = 0; i < NLWP; i++) {
-        struct lwp *l = &lwp_table[i];
-        if (l->state == LWP_SLEEPING && l->chan == chan) {
-            l->state = LWP_RUNNABLE;
-            sched_woke(l);
-            woke = true;
-        }
-    }
-    if (woke)
-        smp_kick_idle();
 }
 
 unsigned long loadavg[3];
@@ -323,7 +244,7 @@ static void update_loadavg(void)
     static const unsigned long e[3] = { 1884, 2014, 2037 };      /* 2048 * exp(-5/60), (-5/300), (-5/900) */
     unsigned long n = 0;
     for (int i = 0; i < NLWP; i++)
-        if (lwp_table[i].state == LWP_RUNNABLE || lwp_table[i].state == LWP_RUNNING)
+        if ((lwp_table[i].state == LWP_RUNNABLE || lwp_table[i].state == LWP_RUNNING) && !lwp_table[i].kthread)
             n++;
     for (int k = 0; k < 3; k++)
         loadavg[k] = (loadavg[k] * e[k] + (n << 11) * (2048 - e[k])) >> 11;
@@ -332,103 +253,110 @@ static void update_loadavg(void)
 /* n ticks have passed (usually 1). */
 void timerfd_tick(void);                         /* fdext.c */
 
+/* The clock thread, n ticks later (the interrupt woke the LWPs whose deadline passed). */
 void clock_tick(uint64_t n)
 {
-    bool woke = false;
     timerfd_tick();                              /* (expired timerfds wake their waiters) */
     if (ticks / (5 * TIMER_HZ) != (ticks - n) / (5 * TIMER_HZ))
         update_loadavg();
     if (ticks / TIMER_HZ != (ticks - n) / TIMER_HZ)
         sched_second();
-    for (int i = 0; i < NLWP; i++) {
-        struct lwp *l = &lwp_table[i];
-        if (l->state == LWP_SLEEPING && l->wake_tick && l->wake_tick <= ticks) {
-            l->state = LWP_RUNNABLE;
-            sched_woke(l);
-            woke = true;
-        }
-    }
     /* ITIMER_REAL counts wall-clock ticks */
+    mutex_enter(&pidlock);
     for (int i = 1; i < NPROC; i++) {
         struct proc *p = &proc_table[i];
         if (p->state != PSTATE_RUNNING || !p->itimer_value[0])
             continue;
+        mutex_enter(&p->p_lock);
+        bool fire = false;
         if (p->itimer_value[0] <= n) {
             p->itimer_value[0] = p->itimer_interval[0];
-            signal_send(p, SIGALRM);
-        } else {
+            fire = true;
+        } else if (p->itimer_value[0]) {
             p->itimer_value[0] -= n;
         }
+        mutex_exit(&p->p_lock);
+        if (fire)
+            signal_send(p, SIGALRM);
     }
-    if (woke)
-        smp_kick_idle();
+    mutex_exit(&pidlock);
 }
 
+/* An interval timer (ITIMER_VIRTUAL, ITIMER_PROF) counts a tick: true when it expires (and reloads). */
+static bool itimer_count(struct proc *p, int which)
+{
+    uint64_t v = __atomic_load_n(&p->itimer_value[which], __ATOMIC_RELAXED);
+    while (v && !__atomic_compare_exchange_n(&p->itimer_value[which], &v, v - 1, false, __ATOMIC_RELAXED,
+                                             __ATOMIC_RELAXED))
+        ;
+    if (v != 1)
+        return false;
+    p->itimer_value[which] = p->itimer_interval[which];
+    return true;
+}
+
+/*
+ * This processor's tick (the timer interrupt): its LWP's time, its process's
+ * CPU limit and interval timers (their signals are sent on the LWP's way back
+ * to user mode: ast_deliver), the end of its quantum.
+ */
 void sched_tick(struct trapframe *tf)
 {
     struct cpu *c = mycpu();
     struct lwp *l = c->lwp;
     if (l->is_idle) {
         c->idle_ticks++;
-    } else {
-        c->busy_ticks++;
-        l->ticks++;
-        if ((tf->cs & 3) != 3)
-            l->sticks++;
-        struct proc *pp = l->proc;
-        pp->cpu_total++;
-        uint64_t lim = pp->rlim_cur[SIEOS_RLIMIT_CPU];
-        if (lim != SIEOS_RLIM_INFINITY && pp->cpu_total % TIMER_HZ == 0) {
-            uint64_t secs = pp->cpu_total / TIMER_HZ;
-            if (secs >= pp->rlim_max[SIEOS_RLIMIT_CPU])
-                signal_send(pp, SIGKILL);
-            else if (secs >= lim && (int)secs > pp->cpu_limit_sent) {
-                pp->cpu_limit_sent = secs;
-                signal_send(pp, SIGXCPU);
+        return;
+    }
+    bool user = (tf->cs & 3) == 3;
+    c->busy_ticks++;
+    l->ticks++;
+    if (!user)
+        l->sticks++;
+    struct proc *p = l->proc;
+    if (!l->kthread) {
+        uint32_t ast = 0;
+        uint64_t total = __atomic_add_fetch(&p->cpu_total, 1, __ATOMIC_RELAXED);
+        uint64_t lim = p->rlim_cur[SIEOS_RLIMIT_CPU];
+        if (lim != SIEOS_RLIM_INFINITY && total % TIMER_HZ == 0) {
+            uint64_t secs = total / TIMER_HZ;
+            if (secs >= p->rlim_max[SIEOS_RLIMIT_CPU])
+                ast |= AST_KILL;
+            else if (secs >= lim && (int)secs > p->cpu_limit_sent) {
+                p->cpu_limit_sent = secs;
+                ast |= AST_XCPU;
             }
         }
-        /* ITIMER_VIRTUAL (user time) and ITIMER_PROF (all CPU time) */
-        struct proc *p = l->proc;
-        bool user = (tf->cs & 3) == 3;
-        if (user && p->itimer_value[1] && --p->itimer_value[1] == 0) {
-            p->itimer_value[1] = p->itimer_interval[1];
-            signal_send(p, SIGVTALRM);
-        }
-        if (p->itimer_value[2] && --p->itimer_value[2] == 0) {
-            p->itimer_value[2] = p->itimer_interval[2];
-            signal_send(p, SIGPROF);
-        }
+        if (user && itimer_count(p, 1))
+            ast |= AST_VTALRM;                   /* ITIMER_VIRTUAL: user time */
+        if (itimer_count(p, 2))
+            ast |= AST_PROF;                     /* ITIMER_PROF: all CPU time */
+        if (ast)
+            __atomic_or_fetch(&l->ast, ast, __ATOMIC_RELAXED);
     }
     uint32_t q = sched_quantum(l);
-    if ((tf->cs & 3) == 3 && !l->is_idle && q && ticks - c->slice_start >= q) {
-        sched_expired(l);                /* its quantum is used up */
+    if (user && q && ticks - c->slice_start >= q) {
+        disp_enter();
+        sched_expired(l);                        /* its quantum is used up */
+        disp_exit();
         c->slice_expired = true;
-        schedule();
+        c->need_resched = true;                  /* (on the way back to user mode) */
     }
 }
 
-/* Wake the high-resolution sleepers that are due; returns the earliest deadline left. */
-uint64_t hr_wake(uint64_t now)
+/* The clock's signals for l (the calling LWP), on its way back to user mode. */
+void ast_deliver(struct lwp *l)
 {
-    uint64_t next = ~0UL;
-    bool woke = false;
-    for (int i = 0; i < NLWP; i++) {
-        struct lwp *l = &lwp_table[i];
-        if (!l->wake_ns)
-            continue;
-        if (l->wake_ns <= now) {
-            if (l->state == LWP_SLEEPING) {
-                l->state = LWP_RUNNABLE;
-                sched_woke(l);
-                woke = true;
-            }
-        } else if (l->wake_ns < next) {
-            next = l->wake_ns;
-        }
-    }
-    if (woke)
-        smp_kick_idle();
-    return next;
+    uint32_t a = __atomic_exchange_n(&l->ast, 0, __ATOMIC_RELAXED);
+    struct proc *p = l->proc;
+    if (a & AST_KILL)
+        signal_send(p, SIGKILL);
+    if (a & AST_XCPU)
+        signal_send(p, SIGXCPU);
+    if (a & AST_VTALRM)
+        signal_send(p, SIGVTALRM);
+    if (a & AST_PROF)
+        signal_send(p, SIGPROF);
 }
 
 /* Sleep until hrtime reaches when; -EINTR if a signal arrives first. */
@@ -442,7 +370,7 @@ long proc_sleep_until_ns(uint64_t when)
             l->wake_ns = 0;
             return -EINTR;
         }
-        sleep_on(&sleep_chan);
+        sleepq_block(&l->wake_ns, NULL, true);
     }
     l->wake_ns = 0;
     return 0;
@@ -458,7 +386,7 @@ long proc_sleep_until(uint64_t wake)
             l->wake_tick = 0;
             return -EINTR;
         }
-        sleep_on(&sleep_chan);
+        sleepq_block(&l->wake_tick, NULL, true);
     }
     l->wake_tick = 0;
     return 0;
@@ -639,7 +567,7 @@ static int exec_script(struct lwp *l, struct inode *ip, const char *path, char *
     return r;
 }
 
-static void single_lwp(void);
+static bool single_lwp(void);
 
 static int exec_into(struct lwp *l, const char *path, char *const argv[], char *const envp[])
 {
@@ -795,9 +723,7 @@ static int exec_file(struct lwp *l, const char *path, char *const argv[], char *
     uint64_t v = sp;
     uint64_t w = argc;
     copy_to_space(pml4, v, &w, 8), v += 8;
-    p->argc = argc;
-    p->argv_addr = v;
-    p->envp_addr = v + 8 * (argc + 1);
+    uint64_t argv_addr = v, envp_addr = v + 8 * (argc + 1);
     for (int i = 0; i < argc; i++)
         copy_to_space(pml4, v, &strs[i], 8), v += 8;
     w = 0;
@@ -809,30 +735,35 @@ static int exec_file(struct lwp *l, const char *path, char *const argv[], char *
     kfree(strs);
 
     /* The point of no return: only now do the other LWPs go (a failed exec leaves them be). */
-    if (l == curlwp) {
-        single_lwp();
-        if (l->must_exit) {                          /* another LWP's exec (or an exit) won */
-            vmm_free_space(pml4);
-            return -EINTR;
-        }
+    if (l == curlwp && !single_lwp()) {
+        vmm_free_space(pml4);                        /* another LWP's exec (or an exit) won */
+        return -EINTR;
     }
 
     /* Commit: replace the old address space. */
+    rw_enter(&p->as_lock, RW_WRITER);
     uint64_t old = p->pml4;
     p->pml4 = pml4;
     if (p == current)
         write_cr3(pml4);
     if (old && old != kernel_pml4_phys)
         vm_space_free(p, old);
+    else
+        vm_exec_reset(p);
+    p->heap_start = p->brk = PAGE_ALIGN_UP(max_end);
+    if (in.end)
+        vm_add_area(p, in.start, in.end, SIEOS_PROT_READ | SIEOS_PROT_WRITE | SIEOS_PROT_EXEC, SIEOS_MAP_PRIVATE);
+    rw_exit(&p->as_lock);
 
+    mutex_enter(&p->p_lock);
     p->euid = new_euid;
     p->egid = new_egid;
     p->suid = p->euid;
     p->sgid = p->egid;
     signal_exec_reset(p);
-
-    p->heap_start = p->brk = PAGE_ALIGN_UP(max_end);
-    (void)0;
+    p->argc = argc;
+    p->argv_addr = argv_addr;
+    p->envp_addr = envp_addr;
     const char *base = strrchr(path, '/');
     strlcpy(p->name, base ? base + 1 : path, sizeof(p->name));
     p->psargs[0] = 0;
@@ -841,14 +772,9 @@ static int exec_file(struct lwp *l, const char *path, char *const argv[], char *
             strlcat(p->psargs, " ", sizeof(p->psargs));
         strlcat(p->psargs, argv[i], sizeof(p->psargs));
     }
+    mutex_exit(&p->p_lock);
 
-    /* descriptors marked close-on-exec */
-    for (int i = 0; i < NOFILE; i++)
-        if (p->ofile[i] && (p->fdflags[i] & FD_CLOEXEC))
-            fd_close(p, i);
-    vm_exec_reset(p);
-    if (in.end)
-        vm_add_area(p, in.start, in.end, SIEOS_PROT_READ | SIEOS_PROT_WRITE | SIEOS_PROT_EXEC, SIEOS_MAP_PRIVATE);
+    fd_close_exec(p);                                /* descriptors marked close-on-exec */
 
     struct trapframe *tf = l->tf;
     memset(tf, 0, sizeof(*tf));                      /* every register 0, rdx = 0 (no rtld fini) */
@@ -871,10 +797,11 @@ static int exec_file(struct lwp *l, const char *path, char *const argv[], char *
     return 0;
 }
 
-/* Terminate every other LWP of the calling process and wait until they are gone. */
-static void single_lwp(void)
+/* End every other LWP of the calling process and wait until they are gone; false if it must end itself. */
+static bool single_lwp(void)
 {
     struct proc *p = current;
+    mutex_enter(&p->p_lock);
     while (!curlwp->must_exit) {
         int others = 0;
         for (int i = 0; i < NLWP; i++) {
@@ -887,14 +814,15 @@ static void single_lwp(void)
             }
             others++;
             l->must_exit = true;
-            if (l->state == LWP_SLEEPING || l->state == LWP_STOPPED || l->state == LWP_SUSPENDED ||
-                l->state == LWP_EMBRYO)
-                make_runnable(l);
+            make_runnable(l);
         }
         if (!others)
-            return;
-        sleep_on(&p->nlwp);
+            break;
+        cv_wait(&p->p_lwpcv, &p->p_lock);
     }
+    bool ok = !curlwp->must_exit;
+    mutex_exit(&p->p_lock);
+    return ok;
 }
 
 long proc_exec(const char *path, char *const argv[], char *const envp[])
@@ -904,12 +832,16 @@ long proc_exec(const char *path, char *const argv[], char *const envp[])
 
 int proc_spawn_init(const char *path, const char *cmdline)
 {
+    mutex_enter(&pidlock);
     struct proc *p = alloc_proc();
+    mutex_exit(&pidlock);
     if (!p)
         return -ENOMEM;
     struct lwp *l = lwp_alloc(p);
     if (!l) {
+        mutex_enter(&pidlock);
         proc_free(p);
+        mutex_exit(&pidlock);
         return -ENOMEM;
     }
     p->pml4 = 0;
@@ -949,11 +881,15 @@ int proc_spawn_init(const char *path, const char *cmdline)
             file_close(p->ofile[i]);
         iput(p->cwd);
         iput(p->root);
+        mutex_enter(&pidlock);
         proc_free(p);
+        mutex_exit(&pidlock);
         return r;
     }
+    mutex_enter(&pidlock);
     p->parent = NULL;
     p->state = PSTATE_RUNNING;
+    mutex_exit(&pidlock);
     make_runnable(l);
     return p->pid;
 }
@@ -962,7 +898,7 @@ int proc_spawn_init(const char *path, const char *cmdline)
 /* fork / exit / wait                                                  */
 /* ------------------------------------------------------------------ */
 
-/* The processes of a real user, for RLIMIT_NPROC. */
+/* pidlock held: the processes of a real user, for RLIMIT_NPROC. */
 static uint64_t user_procs(int uid)
 {
     uint64_t n = 0;
@@ -972,31 +908,48 @@ static uint64_t user_procs(int uid)
     return n;
 }
 
+static void fork_fail(struct proc *np)
+{
+    mutex_enter(&pidlock);
+    proc_free(np);
+    mutex_exit(&pidlock);
+}
+
 long proc_fork(int flags)
 {
-    uint64_t lim = current->rlim_cur[SIEOS_RLIMIT_NPROC];
-    if (lim != SIEOS_RLIM_INFINITY && user_procs(current->uid) >= lim)
-        return -EAGAIN;                                /* (enforced for root too: it lowered its own limit) */
-    struct proc *np = alloc_proc();
-    if (!np)
-        return -EAGAIN;
-    strcpy(np->name, current->name);
-    memcpy(np->psargs, current->psargs, sizeof(np->psargs));
-    np->argc = current->argc;
-    np->argv_addr = current->argv_addr;
-    np->envp_addr = current->envp_addr;
-    struct lwp *nl = lwp_alloc(np);
-    if (!nl) {
-        proc_free(np);
-        return -EAGAIN;
-    }
     struct lwp *cl = curlwp;
     struct proc *cp = current;
+    uint64_t lim = cp->rlim_cur[SIEOS_RLIMIT_NPROC];
+    mutex_enter(&pidlock);
+    if (lim != SIEOS_RLIM_INFINITY && user_procs(cp->uid) >= lim) {
+        mutex_exit(&pidlock);
+        return -EAGAIN;                                /* (enforced for root too: it lowered its own limit) */
+    }
+    struct proc *np = alloc_proc();
+    mutex_exit(&pidlock);
+    if (!np)
+        return -EAGAIN;
+    mutex_enter(&cp->p_lock);
+    strcpy(np->name, cp->name);
+    memcpy(np->psargs, cp->psargs, sizeof(np->psargs));
+    np->argc = cp->argc;
+    np->argv_addr = cp->argv_addr;
+    np->envp_addr = cp->envp_addr;
+    mutex_exit(&cp->p_lock);
+    struct lwp *nl = lwp_alloc(np);
+    if (!nl) {
+        fork_fail(np);
+        return -EAGAIN;
+    }
     np->pml4 = vm_space_copy(np, cp);
     if (!np->pml4) {
-        proc_free(np);
+        fork_fail(np);
         return -ENOMEM;
     }
+    rw_enter(&cp->as_lock, RW_READER);
+    np->heap_start = cp->heap_start;
+    np->brk = cp->brk;
+    rw_exit(&cp->as_lock);
     *nl->tf = *cl->tf;
     fpu_save(&cl->fpu);              /* the child starts with the parent's registers */
     nl->fpu = cl->fpu;
@@ -1009,16 +962,11 @@ long proc_fork(int flags)
     nl->tf->rax = 0;                 /* child sees 0 */
     nl->tf->rdx = 0;
     nl->tf->rflags &= ~1UL;          /* ABI v2: success (carry clear) */
-    for (int i = 0; i < NOFILE; i++)
-        if (cp->ofile[i]) {
-            np->ofile[i] = file_dup(cp->ofile[i]);
-            np->fdflags[i] = cp->fdflags[i];
-        }
+    fd_copy_table(np, cp);
+
+    mutex_enter(&cp->p_lock);
     np->cwd = idup(cp->cwd);
     np->root = cp->root ? idup(cp->root) : NULL;
-    np->heap_start = cp->heap_start;
-    np->brk = cp->brk;
-
     np->uid = cp->uid;
     np->euid = cp->euid;
     np->suid = cp->suid;
@@ -1028,24 +976,29 @@ long proc_fork(int flags)
     np->ngroups = cp->ngroups;
     memcpy(np->groups, cp->groups, sizeof(np->groups));
     np->umask = cp->umask;
-    np->pgid = cp->pgid;
-    np->sid = cp->sid;
     memcpy(np->sigact, cp->sigact, sizeof(np->sigact));
     memcpy(np->rlim_cur, cp->rlim_cur, sizeof(np->rlim_cur));
     memcpy(np->rlim_max, cp->rlim_max, sizeof(np->rlim_max));
+    mutex_exit(&cp->p_lock);
     np->nosigchld = flags & 1;       /* SIEOS_FORK_NOSIGCHLD */
     np->waitpid_only = flags & 2;    /* SIEOS_FORK_WAITPID */
-
-    np->parent = cp;
-    np->state = PSTATE_RUNNING;
-    nl->bound = curlwp->bound;       /* processor bindings and affinities are inherited */
-    nl->affinity = curlwp->affinity;
+    nl->bound = cl->bound;           /* processor bindings and affinities are inherited */
+    nl->affinity = cl->affinity;
     nl->exit_word = 0;
     nl->robust_list = 0;
+
+    mutex_enter(&pidlock);
+    np->pgid = cp->pgid;
+    np->sid = cp->sid;
+    np->parent = cp;
+    np->state = PSTATE_RUNNING;
+    int pid = np->pid;
+    mutex_exit(&pidlock);
     make_runnable(nl);
-    return np->pid;
+    return pid;
 }
 
+/* pidlock held */
 bool pgrp_exists_in_session(int pgid, int sid)
 {
     for (int i = 1; i < NPROC; i++) {
@@ -1056,7 +1009,7 @@ bool pgrp_exists_in_session(int pgid, int sid)
     return false;
 }
 
-long proc_setpgid(int pid, int pgid)
+static long setpgid_locked(int pid, int pgid)
 {
     struct proc *p = pid == 0 ? current : proc_find(pid);
     if (!p || p->state != PSTATE_RUNNING)
@@ -1077,18 +1030,32 @@ long proc_setpgid(int pid, int pgid)
     return 0;
 }
 
+long proc_setpgid(int pid, int pgid)
+{
+    mutex_enter(&pidlock);
+    long r = setpgid_locked(pid, pgid);
+    mutex_exit(&pidlock);
+    return r;
+}
+
 long proc_setsid(void)
 {
     struct proc *p = current;
+    mutex_enter(&pidlock);
     for (int i = 1; i < NPROC; i++) {
         struct proc *q = &proc_table[i];
-        if (q->state != PSTATE_UNUSED && q != p && q->pgid == p->pid)
+        if (q->state != PSTATE_UNUSED && q != p && q->pgid == p->pid) {
+            mutex_exit(&pidlock);
             return -EPERM;
+        }
     }
-    if (p->pgid == p->pid)
+    if (p->pgid == p->pid) {
+        mutex_exit(&pidlock);
         return -EPERM;                        /* already a group leader */
+    }
     p->sid = p->pgid = p->pid;
-    return p->sid;
+    mutex_exit(&pidlock);
+    return p->pid;
 }
 
 /* The last LWP of a process is gone: release its resources, become a zombie. */
@@ -1096,19 +1063,21 @@ static void proc_teardown(struct proc *p)
 {
     ipc_proc_exit(p);
     signal_purge(p, NULL, 0);
-    for (int i = 0; i < NOFILE; i++)
-        if (p->ofile[i])
-            fd_close(p, i);
-    iput(p->cwd);
-    p->cwd = NULL;
-    if (p->root)
-        iput(p->root);
-    p->root = NULL;
+    fd_close_all(p);
+    mutex_enter(&p->p_lock);
+    struct inode *cwd = p->cwd, *root = p->root;
+    p->cwd = p->root = NULL;
+    p->itimer_value[0] = p->itimer_value[1] = p->itimer_value[2] = 0;
+    mutex_exit(&p->p_lock);
+    iput(cwd);
+    if (root)
+        iput(root);
     fb_release_owner(p->pid);
 
     /* A dying session leader hangs up its terminal and its session. */
     if (p->sid == p->pid) {
         tty_session_exit(p->sid);
+        mutex_enter(&pidlock);
         for (int i = 1; i < NPROC; i++) {
             struct proc *q = &proc_table[i];
             if (q != p && q->state == PSTATE_RUNNING && q->sid == p->sid) {
@@ -1116,27 +1085,30 @@ static void proc_teardown(struct proc *p)
                 signal_send(q, SIGCONT);
             }
         }
+        mutex_exit(&pidlock);
     }
 
+    /* The address space goes before freeing it: writing its shared mappings
+     * back may sleep, and a dispatch meanwhile loads p->pml4 into CR3. */
+    rw_enter(&p->as_lock, RW_WRITER);
+    uint64_t pml4 = p->pml4;
+    p->pml4 = 0;
+    write_cr3(kernel_pml4_phys);
+    vm_space_free(p, pml4);
+    rw_exit(&p->as_lock);
+
+    /* Its children go to init; it becomes a zombie, for its parent to wait for. */
+    mutex_enter(&pidlock);
     struct proc *init = proc_find(1);
     for (int i = 1; i < NPROC; i++) {
         struct proc *c = &proc_table[i];
         if (c->state != PSTATE_UNUSED && c->parent == p) {
             c->parent = init;
             if (c->state == PSTATE_ZOMBIE && init)
-                wakeup(init);
+                cv_broadcast(&init->p_cv);
         }
     }
-
-    /* The address space goes before freeing it: writing its shared mappings
-     * back may sleep, and a dispatch meanwhile loads p->pml4 into CR3. */
-    uint64_t pml4 = p->pml4;
-    p->pml4 = 0;
-    write_cr3(kernel_pml4_phys);
-    vm_space_free(p, pml4);
-    p->itimer_value[0] = p->itimer_value[1] = p->itimer_value[2] = 0;
     p->state = PSTATE_ZOMBIE;
-    poll_wakeup();                               /* (its pidfds are readable now) */
     if (p->parent) {
         if (!p->nosigchld) {
             struct ksiginfo info = { 0 };
@@ -1147,8 +1119,10 @@ static void proc_teardown(struct proc *p)
             info.uid = p->uid;
             signal_send_info(p->parent, SIGCHLD, &info);
         }
-        wakeup(p->parent);
+        cv_broadcast(&p->parent->p_cv);
     }
+    mutex_exit(&pidlock);
+    poll_wakeup();                               /* (its pidfds are readable now) */
 }
 
 /* The calling LWP ends; the last one ends the process. */
@@ -1156,26 +1130,38 @@ void lwp_exit_self(void)
 {
     struct lwp *l = curlwp;
     struct proc *p = l->proc;
-    if (l->is_idle)
-        panic("idle LWP tried to exit");
+    if (l->is_idle || l->kthread)
+        panic("LWP %s tried to exit", l->name);
     lwp_exit_word(l);
     signal_purge(p, l, 0);
+    fd_release_held();                   /* (the descriptors this call was using) */
+    mutex_enter(&p->p_lock);
     p->ticks += l->ticks;
     p->ru.sticks += l->sticks;
     p->ru.nvcsw += l->nvcsw;
     p->ru.nivcsw += l->nivcsw;
     p->ru.minflt += l->minflt;
-    p->nlwp--;
-    if (p->nlwp == 0) {
+    reap_detached(p);
+    bool last = --p->nlwp == 0;
+    if (!last) {
+        disp_enter();
+        l->state = LWP_ZOMBIE;           /* only now: a wake-up must not make us runnable again */
+        disp_exit();
+        cv_broadcast(&p->p_lwpcv);       /* lwp_wait, exec (they free us once we have switched away) */
+    }
+    mutex_exit(&p->p_lock);
+    if (last) {
         if (p->pid == 1)
             panic("init exited with status %x", p->exit_status);
+        /* The process becomes a zombie: from then on its parent may free it, and its LWPs
+         * (this one once it has switched away): nothing of it is touched after. */
         proc_teardown(p);                /* (closing files may sleep in disk I/O: still running) */
-    } else {
-        wakeup(&p->nlwp);                /* lwp_wait, exec (they run once we have switched away) */
+        disp_enter();
+        l->state = LWP_ZOMBIE;
+        disp_exit();
     }
-    l->state = LWP_ZOMBIE;               /* only now: a wake-up must not make us runnable again */
-    reap_detached();
-    schedule();
+    disp_enter();
+    swtch();
     panic("exited LWP %d/%d was scheduled", p->pid, l->lwpid);
 }
 
@@ -1184,6 +1170,7 @@ void proc_exit(int status)
     struct proc *p = current;
     if (p->pid == 1)
         panic("init exited with status %x", status);
+    mutex_enter(&p->p_lock);
     if (!p->exiting) {
         p->exiting = true;
         p->exit_status = status;
@@ -1192,11 +1179,10 @@ void proc_exit(int status)
             if (l->state == LWP_UNUSED || l->state == LWP_ZOMBIE || l->proc != p || l == curlwp)
                 continue;
             l->must_exit = true;
-            if (l->state == LWP_SLEEPING || l->state == LWP_STOPPED || l->state == LWP_SUSPENDED ||
-                l->state == LWP_EMBRYO)
-                make_runnable(l);
+            make_runnable(l);
         }
     }
+    mutex_exit(&p->p_lock);
     lwp_exit_self();
 }
 
@@ -1222,11 +1208,13 @@ long proc_waitid(int idtype, long id, int options, struct ksiginfo *info, int *s
         return -EINVAL;
     if (idtype != SIEOS_P_PID && idtype != SIEOS_P_PGID && idtype != SIEOS_P_SID && idtype != SIEOS_P_ALL)
         return -EINVAL;
+    struct proc *me = current;
+    mutex_enter(&pidlock);
     for (;;) {
         bool have_kids = false;
         for (int i = 1; i < NPROC; i++) {
             struct proc *c = &proc_table[i];
-            if (c->state == PSTATE_UNUSED || c->state == PSTATE_EMBRYO || c->parent != current)
+            if (c->state == PSTATE_UNUSED || c->state == PSTATE_EMBRYO || c->parent != me)
                 continue;
             if (!wait_match(c, idtype, id))
                 continue;
@@ -1246,22 +1234,28 @@ long proc_waitid(int idtype, long id, int options, struct ksiginfo *info, int *s
                 }
                 int cpid = c->pid;
                 if (!(options & SIEOS_WNOWAIT)) {
-                    current->child_ticks += c->ticks + c->child_ticks;
-                    current->cru.sticks += c->ru.sticks + c->cru.sticks;
-                    current->cru.nvcsw += c->ru.nvcsw + c->cru.nvcsw;
-                    current->cru.nivcsw += c->ru.nivcsw + c->cru.nivcsw;
-                    current->cru.minflt += c->ru.minflt + c->cru.minflt;
+                    mutex_enter(&me->p_lock);
+                    me->child_ticks += c->ticks + c->child_ticks;
+                    me->cru.sticks += c->ru.sticks + c->cru.sticks;
+                    me->cru.nvcsw += c->ru.nvcsw + c->cru.nvcsw;
+                    me->cru.nivcsw += c->ru.nivcsw + c->cru.nivcsw;
+                    me->cru.minflt += c->ru.minflt + c->cru.minflt;
+                    mutex_exit(&me->p_lock);
                     proc_free(c);
                 }
+                mutex_exit(&pidlock);
                 return cpid;
             }
+            mutex_enter(&c->p_lock);
             if ((options & SIEOS_WSTOPPED) && c->state == PSTATE_RUNNING && c->stopped && !c->stop_reported) {
                 if (!(options & SIEOS_WNOWAIT))
                     c->stop_reported = true;
                 info->code = SIEOS_CLD_STOPPED;
                 info->status = c->stop_sig;
                 *status_word = 0x7F | (c->stop_sig << 8);
-                return c->pid;
+                mutex_exit(&c->p_lock);
+                mutex_exit(&pidlock);
+                return info->pid;
             }
             if ((options & SIEOS_WCONTINUED) && c->cont_pending) {
                 if (!(options & SIEOS_WNOWAIT))
@@ -1269,32 +1263,44 @@ long proc_waitid(int idtype, long id, int options, struct ksiginfo *info, int *s
                 info->code = SIEOS_CLD_CONTINUED;
                 info->status = SIGCONT;
                 *status_word = 0xFFFF;
-                return c->pid;
+                mutex_exit(&c->p_lock);
+                mutex_exit(&pidlock);
+                return info->pid;
             }
+            mutex_exit(&c->p_lock);
         }
-        if (!have_kids)
+        if (!have_kids) {
+            mutex_exit(&pidlock);
             return -ECHILD;
+        }
         if (options & SIEOS_WNOHANG) {
+            mutex_exit(&pidlock);
             memset(info, 0, sizeof(*info));
             return 0;
         }
-        if (signal_pending(current))
+        if (!cv_wait_sig(&me->p_cv, &pidlock)) {
+            mutex_exit(&pidlock);
             return -ERESTART;
-        sleep_on(current);
+        }
     }
 }
 
 bool proc_table_uses(struct fs *fs)
 {
-    for (int i = 0; i < NPROC; i++) {
+    bool used = false;
+    mutex_enter(&pidlock);
+    for (int i = 0; i < NPROC && !used; i++) {
         struct proc *p = &proc_table[i];
         if (p->state == PSTATE_UNUSED)
             continue;
         if ((p->cwd && p->cwd->fs == fs) || (p->root && p->root->fs == fs))
-            return true;
-        for (struct vm_area *a = p->areas; a; a = a->next)
+            used = true;
+        vm_space_lock(p);
+        for (struct vm_area *a = p->areas; a && !used; a = a->next)
             if (a->ip && a->ip->fs == fs)
-                return true;
+                used = true;
+        vm_space_unlock(p);
     }
-    return false;
+    mutex_exit(&pidlock);
+    return used;
 }

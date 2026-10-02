@@ -16,6 +16,11 @@
  * node type, the pid and the LWP id or descriptor number.  Records are
  * generated on every read.
  *
+ * Locking: a process is looked at under pidlock (it cannot go meanwhile),
+ * its descriptors under its p_fdlock; records and listings are copied out
+ * of the process table first, and what follows (getcwd's lookups, the
+ * caller's buffer) runs without pidlock.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -68,6 +73,7 @@ static int parse_num(const char *s, size_t len)
     return n;
 }
 
+/* pidlock held */
 static struct proc *pfind(int pid)
 {
     struct proc *p = proc_find(pid);
@@ -118,7 +124,7 @@ static void fill_lwpsinfo(struct proc *p, struct lwp *l, sieos_lwpsinfo_t *li)
     }
     li->pr_state = st;
     li->pr_sname = sn;
-    li->pr_wchan = l->state == LWP_SLEEPING ? (uint64_t)l->chan : 0;
+    li->pr_wchan = l->state == LWP_SLEEPING ? (uint64_t)l->wchan : 0;
     if (l->state == LWP_STOPPED || l->state == LWP_SUSPENDED)
         li->pr_flag |= SIEOS_PR_STOPPED;
     li->pr_pri = sched_gpri(l);
@@ -248,36 +254,62 @@ static void fill_usage(struct proc *p, sieos_prusage_t *u)
 /* The target of a symbolic-link node. */
 static long link_target(struct inode *ip, char *buf, size_t size)
 {
-    struct proc *p = PTYPE(ip) == PN_SELF ? current : pfind(PPID(ip));
-    if (!p)
-        return -ENOENT;
-    switch (PTYPE(ip)) {
-    case PN_SELF:
-        return snprintf(buf, size, "%d", p->pid);
-    case PN_CWD:
-    case PN_ROOTLNK: {
-        struct inode *d = PTYPE(ip) == PN_CWD ? p->cwd : p->root;
-        if (!d)
-            return -ENOENT;
-        long r = vfs_dir_path(d, buf, size);
-        return r < 0 ? r : r - 1;
-    }
-    case PN_FD: {
+    if (PTYPE(ip) == PN_SELF)
+        return snprintf(buf, size, "%d", current->pid);
+    struct inode *d = NULL;
+    struct file *f = NULL;
+    mutex_enter(&pidlock);
+    struct proc *p = pfind(PPID(ip));
+    if (p) {
         int fd = PSUB(ip);
-        struct file *f = fd < NOFILE ? p->ofile[fd] : NULL;
-        if (!f)
-            return -ENOENT;
-        return file_path(f, buf, size);
+        if (PTYPE(ip) == PN_FD) {
+            mutex_enter(&p->p_fdlock);
+            if (fd >= 0 && fd < NOFILE && p->ofile[fd])
+                f = file_dup(p->ofile[fd]);
+            mutex_exit(&p->p_fdlock);
+        } else {
+            mutex_enter(&p->p_lock);
+            d = PTYPE(ip) == PN_CWD ? p->cwd : p->root;
+            if (d)
+                idup(d);
+            mutex_exit(&p->p_lock);
+        }
     }
+    mutex_exit(&pidlock);
+    long r = -ENOENT;
+    if (d) {                                     /* (getcwd's lookups: without pidlock) */
+        r = vfs_dir_path(d, buf, size);
+        r = r < 0 ? r : r - 1;
+        iput(d);
+    } else if (f) {
+        r = file_path(f, buf, size);
+        file_close(f);
+    } else if (p && PTYPE(ip) != PN_FD && PTYPE(ip) != PN_CWD && PTYPE(ip) != PN_ROOTLNK) {
+        r = -EINVAL;
     }
-    return -EINVAL;
+    return r;
 }
 
 /* ---------------- nodes ---------------- */
 
-static struct inode *pnode(struct fs *fs, int type, struct proc *p, int sub, uint16_t mode)
+/* What a node takes from its process (read under pidlock). */
+struct pinfo {
+    int pid, uid, gid;
+    uint64_t start_tick;
+};
+
+static void pinfo_of(struct proc *p, struct pinfo *pi)
 {
-    int uid = p ? p->euid : 0, gid = p ? p->egid : 0;
+    pi->pid = p->pid;
+    pi->uid = p->euid;
+    pi->gid = p->egid;
+    pi->start_tick = p->start_tick;
+}
+
+/* A node (pidlock not held: a link's size is its target's length). */
+static struct inode *pnode(struct fs *fs, int type, const struct pinfo *p, int sub, uint16_t mode)
+{
+    int uid = p ? p->uid : 0, gid = p ? p->gid : 0;
     struct inode *ip = vfs_new_inode(fs, pino(type, p ? p->pid : 0, sub), mode, uid, gid);
     if (!ip)
         return NULL;
@@ -339,68 +371,120 @@ static int procfs_lookup(struct inode *dir, const char *name, size_t len, struct
             *out = pnode(fs, PN_MNTTAB, NULL, 0, S_IFREG | 0444);
             return *out ? 0 : -ENOMEM;
         }
-        struct proc *p = pfind(parse_num(name, len));
-        if (!p)
-            return -ENOENT;
-        *out = pnode(fs, PN_PID, p, 0, S_IFDIR | 0555);
-        return *out ? 0 : -ENOMEM;
     }
-    struct proc *p = pfind(PPID(dir));
-    if (!p)
-        return -ENOENT;
-    if (dotdot) {
+    /* the process, and what the name is in it */
+    struct pinfo pi;
+    int ntype = 0, nsub = 0;
+    uint16_t nmode = 0;
+    int r = 0;
+    mutex_enter(&pidlock);
+    struct proc *p = pfind(type == PN_ROOT ? parse_num(name, len) : PPID(dir));
+    if (!p) {
+        r = -ENOENT;
+    } else if (type == PN_ROOT) {
+        ntype = PN_PID, nmode = S_IFDIR | 0555;
+    } else if (dotdot) {
         if (type == PN_PID)
-            *out = idup(fs->root);
+            ntype = PN_ROOT;
         else if (type == PN_LWP)
-            *out = pnode(fs, PN_LWPDIR, p, 0, S_IFDIR | 0555);
+            ntype = PN_LWPDIR, nmode = S_IFDIR | 0555;
         else
-            *out = pnode(fs, PN_PID, p, 0, S_IFDIR | 0555);
-        return *out ? 0 : -ENOMEM;
+            ntype = PN_PID, nmode = S_IFDIR | 0555;
+    } else {
+        switch (type) {
+        case PN_PID:
+            r = -ENOENT;
+            for (int i = 0; i < NPID_ENTRIES; i++)
+                if (strlen(pid_entries[i].name) == len && !memcmp(pid_entries[i].name, name, len)) {
+                    ntype = pid_entries[i].type, nmode = pid_entries[i].mode;
+                    r = 0;
+                }
+            break;
+        case PN_LWPDIR: {
+            mutex_enter(&p->p_lock);
+            struct lwp *l = lwp_find(p, parse_num(name, len));
+            if (l)
+                ntype = PN_LWP, nsub = l->lwpid, nmode = S_IFDIR | 0555;
+            else
+                r = -ENOENT;
+            mutex_exit(&p->p_lock);
+            break;
+        }
+        case PN_LWP:
+            mutex_enter(&p->p_lock);
+            if (len != 8 || memcmp(name, "lwpsinfo", 8) || !lwp_find(p, PSUB(dir)))
+                r = -ENOENT;
+            else
+                ntype = PN_LWPSINFO, nsub = PSUB(dir), nmode = S_IFREG | 0444;
+            mutex_exit(&p->p_lock);
+            break;
+        case PN_FDDIR: {
+            int fd = parse_num(name, len);
+            mutex_enter(&p->p_fdlock);
+            if (fd < 0 || fd >= NOFILE || !p->ofile[fd])
+                r = -ENOENT;
+            else
+                ntype = PN_FD, nsub = fd, nmode = S_IFLNK | 0777;
+            mutex_exit(&p->p_fdlock);
+            break;
+        }
+        default:
+            r = -ENOTDIR;
+        }
     }
-    switch (type) {
-    case PN_PID:
-        for (int i = 0; i < NPID_ENTRIES; i++)
-            if (strlen(pid_entries[i].name) == len && !memcmp(pid_entries[i].name, name, len)) {
-                *out = pnode(fs, pid_entries[i].type, p, 0, pid_entries[i].mode);
-                return *out ? 0 : -ENOMEM;
-            }
-        return -ENOENT;
-    case PN_LWPDIR: {
-        struct lwp *l = lwp_find(p, parse_num(name, len));
-        if (!l)
-            return -ENOENT;
-        *out = pnode(fs, PN_LWP, p, l->lwpid, S_IFDIR | 0555);
-        return *out ? 0 : -ENOMEM;
+    if (p)
+        pinfo_of(p, &pi);
+    mutex_exit(&pidlock);
+    if (r < 0)
+        return r;
+    if (ntype == PN_ROOT) {
+        *out = idup(fs->root);
+        return 0;
     }
-    case PN_LWP:
-        if (len != 8 || memcmp(name, "lwpsinfo", 8) || !lwp_find(p, PSUB(dir)))
-            return -ENOENT;
-        *out = pnode(fs, PN_LWPSINFO, p, PSUB(dir), S_IFREG | 0444);
-        return *out ? 0 : -ENOMEM;
-    case PN_FDDIR: {
-        int fd = parse_num(name, len);
-        if (fd < 0 || fd >= NOFILE || !p->ofile[fd])
-            return -ENOENT;
-        *out = pnode(fs, PN_FD, p, fd, S_IFLNK | 0777);
-        return *out ? 0 : -ENOMEM;
-    }
-    }
-    return -ENOTDIR;
+    *out = pnode(fs, ntype, &pi, nsub, nmode);
+    return *out ? 0 : -ENOMEM;
 }
 
 static int procfs_readdir(struct inode *dir, uint64_t *off, filldir_t fill, void *arg)
 {
     int type = PTYPE(dir);
-    struct proc *p = type == PN_ROOT ? NULL : pfind(PPID(dir));
-    if (type != PN_ROOT && !p)
-        return -ENOENT;
     char name[16];
     uint64_t pos = 0;
+    /* the entries' numbers (pids, LWP ids, descriptors; -1: none at that position), taken under pidlock */
+    int nids = type == PN_ROOT ? NPROC : type == PN_LWPDIR ? NLWP : type == PN_FDDIR ? NOFILE : 0;
+    int *ids = nids ? kmalloc(nids * sizeof(int)) : NULL;
+    if (nids && !ids)
+        return -ENOMEM;
+    int pid = 0;
+    mutex_enter(&pidlock);
+    struct proc *p = type == PN_ROOT ? NULL : pfind(PPID(dir));
+    if (type != PN_ROOT && !p) {
+        mutex_exit(&pidlock);
+        kfree(ids);
+        return -ENOENT;
+    }
+    if (p)
+        pid = p->pid;
+    for (int i = 0; i < nids; i++) {
+        ids[i] = -1;
+        if (type == PN_ROOT) {
+            struct proc *q = &proc_table[i];
+            if (i && q->state != PSTATE_UNUSED && q->state != PSTATE_EMBRYO)
+                ids[i] = q->pid;
+        } else if (type == PN_LWPDIR) {
+            struct lwp *l = &lwp_table[i];
+            if (l->proc == p && l->state != LWP_UNUSED)
+                ids[i] = l->lwpid;
+        } else if (p->ofile[i]) {                    /* (a snapshot: racy reads of the table are harmless) */
+            ids[i] = i;
+        }
+    }
+    mutex_exit(&pidlock);
 #define EMIT(nm, ino, dt)                                                   \
     do {                                                                    \
         if (pos >= *off) {                                                  \
             if (fill(arg, nm, strlen(nm), ino, dt, pos + 1))                \
-                return 0;                                                   \
+                goto done;                                                  \
             *off = pos + 1;                                                 \
         }                                                                   \
         pos++;                                                              \
@@ -412,50 +496,50 @@ static int procfs_readdir(struct inode *dir, uint64_t *off, filldir_t fill, void
         EMIT("self", pino(PN_SELF, 0, 0), DT_LNK);
         EMIT("mnttab", pino(PN_MNTTAB, 0, 0), DT_REG);
         EMIT("msgbuf", pino(PN_MSGBUF, 0, 0), DT_REG);
-        for (int i = 1; i < NPROC; i++) {
-            struct proc *q = &proc_table[i];
-            if (q->state == PSTATE_UNUSED || q->state == PSTATE_EMBRYO) {
+        for (int i = 1; i < nids; i++) {
+            if (ids[i] < 0) {
                 pos++;
                 continue;
             }
-            snprintf(name, sizeof(name), "%d", q->pid);
-            EMIT(name, pino(PN_PID, q->pid, 0), DT_DIR);
+            snprintf(name, sizeof(name), "%d", ids[i]);
+            EMIT(name, pino(PN_PID, ids[i], 0), DT_DIR);
         }
         break;
     case PN_PID:
         for (int i = 0; i < NPID_ENTRIES; i++) {
             uint16_t m = pid_entries[i].mode;
-            EMIT(pid_entries[i].name, pino(pid_entries[i].type, p->pid, 0),
+            EMIT(pid_entries[i].name, pino(pid_entries[i].type, pid, 0),
                  S_ISDIR(m) ? DT_DIR : S_ISLNK(m) ? DT_LNK : DT_REG);
         }
         break;
     case PN_LWPDIR:
-        for (int i = 0; i < NLWP; i++) {
-            struct lwp *l = &lwp_table[i];
-            if (l->proc != p || l->state == LWP_UNUSED) {
+        for (int i = 0; i < nids; i++) {
+            if (ids[i] < 0) {
                 pos++;
                 continue;
             }
-            snprintf(name, sizeof(name), "%d", l->lwpid);
-            EMIT(name, pino(PN_LWP, p->pid, l->lwpid), DT_DIR);
+            snprintf(name, sizeof(name), "%d", ids[i]);
+            EMIT(name, pino(PN_LWP, pid, ids[i]), DT_DIR);
         }
         break;
     case PN_LWP:
-        EMIT("lwpsinfo", pino(PN_LWPSINFO, p->pid, PSUB(dir)), DT_REG);
+        EMIT("lwpsinfo", pino(PN_LWPSINFO, pid, PSUB(dir)), DT_REG);
         break;
     case PN_FDDIR:
-        for (int fd = 0; fd < NOFILE; fd++) {
-            if (!p->ofile[fd]) {
+        for (int fd = 0; fd < nids; fd++) {
+            if (ids[fd] < 0) {
                 pos++;
                 continue;
             }
             snprintf(name, sizeof(name), "%d", fd);
-            EMIT(name, pino(PN_FD, p->pid, fd), DT_LNK);
+            EMIT(name, pino(PN_FD, pid, fd), DT_LNK);
         }
         break;
     }
 #undef EMIT
     *off = pos;
+done:
+    kfree(ids);
     return 0;
 }
 
@@ -490,25 +574,35 @@ static long procfs_read(struct inode *ip, void *dst, uint64_t off, size_t n)
             return r;
         size = MIN((size_t)r, sizeof(rec.path) - 1);
     } else {
+        mutex_enter(&pidlock);                       /* (the record: from the table, then out) */
         struct proc *p = pfind(PPID(ip));
-        if (!p)
-            return -ENOENT;
-        switch (type) {
-        case PN_PSINFO: procfs_psinfo(p, &rec.ps); size = sizeof(rec.ps); break;
-        case PN_STATUS: procfs_pstatus(p, &rec.st); size = sizeof(rec.st); break;
-        case PN_CRED:   fill_cred(p, &rec.cr);   size = sizeof(rec.cr); break;
-        case PN_USAGE:  fill_usage(p, &rec.us);  size = sizeof(rec.us); break;
-        case PN_LWPSINFO: {
-            struct lwp *l = lwp_find(p, PSUB(ip));
-            if (!l)
-                return -ENOENT;
-            fill_lwpsinfo(p, l, &rec.li);
-            size = sizeof(rec.li);
-            break;
+        long r = 0;
+        if (!p) {
+            r = -ENOENT;
+        } else {
+            mutex_enter(&p->p_lock);
+            switch (type) {
+            case PN_PSINFO: procfs_psinfo(p, &rec.ps); size = sizeof(rec.ps); break;
+            case PN_STATUS: procfs_pstatus(p, &rec.st); size = sizeof(rec.st); break;
+            case PN_CRED:   fill_cred(p, &rec.cr);   size = sizeof(rec.cr); break;
+            case PN_USAGE:  fill_usage(p, &rec.us);  size = sizeof(rec.us); break;
+            case PN_LWPSINFO: {
+                struct lwp *l = lwp_find(p, PSUB(ip));
+                if (!l)
+                    r = -ENOENT;
+                else
+                    fill_lwpsinfo(p, l, &rec.li);
+                size = sizeof(rec.li);
+                break;
+            }
+            default:
+                r = -EISDIR;
+            }
+            mutex_exit(&p->p_lock);
         }
-        default:
-            return -EISDIR;
-        }
+        mutex_exit(&pidlock);
+        if (r < 0)
+            return r;
     }
     if (off >= size)
         return 0;
@@ -549,6 +643,7 @@ struct fs *procfs_create(void)
     struct fs *fs = kzalloc(sizeof(*fs));
     if (!fs)
         return NULL;
+    fs_lock_init(fs);
     fs->ops = &procfs_ops;
     fs->rdonly = true;
     fs->dev_major = 21;

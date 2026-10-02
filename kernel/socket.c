@@ -6,6 +6,9 @@
  * too, with IPv4 addresses mapped (::ffff:a.b.c.d).  Unbound AF_INET
  * sockets have the local address 0.0.0.0 (mapped), AF_INET6 ones ::.
  *
+ * Everything here runs under net_lock (net.c): the system calls take it
+ * (sock2.c), and so do the file operations below.
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -57,8 +60,17 @@ static uint16_t next_ephemeral = EPHEMERAL_LO;
 
 void socket_wake(struct socket *s)
 {
-    wakeup(s);
+    net_wakeup(s);
     poll_wakeup();
+}
+
+/* A descriptor of s was closed (a thread sleeping in accept on it sees it gone: under net_lock,
+ * so that the wake-up falls before its test or after it sleeps). */
+void socket_fd_closed(struct socket *s)
+{
+    mutex_enter(&net_lock);
+    net_wakeup(s);
+    mutex_exit(&net_lock);
 }
 
 struct socket *socket_alloc(int type, int proto)
@@ -128,7 +140,17 @@ static void free_queue(struct socket *s)
     s->qbytes = 0;
 }
 
+static void close_locked(struct socket *s);
+
 void socket_close(struct socket *s)
+{
+    mutex_enter(&net_lock);
+    close_locked(s);
+    mutex_exit(&net_lock);
+}
+
+/* net_lock held */
+static void close_locked(struct socket *s)
 {
     if (s->tcb) {
         tcp_set_owner(s->tcb, NULL);
@@ -282,7 +304,7 @@ static long dgram_recv(struct socket *s, void *buf, size_t n, int flags, naddr_t
         if (signal_pending(current))
             return -EINTR;
         curlwp->wake_tick = deadline;
-        sleep_on(s);
+        net_sleep(s);
         curlwp->wake_tick = 0;
     }
     struct dgram *d = s->qh;
@@ -305,7 +327,7 @@ static long dgram_recv(struct socket *s, void *buf, size_t n, int flags, naddr_t
     return c;
 }
 
-long socket_read(struct socket *s, void *buf, size_t n, bool nonblock)
+static long read_locked(struct socket *s, void *buf, size_t n, bool nonblock)
 {
     int fl = nonblock ? MSG_DONTWAIT : 0;
     if (s->type == SOCK_STREAM) {
@@ -316,7 +338,15 @@ long socket_read(struct socket *s, void *buf, size_t n, bool nonblock)
     return dgram_recv(s, buf, n, fl, NULL, NULL);
 }
 
-long socket_write(struct socket *s, const void *buf, size_t n, bool nonblock)
+long socket_read(struct socket *s, void *buf, size_t n, bool nonblock)
+{
+    mutex_enter(&net_lock);
+    long r = read_locked(s, buf, n, nonblock);
+    mutex_exit(&net_lock);
+    return r;
+}
+
+static long write_locked(struct socket *s, const void *buf, size_t n, bool nonblock)
 {
     if (s->type == SOCK_STREAM) {
         if (!s->tcb)
@@ -328,6 +358,14 @@ long socket_write(struct socket *s, const void *buf, size_t n, bool nonblock)
     if (s->type == SOCK_RAW)
         return raw_send(s, &s->rip, buf, n);
     return udp_send(s, &s->rip, s->rport, buf, n);
+}
+
+long socket_write(struct socket *s, const void *buf, size_t n, bool nonblock)
+{
+    mutex_enter(&net_lock);
+    long r = write_locked(s, buf, n, nonblock);
+    mutex_exit(&net_lock);
+    return r;
 }
 
 bool socket_readable(struct socket *s)
@@ -366,10 +404,8 @@ static bool uok(const void *p, size_t n, bool w)
 
 static struct socket *sockfd(int fd, struct file **fp)
 {
-    if (fd < 0 || fd >= NOFILE || !current->ofile[fd])
-        return NULL;
-    struct file *f = current->ofile[fd];
-    if (f->type != FD_SOCKET)
+    struct file *f = fd_file(fd);
+    if (!f || f->type != FD_SOCKET)
         return NULL;
     if (fp)
         *fp = f;
@@ -474,7 +510,7 @@ static long sys_socket(int domain, int type, int proto)
         s->lip = na_v4(0);
     int fd = fd_install(s);
     if (fd < 0)
-        socket_close(s);
+        close_locked(s);
     return fd;
 }
 
@@ -549,13 +585,13 @@ static long sys_accept(int fd, void *ua, unsigned int *ulen)
         return -EINVAL;
     struct tcb *c;
     while (!(c = tcp_accept_ready(s->tcb))) {
-        if (current->ofile[fd] != f)                 /* closed by another thread while we slept */
+        if (!fd_still(fd, f))                        /* closed by another thread while we slept */
             return -EBADF;
         if (f->flags & O_NONBLOCK_K)
             return -EAGAIN;
         if (signal_pending(current))
             return -ERESTART;
-        sleep_on(s);
+        net_sleep(s);
     }
     struct socket *ns = socket_alloc(SOCK_STREAM, IPPROTO_TCP);
     if (!ns) {
@@ -569,7 +605,7 @@ static long sys_accept(int fd, void *ua, unsigned int *ulen)
     ns->bound = ns->connected = true;
     int nfd = fd_install(ns);
     if (nfd < 0) {
-        socket_close(ns);
+        close_locked(ns);
         return nfd;
     }
     put_addr(ns->family, ua, ulen, &ns->rip, ns->rport);
@@ -622,7 +658,7 @@ static long sys_connect(int fd, const void *ua, unsigned int len)
     if (!s->tcb)
         return -ENOBUFS;
     tcp_set_owner(s->tcb, s);
-    r = tcp_connect(s->tcb, &lip, s->lport, &ip, port, current->ofile[fd]->flags & O_NONBLOCK_K);
+    r = tcp_connect(s->tcb, &lip, s->lport, &ip, port, fd_file(fd)->flags & O_NONBLOCK_K);
     if (r < 0 && r != -EINPROGRESS) {
         tcp_set_owner(s->tcb, NULL);
         tcp_abort(s->tcb);
@@ -650,7 +686,7 @@ static long sys_sendto(int fd, const void *buf, size_t n, int flags, const void 
         return -EOPNOTSUPP;
     if (s->type == SOCK_STREAM || !ua)
         return s->type == SOCK_STREAM && s->tcb ? tcp_send(s->tcb, buf, n, flags)
-                                                : socket_write(s, buf, n, flags & MSG_DONTWAIT);
+                                                : write_locked(s, buf, n, flags & MSG_DONTWAIT);
     naddr_t ip;
     uint16_t port;
     int r = get_addr(s, ua, alen, &ip, &port);
@@ -746,7 +782,7 @@ long socket_kopt(int fd, int which, bool set, int *val)
         return -EBADF;
     struct socket *s = sockfd(fd, NULL);
     if (!s)
-        return current->ofile[fd] ? -ENOTSOCK : -EBADF;
+        return fd_file(fd) ? -ENOTSOCK : -EBADF;
     switch (which) {
     case 0:
         *val = s->type;
@@ -952,6 +988,7 @@ long socket_netinfo6(struct sieos_netinfo6 *u, long idx)
     return ifp ? 0 : -ENODEV;
 }
 
+/* net_lock held (sock2.c) */
 long net_syscall(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
 {
     switch (nr) {

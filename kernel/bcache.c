@@ -7,6 +7,11 @@
  * Programs and shared libraries are read again at every exec and mmap, so
  * the cache has to hold the working set.
  *
+ * Locking: bc_lock protects the table (the hash, the LRU list, references,
+ * the valid and reading flags); it is not held across disk I/O: a reader of
+ * a block being read waits on bc_cv.  A buffer's data belongs to whoever
+ * holds a reference (the file system on the device, under its own lock).
+ *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
@@ -25,6 +30,8 @@ static size_t nbuf;
 static struct buf *hash[NHASH];
 static struct buf lru;                      /* list head: lru.next is the most recent */
 static uint32_t dev_bsize[NBLKDEV];
+static kmutex_t bc_lock;
+static kcondvar_t bc_cv;
 
 static unsigned hkey(int dev, uint64_t blk)
 {
@@ -82,7 +89,7 @@ int bcache_set_bsize(int dev, uint32_t bs)
     return 0;
 }
 
-/* The buffer of (dev, blk): valid, or being read (disk I/O sleeps). */
+/* bc_lock held: the buffer of (dev, blk): valid, or being read (disk I/O sleeps). */
 static struct buf *lookup(int dev, uint64_t blk)
 {
     for (struct buf *b = hash[hkey(dev, blk)]; b; b = b->hnext)
@@ -91,6 +98,7 @@ static struct buf *lookup(int dev, uint64_t blk)
     return NULL;
 }
 
+/* bc_lock held */
 static struct buf *bget(int dev, uint64_t blk)
 {
     struct buf *b = lookup(dev, blk);
@@ -126,7 +134,7 @@ static uint32_t spb(int dev)                /* sectors per block */
 }
 
 /*
- * The block, read if need be.  The read may sleep (the kernel lock is free
+ * The block, read if need be.  The read may sleep (bc_lock is released
  * meanwhile): another reader of the block then waits for it rather than
  * reading it too.
  */
@@ -134,40 +142,53 @@ struct buf *bread(int dev, uint64_t blk)
 {
     if (dev < 0 || dev >= NBLKDEV || !dev_bsize[dev])
         return NULL;
+    mutex_enter(&bc_lock);
     for (;;) {
         struct buf *b = bget(dev, blk);
-        if (b->valid)
+        if (b->valid) {
+            mutex_exit(&bc_lock);
             return b;
+        }
         if (b->reading) {                        /* someone is reading it: wait */
             while (b->reading)
-                sleep_on(b);
+                cv_wait(&bc_cv, &bc_lock);
             bool ok = b->valid && b->dev == dev && b->blockno == blk;
-            if (ok)
+            if (ok) {
+                mutex_exit(&bc_lock);
                 return b;
+            }
             b->ref--;                            /* their read failed: try ourselves */
             continue;
         }
         b->reading = true;
+        mutex_exit(&bc_lock);
         int r = blk_read(dev, blk * spb(dev), spb(dev), b->data);
+        mutex_enter(&bc_lock);
         b->reading = false;
-        wakeup(b);
+        cv_broadcast(&bc_cv);
         if (r < 0) {
             kprintf("bcache: read error on device %d block %lu\n", dev, blk);
             hash_remove(b);
             b->hashed = false;
             b->ref--;
+            mutex_exit(&bc_lock);
             return NULL;
         }
         b->valid = true;
+        mutex_exit(&bc_lock);
         return b;
     }
 }
 
 struct buf *bzero_get(int dev, uint64_t blk)
 {
+    mutex_enter(&bc_lock);
     struct buf *b = bget(dev, blk);
+    mutex_exit(&bc_lock);
     memset(b->data, 0, dev_bsize[dev]);
+    mutex_enter(&bc_lock);
     b->valid = true;
+    mutex_exit(&bc_lock);
     return b;
 }
 
@@ -181,30 +202,40 @@ int bwrite(struct buf *b)
 
 void brelse(struct buf *b)
 {
+    mutex_enter(&bc_lock);
     if (b->ref <= 0)
         panic("brelse: refcount underflow");
     b->ref--;
+    mutex_exit(&bc_lock);
 }
 
 /* A block's buffer if the cache holds it (no reference taken), else NULL. */
 struct buf *bcache_peek(int dev, uint64_t blk)
 {
-    return dev >= 0 && dev < NBLKDEV ? lookup(dev, blk) : NULL;
+    if (dev < 0 || dev >= NBLKDEV)
+        return NULL;
+    mutex_enter(&bc_lock);
+    struct buf *b = lookup(dev, blk);
+    mutex_exit(&bc_lock);
+    return b;
 }
 
 /* n blocks from blk were written to dev directly: the cache's copies follow. */
 void bcache_wrote(int dev, uint64_t blk, size_t n, const uint8_t *data)
 {
+    mutex_enter(&bc_lock);
     for (size_t i = 0; i < n; i++) {
         struct buf *b = lookup(dev, blk + i);
         if (b && b->valid)
             memcpy(b->data, data + i * dev_bsize[dev], dev_bsize[dev]);
     }
+    mutex_exit(&bc_lock);
 }
 
 /* A file system on dev went away: forget its blocks. */
 void bcache_forget(int dev)
 {
+    mutex_enter(&bc_lock);
     for (size_t i = 0; i < nbuf; i++) {
         struct buf *b = &bufs[i];
         if (b->hashed && b->dev == dev && b->ref == 0) {
@@ -213,6 +244,7 @@ void bcache_forget(int dev)
             b->valid = false;
         }
     }
+    mutex_exit(&bc_lock);
 }
 
 /*
@@ -225,10 +257,13 @@ static bool prefetch_busy;                       /* (one read-ahead at a time: t
 
 void bprefetch(int dev, uint64_t blk, int n)
 {
-    if (prefetch_busy)
-        return;
     if (n > PREFETCH_MAX)
         n = PREFETCH_MAX;
+    mutex_enter(&bc_lock);
+    if (prefetch_busy) {
+        mutex_exit(&bc_lock);
+        return;
+    }
     while (n > 0 && lookup(dev, blk)) {
         blk++;
         n--;
@@ -236,17 +271,23 @@ void bprefetch(int dev, uint64_t blk, int n)
     int run = 0;
     while (run < n && !lookup(dev, blk + run))
         run++;
-    if (run < 2)
+    if (run < 2) {
+        mutex_exit(&bc_lock);
         return;                                  /* bread does single blocks */
+    }
     if (!prefetch_buf) {
         uint64_t pa = pmm_alloc_contig(PREFETCH_MAX * BUFSIZE / PAGE_SIZE);
-        if (!pa)
+        if (!pa) {
+            mutex_exit(&bc_lock);
             return;
+        }
         prefetch_buf = P2V(pa);
     }
     uint32_t bs = dev_bsize[dev];
     prefetch_busy = true;
+    mutex_exit(&bc_lock);
     int r = blk_read(dev, blk * spb(dev), run * spb(dev), prefetch_buf);
+    mutex_enter(&bc_lock);
     if (r == 0)
         for (int i = 0; i < run; i++) {
             struct buf *b = bget(dev, blk + i);
@@ -254,9 +295,10 @@ void bprefetch(int dev, uint64_t blk, int n)
                 memcpy(b->data, prefetch_buf + (size_t)i * bs, bs);
                 b->valid = true;
             }
-            brelse(b);
+            b->ref--;
         }
     prefetch_busy = false;
+    mutex_exit(&bc_lock);
 }
 
 size_t bcache_blocks(void)

@@ -15,6 +15,7 @@
  * Part of SIEOS, released under the GNU General Public License version 3
  * (GPL-3.0); see the LICENSE file.
  */
+#include "smp.h"
 #include "net.h"
 #include "ddi.h"
 #include "pci.h"
@@ -85,6 +86,7 @@ struct vnet {
     struct netif *ifp;
     int irq;
     uint64_t interrupts;
+    struct spinlock rxlock;                      /* the receive queue: its interrupt, and the network thread's poll */
 };
 
 #define MAX_CARDS 4
@@ -189,6 +191,7 @@ static void vnet_poll(struct netif *ifp)
     struct vnet *v = ifp->drv;
     struct vq *q = &v->rx;
     int got = 0;
+    spin_lock(&v->rxlock);
     for (int budget = 0; budget < q->size && q->last_used != used_idx(q); budget++) {
         mb();
         uint16_t slot = q->last_used % q->size;
@@ -204,6 +207,7 @@ static void vnet_poll(struct netif *ifp)
     }
     if (got)
         kick(q);
+    spin_unlock(&v->rxlock);
 }
 
 static void vnet_irq(struct trapframe *tf, void *arg)

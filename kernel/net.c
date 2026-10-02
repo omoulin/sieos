@@ -10,9 +10,14 @@
  * sender chose, if it has a gateway, otherwise the first interface that
  * has one.  An address of any interface is local (the weak host model).
  *
- * Everything runs under the big kernel lock.  Received frames are pulled
- * from the cards by net_poll(), called from the PIT tick on the BSP (and at
- * their interrupts); this also drives the ARP, DHCP and TCP timers.
+ * Locking: the stack (interfaces, protocols, the IP sockets) runs under
+ * net_lock, which socket calls hold and drop while they sleep (net_sleep).
+ * The cards' drivers hand received frames to net_rx, which queues them
+ * (under rxq_lock, a spin lock: drivers call it holding their own locks);
+ * the network thread (netisr) takes them, polls the cards that have no
+ * interrupt, delivers what was sent to ourselves and runs the ARP, DHCP
+ * and TCP timers, under net_lock.  The stack calls the drivers' send with
+ * net_lock held: their locks come after it.
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -24,23 +29,31 @@
 
 struct netif netifs[NETIF_MAX];
 int nnetif;
+kmutex_t net_lock;
+static kmutex_t netif_reg_lock = MUTEX_SPIN_INITIALIZER;
 
 static const uint8_t bcast_mac[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 enum { DHCP_OFF, DHCP_SELECTING, DHCP_REQUESTING, DHCP_BOUND };
 
+/* (drivers call it holding their own locks: interfaces are only added, and nnetif last) */
 struct netif *netif_register(const struct nic_ops *ops, void *drv, const uint8_t mac[6])
 {
-    if (nnetif == NETIF_MAX)
+    mutex_enter(&netif_reg_lock);
+    if (nnetif == NETIF_MAX) {
+        mutex_exit(&netif_reg_lock);
         return NULL;
+    }
     struct netif *ifp = &netifs[nnetif];
     memset(ifp, 0, sizeof(*ifp));
-    ifp->index = nnetif++;
+    ifp->index = nnetif;
     snprintf(ifp->name, sizeof(ifp->name), "eth%d", ifp->index);
     ifp->nic = ops;
     ifp->drv = drv;
     memcpy(ifp->mac, mac, 6);
     ifp->present = true;
+    __atomic_store_n(&nnetif, nnetif + 1, __ATOMIC_RELEASE);
+    mutex_exit(&netif_reg_lock);
     return ifp;
 }
 
@@ -367,7 +380,7 @@ static int ip_emit(struct netif *ifp, uint32_t dst, uint32_t nexthop, const uint
 
 volatile bool net_loop_pending;
 
-/* Deliver the packets sent to ourselves (from net_poll, and on the way out of a system call). */
+/* net_lock held: deliver the packets sent to ourselves (the network thread). */
 void net_loop_drain(void)
 {
     net_loop_pending = false;
@@ -513,6 +526,7 @@ static void loop_put(const void *pkt, size_t len)
     memcpy(loopq[loop_tail % NLOOP].pkt, pkt, len);
     loop_tail++;
     net_loop_pending = true;
+    netisr_kick();
 }
 
 static void icmp_input(uint32_t src, uint32_t dst, const uint8_t *msg, size_t len)
@@ -572,7 +586,8 @@ void ip_input(struct netif *in, const uint8_t *pkt, size_t len)
     kfree(whole);
 }
 
-void net_rx(struct netif *ifp, const uint8_t *frame, size_t len)
+/* net_lock held: a frame from a card. */
+static void eth_input(struct netif *ifp, const uint8_t *frame, size_t len)
 {
     if (len < ETH_HLEN)
         return;
@@ -736,8 +751,8 @@ int net_configure(int index, bool dhcp, uint32_t ip, uint32_t mask, uint32_t gw,
     return 0;
 }
 
-/* An interface starts: DHCP, IPv6 (at boot, and for a card plugged in later: a USB adapter). */
-void net_attach(struct netif *ifp)
+/* net_lock held: an interface starts: DHCP, IPv6. */
+static void attach_locked(struct netif *ifp)
 {
     ifp->dhcp_xid = (uint32_t)(ticks * 2654435761U) ^ (ifp->mac[5] << 8) ^ (ifp->mac[4] << 16) ^ 0xA1E05 ^ ifp->index;
     ifp->dhcp_state = DHCP_SELECTING;
@@ -745,11 +760,20 @@ void net_attach(struct netif *ifp)
     net6_attach(ifp);
 }
 
+/* An interface starts (at boot, and for a card plugged in later: a USB adapter, from its driver). */
+void net_attach(struct netif *ifp)
+{
+    ifp->attach_pending = true;                  /* (the network thread's, under net_lock) */
+    netisr_kick();
+}
+
 void net_init(void)
 {
+    mutex_enter(&net_lock);
     for (int i = 0; i < nnetif; i++)             /* (the cards' drivers registered them: DDI_PHASE_ROOT) */
-        net_attach(&netifs[i]);
+        attach_locked(&netifs[i]);
     net_started = true;
+    mutex_exit(&net_lock);
 }
 
 /* Wait (at boot) for DHCP on every interface; eth0 falls back to the QEMU user-network defaults. */
@@ -769,6 +793,7 @@ bool net_wait_config(int max_ticks)
         cli();
     }
     struct netif *e0 = &netifs[0];
+    mutex_enter(&net_lock);
     if (!e0->up) {
         e0->dhcp_state = DHCP_OFF;
         e0->ip = 0x0A00020F;            /* 10.0.2.15 */
@@ -777,15 +802,131 @@ bool net_wait_config(int max_ticks)
         e0->dns = 0x0A000203;
         e0->up = true;
     }
-    return e0->dhcp;
+    bool dhcp = e0->dhcp;
+    mutex_exit(&net_lock);
+    return dhcp;
 }
 
+/* ---------------- the received frames' queue and the network thread ---------------- */
+
+struct rxpkt {
+    struct rxpkt *next;
+    struct netif *ifp;
+    size_t len;
+    uint8_t data[];
+};
+
+#define RXQ_MAX 4096
+static kmutex_t rxq_lock = MUTEX_SPIN_INITIALIZER;
+static kcondvar_t netisr_cv;
+static struct rxpkt *rxq_head, *rxq_tail;
+static int rxq_n;
+static bool netisr_pending;
+
+/* A frame a card received (any context but an interrupt: copied and queued for the network thread). */
+void net_rx(struct netif *ifp, const uint8_t *frame, size_t len)
+{
+    if (len < ETH_HLEN || len > 65536)
+        return;
+    struct rxpkt *r = kmalloc(sizeof(*r) + len);
+    if (!r) {
+        ifp->rx_dropped++;
+        return;
+    }
+    r->next = NULL;
+    r->ifp = ifp;
+    r->len = len;
+    memcpy(r->data, frame, len);
+    mutex_enter(&rxq_lock);
+    if (rxq_n >= RXQ_MAX) {
+        mutex_exit(&rxq_lock);
+        ifp->rx_dropped++;
+        kfree(r);
+        return;
+    }
+    if (rxq_tail)
+        rxq_tail->next = r;
+    else
+        rxq_head = r;
+    rxq_tail = r;
+    rxq_n++;
+    cv_signal(&netisr_cv);
+    mutex_exit(&rxq_lock);
+}
+
+/* Something for the network thread: a tick, packets to ourselves, an interface to start. */
+void netisr_kick(void)
+{
+    mutex_enter(&rxq_lock);
+    netisr_pending = true;
+    cv_signal(&netisr_cv);
+    mutex_exit(&rxq_lock);
+}
+
+static void net_timers(void);
+
+/* net_lock held: the queued frames, the cards without interrupts, the loopback, the timers. */
+static void net_work(void)
+{
+    static uint64_t last_tick;
+    mutex_enter(&rxq_lock);
+    struct rxpkt *r = rxq_head;
+    rxq_head = rxq_tail = NULL;
+    rxq_n = 0;
+    netisr_pending = false;
+    mutex_exit(&rxq_lock);
+    while (r) {
+        struct rxpkt *next = r->next;
+        eth_input(r->ifp, r->data, r->len);
+        kfree(r);
+        r = next;
+    }
+    int n = __atomic_load_n(&nnetif, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n; i++)
+        if (netifs[i].attach_pending) {
+            netifs[i].attach_pending = false;
+            attach_locked(&netifs[i]);
+        }
+    if (net_loop_pending)
+        net_loop_drain();
+    if (ticks != last_tick) {
+        last_tick = ticks;
+        for (int i = 0; i < n; i++)              /* (the frames they take are queued: delivered next time) */
+            if (netifs[i].nic)
+                netifs[i].nic->poll(&netifs[i]);
+        net_timers();
+    }
+}
+
+static void netisr(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        mutex_enter(&rxq_lock);
+        while (!rxq_head && !netisr_pending)
+            cv_wait(&netisr_cv, &rxq_lock);
+        mutex_exit(&rxq_lock);
+        mutex_enter(&net_lock);
+        net_work();
+        mutex_exit(&net_lock);
+    }
+}
+
+void netisr_start(void)
+{
+    kthread_create(netisr, NULL, "netisr", 163);
+}
+
+/* The boot's tick (before the network thread runs): the same work. */
 void net_poll(void)
 {
-    for (int i = 0; i < nnetif; i++)
-        if (netifs[i].nic)
-            netifs[i].nic->poll(&netifs[i]);
-    net_loop_drain();
+    mutex_enter(&net_lock);
+    net_work();
+    mutex_exit(&net_lock);
+}
+
+static void net_timers(void)
+{
     for (int k = 0; k < nnetif; k++) {
         struct netif *ifp = &netifs[k];
         /* expire ARP-pending packets after 3 s (and re-ask once a second) */

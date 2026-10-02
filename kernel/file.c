@@ -1,5 +1,14 @@
 /*
- * file.c - Open file objects shared between file descriptors.
+ * file.c - Open file objects shared between file descriptors, and the
+ * processes' descriptor tables.
+ *
+ * Locking: a file's references are counted atomically; the last one closes
+ * it.  The table of files has a spin lock for finding a free entry.  A
+ * process's descriptors are under its p_fdlock; a system call uses a file
+ * through a reference (getf/releasef, or fd_file: held until the call
+ * returns), so another LWP's close cannot free it meanwhile.  A file's
+ * offset is under its f_offlock (held across the read or write that moves
+ * it).
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -17,38 +26,48 @@
 #define NFILE 8192                       /* open files in the whole system */
 
 static struct file ftable[NFILE];
+static struct spinlock ftable_lock;
 
 struct file *file_alloc(void)
 {
+    static uint64_t gen;
+    struct file *f = NULL;
+    spin_lock(&ftable_lock);
     for (int i = 0; i < NFILE; i++) {
         if (ftable[i].ref == 0) {
-            static uint64_t gen;
-            memset(&ftable[i], 0, sizeof(ftable[i]));
-            ftable[i].ref = 1;
-            ftable[i].gen = ++gen;
-            return &ftable[i];
+            f = &ftable[i];
+            memset(f, 0, sizeof(*f));
+            f->ref = 1;
+            f->gen = ++gen;
+            break;
         }
     }
-    return NULL;
+    spin_unlock(&ftable_lock);
+    return f;
 }
 
 struct file *file_dup(struct file *f)
 {
-    f->ref++;
+    __atomic_add_fetch(&f->ref, 1, __ATOMIC_RELAXED);
     return f;
 }
 
 void file_close(struct file *f)
 {
-    if (f->ref <= 0)
-        panic("file_close: bad refcount");
-    if (--f->ref > 0)
+    /* The last reference: the entry is reserved (ref -1) while it is closed
+     * (that may sleep: the last iput can do disk I/O), or file_alloc could
+     * hand it out meanwhile and we would clear someone else's file. */
+    int r = __atomic_load_n(&f->ref, __ATOMIC_RELAXED);
+    for (;;) {
+        if (r <= 0)
+            panic("file_close: bad refcount");
+        int n = r == 1 ? -1 : r - 1;
+        if (__atomic_compare_exchange_n(&f->ref, &r, n, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+            break;
+    }
+    if (r > 1)
         return;
-    /* Closing may sleep (the last iput can do disk I/O): the entry stays
-     * reserved (ref -1) until it is clean, or file_alloc could hand it out
-     * meanwhile and we would clear someone else's file. */
     struct file c = *f;
-    f->ref = -1;
     if (c.ip)
         iput(c.ip);
     if (c.pdir)
@@ -68,22 +87,191 @@ void file_close(struct file *f)
         unix_close(c.usock);
     else if (c.type == FD_OPS && c.ops->close)
         c.ops->close(&c);
-    memset(f, 0, sizeof(*f));                    /* free (ref 0), type FD_NONE */
+    memset(f, 0, offsetof(struct file, ref));
+    memset((char *)f + offsetof(struct file, ref) + sizeof(f->ref), 0,
+           sizeof(*f) - offsetof(struct file, ref) - sizeof(f->ref));
+    __atomic_store_n(&f->ref, 0, __ATOMIC_RELEASE);   /* free (ref 0), type FD_NONE */
 }
 
-/* Close descriptor fd of process p (its record locks on the file go too). */
-void fd_close(struct proc *p, int fd)
+/* ---------------- descriptor tables ---------------- */
+
+/* The caller's file on fd, referenced (releasef), or NULL. */
+struct file *getf(int fd)
 {
+    struct proc *p = current;
+    if (fd < 0 || fd >= NOFILE)
+        return NULL;
+    mutex_enter(&p->p_fdlock);
     struct file *f = p->ofile[fd];
+    if (f)
+        file_dup(f);
+    mutex_exit(&p->p_fdlock);
+    return f;
+}
+
+void releasef(struct file *f)
+{
+    file_close(f);
+}
+
+/* Does the caller's descriptor fd still name f? */
+bool fd_still(int fd, struct file *f)
+{
+    struct proc *p = current;
+    if (fd < 0 || fd >= NOFILE)
+        return false;
+    mutex_enter(&p->p_fdlock);
+    bool r = p->ofile[fd] == f;
+    mutex_exit(&p->p_fdlock);
+    return r;
+}
+
+/* The caller's file on fd, referenced until the system call returns (fd_release_held; once per file). */
+struct file *fd_file(int fd)
+{
+    struct lwp *l = curlwp;
+    struct file *f = getf(fd);
     if (!f)
-        return;
+        return NULL;
+    for (int i = 0; i < l->nfheld; i++)
+        if (l->fheld[i] == f) {
+            releasef(f);                         /* (held already: the call's reference serves) */
+            return f;
+        }
+    if (l->nfheld == (int)ARRAY_SIZE(l->fheld)) {
+        releasef(f);
+        panic("fd_file: more than %d files held by one system call", (int)ARRAY_SIZE(l->fheld));
+    }
+    l->fheld[l->nfheld++] = f;
+    return f;
+}
+
+void fd_release_held(void)
+{
+    struct lwp *l = curlwp;
+    while (l->nfheld > 0)
+        releasef(l->fheld[--l->nfheld]);
+}
+
+/* A descriptor for f (the table's reference: the caller's), from `from` up; -EMFILE. */
+int fd_alloc(struct proc *p, struct file *f, int from, int fdflags)
+{
+    uint64_t lim = p->rlim_cur[5];                   /* SIEOS_RLIMIT_NOFILE */
+    int max = lim < NOFILE ? (int)lim : NOFILE;
+    int r = -EMFILE;
+    mutex_enter(&p->p_fdlock);
+    for (int fd = from < 0 ? 0 : from; fd < max; fd++) {
+        if (!p->ofile[fd]) {
+            p->ofile[fd] = f;
+            p->fdflags[fd] = fdflags;
+            r = fd;
+            break;
+        }
+    }
+    mutex_exit(&p->p_fdlock);
+    return r;
+}
+
+/* Put f on descriptor fd (dup2: its reference is the caller's); the file it replaced, for the caller to close. */
+struct file *fd_replace(struct proc *p, int fd, struct file *f, int fdflags)
+{
+    mutex_enter(&p->p_fdlock);
+    struct file *old = p->ofile[fd];
+    p->ofile[fd] = f;
+    p->fdflags[fd] = fdflags;
+    mutex_exit(&p->p_fdlock);
+    return old;
+}
+
+/* Take fd's file out of the table (its reference is the caller's now), or NULL. */
+static struct file *fd_detach(struct proc *p, int fd)
+{
+    if (fd < 0 || fd >= NOFILE)
+        return NULL;
+    mutex_enter(&p->p_fdlock);
+    struct file *f = p->ofile[fd];
     p->ofile[fd] = NULL;
     p->fdflags[fd] = 0;
+    mutex_exit(&p->p_fdlock);
+    return f;
+}
+
+/* A file that left a descriptor of p: its record locks of p go, and the reference. */
+static void fd_drop(struct proc *p, struct file *f)
+{
     if (f->ip)
         flock_release(f->ip, p->pid);
-    if (f->type == FD_SOCKET && f->sock && f->ref > 1)
-        wakeup(f->sock);                         /* (a thread sleeping in accept on it sees it gone) */
+    if (f->type == FD_SOCKET && f->sock)
+        socket_fd_closed(f->sock);               /* (a thread sleeping in accept on it sees it gone) */
     file_close(f);
+}
+
+/* Close descriptor fd of process p (its record locks on the file go too); false if it was not open. */
+bool fd_close(struct proc *p, int fd)
+{
+    struct file *f = fd_detach(p, fd);
+    if (!f)
+        return false;
+    fd_drop(p, f);
+    return true;
+}
+
+int fd_getflags(struct proc *p, int fd)
+{
+    mutex_enter(&p->p_fdlock);
+    int r = fd >= 0 && fd < NOFILE && p->ofile[fd] ? p->fdflags[fd] : -EBADF;
+    mutex_exit(&p->p_fdlock);
+    return r;
+}
+
+int fd_setflags(struct proc *p, int fd, int flags)
+{
+    mutex_enter(&p->p_fdlock);
+    int r = fd >= 0 && fd < NOFILE && p->ofile[fd] ? 0 : -EBADF;
+    if (!r)
+        p->fdflags[fd] = flags;
+    mutex_exit(&p->p_fdlock);
+    return r;
+}
+
+/* fork: the child's descriptors are the parent's. */
+void fd_copy_table(struct proc *np, struct proc *cp)
+{
+    mutex_enter(&cp->p_fdlock);
+    for (int i = 0; i < NOFILE; i++)
+        if (cp->ofile[i]) {
+            np->ofile[i] = file_dup(cp->ofile[i]);
+            np->fdflags[i] = cp->fdflags[i];
+        }
+    mutex_exit(&cp->p_fdlock);
+}
+
+/* Close every descriptor (exit), or those marked close-on-exec (exec). */
+static void fd_close_some(struct proc *p, bool exec_only)
+{
+    for (int i = 0; i < NOFILE; i++) {
+        mutex_enter(&p->p_fdlock);
+        struct file *f = p->ofile[i];
+        if (f && (!exec_only || (p->fdflags[i] & FD_CLOEXEC))) {
+            p->ofile[i] = NULL;
+            p->fdflags[i] = 0;
+        } else {
+            f = NULL;
+        }
+        mutex_exit(&p->p_fdlock);
+        if (f)
+            fd_drop(p, f);
+    }
+}
+
+void fd_close_all(struct proc *p)
+{
+    fd_close_some(p, false);
+}
+
+void fd_close_exec(struct proc *p)
+{
+    fd_close_some(p, true);
 }
 
 /* The path of an open file, for /proc/<pid>/fd/<n>.  Returns its length. */
@@ -161,6 +349,28 @@ static long fsize_check(struct file *f, uint64_t off, size_t *n)
     return 0;
 }
 
+/* The offset of a seekable file moves under its f_offlock. */
+static long offset_io(struct file *f, void *buf, size_t n, bool write)
+{
+    mutex_enter(&f->f_offlock);
+    long r;
+    if (f->type == FD_BLK) {
+        r = blk_file_io(f->minor, f->off, buf, n, write);
+    } else if (!write) {
+        r = readi(f->ip, buf, f->off, n);
+    } else {
+        if (f->flags & O_APPEND)
+            f->off = inode_size(f->ip);
+        r = fsize_check(f, f->off, &n);
+        if (r == 0)
+            r = writei(f->ip, buf, f->off, n);
+    }
+    if (r > 0)
+        f->off += r;
+    mutex_exit(&f->f_offlock);
+    return r;
+}
+
 long file_read(struct file *f, void *buf, size_t n)
 {
     if ((f->flags & O_ACCMODE) == O_WRONLY)
@@ -192,20 +402,12 @@ long file_read(struct file *f, void *buf, size_t n)
     case FD_RANDOM:
         random_bytes(buf, n);
         return n;
-    case FD_BLK: {
-        long r = blk_file_io(f->minor, f->off, buf, n, false);
-        if (r > 0)
-            f->off += r;
-        return r;
-    }
-    case FD_INODE: {
+    case FD_BLK:
+        return offset_io(f, buf, n, false);
+    case FD_INODE:
         if (S_ISDIR(inode_mode(f->ip)))
             return -EISDIR;
-        long r = readi(f->ip, buf, f->off, n);
-        if (r > 0)
-            f->off += r;
-        return r;
-    }
+        return offset_io(f, buf, n, false);
     }
     return -EBADF;
 }
@@ -235,27 +437,14 @@ long file_write(struct file *f, const void *buf, size_t n)
     case FD_NULL:
     case FD_ZERO:
         return n;
-    case FD_BLK: {
-        long r = blk_file_io(f->minor, f->off, (void *)buf, n, true);
-        if (r > 0)
-            f->off += r;
-        return r;
-    }
+    case FD_BLK:
+        return offset_io(f, (void *)buf, n, true);
     case FD_RANDOM:                       /* writes stir the pool */
         for (size_t i = 0; i + 8 <= n; i += 8)
             random_add_entropy(*(const uint64_t *)((const uint8_t *)buf + i));
         return n;
-    case FD_INODE: {
-        if (f->flags & O_APPEND)
-            f->off = inode_size(f->ip);
-        long e = fsize_check(f, f->off, &n);
-        if (e < 0)
-            return e;
-        long r = writei(f->ip, buf, f->off, n);
-        if (r > 0)
-            f->off += r;
-        return r;
-    }
+    case FD_INODE:
+        return offset_io(f, (void *)buf, n, true);
     }
     return -EBADF;
 }

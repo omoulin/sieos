@@ -12,13 +12,16 @@
  * nobody else maps it any more.  MAP_SHARED pages (PTE_SHARED) stay shared.
  * Anonymous private memory is zero-filled on first touch.
  *
- * Locking: page faults from user mode run without the big kernel lock, under
- * the process's vmlock only (vm_space_lock), so that the LWPs of a process, and
- * different processes, fault in parallel.  The fault path reads the area list
- * and changes page tables; everything else runs under the kernel lock and
- * takes vmlock around its own page-table changes and area-list changes (never
- * across anything that sleeps), and frees areas only after unlinking them
- * under it.  Order: kernel lock, vmlock, the frame allocator's lock.
+ * Locking (as Solaris' a_lock and its hat lock): the process's address-space
+ * lock (p->as_lock, a reader/writer lock) is held as writer by what changes
+ * the areas (mmap, munmap, mremap, mprotect, brk, shmat/shmdt, exec, exit)
+ * and as reader by what only walks them (fork, msync, mincore); it may be
+ * held across sleeping (writing shared file pages back).  Page faults do not
+ * take it: they run under the spin lock vmlock (vm_space_lock), which every
+ * change to the area list or the page tables also holds (never across
+ * anything that sleeps), so that the LWPs of a process, and different
+ * processes, fault in parallel; areas are freed only after being unlinked
+ * under it.  Order: as_lock, the file systems', vmlock, the frame allocator's.
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -140,19 +143,7 @@ static struct vm_area *area_split(struct vm_area *a, uint64_t at)
 
 void vm_space_lock(struct proc *p)
 {
-    if (!__atomic_exchange_n(&p->vmlock.locked, 1, __ATOMIC_ACQUIRE))
-        return;
-    /* While we spin, a TLB shootdown for this space must not wait for us
-     * (interrupts are off): catch up on it once we have the lock. */
-    struct cpu *c = mycpu();
-    c->bkl_waiting = 1;
-    spin_lock(&p->vmlock);
-    c->bkl_waiting = 0;
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    if (c->tlb_flush) {
-        c->tlb_flush = 0;
-        write_cr3(read_cr3());
-    }
+    spin_lock(&p->vmlock);                       /* (spinning answers TLB shootdowns) */
 }
 
 void vm_space_unlock(struct proc *p)
@@ -169,9 +160,11 @@ static void flush_if_current(uint64_t pml4)
 
 uint64_t vm_space_copy(struct proc *child, struct proc *parent)
 {
-    uint64_t src = parent->pml4, dst = vmm_new_space();
+    uint64_t dst = vmm_new_space();
     if (!dst)
         return 0;
+    rw_enter(&parent->as_lock, RW_READER);
+    uint64_t src = parent->pml4;
     vm_space_lock(parent);
     uint64_t *l4 = P2V(src & PTE_ADDR);
     for (uint64_t i = 0; i < 256; i++) {
@@ -202,6 +195,7 @@ uint64_t vm_space_copy(struct proc *child, struct proc *parent)
                     if (vmm_map(dst, va, pa, fl & ~PTE_P) < 0) {
                         flush_if_current(src);
                         vm_space_unlock(parent);
+                        rw_exit(&parent->as_lock);
                         vm_space_free(child, dst);
                         return 0;
                     }
@@ -223,6 +217,7 @@ uint64_t vm_space_copy(struct proc *child, struct proc *parent)
         area_hold(n);
         insert_area(child, n);
     }
+    rw_exit(&parent->as_lock);
     return dst;
 }
 
@@ -307,9 +302,8 @@ static uint64_t file_pte_flags(const struct vm_area *a)
 
 /*
  * A file mapping's page, on its first touch: the file system may read it from
- * disk (with the kernel lock: trap.c's slow path), without the address
- * space's lock, which is taken again to map it (unless the area changed
- * meanwhile).
+ * disk (under its lock), without the address space's lock, which is taken
+ * again to map it (unless the area changed meanwhile).
  */
 static bool file_fault(struct proc *p, uint64_t va)
 {
@@ -342,7 +336,7 @@ static bool file_fault(struct proc *p, uint64_t va)
     return ok;
 }
 
-/* Also called without the kernel lock, for faults from user mode (see above). */
+/* A page fault, from user mode or a kernel copy to or from user memory (see above). */
 bool vm_fault(uint64_t addr, uint64_t err, bool from_user)
 {
     (void)from_user;
@@ -361,8 +355,8 @@ bool vm_fault(uint64_t addr, uint64_t err, bool from_user)
     vm_space_unlock(p);
     if (frame)
         pmm_free(frame);                         /* not needed after all */
-    if (file)                                    /* (without the kernel lock: the slow path's turn) */
-        ok = bkl_held() && file_fault(p, PAGE_ALIGN_DOWN(addr));
+    if (file)
+        ok = file_fault(p, PAGE_ALIGN_DOWN(addr));   /* (the file system's lock: no spin lock may be held here) */
     return ok;
 }
 
@@ -584,7 +578,7 @@ static int map_locked(struct proc *p, uint64_t va, uint64_t pa, uint64_t fl)
     return r;
 }
 
-long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
+static long vm_mmap_locked(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
 {
     struct proc *p = current;
     int type = flags & SIEOS_MAP_TYPE;
@@ -701,7 +695,7 @@ long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t 
     return (long)start;
 }
 
-long vm_munmap(uint64_t addr, uint64_t len)
+static long vm_munmap_locked(uint64_t addr, uint64_t len)
 {
     struct proc *p = current;
     if ((addr & (PAGE_SIZE - 1)) || !len || addr < USER_BASE || addr + len > USER_LIMIT || addr + len < addr)
@@ -743,7 +737,7 @@ static bool shared_anon(const struct vm_area *a)
  * copy-on-write as they were) to a new range, which then grows.
  * MREMAP_FIXED is not supported.
  */
-long vm_mremap(uint64_t old, uint64_t oldlen, uint64_t newlen, int flags, uint64_t newaddr)
+static long vm_mremap_locked(uint64_t old, uint64_t oldlen, uint64_t newlen, int flags, uint64_t newaddr)
 {
     struct proc *p = current;
     (void)newaddr;
@@ -759,7 +753,7 @@ long vm_mremap(uint64_t old, uint64_t oldlen, uint64_t newlen, int flags, uint64
     if (newlen == oldlen)
         return (long)old;
     if (newlen < oldlen) {
-        long r = vm_munmap(old + newlen, oldlen - newlen);
+        long r = vm_munmap_locked(old + newlen, oldlen - newlen);
         return r < 0 ? r : (long)old;
     }
     if (a->shm)
@@ -837,7 +831,7 @@ static bool range_mapped(struct proc *p, uint64_t start, uint64_t end)
     return true;
 }
 
-long vm_mprotect(uint64_t addr, uint64_t len, int prot)
+static long vm_mprotect_locked(uint64_t addr, uint64_t len, int prot)
 {
     struct proc *p = current;
     if ((addr & (PAGE_SIZE - 1)) || addr < USER_BASE || addr + len > USER_LIMIT || addr + len < addr ||
@@ -887,7 +881,7 @@ long vm_mprotect(uint64_t addr, uint64_t len, int prot)
     return 0;
 }
 
-long vm_mincore(uint64_t addr, uint64_t len, char *vec)
+static long vm_mincore_locked(uint64_t addr, uint64_t len, char *vec)
 {
     if ((addr & (PAGE_SIZE - 1)) || addr + len < addr)
         return -EINVAL;
@@ -901,7 +895,7 @@ long vm_mincore(uint64_t addr, uint64_t len, char *vec)
     return 0;
 }
 
-long vm_memcntl(uint64_t addr, uint64_t len, int cmd, uint64_t arg)
+static long vm_memcntl_locked(uint64_t addr, uint64_t len, int cmd, uint64_t arg)
 {
     struct proc *p = current;
     if (addr & (PAGE_SIZE - 1))
@@ -937,7 +931,7 @@ long vm_memcntl(uint64_t addr, uint64_t len, int cmd, uint64_t arg)
 
 /* ---------------- System V shared memory ---------------- */
 
-long vm_map_shm(struct shmseg *seg, uint64_t addr, uint64_t len, int prot, bool fixed)
+static long vm_map_shm_locked(struct shmseg *seg, uint64_t addr, uint64_t len, int prot, bool fixed)
 {
     struct proc *p = current;
     len = PAGE_ALIGN_UP(len);
@@ -977,7 +971,7 @@ long vm_map_shm(struct shmseg *seg, uint64_t addr, uint64_t len, int prot, bool 
     return start;
 }
 
-long vm_unmap_shm(uint64_t addr)
+static long vm_unmap_shm_locked(uint64_t addr)
 {
     struct proc *p = current;
     struct vm_area *a = find_area(p, addr);
@@ -1006,4 +1000,76 @@ void vm_add_area(struct proc *p, uint64_t start, uint64_t end, int prot, int fla
     vm_space_lock(p);
     insert_area(p, a);
     vm_space_unlock(p);
+}
+
+long vm_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
+{
+    struct proc *p = current;
+    rw_enter(&p->as_lock, RW_WRITER);
+    long r = vm_mmap_locked(addr, len, prot, flags, fd, off);
+    rw_exit(&p->as_lock);
+    return r;
+}
+
+long vm_munmap(uint64_t addr, uint64_t len)
+{
+    struct proc *p = current;
+    rw_enter(&p->as_lock, RW_WRITER);
+    long r = vm_munmap_locked(addr, len);
+    rw_exit(&p->as_lock);
+    return r;
+}
+
+long vm_mremap(uint64_t old, uint64_t oldlen, uint64_t newlen, int flags, uint64_t newaddr)
+{
+    struct proc *p = current;
+    rw_enter(&p->as_lock, RW_WRITER);
+    long r = vm_mremap_locked(old, oldlen, newlen, flags, newaddr);
+    rw_exit(&p->as_lock);
+    return r;
+}
+
+long vm_mprotect(uint64_t addr, uint64_t len, int prot)
+{
+    struct proc *p = current;
+    rw_enter(&p->as_lock, RW_WRITER);
+    long r = vm_mprotect_locked(addr, len, prot);
+    rw_exit(&p->as_lock);
+    return r;
+}
+
+long vm_mincore(uint64_t addr, uint64_t len, char *vec)
+{
+    struct proc *p = current;
+    rw_enter(&p->as_lock, RW_READER);
+    long r = vm_mincore_locked(addr, len, vec);
+    rw_exit(&p->as_lock);
+    return r;
+}
+
+long vm_memcntl(uint64_t addr, uint64_t len, int cmd, uint64_t arg)
+{
+    struct proc *p = current;
+    rw_enter(&p->as_lock, RW_WRITER);
+    long r = vm_memcntl_locked(addr, len, cmd, arg);
+    rw_exit(&p->as_lock);
+    return r;
+}
+
+long vm_map_shm(struct shmseg *seg, uint64_t addr, uint64_t len, int prot, bool fixed)
+{
+    struct proc *p = current;
+    rw_enter(&p->as_lock, RW_WRITER);
+    long r = vm_map_shm_locked(seg, addr, len, prot, fixed);
+    rw_exit(&p->as_lock);
+    return r;
+}
+
+long vm_unmap_shm(uint64_t addr)
+{
+    struct proc *p = current;
+    rw_enter(&p->as_lock, RW_WRITER);
+    long r = vm_unmap_shm_locked(addr);
+    rw_exit(&p->as_lock);
+    return r;
 }

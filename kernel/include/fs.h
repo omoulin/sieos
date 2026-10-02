@@ -11,6 +11,7 @@
 #include "kernel.h"
 #include "abi.h"
 #include "ext4.h"
+#include "sync.h"
 
 #define INODE_RAW_MAX 1024
 
@@ -103,6 +104,8 @@ struct fs_ops {
 /* A mounted file system. */
 struct fs {
     const struct fs_ops *ops;
+    krmutex_t *lockp;             /* the file system's lock (fs_enter): its own, or shared (ext4's volumes) */
+    krmutex_t lockbuf;
     uint32_t dev_major, dev_minor;
     uint32_t bsize;
     bool rdonly;
@@ -116,6 +119,16 @@ struct fs {
     struct fs *next;
 };
 
+/*
+ * A file system's lock: held by the VFS around every operation on its
+ * inodes (their attributes, data, directories, the shared pages); entered
+ * again by the same LWP (a file system's operation may need another, and a
+ * copy to user memory may fault on a mapping of the same file system).
+ */
+static inline void fs_enter(struct fs *fs) { rmutex_enter(fs->lockp); }
+static inline void fs_exit(struct fs *fs) { rmutex_exit(fs->lockp); }
+static inline void fs_lock_init(struct fs *fs) { if (!fs->lockp) fs->lockp = &fs->lockbuf; }
+
 /* vfs.c */
 extern struct fs *root_fs;
 void vfs_init(void);
@@ -127,6 +140,8 @@ long vfs_mnttab(char *buf, size_t size);         /* the mount table as text; its
 bool file_table_uses(struct fs *fs);             /* file.c: an open file is on fs */
 struct fs *vfs_mounts(void);
 struct inode *vfs_root(void);                    /* the global root, referenced */
+struct inode *proc_root(void);                   /* namei.c: the caller's root directory, referenced */
+struct inode *proc_cwd(void);                    /* ... its working directory, referenced */
 struct inode *vfs_covering(struct inode *ip);    /* root of a file system mounted on ip, referenced */
 struct inode *idup(struct inode *ip);
 void iput(struct inode *ip);
@@ -242,7 +257,8 @@ struct usock;
 
 struct file {
     int type;
-    int ref;
+    int ref;                   /* (atomic) */
+    kmutex_t f_offlock;        /* off, across the read or write that moves it */
     int flags;
     uint64_t off;
     struct inode *pdir;        /* directory the file was opened from (for /proc fd links) */
@@ -269,7 +285,19 @@ long file_pwrite(struct file *f, const void *buf, size_t n, uint64_t off);
 short file_poll(struct file *f, short events);   /* poll.c */
 int  file_path(struct file *f, char *buf, size_t size);
 struct proc;
-void fd_close(struct proc *p, int fd);          /* close a descriptor, dropping its record locks */
+bool fd_close(struct proc *p, int fd);          /* close a descriptor, dropping its record locks */
+struct file *getf(int fd);                      /* the caller's file on fd, referenced */
+void releasef(struct file *f);
+bool fd_still(int fd, struct file *f);          /* the caller's fd still names f */
+struct file *fd_file(int fd);                   /* ... referenced until the system call returns */
+void fd_release_held(void);                     /* (the system call returns) */
+int  fd_alloc(struct proc *p, struct file *f, int from, int fdflags);   /* a descriptor for f; -EMFILE */
+struct file *fd_replace(struct proc *p, int fd, struct file *f, int fdflags);   /* dup2: the file replaced */
+int  fd_getflags(struct proc *p, int fd);
+int  fd_setflags(struct proc *p, int fd, int flags);
+void fd_copy_table(struct proc *np, struct proc *cp);
+void fd_close_all(struct proc *p);
+void fd_close_exec(struct proc *p);
 
 /* flock.c: POSIX record locks */
 struct kflock {

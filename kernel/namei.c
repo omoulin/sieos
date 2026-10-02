@@ -16,9 +16,23 @@
 
 #define PBUF (SYMLINK_MAX + 1 + MAXPATH)       /* a link's target and the rest of the path */
 
-static struct inode *proc_root(void)
+/* The calling process's root and working directories, referenced (its p_lock: chdir and chroot change them). */
+struct inode *proc_root(void)
 {
-    return current && current->root ? current->root : root_fs->root;
+    struct proc *p = current;
+    mutex_enter(&p->p_lock);
+    struct inode *r = idup(p->root ? p->root : root_fs->root);
+    mutex_exit(&p->p_lock);
+    return r;
+}
+
+struct inode *proc_cwd(void)
+{
+    struct proc *p = current;
+    mutex_enter(&p->p_lock);
+    struct inode *r = idup(p->cwd ? p->cwd : p->root ? p->root : root_fs->root);
+    mutex_exit(&p->p_lock);
+    return r;
 }
 
 static struct inode *namex(struct inode *start, const char *path, int flags, bool want_parent, char *name,
@@ -45,7 +59,7 @@ static struct inode *namex(struct inode *start, const char *path, int flags, boo
     else if (start)
         ip = idup(start);
     else
-        ip = idup(current && current->cwd ? current->cwd : root);
+        ip = proc_cwd();
 
     const char *p = buf;
     for (;;) {
@@ -76,6 +90,7 @@ static struct inode *namex(struct inode *start, const char *path, int flags, boo
             name[len] = 0;
             kfree(buf);
             kfree(tmp);
+            iput(root);
             return ip;
         }
         if (len == 1 && comp[0] == '.') {
@@ -151,6 +166,7 @@ static struct inode *namex(struct inode *start, const char *path, int flags, boo
 out:
     kfree(buf);
     kfree(tmp);
+    iput(root);
     if (r < 0) {
         if (ip)
             iput(ip);

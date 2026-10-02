@@ -170,7 +170,6 @@ void kmain(uint32_t magic, uint32_t mb_info)
     ok(msg);
 
     proc_init_cpu(&cpus[0]);
-    bkl_lock();                       /* held by the BSP until its idle loop */
 
     timer_init();
     if (pit_ok)
@@ -189,7 +188,7 @@ void kmain(uint32_t magic, uint32_t mb_info)
     lapic_timer_start();
     smp_boot();
     if (lapic_ok)
-        snprintf(msg, sizeof(msg), "SMP: %d CPU%s online (local %sAPIC timers, %s, big kernel lock)",
+        snprintf(msg, sizeof(msg), "SMP: %d CPU%s online (local %sAPIC timers, %s)",
                  ncpu, ncpu > 1 ? "s" : "", x2apic ? "x2" : "", ioapic_ok ? "I/O APIC interrupts" : "8259 PIC interrupts");
     else
         snprintf(msg, sizeof(msg), "SMP: no ACPI MADT found, running on 1 CPU");
@@ -263,6 +262,7 @@ void kmain(uint32_t magic, uint32_t mb_info)
         panic("cannot start /sbin/init or /bin/sh (error %d)", pid);
     ok("Starting init");
 
+    kthreads_start();                 /* the clock, interrupt, network and fsflush threads */
     kernel_running = true;            /* from now on kernel code runs in LWPs: disk I/O may sleep */
     cpu_idle();
 }

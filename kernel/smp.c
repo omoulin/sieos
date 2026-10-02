@@ -14,9 +14,8 @@
  * turns on (the Surface Pro 7, most Ice Lake and later laptops); the MADT's
  * x2APIC entries are read too.
  *
- * Concurrency: a big kernel lock serialises all kernel code, so user
- * programs run in parallel on every CPU while the kernel itself keeps
- * its simple uniprocessor structure.
+ * Concurrency: there is no big kernel lock; the kernel runs on every CPU at
+ * once, each subsystem with its own locks (docs/locking.md).
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -63,41 +62,9 @@ static int napic;
 static uint32_t lapic_timer_count;
 static volatile uint64_t lapic_irqs[NCPU];   /* local timer interrupts per CPU */
 
-static struct spinlock bkl;
-static volatile int bkl_owner = -1;
-
 extern char kernel_stack_top[];
 extern char ap_trampoline[], ap_trampoline_end[];
 extern uint64_t ap_param_cr3, ap_param_stack, ap_param_entry, ap_param_cpu;
-
-/* ------------------------------------------------------------------ */
-/* Big kernel lock                                                     */
-/* ------------------------------------------------------------------ */
-
-void bkl_lock(void)
-{
-    struct cpu *c = mycpu();
-    c->bkl_waiting = 1;
-    spin_lock(&bkl);
-    c->bkl_waiting = 0;
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);   /* against tlb_shootdown's tlb_flush/bkl_waiting */
-    if (c->tlb_flush) {                 /* a shootdown arrived while we waited */
-        c->tlb_flush = 0;
-        write_cr3(read_cr3());
-    }
-    bkl_owner = c->id;
-}
-
-void bkl_unlock(void)
-{
-    bkl_owner = -1;
-    spin_unlock(&bkl);
-}
-
-bool bkl_held(void)
-{
-    return bkl.locked && bkl_owner == mycpu()->id;
-}
 
 /* ------------------------------------------------------------------ */
 /* Local APIC                                                          */
@@ -313,9 +280,10 @@ void smp_kick_idle(void)
 
 /*
  * Page tables of pml4 changed (copy-on-write, munmap, mprotect): flush this
- * CPU and every other CPU running an LWP of that address space.  A CPU in
- * user mode reloads CR3 from the IPI; one waiting for the big kernel lock
- * does it when it gets the lock.  Called with the lock held.
+ * CPU and every other CPU running an LWP of that address space, and wait
+ * until they have.  A CPU in user mode or idle reloads CR3 from the IPI; one
+ * in the kernel (interrupts off) when it spins on a lock (cpu_relax),
+ * switches LWPs, or goes back to user mode.
  */
 void tlb_shootdown(uint64_t pml4)
 {
@@ -333,8 +301,8 @@ void tlb_shootdown(uint64_t pml4)
         c->tlb_flush = 1;
         lapic_send_ipi(c->apic_id, 0x4000 | T_IPI_TLB);
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
-        while (c->tlb_flush && !c->bkl_waiting)
-            __asm__ volatile("pause");
+        while (c->tlb_flush && c->lwp == l)
+            cpu_relax();                         /* (answering any shootdown aimed at us meanwhile) */
     }
 }
 
@@ -513,7 +481,6 @@ void ap_main(struct cpu *c)
     proc_init_cpu(c);
     c->online = 1;
     tsc_sync_slave(c);                              /* with the boot CPU, which waits for us */
-    bkl_lock();
     cpu_idle();
 }
 

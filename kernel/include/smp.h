@@ -1,5 +1,5 @@
 /*
- * smp.h - Per-CPU state, spinlocks, the big kernel lock and the local APIC.
+ * smp.h - Per-CPU state, spinlocks, the dispatcher's lock and the local APIC.
  *
  * Copyright (C) 2026 Olivier Moulin
  * Part of SIEOS, released under the GNU General Public License version 3
@@ -45,7 +45,7 @@ struct cpu {
     uint64_t busy_ticks, idle_ticks;
     bool offline;               /* p_online(P_OFFLINE): runs only its idle LWP */
     volatile int tlb_flush;        /* page tables changed: reload CR3 */
-    volatile int bkl_waiting;      /* spinning for the big kernel lock */
+    struct lwp *prev;              /* the LWP switched away from (until switch_finish) */
     uint64_t kstack_top;           /* idle / boot stack */
     int64_t tsc_off;               /* added to this CPU's TSC to match the boot CPU's */
     uint64_t next_tick_ns;         /* hrtime of this CPU's next scheduling tick */
@@ -72,6 +72,24 @@ static inline struct cpu *mycpu(void)
     return c;
 }
 
+/* A TLB shootdown asked this CPU to reload CR3 (smp.c). */
+static inline void tlb_service(void)
+{
+    struct cpu *c = mycpu();
+    if (c->tlb_flush) {
+        c->tlb_flush = 0;
+        __asm__ volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+    }
+}
+
+/* In a spin loop: interrupts are off, so TLB shootdowns are answered here. */
+static inline void cpu_relax(void)
+{
+    __asm__ volatile("pause" ::: "memory");
+    if (__atomic_load_n(&mycpu()->tlb_flush, __ATOMIC_RELAXED))
+        tlb_service();
+}
+
 /* spinlocks (callers run with interrupts disabled) */
 struct spinlock {
     volatile uint32_t locked;
@@ -82,19 +100,18 @@ static inline void spin_lock(struct spinlock *l)
 {
     while (__atomic_exchange_n(&l->locked, 1, __ATOMIC_ACQUIRE))
         while (l->locked)
-            __asm__ volatile("pause");
+            cpu_relax();
+}
+
+static inline bool spin_trylock(struct spinlock *l)
+{
+    return !__atomic_exchange_n(&l->locked, 1, __ATOMIC_ACQUIRE);
 }
 
 static inline void spin_unlock(struct spinlock *l)
 {
     __atomic_store_n(&l->locked, 0, __ATOMIC_RELEASE);
 }
-
-/* The big kernel lock: held by a CPU whenever it executes kernel code
- * (other than the trap entry/exit paths and the idle loop's hlt). */
-void bkl_lock(void);
-void bkl_unlock(void);
-bool bkl_held(void);
 
 /* MADT: I/O APICs and interrupt source overrides (smp.c, used by ioapic.c) */
 #define MADT_MAX_IOAPIC 4
@@ -111,6 +128,8 @@ bool ioapic_init(void);             /* route device interrupts through the I/O A
 extern bool ioapic_ok;
 void ioapic_route(int irq, int dest_apic);     /* ISA/PCI line irq -> vector IRQ_BASE + irq */
 void ioapic_mask(int irq);
+void ioapic_unmask(int irq);
+bool ioapic_is_level(int irq);          /* a level-triggered line (from an override) */
 
 /* smp.c */
 void cpu_early_init(void);          /* BSP per-CPU data (before anything else) */

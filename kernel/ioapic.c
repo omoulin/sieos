@@ -36,6 +36,7 @@ static struct {
     uint32_t gsi_base, npins;
 } ioapics[MADT_MAX_IOAPIC];
 static int nio;
+static struct spinlock io_lock;              /* the index/window pairs (the trap masks, the interrupt thread unmasks) */
 
 static uint32_t io_read(int i, uint32_t reg)
 {
@@ -91,16 +92,32 @@ void ioapic_route(int irq, int dest_apic)
     uint32_t gsi = line_gsi(irq, &flags);
     if (!pin_of(gsi, &io, &pin))
         return;
+    spin_lock(&io_lock);
     io_write(io, IOREDTBL(pin) + 1, (uint32_t)dest_apic << 24);
     io_write(io, IOREDTBL(pin), (IRQ_BASE + irq) | flags);      /* fixed delivery, physical destination */
+    spin_unlock(&io_lock);
 }
 
 void ioapic_mask(int irq)
 {
     uint32_t flags, pin;
     int io;
-    if (pin_of(line_gsi(irq, &flags), &io, &pin))
+    if (pin_of(line_gsi(irq, &flags), &io, &pin)) {
+        spin_lock(&io_lock);
         io_write(io, IOREDTBL(pin), io_read(io, IOREDTBL(pin)) | RTE_MASKED);
+        spin_unlock(&io_lock);
+    }
+}
+
+void ioapic_unmask(int irq)
+{
+    uint32_t flags, pin;
+    int io;
+    if (pin_of(line_gsi(irq, &flags), &io, &pin)) {
+        spin_lock(&io_lock);
+        io_write(io, IOREDTBL(pin), io_read(io, IOREDTBL(pin)) & ~RTE_MASKED);
+        spin_unlock(&io_lock);
+    }
 }
 
 bool ioapic_init(void)
