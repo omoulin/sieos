@@ -120,6 +120,12 @@ typedef struct {
             int fd;
             long band;
         } file;
+        struct {                        /* SI_TIMER: a POSIX timer's (value where proc's is) */
+            int timerid;
+            int overrun;                /* expirations since, while it was pending */
+            int __resv[2];
+            union sieos_sigval value;
+        } timer;
     } __data;
 } sieos_siginfo_t;
 
@@ -128,6 +134,21 @@ typedef struct {
 #define sieos_si_status __data.proc.status
 #define sieos_si_value  __data.proc.value
 #define sieos_si_addr   __data.fault.addr
+
+/* sigevent: how a POSIX timer notifies (timer_create, system call 126) */
+#define SIEOS_SIGEV_NONE   1
+#define SIEOS_SIGEV_SIGNAL 2
+#define SIEOS_SIGEV_THREAD 3            /* the C library's (a thread waiting on an event port) */
+#define SIEOS_SIGEV_PORT   4            /* an event to a port: sigev_value.sival_ptr is a sieos_port_notify_t * (port.h) */
+
+struct sieos_sigevent {
+    int sigev_notify;
+    int sigev_signo;
+    union sieos_sigval sigev_value;
+    void (*sigev_function)(union sieos_sigval);          /* (SIGEV_THREAD: the C library's) */
+    void *sigev_attributes;
+    int __sigev_pad2;
+};
 
 /* si_code values */
 #define SIEOS_SI_USER     0

@@ -569,6 +569,47 @@ const char *getexecname(void);''')
 int sig2str(int, char *);
 int str2sig(const char *, int *);
 #endif''')
+    # sigevent: Solaris's notification values; SIGEV_PORT (event ports), no SIGEV_THREAD_ID
+    add('include/signal.h', '''#define SIGEV_SIGNAL 0
+#define SIGEV_NONE 1
+#define SIGEV_THREAD 2
+#define SIGEV_THREAD_ID 4''', '''#define SIGEV_NONE %s
+#define SIGEV_SIGNAL %s
+#define SIGEV_THREAD %s
+#define SIGEV_PORT %s''' % (D('SIGEV_NONE'), D('SIGEV_SIGNAL'), D('SIGEV_THREAD'), D('SIGEV_PORT')))
+    add('include/ucontext.h', '''int  swapcontext(struct __ucontext *, const struct __ucontext *);''',
+        '''int  swapcontext(struct __ucontext *, const struct __ucontext *);
+
+#if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
+int walkcontext(const struct __ucontext *, int (*)(unsigned long, int, void *), void *);
+int printstack(int);
+int addrtosymstr(void *, char *, int);
+#endif''')
+    add('include/stdlib.h', '''int getloadavg(double *, int);''', '''int getloadavg(double *, int);
+unsigned arc4random(void);
+void arc4random_buf(void *, size_t);
+unsigned arc4random_uniform(unsigned);''')
+    # POSIX.1-2024's waits with a clock (src/sieos/clockwait.c)
+    add('include/pthread.h', 'int pthread_mutex_timedlock(pthread_mutex_t *__restrict, const struct timespec *__restrict);',
+        'int pthread_mutex_timedlock(pthread_mutex_t *__restrict, const struct timespec *__restrict);\n'
+        'int pthread_mutex_clocklock(pthread_mutex_t *__restrict, clockid_t, const struct timespec *__restrict);')
+    add('include/pthread.h', 'int pthread_cond_timedwait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict, const struct timespec *__restrict);',
+        'int pthread_cond_timedwait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict, const struct timespec *__restrict);\n'
+        'int pthread_cond_clockwait(pthread_cond_t *__restrict, pthread_mutex_t *__restrict, clockid_t, const struct timespec *__restrict);')
+    add('include/pthread.h', 'int pthread_rwlock_timedrdlock(pthread_rwlock_t *__restrict, const struct timespec *__restrict);',
+        'int pthread_rwlock_timedrdlock(pthread_rwlock_t *__restrict, const struct timespec *__restrict);\n'
+        'int pthread_rwlock_clockrdlock(pthread_rwlock_t *__restrict, clockid_t, const struct timespec *__restrict);')
+    add('include/pthread.h', 'int pthread_rwlock_timedwrlock(pthread_rwlock_t *__restrict, const struct timespec *__restrict);',
+        'int pthread_rwlock_timedwrlock(pthread_rwlock_t *__restrict, const struct timespec *__restrict);\n'
+        'int pthread_rwlock_clockwrlock(pthread_rwlock_t *__restrict, clockid_t, const struct timespec *__restrict);')
+    add('include/semaphore.h', '#define __NEED_time_t\n', '#define __NEED_time_t\n#define __NEED_clockid_t\n')
+    add('include/semaphore.h', 'int    sem_timedwait(sem_t *__restrict, const struct timespec *__restrict);',
+        'int    sem_timedwait(sem_t *__restrict, const struct timespec *__restrict);\n'
+        'int    sem_clockwait(sem_t *__restrict, clockid_t, const struct timespec *__restrict);')
+    # backtrace(3C) unwinds through its own frames: they have unwind tables
+    add('Makefile', '$(CRT_OBJS): CFLAGS_ALL += -DCRT',
+        '$(CRT_OBJS): CFLAGS_ALL += -DCRT\n\nobj/src/sieos/backtrace.o obj/src/sieos/backtrace.lo: '
+        'CFLAGS_ALL += -funwind-tables -fasynchronous-unwind-tables')
     # posix_spawn: the child is a fork (no CLONE_VM|CLONE_VFORK processes on SIEOS)
     add('src/process/posix_spawn.c', '''	pid = __clone(child, stack+sizeof stack,
 		CLONE_VM|CLONE_VFORK|SIGCHLD, &args);''', '''	(void)stack;
@@ -626,6 +667,7 @@ def gen_solaris_headers(tree):
     out = {
         'include/sys/procfs.h': ('procfs.h', ['sys/types.h', 'signal.h', 'stdint.h', 'time.h']),
         'include/sys/__lwp_abi.h': ('lwp.h', ['sys/types.h']),
+        'include/sys/port.h': ('port.h', ['sys/types.h', 'time.h']),
     }
     for dst, (src, incs) in out.items():
         text = open(os.path.join(ABI, src)).read()
@@ -637,6 +679,8 @@ def gen_solaris_headers(tree):
         if src == 'procfs.h':
             pre += ('#define __NEED_sigset_t\n#define __NEED_struct_timespec\n#include <bits/alltypes.h>\n'
                     '#include <sys/lwp.h>\n')
+        if src == 'port.h':
+            body = body.replace('\n#endif', '\ntypedef struct file_obj file_obj_t;\n#endif')
         body = body.replace('#define _SIEOS_SYS_', pre + '#define _SIEOS_SYS_', 1) if pre else body
         open(os.path.join(tree, dst), 'w').write(body)
 

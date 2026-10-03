@@ -20,6 +20,8 @@
 #include "blkdev.h"
 #include "proc.h"
 #include "mm.h"
+#include "port.h"
+#include "sieos/port.h"
 
 struct fs *root_fs;
 static void now_ts(int64_t *s, long *ns);
@@ -210,6 +212,8 @@ int inode_setattr(struct inode *ip, int mode, int uid, int gid)
     inode_touch(ip, false, true);
     int r = iupdate(ip);
     fs_exit(ip->fs);
+    if (r == 0)
+        fem_notify(ip, SIEOS_FILE_ATTRIB);
     return r;
 }
 
@@ -226,6 +230,8 @@ int inode_settimes(struct inode *ip, int64_t as, long ans, int64_t ms, long mns)
     inode_touch(ip, false, true);
     int r = iupdate(ip);
     fs_exit(ip->fs);
+    if (r == 0)
+        fem_notify(ip, SIEOS_FILE_ATTRIB);
     return r;
 }
 
@@ -287,6 +293,8 @@ long readi(struct inode *ip, void *dst, uint64_t off, size_t n)
     if (r > 0 && ip->pcache)
         pcache_copy(ip, dst, off, r, false);     /* shared mappings may hold newer data */
     fs_exit(ip->fs);
+    if (r > 0)
+        fem_notify(ip, SIEOS_FILE_ACCESS);
     return r;
 }
 
@@ -301,6 +309,8 @@ long writei(struct inode *ip, const void *src, uint64_t off, size_t n)
     if (r > 0 && ip->pcache)
         pcache_copy(ip, (uint8_t *)src, off, r, true);
     fs_exit(ip->fs);
+    if (r > 0)
+        fem_notify(ip, SIEOS_FILE_MODIFIED);
     return r;
 }
 
@@ -404,6 +414,8 @@ int itruncate(struct inode *ip, uint64_t len)
         }
     int r = ip->fs->ops->truncate(ip, len);
     fs_exit(ip->fs);
+    if (r == 0)
+        fem_notify(ip, SIEOS_FILE_TRUNC | SIEOS_FILE_MODIFIED);
     return r;
 }
 
@@ -457,6 +469,8 @@ int vfs_create(struct inode *dir, const char *name, uint16_t mode, uint32_t rdev
     fs_enter(dir->fs);
     r = dir->fs->ops->create(dir, name, mode, rdev, uid, gid, out);
     fs_exit(dir->fs);
+    if (r == 0)
+        fem_notify(dir, SIEOS_FILE_MODIFIED);    /* (a name added) */
     return r;
 }
 
@@ -468,6 +482,8 @@ int vfs_mkdir(struct inode *dir, const char *name, uint16_t mode, int uid, int g
     fs_enter(dir->fs);
     r = dir->fs->ops->mkdir(dir, name, mode, uid, gid);
     fs_exit(dir->fs);
+    if (r == 0)
+        fem_notify(dir, SIEOS_FILE_MODIFIED);    /* (a name added) */
     return r;
 }
 
@@ -476,9 +492,18 @@ int vfs_unlink(struct inode *dir, const char *name, bool is_dir)
     int r = may_modify(dir, dir->fs->ops->unlink != NULL);
     if (r < 0)
         return r;
+    struct inode *victim = NULL;                 /* (watched files: told they are deleted) */
+    if (fem_any())
+        vfs_lookup(dir, name, strlen(name), &victim);
     fs_enter(dir->fs);
     r = dir->fs->ops->unlink(dir, name, is_dir);
     fs_exit(dir->fs);
+    if (r == 0) {
+        fem_notify(victim, SIEOS_FILE_DELETE);
+        fem_notify(dir, SIEOS_FILE_MODIFIED);
+    }
+    if (victim)
+        iput(victim);
     return r;
 }
 
@@ -489,9 +514,26 @@ int vfs_rename(struct inode *od, const char *on, struct inode *nd, const char *n
     int r = may_modify(od, od->fs->ops->rename != NULL);
     if (r < 0)
         return r;
+    struct inode *from = NULL, *to = NULL;       /* (watched files: told they are renamed, or replaced) */
+    if (fem_any()) {
+        vfs_lookup(od, on, strlen(on), &from);
+        vfs_lookup(nd, nn, strlen(nn), &to);
+    }
     fs_enter(od->fs);
     r = od->fs->ops->rename(od, on, nd, nn);
     fs_exit(od->fs);
+    if (r == 0) {
+        fem_notify(from, SIEOS_FILE_RENAME_FROM);
+        if (to && !same_inode(to, from))
+            fem_notify(to, SIEOS_FILE_RENAME_TO);
+        fem_notify(od, SIEOS_FILE_MODIFIED);
+        if (nd != od)
+            fem_notify(nd, SIEOS_FILE_MODIFIED);
+    }
+    if (from)
+        iput(from);
+    if (to)
+        iput(to);
     return r;
 }
 
@@ -505,6 +547,10 @@ int vfs_link(struct inode *dir, const char *name, struct inode *ip)
     fs_enter(dir->fs);
     r = dir->fs->ops->link(dir, name, ip);
     fs_exit(dir->fs);
+    if (r == 0) {
+        fem_notify(dir, SIEOS_FILE_MODIFIED);
+        fem_notify(ip, SIEOS_FILE_ATTRIB);       /* (its link count) */
+    }
     return r;
 }
 
@@ -516,6 +562,8 @@ int vfs_symlink(struct inode *dir, const char *name, const char *target, int uid
     fs_enter(dir->fs);
     r = dir->fs->ops->symlink(dir, name, target, uid, gid);
     fs_exit(dir->fs);
+    if (r == 0)
+        fem_notify(dir, SIEOS_FILE_MODIFIED);    /* (a name added) */
     return r;
 }
 
@@ -601,6 +649,7 @@ int vfs_mount(struct fs *fs, const char *path)
         pp = &(*pp)->next;
     *pp = fs;
     rw_exit(&mount_lock);
+    fem_notify(ip, SIEOS_MOUNTEDOVER);           /* (a watched directory mounted over) */
     return 0;
 }
 
@@ -635,6 +684,7 @@ int vfs_umount(struct fs *fs)
             break;
         }
     rw_exit(&mount_lock);
+    fem_unmount(fs);                             /* (watched files on it: UNMOUNTED) */
     iput(fs->covered);
     fs->ops->destroy(fs);
     return 0;

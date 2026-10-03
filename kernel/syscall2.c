@@ -26,6 +26,7 @@
 #include "sieos/time.h"
 #include "sieos/sysinfo.h"
 #include "pci.h"
+#include "port.h"
 #include "sieos/sysinfo.h"
 #include "sieos/wait.h"
 #include "sieos/lwp.h"
@@ -440,6 +441,9 @@ long syscall_dispatch_v2(struct trapframe *tf)
     fr = syscall_sock_v2(tf, &handled);
     if (handled)
         return fr;
+    fr = sys2_timer(tf, &handled);               /* POSIX timers, event ports (ptimer.c, port.c) */
+    if (handled)
+        return fr;
     switch (tf->rax) {
     /* processes */
     case SIEOS_SYS_exit:      return v1(tf, SYS_exit, a1, 0, 0);
@@ -534,6 +538,7 @@ long syscall_dispatch_v2(struct trapframe *tf)
     case SIEOS_SYS_wifi:      return sys_wifi((long)a1, (void *)a2, (long)a3);
     case SIEOS_SYS_modinfo:   return sys_modinfo((struct sieos_modinfo *)a1, (long)a2);
     case SIEOS_SYS_modload:   return sys_modload((const char *)a1);
+    case SIEOS_SYS_ucredsys:  return sys2_ucredsys((long)a1, (long)a2, (struct sieos_ucred *)a3);
     }
     return -ENOSYS;
 }

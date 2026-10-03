@@ -121,6 +121,7 @@
 #define SIEOS_SYS_setregid       109
 #define SIEOS_SYS_getgroups      110   /* getgroups(n, gid *) */
 #define SIEOS_SYS_setgroups      111
+#define SIEOS_SYS_timer_getoverrun 112 /* timer_getoverrun(timer)  (with the time calls below) */
 
 /* ---- time (115-129) -------------------------------------------------- */
 #define SIEOS_SYS_clock_gettime  115
@@ -134,10 +135,10 @@
 #define SIEOS_SYS_gethrvtime     123   /* gethrvtime()       - LWP CPU time in ns */
 #define SIEOS_SYS_adjtime        124
 #define SIEOS_SYS_stime          125   /* stime(time_t) - set the clock (root) */
-#define SIEOS_SYS_timer_create   126   /* timer_create(clock, sigevent *, timer_t *)   (reserved) */
-#define SIEOS_SYS_timer_delete   127   /* (reserved) */
-#define SIEOS_SYS_timer_settime  128   /* (reserved) */
-#define SIEOS_SYS_timer_gettime  129   /* (reserved) */
+#define SIEOS_SYS_timer_create   126   /* timer_create(clock, const sieos_sigevent *, int *timerid)  POSIX timers */
+#define SIEOS_SYS_timer_delete   127   /* timer_delete(timer) */
+#define SIEOS_SYS_timer_settime  128   /* timer_settime(timer, flags, const sieos_itimerspec *, sieos_itimerspec *old) */
+#define SIEOS_SYS_timer_gettime  129   /* timer_gettime(timer, sieos_itimerspec *) */
 
 /* ---- sockets (130-149) ----------------------------------------------- */
 #define SIEOS_SYS_so_socket      130   /* so_socket(domain, type, protocol) - type may carry SIEOS_SOCK_CLOEXEC/NONBLOCK */
@@ -161,7 +162,8 @@
 #define SIEOS_SYS_semsys         151
 #define SIEOS_SYS_shmsys         152
 #define SIEOS_SYS_door           153
-#define SIEOS_SYS_portfs         154
+#define SIEOS_SYS_portfs         154   /* portfs(op, ...): event ports (port.h) */
+#define SIEOS_SYS_ucredsys       155   /* ucredsys(op, id, sieos_ucred *): a process's or a peer's credentials (ucred.h) */
 
 /* ---- processors (160-169) -------------------------------------------- */
 #define SIEOS_SYS_processor_info 160   /* processor_info(id, sieos_processor_info *) */

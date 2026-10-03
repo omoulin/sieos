@@ -375,6 +375,14 @@ bool socket_readable(struct socket *s)
     return s->qh != NULL;
 }
 
+long socket_nread(struct socket *s)
+{
+    mutex_enter(&net_lock);
+    long n = s->type == SOCK_STREAM ? (s->tcb ? (long)tcp_nread(s->tcb) : 0) : s->qh ? (long)s->qh->len : 0;
+    mutex_exit(&net_lock);
+    return n;
+}
+
 bool socket_urgent(struct socket *s)
 {
     return s->type == SOCK_STREAM && s->tcb && tcp_urgent(s->tcb);

@@ -14,6 +14,7 @@
 #include "tty.h"
 #include "poll.h"
 #include "display.h"
+#include "net.h"
 #include "abi2.h"
 #include "sieos/syscall.h"
 #include "sieos/errno.h"
@@ -688,6 +689,12 @@ static long do_ioctl(long fd, unsigned long cmd, uint64_t arg)
         long n = 0;
         if (f->type == FD_INODE && f->ip && S_ISREG(inode_mode(f->ip)))
             n = inode_size(f->ip) > f->off ? (long)(inode_size(f->ip) - f->off) : 0;
+        else if (f->type == FD_PIPE && f->pipe)
+            n = pipe_nread(f->pipe);
+        else if (f->type == FD_UNIX && f->usock)
+            n = unix_nread(f->usock);
+        else if (f->type == FD_SOCKET && f->sock)
+            n = socket_nread(f->sock);
         else
             n = (file_poll(f, POLLIN) & POLLIN) ? 1 : 0;
         *ip = (int)MIN(n, 0x7FFFFFFF);

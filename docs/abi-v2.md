@@ -3150,6 +3150,69 @@ every processor at once.
     the disk's completions;
   - user-mutex wakes lost between an LWP joining a sleep queue and going to sleep.
 
+### Milestone 78: Chromium's needs, Solaris's way
+
+The first stage of the Chromium port ([chromium.md](chromium.md)): what Chromium needs
+that Solaris has, added as Solaris has it.
+
+- **POSIX timers** (`kernel/ptimer.c`; system calls 126-129 and 112): `timer_create`,
+  `timer_settime` (relative or `TIMER_ABSTIME`, one-shot or periodic), `timer_gettime`,
+  `timer_getoverrun`, `timer_delete`, on `CLOCK_REALTIME` and `CLOCK_MONOTONIC`, 32 a
+  process. An expiration notifies as the `sigevent` says:
+  - `SIGEV_SIGNAL`: the signal, with `si_code` `SI_TIMER`, the timer's id, the
+    expirations missed and the value;
+  - `SIGEV_PORT`: an event (`PORT_SOURCE_TIMER`) on an event port;
+  - `SIGEV_THREAD`: the C library's, as Solaris's: a thread of the timer's waits on an
+    event port and calls the function;
+  - `SIGEV_NONE`.
+
+  The clock thread looks at the armed timers every tick. Timers go at exec and exit;
+  a child of `fork` has none. The `SIGEV_*` values are Solaris's (`SIGEV_NONE` 1,
+  `SIGNAL` 2, `THREAD` 3, `PORT` 4).
+- **Event ports** (`kernel/port.c`; system call 154, `portfs`): `port_create`,
+  `port_associate`, `port_dissociate`, `port_send`, `port_sendn`, `port_get`,
+  `port_getn`, `port_alert` (`<port.h>`). The sources:
+  - `PORT_SOURCE_FD`: a descriptor's poll events, reported once, then dissociated;
+  - `PORT_SOURCE_FILE`: File Event Notification. A `file_obj` names a path and the times
+    the caller saw; `FILE_ACCESS`, `FILE_MODIFIED`, `FILE_ATTRIB`, `FILE_TRUNC` as asked,
+    and always the exceptions (`FILE_DELETE`, `FILE_RENAME_FROM`/`TO`, `UNMOUNTED`,
+    `MOUNTEDOVER`). Times that differ from the file's report at once. A directory is
+    modified when a name in it comes or goes. The VFS calls the watches' hooks on
+    reads, writes, truncation, attribute and time changes, names created, linked,
+    removed and renamed, mounts and unmounts.
+  - `PORT_SOURCE_USER` (`port_send`), `PORT_SOURCE_TIMER`, `PORT_SOURCE_ALERT`.
+- **Credentials** (system call 155, `ucredsys`): `ucred_get` (a process's, its own user's
+  or root's), `getpeerucred` (a connected `AF_UNIX` socket's peer, as it was when it
+  connected; a socket pair's creator), the `ucred_get*` accessors, in `<ucred.h>`.
+- **In the C library:**
+  - `backtrace`, `backtrace_symbols`, `backtrace_symbols_fd` (`<execinfo.h>`): with the
+    unwinder's tables (`_Unwind_Backtrace`) when the program has `libgcc_s`, else by the
+    frame pointers;
+  - `walkcontext`, `printstack`, `addrtosymstr` (`<ucontext.h>`), symbols written
+    `object'symbol+0xoffset [pc]` as on Solaris;
+  - `arc4random`, `arc4random_buf`, `arc4random_uniform` (`<stdlib.h>`), from the
+    kernel's random numbers, a buffer at a time, each byte used once, afresh after
+    `fork`;
+  - POSIX.1-2024's clock waits: `pthread_cond_clockwait`, `pthread_mutex_clocklock`,
+    `pthread_rwlock_clockrdlock`, `pthread_rwlock_clockwrlock`, `sem_clockwait`.
+- **`FIONREAD`** on pipes and sockets gives the bytes waiting (a datagram socket's: the
+  next datagram's), as Solaris's does; it said 1 when anything was there.
+- **Many mappings.** Page faults find their area in a sorted index searched by
+  bisection, made again after the areas change: a process with thousands of mappings
+  faults in O(log n).
+- **Tested** on SIEOS (`libc/tests/m78.c`): every port source, file events on a file and
+  a directory (modification, attributes, stale times, deletion, renaming), timers of
+  every kind (periodic, absolute, deleted, not inherited), credentials of processes and
+  socket peers, `arc4random_uniform`'s spread, backtraces, the clock waits, and 6,000
+  separate mappings changed by `munmap` and `mprotect` and inherited by `fork`; a C++
+  program's `backtrace` and `printstack` through the unwinder. CPython's test suite
+  passes on the same kernel (452 files, 46,367 tests, 4 min 6 s on 8 processors).
+- **The Chromium package's translation layer** (`ports/chromium/lxcompat`, stage 2 of
+  [chromium.md](chromium.md)) is built on these: Linux's `/proc` and `/sys` files,
+  `prctl`, `statfs`'s magic numbers, inotify on event ports, the futex bitset
+  operations, `SO_PEERCRED`, memfd seals, `sendmmsg`/`recvmmsg`; its tests pass on
+  SIEOS. It is the package's, not SIEOS's.
+
 ## 14. Implementation plan
 
 | Milestone | Scope |
@@ -3220,7 +3283,7 @@ every processor at once.
 | 75 | a laptop's hardware: 64 processors, RTL8111/8168 Ethernet, Wi-Fi 6E AX210, `hwreport` (done; not tested on the hardware) |
 | 76 | NVIDIA RTX 50 (Blackwell) for Vulkan compute: Rust for SIEOS, GSP-RM, `/dev/nvgpu0`, NVK (in progress) |
 | 77 | no big kernel lock: Solaris's mutexes, condition variables, reader/writer locks and sleep queues; the dispatcher's lock; kernel threads for interrupts, the clock, the network and fsflush; every subsystem with its own locks ([locking.md](locking.md)) (done) |
-| 78 | Chromium's needs, Solaris's way (planned, [chromium.md](chromium.md)): POSIX timers, `getpeerucred`, event ports with file events, `backtrace`/`printstack`, `arc4random`, `pthread_cond_clockwait`, the mappings in a tree; Linux-only needs translated in the Chromium package (`liblxcompat`) |
+| 78 | Chromium's needs, Solaris's way ([chromium.md](chromium.md)): POSIX timers in the kernel, `ucred_get`/`getpeerucred`, event ports with File Event Notification, `backtrace`/`walkcontext`/`printstack`, `arc4random`, the clock waits (`pthread_cond_clockwait`...), the page faults' area index, `FIONREAD`'s byte counts; the Chromium package's `liblxcompat` (done) |
 | 73 | 4096-byte paths, TCP urgent data and `MSG_PEEK`, processor sets (`lwp_affinity`), demand-paged file mappings, `posix_spawn` scheduling, the locale database (done) |
 | 72 | Python 3.14 and its libraries; larger file, socket and inode tables; exit, tmpfs and pipe fixes; 64 KiB pipes; listen backlogs; socket options kept; pty output processing; `setreuid`, `sigwait`, CPU clocks; `SO_DOMAIN`, `SO_PROTOCOL`; `pthread_getattr_np`, thread names (done) |
 | 71 | OpenGL, EGL and Vulkan in software (Mesa: llvmpipe, lavapipe; LLVM 22), EGL's Facet platform, the Vulkan loader (done) |

@@ -32,6 +32,7 @@
 #include "poll.h"
 #include "display.h"
 #include "random.h"
+#include "port.h"
 #include "sieos/auxv.h"
 #include "sieos/mman.h"
 #include "sieos/wait.h"
@@ -140,6 +141,7 @@ static struct proc *alloc_proc(void)
         if (p->state != PSTATE_UNUSED)
             continue;
         memset(p, 0, sizeof(*p));
+        p->area_stale = true;
         p->state = PSTATE_EMBRYO;
         p->pid = alloc_pid();
         p->start_tick = ticks;
@@ -775,6 +777,7 @@ static int exec_file(struct lwp *l, const char *path, char *const argv[], char *
     mutex_exit(&p->p_lock);
 
     fd_close_exec(p);                                /* descriptors marked close-on-exec */
+    ptimer_proc_exit(p);                             /* POSIX timers do not survive exec */
 
     struct trapframe *tf = l->tf;
     memset(tf, 0, sizeof(*tf));                      /* every register 0, rdx = 0 (no rtld fini) */
@@ -1061,6 +1064,7 @@ long proc_setsid(void)
 /* The last LWP of a process is gone: release its resources, become a zombie. */
 static void proc_teardown(struct proc *p)
 {
+    ptimer_proc_exit(p);                         /* (first: an expiring timer signals the process) */
     ipc_proc_exit(p);
     signal_purge(p, NULL, 0);
     fd_close_all(p);

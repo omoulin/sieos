@@ -25,6 +25,7 @@
 #include "abi2.h"
 #include "sieos/syscall.h"
 #include "sieos/socket.h"
+#include "sieos/ucred.h"
 
 #define UNIX_BUF       32768                 /* stream receive buffer */
 #define UNIX_DGRAM_MAX 65536                 /* largest datagram */
@@ -52,6 +53,9 @@ struct umsg {
 enum { US_NEW, US_LISTEN, US_CONNECTED };
 
 struct usock {
+    struct sieos_ucred self;                 /* the creator's credentials (a listener's: its peers') */
+    struct sieos_ucred peer_cred;            /* connected: the peer's (getpeerucred) */
+    bool has_peer;
     int type;                                /* SIEOS_SOCK_STREAM or SIEOS_SOCK_DGRAM */
     int state;
     int refs;                                /* the file, plus callers sleeping on it */
@@ -138,11 +142,30 @@ static void defer_close(struct urights *r, struct file *f)
 /* Sockets and descriptors                                             */
 /* ------------------------------------------------------------------ */
 
+/* The calling process's credentials, as ucred_get gives them. */
+void ucred_of(struct proc *p, struct sieos_ucred *uc)
+{
+    memset(uc, 0, sizeof(*uc));
+    mutex_enter(&p->p_lock);
+    uc->uc_pid = p->pid;
+    uc->uc_euid = p->euid;
+    uc->uc_ruid = p->uid;
+    uc->uc_suid = p->suid;
+    uc->uc_egid = p->egid;
+    uc->uc_rgid = p->gid;
+    uc->uc_sgid = p->sgid;
+    uc->uc_ngroups = MIN(p->ngroups, SIEOS_UCRED_NGROUPS);
+    for (int i = 0; i < uc->uc_ngroups; i++)
+        uc->uc_groups[i] = p->groups[i];
+    mutex_exit(&p->p_lock);
+}
+
 static struct usock *usock_new(int type)
 {
     struct usock *u = kzalloc(sizeof(*u));
     if (!u)
         return NULL;
+    ucred_of(current, &u->self);
     if (type == SIEOS_SOCK_STREAM && !(u->buf = kmalloc(UNIX_BUF))) {
         kfree(u);
         return NULL;
@@ -268,6 +291,9 @@ long unix_socketpair(int type, int *usv)
     a->peer = b;
     b->peer = a;
     a->state = b->state = US_CONNECTED;
+    a->has_peer = b->has_peer = true;            /* (each one's peer is the creator) */
+    a->peer_cred = a->self;
+    b->peer_cred = b->self;
     long fa = install(a);
     if (fa < 0) {
         unix_close(b);
@@ -461,6 +487,11 @@ static long do_connect(struct usock *u, struct file *f, const void *uaddr, long 
     n->peer = u;
     u->peer = n;
     u->state = US_CONNECTED;
+    n->self = l->self;
+    ucred_of(current, &n->peer_cred);            /* the connecting process's, now */
+    n->has_peer = true;
+    u->peer_cred = l->self;                      /* the listener's (as it was when made) */
+    u->has_peer = true;
     l->backlog[l->nback++] = n;
     wake(l);
     usock_put(l);
@@ -979,6 +1010,14 @@ long unix_write(struct file *f, const void *buf, size_t n)
 
 static short poll_locked(struct usock *u);
 
+long unix_nread(struct usock *u)
+{
+    mutex_enter(&unix_lock);
+    long n = u->type == SIEOS_SOCK_STREAM ? (long)(u->wn - u->rn) : u->q ? (long)u->q->len : 0;
+    mutex_exit(&unix_lock);
+    return n;
+}
+
 short unix_poll(struct usock *u)
 {
     mutex_enter(&unix_lock);
@@ -1140,4 +1179,45 @@ static long syscall_locked(struct usock *u, struct file *f, uint64_t nr, uint64_
     case SIEOS_SYS_setsockopt:  return do_setsockopt(a2, a3, (const void *)a4, a5);
     }
     return -EOPNOTSUPP;
+}
+
+/* ucredsys(op, id, sieos_ucred *): a process's credentials, or an AF_UNIX socket's peer's. */
+long sys2_ucredsys(long op, long id, struct sieos_ucred *ubuf)
+{
+    if (!user_ok(ubuf, sizeof(*ubuf), true))
+        return -EFAULT;
+    struct sieos_ucred uc;
+    if (op == SIEOS_UCREDSYS_GETPEERUCRED) {
+        struct file *f;
+        struct usock *u = ufd(id, &f);
+        if (!u)
+            return fd_file((int)id) ? -ENOTSOCK : -EBADF;
+        mutex_enter(&unix_lock);
+        long r = u->has_peer && u->state == US_CONNECTED ? 0 : -ENOTCONN;
+        if (!r)
+            uc = u->peer_cred;
+        mutex_exit(&unix_lock);
+        if (r < 0)
+            return r;
+    } else if (op == SIEOS_UCREDSYS_UCREDGET) {
+        struct proc *me = current;
+        if (id == 0 || id == me->pid) {
+            ucred_of(me, &uc);
+        } else {
+            mutex_enter(&pidlock);
+            struct proc *p = proc_find((int)id);
+            long r = !p || p->state != PSTATE_RUNNING ? -ESRCH : 0;
+            if (!r && me->euid != 0 && me->euid != p->uid && me->uid != p->uid)
+                r = -EPERM;
+            if (!r)
+                ucred_of(p, &uc);
+            mutex_exit(&pidlock);
+            if (r < 0)
+                return r;
+        }
+    } else {
+        return -EINVAL;
+    }
+    memcpy(ubuf, &uc, sizeof(uc));
+    return 0;
 }

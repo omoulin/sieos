@@ -64,31 +64,44 @@ Linux. What Chromium needs is sorted in two:
 
 | What | Used by | Solaris's interface | SIEOS today |
 |---|---|---|---|
-| POSIX timers (`timer_create`, `timer_settime`, `timer_delete`...) | `base`'s watchdogs, Perfetto | POSIX timers in the kernel, per process | the functions, no kernel timers (`ENOSYS`) |
-| Peer credentials of a Unix socket | `base`'s and Mojo's peer checks | `getpeerucred(3C)`, `ucred_get` | none |
-| Watching files | `base::FilePathWatcher` | event ports (`port_create`, `port_associate` with `PORT_SOURCE_FILE`: File Event Notification) | the `portfs` system call reserved, not done |
-| Stack walking | `base::debug::StackTrace` | `walkcontext`, `printstack`, and `backtrace`/`backtrace_symbols` (Solaris 11's libc) | none |
-| `arc4random`, `arc4random_buf` | Expat, ffmpeg | Solaris 11.4's libc | none |
-| `pthread_cond_clockwait` | libc++, Abseil | POSIX (2024) | none |
+| POSIX timers (`timer_create`, `timer_settime`, `timer_delete`...) | `base`'s watchdogs, Perfetto | POSIX timers in the kernel, per process | done (milestone 78) |
+| Peer credentials of a Unix socket | `base`'s and Mojo's peer checks | `getpeerucred(3C)`, `ucred_get` | done (milestone 78) |
+| Watching files | `base::FilePathWatcher` | event ports (`port_create`, `port_associate` with `PORT_SOURCE_FILE`: File Event Notification) | done (milestone 78) |
+| Stack walking | `base::debug::StackTrace` | `walkcontext`, `printstack`, and `backtrace`/`backtrace_symbols` (Solaris 11's libc) | done (milestone 78) |
+| `arc4random`, `arc4random_buf` | Expat, ffmpeg | Solaris 11.4's libc | done (milestone 78) |
+| `pthread_cond_clockwait` | libc++, Abseil | POSIX (2024) | done, with the other clock waits (milestone 78) |
 | The processor an LWP runs on | PartitionAlloc, Perfetto | `getcpuid(3C)` | there |
 | File system information | `base` | `statvfs` (`f_basetype`) | there |
 
 ### In `liblxcompat` (the Chromium package)
 
+`ports/chromium/lxcompat/` (stage 2, done): a static library linked whole
+into every Chromium program ahead of the C library (its functions have
+the C library's names and reach the C library's own through
+`dlsym(RTLD_NEXT)`), a header forced into every compilation
+(`lxcompat.h`), and the Linux kernel headers Chromium includes
+(`linux/futex.h`, `linux/magic.h`, `linux/memfd.h`, `linux/limits.h`,
+`linux/version.h`, `sys/cdefs.h`). Its tests (`tests/lxtest.c`) pass on
+SIEOS.
+
 | Linux's | Used by | Translated from |
 |---|---|---|
-| `/proc/cpuinfo`, `/proc/meminfo`, `/proc/self/{exe,maps,status,stat,auxv,cmdline}`, `/sys/devices/system/cpu/*` (opened, read) | `base`, PartitionAlloc, Abseil, cpuinfo, V8 | Solaris's `/proc` (`psinfo`, `status`, `map`, `auxv`), `sysinfo`, `getexecname`, `processor_info`, `sysconf`: the files' text made when opened (`open`/`fopen` of these paths wrapped) |
-| `prctl` (`PR_SET_NAME`, `PR_GET_NAME`, `PR_SET_PDEATHSIG`, `PR_SET_DUMPABLE`, `PR_SET_VMA_ANON_NAME`) | `base` | `pthread_setname_np`; the parent's exit watched (`waitid`/a thread); the rest accepted |
+| `/proc/cpuinfo`, `meminfo`, `stat`, `uptime`, `loadavg`, `version`; `/proc/PID/{stat,statm,status,comm,cmdline}`, `/proc/PID/task/` and `task/TID/*`; `/proc/self/{environ,auxv,maps,exe}`; `/proc/sys/kernel/random/{boot_id,uuid}`; `/sys/devices/system/cpu/{online,possible,present,cpuN/cpufreq/*}` (`open`, `openat`, `fopen`, `readlink`, `stat`, `access`, `opendir`) | `base`, PartitionAlloc, Abseil, cpuinfo, V8 | Solaris's `/proc` (`psinfo`, `status`, `cred`, `usage`, `lwp/`), the process's initial stack (`pr_argv`, `pr_envp`: the arguments, the environment, the aux vector), `cpuid`, `processor_info`, `sysinfo`, `getexecname`: the text made when the file is opened, in a memfd. `maps` lists the loaded objects (`dl_iterate_phdr`), the heap and the stack, not anonymous mappings |
+| `prctl` (`PR_SET_NAME`, `PR_GET_NAME`, `PR_SET_PDEATHSIG`, `PR_SET/GET_DUMPABLE`, `PR_SET_NO_NEW_PRIVS`, `PR_SET_VMA`) | `base` | `pthread_setname_np`/`pthread_getname_np`; a thread waiting on the parent's pidfd sends the signal; the rest kept or accepted |
 | `statfs`, `fstatfs` (`f_type`'s magic numbers) | `base` (drive information, `/dev/shm`) | `statvfs`'s `f_basetype` mapped to Linux's numbers |
-| inotify (`inotify_init1`, `inotify_add_watch`...) | `base::FilePathWatcher` (or a SIEOS watcher patched in) | event ports' file events |
-| futex's `FUTEX_WAIT_BITSET`, `FUTEX_CLOCK_REALTIME`, `<linux/futex.h>` | PartitionAlloc, Abseil, V8 | SIEOS's user mutexes (`lwp_umtx`), as the C library's futex is |
-| `SO_PEERCRED`, `SCM_CREDENTIALS` | `base`, Mojo | `getpeerucred` |
-| `SOCK_SEQPACKET` Unix socket pairs | the browser's sandbox host, the zygote | stream sockets with a length before each message (or Chromium patched to stream sockets) |
-| memfd seals (`F_ADD_SEALS`, `F_GET_SEALS`) | Mojo's read-only shared memory | recorded and answered by the layer (Chromium checks them; nothing enforces them in-process) |
+| inotify (`inotify_init1`, `inotify_add_watch`, `inotify_rm_watch`) | `base::FilePathWatcher` | event ports' file events: a thread an instance writes `inotify_event` records into a socket pair; a directory's names compared after each change (`IN_CREATE`, `IN_DELETE`, `IN_MOVED_FROM`/`TO` with a cookie), its first 256 files watched for `IN_MODIFY`/`IN_ATTRIB` |
+| futex's `FUTEX_WAIT_BITSET`, `FUTEX_WAKE_BITSET`, `FUTEX_CLOCK_REALTIME` (`syscall(SYS_futex)`) | PartitionAlloc, Abseil, V8 | `FUTEX_WAIT` (the absolute time made relative) and `FUTEX_WAKE`, which the C library makes SIEOS's user mutexes (`lwp_umtx`) |
+| `SO_PEERCRED` (`SO_PASSCRED` accepted; no `SCM_CREDENTIALS` sent) | `base`, Mojo | `getpeerucred` |
+| memfd seals (`F_ADD_SEALS`, `F_GET_SEALS`; `MFD_NOEXEC_SEAL`) | Mojo's read-only shared memory | recorded and answered by the layer (Chromium checks them; nothing enforces them in-process) |
 | `sendmmsg`, `recvmmsg` | QUIC | loops over `sendmsg`/`recvmsg` |
-| Netlink route sockets | `net::AddressTrackerLinux` | none: a SIEOS network change notifier patched in (`getifaddrs`, polled, or SIEOS's routing socket) |
-| `fopen64`, `lseek64`, `pread64`... | minizip, libwebm, ffmpeg | macros in the forced header |
-| xattrs, `pkey_*`, `rseq`, `membarrier`, `userfaultfd`, `perf_event_open` | V8's and PartitionAlloc's isolation, metrics | `ENOTSUP`/`ENOSYS`, or the features off |
+| `sched_getcpu` | PartitionAlloc, Perfetto | `getcpuid(3C)` |
+| `SOCK_SEQPACKET` Unix socket pairs | the browser's sandbox host, the zygote | not translated: both are off in the SIEOS build (stage 3) |
+| Netlink route sockets | `net::AddressTrackerLinux` | not translated: a SIEOS network change notifier patched in (stage 3) |
+| `fopen64`, `lseek64`, `pread64`... | minizip, libwebm, ffmpeg | the C library's macros (`_LARGEFILE64_SOURCE`) |
+| xattrs, `pkey_*`, `rseq`, `membarrier`, `userfaultfd`, `perf_event_open` | V8's and PartitionAlloc's isolation, metrics | `ENOSYS` from the C library, or the features off |
+
+SIEOS itself gained one thing on the way, as Solaris has it: `FIONREAD` on
+pipes and sockets gives the bytes waiting (the next datagram's), not 1.
 
 ### Memory and threads (to be fast enough)
 
@@ -96,8 +109,8 @@ Linux. What Chromium needs is sorted in two:
   sandbox 1 TiB (`PROT_NONE`, `MAP_NORESERVE`): SIEOS's 128 TiB of user
   address space holds them, and reservations are not filled; V8's sandbox
   can be turned off first.
-- **Many mappings**: SIEOS keeps a process's mappings in a list; Chromium's
-  processes have thousands: a balanced tree (or the list's lookups cached).
+- **Many mappings**: Chromium's processes have thousands; SIEOS's page
+  faults find theirs in a sorted index, by bisection (milestone 78).
 - **`madvise(MADV_DONTNEED)`, `MADV_FREE`**: SIEOS has them (through
   `memcntl`); PartitionAlloc's decommit uses them and `mmap(MAP_FIXED)`.
 - **Threads**: tens a process, several processes: the kernel runs on
@@ -144,8 +157,8 @@ making system calls, would have queued there. It is gone now, Solaris's way
 
 | Stage | What | Time |
 |---|---|---|
-| 1 | **SIEOS, Solaris's way** (milestone 78): POSIX timers in the kernel, `getpeerucred`, event ports with file events, `backtrace`/`walkcontext`/`printstack`, `arc4random`, `pthread_cond_clockwait`; a process's mappings in a tree; each tested on SIEOS | about 1 day |
-| 2 | **`liblxcompat`** in the Chromium package: the table above, with its own tests (run on SIEOS) | about 1 day |
+| 1 | **SIEOS, Solaris's way** (done: milestone 78): POSIX timers in the kernel, `getpeerucred`, event ports with file events, `backtrace`/`walkcontext`/`printstack`, `arc4random`, `pthread_cond_clockwait`; the page faults' area index; each tested on SIEOS | done |
+| 2 | **`liblxcompat`** in the Chromium package (done): the table above, with its own tests (run on SIEOS) | done |
 | 3 | **The build**: Chromium's clang with SIEOS's sysroot, its Rust's `libc` made SIEOS's, the GN arguments, the patch set (musl, the network change notifier, what is off), the first full build | about 1 day |
 | 4 | **`headless_shell`**: pages drawn into images (`--headless --screenshot`), single process then several; its failures fixed | about 1–2 days |
 | 5 | **`content_shell` in a Facet window**: the `sieos` Ozone platform | about 1 day |

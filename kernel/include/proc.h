@@ -22,9 +22,11 @@
 #define MAXENV      (256 * 1024)
 #define MAXARGSTR   2096640              /* ARG_MAX (as Solaris): argument and environment strings and pointers */
 #define MAXPATH     4096        /* a path, its NUL included: PATH_MAX, one page (path_get) */
+#define NPTIMER     64          /* POSIX timers a process may have */
 
 struct file;
 struct inode;
+struct ptimer;
 
 struct ksigaction {
     uint64_t handler;           /* SIG_DFL (0), SIG_IGN (1) or user address */
@@ -116,7 +118,10 @@ struct proc {
     krwlock_t as_lock;          /* the address space's areas and brk, against their changes (vm.c) */
     struct spinlock vmlock;     /* the address space: areas and page tables, for faults (vm.c) */
     uint64_t brk;
-    struct vm_area *areas;      /* mmap regions (vm.c) */
+    struct vm_area *areas;      /* mmap regions (vm.c), sorted */
+    struct vm_area **area_index;   /* ... in an array, for the page faults' bisection (vmlock) */
+    int area_n, area_cap;
+    bool area_stale;            /* the list changed since: made again at the next fault */
 
     int exit_status;            /* wait status word, kernel signal numbers */
     uint64_t ticks;             /* CPU time of the LWPs that have exited */
@@ -157,6 +162,7 @@ struct proc {
     int nlwp;                   /* LWPs not yet exited */
     int next_lwpid;
 
+    struct ptimer *timers[NPTIMER];     /* POSIX timers (ptimer.c: under its lock) */
     /* interval timers (ITIMER_REAL, VIRTUAL, PROF): ticks left and reload */
     uint64_t itimer_value[3], itimer_interval[3];
     /* resource limits (SIEOS_RLIMIT_*): current and maximum */

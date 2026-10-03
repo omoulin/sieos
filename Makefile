@@ -678,7 +678,7 @@ libc-test: $(TCDEP) $(BUILD)/libc-test/runall libc/tests/libc-test-sieos.patch
 	cd $(BUILD)/libc-test && $(MAKE) -k src/api/main.exe >/dev/null 2>&1 || true
 
 # SIEOS tests: Solaris interfaces; named FIFOs and AF_UNIX sockets
-SIEOS_LTESTS := $(BUILD)/libc-test/sieos/solaris.exe $(BUILD)/libc-test/sieos/unixsock.exe $(BUILD)/libc-test/sieos/m12.exe $(BUILD)/libc-test/sieos/m18.exe $(BUILD)/libc-test/sieos/vmstress.exe $(BUILD)/libc-test/sieos/ipv6.exe $(BUILD)/libc-test/sieos/symlink.exe $(BUILD)/libc-test/sieos/tcpstress.exe $(BUILD)/libc-test/sieos/frag.exe
+SIEOS_LTESTS := $(BUILD)/libc-test/sieos/solaris.exe $(BUILD)/libc-test/sieos/unixsock.exe $(BUILD)/libc-test/sieos/m12.exe $(BUILD)/libc-test/sieos/m18.exe $(BUILD)/libc-test/sieos/vmstress.exe $(BUILD)/libc-test/sieos/ipv6.exe $(BUILD)/libc-test/sieos/symlink.exe $(BUILD)/libc-test/sieos/tcpstress.exe $(BUILD)/libc-test/sieos/frag.exe $(BUILD)/libc-test/sieos/m78.exe
 $(BUILD)/libc-test/sieos/%.exe: libc/tests/%.c $(TCDEP)
 	@mkdir -p $(dir $@)
 	$(MUSL_CC) -static -O2 -Wall -Wextra -Iabi/include -o $@ $<

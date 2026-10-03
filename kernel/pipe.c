@@ -188,6 +188,14 @@ int fifo_open(struct file *f, struct inode *ip, int flags)
     return 0;
 }
 
+long pipe_nread(struct pipe *p)
+{
+    mutex_enter(&p->lock);
+    long n = (long)(p->nwrite - p->nread);
+    mutex_exit(&p->lock);
+    return n;
+}
+
 long pipe_read(struct pipe *p, char *buf, size_t n)
 {
     mutex_enter(&p->lock);

@@ -356,8 +356,10 @@ long unix_syscall(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a
 long unix_read(struct file *f, void *buf, size_t n);
 long unix_write(struct file *f, const void *buf, size_t n);
 short unix_poll(struct usock *u);
+long unix_nread(struct usock *u);              /* FIONREAD: the bytes (the next datagram's) to read */
 void unix_close(struct usock *u);
 long pipe_read(struct pipe *p, char *buf, size_t n);
+long pipe_nread(struct pipe *p);               /* FIONREAD: the bytes in it */
 long pipe_write(struct pipe *p, const char *buf, size_t n, bool nonblock);
 
 #endif

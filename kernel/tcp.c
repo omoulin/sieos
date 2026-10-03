@@ -1008,6 +1008,11 @@ static bool urg_index(struct tcb *t, bool oobinline, uint32_t *k)
     return *k < t->rlen;
 }
 
+uint32_t tcp_nread(struct tcb *t)
+{
+    return t->rlen;
+}
+
 bool tcp_urgent(struct tcb *t)
 {
     return t->oob_have || (t->urg_valid && !t->oob_taken);

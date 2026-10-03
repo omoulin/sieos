@@ -265,6 +265,7 @@ void socket_fd_closed(struct socket *s);     /* a descriptor of it was closed (a
 long socket_read(struct socket *s, void *buf, size_t n, bool nonblock);
 long socket_write(struct socket *s, const void *buf, size_t n, bool nonblock);
 bool socket_readable(struct socket *s);
+long socket_nread(struct socket *s);             /* FIONREAD: the bytes (the next datagram's) to read */
 bool socket_urgent(struct socket *s);          /* TCP urgent data unread: POLLPRI */
 bool socket_writable(struct socket *s);
 bool socket_failed(struct socket *s);
@@ -288,6 +289,7 @@ void tcp_set_backlog(struct tcb *t, int backlog);
 long tcp_send(struct tcb *t, const void *buf, size_t n, int flags);       /* MSG_DONTWAIT, MSG_OOB, MSG_NOSIGNAL */
 long tcp_recv(struct tcb *t, void *buf, size_t n, int flags, int timeout_ms, bool oobinline);  /* + MSG_PEEK */
 bool tcp_urgent(struct tcb *t);                  /* urgent data not read yet: POLLPRI */
+uint32_t tcp_nread(struct tcb *t);               /* the bytes received, in order, not read yet */
 /* struct socket's opts (sock2.c's flag options) the stack reads */
 #define SOPT_OOBINLINE    (1 << 5)          /* SO_OOBINLINE */
 #define SOPT_RECVHOPLIMIT (1 << 8)          /* IPV6_RECVHOPLIMIT */

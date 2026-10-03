@@ -50,11 +50,59 @@ static uint64_t prot_flags(int prot)
     return f;
 }
 
+/* The area holding va (as_lock held: the list does not change). */
 static struct vm_area *find_area(struct proc *p, uint64_t va)
 {
     for (struct vm_area *a = p->areas; a; a = a->next)
         if (va >= a->start && va < a->end)
             return a;
+    return NULL;
+}
+
+/*
+ * The page faults' lookup (vmlock held): the areas' index, a sorted array
+ * searched by bisection, made again after the list changed (each change,
+ * under vmlock too, marks it stale).  A process with thousands of mappings
+ * (a browser's) faults in O(log n).
+ */
+static void index_rebuild(struct proc *p)
+{
+    int n = 0;
+    for (struct vm_area *a = p->areas; a; a = a->next)
+        n++;
+    if (n > p->area_cap) {
+        int cap = n < 64 ? 64 : n * 2;
+        struct vm_area **ix = kmalloc(cap * sizeof(*ix));
+        if (!ix)
+            return;                              /* (stays stale: the list is walked) */
+        kfree(p->area_index);
+        p->area_index = ix;
+        p->area_cap = cap;
+    }
+    int i = 0;
+    for (struct vm_area *a = p->areas; a; a = a->next)
+        p->area_index[i++] = a;
+    p->area_n = n;
+    p->area_stale = false;
+}
+
+static struct vm_area *find_area_fast(struct proc *p, uint64_t va)
+{
+    if (p->area_stale)
+        index_rebuild(p);
+    if (p->area_stale)
+        return find_area(p, va);
+    int lo = 0, hi = p->area_n - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        struct vm_area *a = p->area_index[mid];
+        if (va < a->start)
+            hi = mid - 1;
+        else if (va >= a->end)
+            lo = mid + 1;
+        else
+            return a;
+    }
     return NULL;
 }
 
@@ -65,6 +113,7 @@ static void insert_area(struct proc *p, struct vm_area *n)
         pp = &(*pp)->next;
     n->next = *pp;
     *pp = n;
+    p->area_stale = true;
 }
 
 /* Private anonymous memory with the same protection, end to end: one area.
@@ -79,6 +128,7 @@ static bool mergeable(const struct vm_area *x, const struct vm_area *y)
 
 static void merge_area(struct proc *p, struct vm_area *a)
 {
+    p->area_stale = true;
     struct vm_area *prev = NULL;
     for (struct vm_area *x = p->areas; x && x != a; x = x->next)
         prev = x;
@@ -136,7 +186,7 @@ static struct vm_area *area_split(struct vm_area *a, uint64_t at)
     b->off = a->off + (at - a->start);
     a->end = at;
     b->next = a->next;
-    a->next = b;
+    a->next = b;                                 /* (the caller marks its process's index stale) */
     area_hold(b);
     return b;
 }
@@ -225,6 +275,13 @@ void vm_space_free(struct proc *p, uint64_t pml4)
 {
     vmm_free_space(pml4);
     vm_exec_reset(p);
+    vm_space_lock(p);
+    struct vm_area **ix = p->area_index;     /* (an address space that goes: its index too) */
+    p->area_index = NULL;
+    p->area_n = p->area_cap = 0;
+    p->area_stale = true;
+    vm_space_unlock(p);
+    kfree(ix);
 }
 
 void vm_exec_reset(struct proc *p)
@@ -232,6 +289,7 @@ void vm_exec_reset(struct proc *p)
     vm_space_lock(p);
     struct vm_area *list = p->areas;
     p->areas = NULL;
+    p->area_stale = true;
     vm_space_unlock(p);
     while (list) {
         struct vm_area *a = list;
@@ -308,7 +366,7 @@ static uint64_t file_pte_flags(const struct vm_area *a)
 static bool file_fault(struct proc *p, uint64_t va)
 {
     vm_space_lock(p);
-    struct vm_area *a = find_area(p, va);
+    struct vm_area *a = find_area_fast(p, va);
     struct inode *ip = a ? a->ip : NULL;
     uint64_t idx = a ? (a->off + (va - a->start)) / PAGE_SIZE : 0;
     if (ip)
@@ -318,7 +376,7 @@ static bool file_fault(struct proc *p, uint64_t va)
     uint64_t pa;
     if (ip && vfs_getpage(ip, idx, &pa) >= 0) {
         vm_space_lock(p);
-        a = find_area(p, va);
+        a = find_area_fast(p, va);
         uint64_t *pte = vmm_pte(p->pml4, va, false);
         if (pte && (*pte & PTE_P)) {
             ok = true;                           /* another LWP mapped it meanwhile */
@@ -384,7 +442,7 @@ static bool fault(struct proc *p, uint64_t addr, uint64_t err, uint64_t *frame, 
     uint64_t limit = MIN(p->rlim_cur[3] ? p->rlim_cur[3] : USER_STACK_SIZE, USER_STACK_SIZE);
     if (va >= USER_STACK_TOP - limit && va < USER_STACK_TOP)
         return zero_page(pml4, va, PTE_U | PTE_W | pte_nx, frame);
-    struct vm_area *a = find_area(p, va);
+    struct vm_area *a = find_area_fast(p, va);
     if (a && a->ip && a->prot != SIEOS_PROT_NONE) {
         if ((err & 2) && !(a->prot & SIEOS_PROT_WRITE))
             return false;
@@ -458,6 +516,7 @@ static int cut_areas(struct proc *p, uint64_t start, uint64_t end)
     struct inode *trim[2] = { NULL, NULL };
     int ntrim = 0, r = 0;
     vm_space_lock(p);
+    p->area_stale = true;
     struct vm_area **pp = &p->areas;
     while (*pp) {
         struct vm_area *a = *pp;
@@ -764,6 +823,7 @@ static long vm_mremap_locked(uint64_t old, uint64_t oldlen, uint64_t newlen, int
     if (old + oldlen == a->end && old + newlen <= USER_MMAP_TOP && range_free(p, a->end, a->end + grow)) {
         vm_space_lock(p);
         a->end = old + newlen;                       /* in place */
+        p->area_stale = true;
         vm_space_unlock(p);
         if (shared_anon(a) && fill_shared_anon(p, old + oldlen, old + newlen, a->prot) < 0) {
             unmap_pages(p, old + oldlen, old + newlen);
@@ -843,6 +903,7 @@ static long vm_mprotect_locked(uint64_t addr, uint64_t len, int prot)
         return -ENOMEM;
     /* split the areas at the range edges, then set their protection */
     vm_space_lock(p);
+    p->area_stale = true;
     for (struct vm_area *a = p->areas; a; a = a->next) {
         if (a->end <= addr || a->start >= end)
             continue;

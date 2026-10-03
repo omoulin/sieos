@@ -35,6 +35,7 @@
 #include "net.h"
 #include "ddi.h"
 #include "power.h"
+#include "port.h"
 #include "jbd2.h"
 #include "blkdev.h"
 #include "sieos/priocntl.h"
@@ -354,6 +355,7 @@ static void clock_thread(void *arg)
         last = now;
         if (n)
             clock_tick(n);
+        ptimer_tick();                           /* POSIX timers */
         netisr_kick();                           /* the network's timers and polled cards */
         ddi_poll();                              /* the drivers' polled devices (USB, I2C HID, Wi-Fi) */
         power_tick();
