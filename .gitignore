@@ -1,0 +1,4 @@
+build/
+build-*/
+*.gguf
+gmon.out

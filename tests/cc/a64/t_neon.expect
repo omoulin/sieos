@@ -1,0 +1,15 @@
+add/sub/mul s8 ok
+mla/max/min/abs s32 ok
+saturating/rounding u8 ok
+logic u8 ok
+shifts ok
+compares ok
+float arithmetic, fma ok
+add across ok
+widening ok
+narrowing ok
+permutes, lanes ok
+table, count, select ok
+conversions, half precision ok
+passing in v registers ok
+exit 0

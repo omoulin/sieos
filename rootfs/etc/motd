@@ -1,0 +1,3 @@
+Welcome to SIEOS, a microkernel system. Type 'help' for the commands.
+Files live on SieFS: try ls /, cat /etc/motd, hello, bench.
+
