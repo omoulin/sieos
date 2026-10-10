@@ -1,5 +1,5 @@
 /* abi_gcc.c - the host compiler's side of the ABI test.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "abi.h"
 long g_take(S1 a, S3 b, S8 c, S12 d, S16 e, S24 f, D2 g, DL h, IFD i, F3 j, C5 k, int x, double y)
 {

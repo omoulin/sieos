@@ -20,7 +20,7 @@
  * output. Until enough is gathered (256 bits, counted cautiously), the
  * call fails with -EAGAIN rather than give guessable bytes.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "mk/crypto.h"

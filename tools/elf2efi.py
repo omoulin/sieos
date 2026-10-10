@@ -10,7 +10,7 @@ that is not position-independent (compile with -fpic): refused.
 
 Usage: elf2efi.py A.elf B.elf out.efi   (A linked at the lower address)
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import struct, sys
 

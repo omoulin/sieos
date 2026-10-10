@@ -1,5 +1,5 @@
 /* tls.c - _Thread_local and __thread: local-exec, and initial-exec for tls_gcc.c's variable.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 typedef unsigned long pthread_t;
 int pthread_create(pthread_t *t, const void *attr, void *(*fn)(void *), void *arg);

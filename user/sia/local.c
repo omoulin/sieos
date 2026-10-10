@@ -11,7 +11,7 @@
  *     answer they spin briefly between two pieces of work, so the next one
  *     needs no wake-up message.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "backend.h"

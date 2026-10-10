@@ -1,6 +1,6 @@
 # The USB stack
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 One user-space server, `usb` (`user/usb/`), drives the xHCI controller,
 enumerates every device (hubs included), serves each USB disk with the

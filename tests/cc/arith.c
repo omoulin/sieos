@@ -1,4 +1,4 @@
-/* Integer arithmetic, promotions and conversions. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Integer arithmetic, promotions and conversions. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 int g = -7; unsigned ug = 7; long lg = -123456789012L; unsigned long ulg = 18446744073709551615UL;
 signed char sc = -100; unsigned char uc = 200; short ss = -30000; unsigned short us = 60000;

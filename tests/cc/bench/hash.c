@@ -1,5 +1,5 @@
 /* hash.c - benchmark: strings and an open-addressing hash table (word counting).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 int printf(const char *fmt, ...);
 #define N 65536
 static struct { char key[16]; int len, count; } tab[N];

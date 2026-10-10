@@ -2,7 +2,7 @@
  * internal.h - What the engine's files share: quantized block formats, the
  * model, its tokenizer, and sessions.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include "llm.h"

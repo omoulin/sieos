@@ -13,7 +13,7 @@
  * before it, never a mix. The library does no permission checks: the
  * server does them with the caller's uid/gid (siefs_access helps).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

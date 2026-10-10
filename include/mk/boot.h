@@ -7,7 +7,7 @@
  * paging on (the firmware's identity map), interrupts off, after
  * ExitBootServices. Everything it points to is below 4 GiB.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

@@ -2,7 +2,7 @@
  * mk/lib.h - Small helpers compiled into both the kernel and user programs
  * (lib/string.c, lib/fmt.c): there is no C library underneath either.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stddef.h>

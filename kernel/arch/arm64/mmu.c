@@ -9,7 +9,7 @@
  * what the core calls its "address space"). So, unlike x86-64, a new
  * address space copies nothing of the kernel's.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "arm64.h"

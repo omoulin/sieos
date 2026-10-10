@@ -6,7 +6,7 @@
  * The thread pool: the caller is worker 0; the others wait for a job, spin
  * a little first (a job usually follows quickly), then sleep.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdio.h>
 #include <stdlib.h>

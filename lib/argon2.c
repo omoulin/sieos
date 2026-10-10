@@ -13,7 +13,7 @@
  * Argon2id, the one SIEOS uses, does Argon2i for the first half pass, then
  * Argon2d. Lanes are computed one after the other (SIEOS uses p = 1).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk/crypto.h"
 #include "mk/lib.h"

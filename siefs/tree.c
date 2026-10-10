@@ -14,7 +14,7 @@
  * entry's key is the first key of its child (so a search for the item at or
  * just before a key ends in the right leaf).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "siefs_int.h"
 

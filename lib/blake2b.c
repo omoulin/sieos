@@ -4,7 +4,7 @@
  * the digest is the state's first outlen bytes. Used by the kernel (to mix
  * entropy) and by programs (Argon2).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk/crypto.h"
 #include "mk/lib.h"

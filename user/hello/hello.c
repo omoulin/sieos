@@ -2,7 +2,7 @@
  * hello - The first program loaded from the disk: it shows its arguments
  * and who it runs as.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

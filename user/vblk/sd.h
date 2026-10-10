@@ -1,7 +1,7 @@
 /*
  * sd.h - The SD card backend of the disk server (sd.c, arm64).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

@@ -11,7 +11,7 @@
  * multiple of 64, so the thread pointer (template start + size) is where
  * the compilers' offsets assume, whatever alignment the linker records.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 ENTRY(_start)
 PHDRS { text PT_LOAD FLAGS(5); rodata PT_LOAD FLAGS(4); data PT_LOAD FLAGS(6); tls PT_TLS; }

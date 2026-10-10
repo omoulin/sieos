@@ -8,7 +8,7 @@
  * products fit in 128 bits. The Montgomery ladder does the same operations
  * whatever the secret's bits are (a constant-time swap instead of branches).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk/crypto.h"
 #include "mk/lib.h"

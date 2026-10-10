@@ -3,7 +3,7 @@
  * and the SYSCALL instruction; a new thread's first frame. Also trap(),
  * where every interrupt and exception arrives.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "x86.h"

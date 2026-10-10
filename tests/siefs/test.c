@@ -14,7 +14,7 @@
  * The disk is in memory and remembers what was flushed, so a power cut
  * can be simulated precisely. ISO C only.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdio.h>
 #include <stdlib.h>

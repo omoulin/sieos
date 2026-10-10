@@ -3,7 +3,7 @@
 compiler (-fwrapv: wrapping overflow, as sicc's code does) and by sicc; the
 printed results must agree. Usage: fuzz.py SICC [programs] [seed]
 (QEMU=the emulator: for AArch64, see a64/target.py).
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only"""
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only"""
 import random, subprocess, sys, os
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "a64"))

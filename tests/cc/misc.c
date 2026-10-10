@@ -1,4 +1,4 @@
-/* Builtins, _Generic, statement expressions, atomics, enums, typeof. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Builtins, _Generic, statement expressions, atomics, enums, typeof. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 #include <stdint.h>
 #include <stdbool.h>

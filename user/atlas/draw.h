@@ -2,7 +2,7 @@
  * draw.h - The drawing layer of the desktop: a display list rasterized
  * straight into video memory, one region at a time.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

@@ -13,7 +13,7 @@
  *    is redone ("relaxation"). Sizes only ever grow, so this ends.
  * 4. Encoding: the bytes, plus relocations for what only the linker knows.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "sicc.h"
 

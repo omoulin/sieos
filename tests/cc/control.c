@@ -1,4 +1,4 @@
-/* Statements: loops, switch, goto, conditions. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Statements: loops, switch, goto, conditions. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 static int classify(int x) {
     switch (x) {

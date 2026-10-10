@@ -10,7 +10,7 @@
  * The integer kernels compute exactly what the plain C ones do (quant.c);
  * only the order of the final float additions differs.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #if defined(__aarch64__)
 #include <arm_neon.h>

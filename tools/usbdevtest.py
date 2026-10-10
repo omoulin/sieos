@@ -10,7 +10,7 @@ SIEOS's only disk, a USB keyboard) and its control socket (QMP):
 Usage: usbdevtest.py <cpus> <host tools dir> <disk image> <qemu command...>
 (the command without disk; see make usb-dev-test).
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import json, os, re, select, shutil, socket, subprocess, sys, time
 

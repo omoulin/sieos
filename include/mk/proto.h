@@ -2,7 +2,7 @@
  * mk/proto.h - The message protocols of the system servers: what goes in w[]
  * of a msg_t. The kernel knows nothing of these; only clients and servers do.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

@@ -10,7 +10,7 @@
  * Header guards (#ifndef X / #define X ... #endif around a whole file) and
  * #pragma once are remembered, so a header included again is not even read.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "sicc.h"
 

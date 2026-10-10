@@ -9,7 +9,7 @@
  *   svc idle NAME SECONDS     an on-demand service stops after this long unused
  *                             (0: never) (root)
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

@@ -10,7 +10,7 @@
  * where tbsCertificate ("to be signed") holds the issuer's and subject's
  * names, the validity dates, the subject's public key and extensions.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "net.h"
 #include "mk/crypto.h"

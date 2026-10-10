@@ -1,7 +1,7 @@
 /* spill_widen.c - 32-bit values spilled under register pressure, then widened to
  * 64 bits (a spill slot holds only the low 4 bytes: the top must never be
  * assumed clear); the stack is filled with junk first.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 __attribute__((noinline)) static void junk(unsigned s) { volatile unsigned char b[8192]; for (int i = 0; i < 8192; i++) b[i] = (unsigned char)((s = s * 1103515245 + 12345) >> 16) | 0x80; }
 __attribute__((noinline)) static unsigned long mix(const unsigned *v, int n)

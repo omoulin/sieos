@@ -1,4 +1,4 @@
-/* Structs, unions, bit-fields, initializers, struct values. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Structs, unions, bit-fields, initializers, struct values. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 struct P { int x, y; };
 struct R { struct P a, b; char name[8]; };

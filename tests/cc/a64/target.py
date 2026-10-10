@@ -4,7 +4,7 @@ emulator, for AArch64: sicc --target=aarch64, linked by sicc with the test C
 library of this directory, run under the emulator. The reference is then
 built by the host compiler with SIEOS's AArch64 types (char unsigned, long
 double = double) and the same printf (fmt.c).
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only"""
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only"""
 import os, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))

@@ -17,7 +17,7 @@
  * Until the MMU is on, everything is addressed relative to the program
  * counter (adr/adrp), which gives physical addresses.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #define KVMA_HI   0xFFFF            /* KVMA = 0xFFFFFFFF80000000, built 16 bits at a time */
 #define MAIR      0x4400FF          /* attribute 0: normal, write-back; 1: device nGnRnE; 2: normal uncached */

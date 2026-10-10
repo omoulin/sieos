@@ -11,7 +11,7 @@
  * Options: -s system  -t threads  -n max tokens  --temp T  --seed N  --ctx N
  *          --kernel scalar|avx2|vnni  --exact  --budget MiB
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdio.h>
 #include <stdlib.h>

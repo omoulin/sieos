@@ -13,7 +13,7 @@
  *   - the attribute index matches the attributes, both ways;
  *   - with data != 0, every file block against its checksum.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdarg.h>
 #include "siefs_int.h"

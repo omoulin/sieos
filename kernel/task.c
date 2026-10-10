@@ -15,7 +15,7 @@
  * thread becomes ready, a sleeping CPU is woken (arch_kick: on x86-64, an
  * inter-processor interrupt).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 

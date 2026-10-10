@@ -2,7 +2,7 @@
 # Compile each test with the host compiler and with sicc, run both, compare.
 # Usage: run.sh SICC [mode]   mode "S": sicc emits assembly, the host assembles
 # (only for checking code generation before sicc's own assembler exists).
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 LIBS="-lm -latomic"   # -latomic: the host compiler calls it for floating _Atomic compound assignment
 SICC=$1; MODE=${2:-c}; D=$(dirname "$0"); OUT=${OUT:-/tmp/sicc-tests}
 mkdir -p "$OUT"; pass=0; fail=0

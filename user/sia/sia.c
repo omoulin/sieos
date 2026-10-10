@@ -11,7 +11,7 @@
  *   sia config KEY=VALUE     (root) backend=local|remote, model=/models/x.gguf, ctx=N,
  *                            threads=N, url=https://.../v1, api_model=NAME, api_key=KEY
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

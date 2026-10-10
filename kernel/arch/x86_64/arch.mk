@@ -2,7 +2,7 @@
 # processor: its objects (from kernel/arch/x86_64/), compiler flags and
 # linker script.
 #
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 # boot.S first (the multiboot header), then the entry code
 KARCH_OBJS   := boot entry ap cpu fpu smp mmu platform

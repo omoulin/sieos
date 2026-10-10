@@ -11,7 +11,7 @@
  * the key, which a program sharing the processor's cache could in theory
  * observe; ChaCha20-Poly1305 has no such tables and is offered first.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk/crypto.h"
 #include "mk/lib.h"

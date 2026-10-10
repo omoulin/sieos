@@ -10,7 +10,7 @@
  * else (the terminal, the disk, files, users) is done by ordinary programs
  * ("servers") that other programs talk to with messages.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

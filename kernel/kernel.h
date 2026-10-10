@@ -4,7 +4,7 @@
  * types, layout and helpers come from arch_defs.h (kernel/arch/NAME/), its
  * functions from arch.h.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

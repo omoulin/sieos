@@ -4,7 +4,7 @@
  * the index of each function we call. The firmware's functions use the
  * Microsoft x64 calling convention; efi_call (start.S) bridges to it.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

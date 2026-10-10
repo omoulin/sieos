@@ -1,4 +1,4 @@
-/* Quicksort of 5 million integers, 3 times. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Quicksort of 5 million integers, 3 times. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "../t.h"
 static int v[5000000];
 static void qs(int *a, long lo, long hi) {

@@ -8,7 +8,7 @@
  *             guessing passwords with many machines in parallel is expensive.
  * All are plain 64-bit integer code: no floating point, no vector registers.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

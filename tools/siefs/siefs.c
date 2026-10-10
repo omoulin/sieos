@@ -12,7 +12,7 @@
  *   siefs IMAGE rmattr PATH NAME   siefs IMAGE find NAME VALUE
  *   siefs IMAGE df
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdlib.h>
 #include <string.h>

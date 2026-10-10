@@ -9,7 +9,7 @@ Usage: nettest.py <cpus> <host tools dir> <disk image> <qemu command line...>
 (see make net-test). Needs the host's internet access for the HTTPS part
 (skipped with NET_OFFLINE=1).
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import hashlib, http.server, os, re, select, shutil, socket, subprocess, sys, tempfile, threading, time
 SLOW = float(__import__("os").environ.get("SIEOS_SLOW", "1"))   # emulated processors (arm64 on a PC): everything takes longer

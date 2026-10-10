@@ -1,4 +1,4 @@
-/* Recursive calls: fib(35), and a struct-heavy loop. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Recursive calls: fib(35), and a struct-heavy loop. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "../t.h"
 typedef struct { long x, y; } P;
 static long fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }

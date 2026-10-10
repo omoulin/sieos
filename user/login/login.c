@@ -12,7 +12,7 @@
  * keeps failing) does login ask for root's password and a first user
  * itself. The accounts server decides who does it (docs/accounts.md).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "mk/crypto.h"

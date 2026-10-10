@@ -1,6 +1,6 @@
 #!/bin/sh
 # bench.sh - Speed of every model in models/, by threads and kernels (make llm-bench).
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 T=$1
 for m in models/*.gguf; do
     echo "== $(basename $m)"

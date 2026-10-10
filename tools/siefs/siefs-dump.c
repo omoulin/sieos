@@ -5,7 +5,7 @@
  *
  *   siefs-dump IMAGE
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdlib.h>
 #include "siefs_int.h"

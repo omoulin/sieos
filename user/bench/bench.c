@@ -4,7 +4,7 @@
  *   bench [MiB]   write then read a file of MiB (default 16), then create,
  *                 stat and delete 500 small files.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

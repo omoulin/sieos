@@ -3,7 +3,7 @@
  * what sia remembers about each user. siad alone uses it, for the uid the
  * kernel stamped on the request; the files are root's (docs/sia.md).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include "backend.h"

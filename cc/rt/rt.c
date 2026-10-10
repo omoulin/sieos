@@ -10,7 +10,7 @@
  *     (with the infinities and NaNs of C11 Annex G)
  * Plain C: no division of 128-bit values inside (that would call itself).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 
 typedef unsigned __int128 u128;

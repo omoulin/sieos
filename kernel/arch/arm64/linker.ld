@@ -4,7 +4,7 @@
  * The flat file (objcopy -O binary) starts with the "Image" header of
  * boot.S; .bss is not in the file (the header gives the size in memory).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 ENTRY(_start)
 SECTIONS

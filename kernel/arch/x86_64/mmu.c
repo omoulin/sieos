@@ -4,7 +4,7 @@
  * PT, 512 entries each). The portable core (mem.c) decides what to map and
  * when to free; this file knows the format.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "x86.h"

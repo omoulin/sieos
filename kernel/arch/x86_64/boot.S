@@ -7,7 +7,7 @@
  *   3. we switch the CPU to 64-bit "long mode" (which requires paging);
  *   4. we jump to the higher half and call kmain() in main.c.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #define KVMA 0xFFFFFFFF80000000
 #define PHYS(x) ((x) - KVMA)            /* physical address of a higher-half symbol */

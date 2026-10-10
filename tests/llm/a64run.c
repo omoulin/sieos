@@ -4,7 +4,7 @@
  *   a64run MODEL KERNEL logits TEXT OUT | greedy N TEXT | bench
  * KERNEL: scalar, neon or dot. One thread. Test infrastructure only (it uses
  * the emulator's clock system call).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stddef.h>
 #include <stdint.h>

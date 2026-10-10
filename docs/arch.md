@@ -1,6 +1,6 @@
 # Processors: the portable kernel and its architectures
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 SIEOS runs on x86-64 and on 64-bit ARM (AArch64: QEMU's `virt` machine
 today, the Raspberry Pi 4 and 5 next), both maintained side by side. The

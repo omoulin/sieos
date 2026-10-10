@@ -1,4 +1,4 @@
-/* iso646.h - sicc's freestanding header. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* iso646.h - sicc's freestanding header. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef __SICC_ISO646_H
 #define __SICC_ISO646_H
 #define and &&

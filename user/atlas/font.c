@@ -1,7 +1,7 @@
 /* font.c - made by tools/mkfont.py from its drawings: do not edit.
  * The glyphs of characters 32..126, 9 rows of 5 pixels each (bit 4 = left).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdint.h>
 

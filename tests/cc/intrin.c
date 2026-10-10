@@ -1,7 +1,7 @@
 /* cflags: -mavx2 -mfma */
 /* intrin.c - SSE to SSE4.1 and AVX2 intrinsics (sicc's headers; the host compiler's
  * for the reference), on fixed data; results printed as integers.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 #include <immintrin.h>
 static void p128(const char *s, __m128i v) { int x[4]; _mm_storeu_si128((__m128i *)x, v); printf("%s %08x %08x %08x %08x\n", s, x[0], x[1], x[2], x[3]); }

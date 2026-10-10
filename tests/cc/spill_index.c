@@ -1,7 +1,7 @@
 /* An address whose base and index both live in stack slots (many values
  * alive at once force the spills): both must be reloaded into different
  * scratch registers. (AArch64 once reloaded them into the same one: p + p.)
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 static unsigned char buf[256];
 __attribute__((noinline)) static long f(const unsigned char *p, unsigned long i, long a, long b, long c, long d, long e, long g)

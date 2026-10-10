@@ -1,5 +1,5 @@
 /* interp.c - benchmark: a switch-dispatched bytecode interpreter (branchy code).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 int printf(const char *fmt, ...);
 enum { PUSH, ADD, SUB, MUL, DUP, SWAP, JNZ, DEC, POP, HALT, XOR, SHR };
 static long run(const int *code, long n)

@@ -1,6 +1,6 @@
 /* prog.ld - an AArch64 test program at 4 MiB, for the user-mode emulator; the
  * start-up code (libc.c) finds the thread-local template through these symbols.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 ENTRY(_start)
 SECTIONS {
   . = 0x400000;

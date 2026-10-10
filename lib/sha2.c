@@ -8,7 +8,7 @@
  * the length, is the digest. SHA-384 is SHA-512 with other starting values,
  * cut to 48 bytes.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk/crypto.h"
 #include "mk/lib.h"

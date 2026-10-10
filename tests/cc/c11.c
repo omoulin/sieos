@@ -1,7 +1,7 @@
 /* c11.c - C11 features: _Generic, _Static_assert, _Alignas/_Alignof, anonymous
  * members, designated initializers, compound literals, flexible arrays, _Noreturn,
  * u8/u/U/L strings and characters, universal character names, restrict, inline.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 #include <stdalign.h>
 #include <stdnoreturn.h>

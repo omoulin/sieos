@@ -9,7 +9,7 @@
  * file is checked once more. Prints
  * "fsloop: N rounds, R redone, ... OK" or what was wrong.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

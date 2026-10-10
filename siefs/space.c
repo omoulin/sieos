@@ -19,7 +19,7 @@
  * commit t + 1, so the two superblocks on disk always describe two intact
  * states (the newest, and the one before as a fallback).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "siefs_int.h"
 

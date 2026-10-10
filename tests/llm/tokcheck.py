@@ -5,7 +5,7 @@ many kinds of text, then decoding back to the exact same bytes.
 
   tokcheck.py llm-info-dir model.gguf tokenizer.json
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import subprocess, sys
 from tokenizers import Tokenizer

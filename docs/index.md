@@ -1,6 +1,6 @@
 # SIEOS documentation
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 

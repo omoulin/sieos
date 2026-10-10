@@ -2,7 +2,7 @@
  * their intrinsics, for sicc. 256-bit operations run as two 128-bit halves
  * (the same results; sicc does not encode VEX instructions yet). _mm256_fmadd_*
  * multiplies and adds with two roundings (not fused).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef _IMMINTRIN_H
 #define _IMMINTRIN_H
 #include <smmintrin.h>

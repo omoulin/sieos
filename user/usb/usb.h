@@ -3,7 +3,7 @@
  * (pci.c), driving it (xhci.c), the devices and hubs (usb.c), and the
  * class drivers: USB disks (msc.c), keyboards and mice (hid.c).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include "mk.h"

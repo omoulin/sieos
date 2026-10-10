@@ -25,7 +25,7 @@
  * it use these devices' I/O ports, maps the screen's memory into it, and
  * turns their interrupts into messages. If it crashes, init restarts it.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

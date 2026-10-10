@@ -20,7 +20,7 @@
  *    page we choose below 1 MiB (0x8000), where we copy ap.S's
  *    "trampoline": it climbs to 64-bit mode and calls ap_main().
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "x86.h"

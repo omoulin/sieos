@@ -1,5 +1,5 @@
 /* int128.c - __int128 arithmetic.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 typedef __int128 i128; typedef unsigned __int128 u128;
 static void p(const char *s, u128 v) { printf("%s %016lx%016lx\n", s, (unsigned long)(v >> 64), (unsigned long)v); }

@@ -12,7 +12,7 @@
  * side reads it through ND_SELF), so x is computed once and a local x can
  * stay in a register.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "sicc.h"
 

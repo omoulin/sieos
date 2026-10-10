@@ -1,5 +1,5 @@
 /* list.c - benchmark: pointer chasing over heap-allocated structures (insertion sort into a list).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 int printf(const char *fmt, ...);
 void *malloc(unsigned long n);
 typedef struct Node { struct Node *next; int key; short tag; char name[6]; } Node;

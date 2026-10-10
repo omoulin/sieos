@@ -7,7 +7,7 @@
  *   reads is deleted (and then, perhaps, the ones that fed it).
  * - Loop invariants: see hoist_loops().
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "ir.h"
 

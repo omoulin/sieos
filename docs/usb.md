@@ -1,6 +1,6 @@
 # SIEOS from a USB key (PCs with UEFI firmware)
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 `make usb` builds `build/sieos-usb.img`. Written to a USB key, it starts
 SIEOS on a PC, and SIEOS then uses **the key as its hard disk**: what you

@@ -11,7 +11,7 @@
  * previous call (or the last token of the prompt). So the scores it samples
  * from are always this session's own, even when several sessions take turns.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "internal.h"
 

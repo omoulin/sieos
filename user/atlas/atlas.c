@@ -43,7 +43,7 @@
  * changes only on an event (input, a shell's output, a piece of an answer,
  * the clock's minute), and only the changed region is sent to the screen.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "atlas.h"
 #include "mk/crypto.h"               /* wipe: forget the password */

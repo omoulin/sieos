@@ -1,7 +1,7 @@
 /* stdatomic.h - sicc's freestanding header: C11 atomics, on the __atomic
  * builtins. Objects of up to 8 bytes are lock-free (lock-prefixed
  * instructions, compare-and-swap loops). As with gcc, atomic_fetch_add on
- * an atomic pointer adds bytes, not elements. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * an atomic pointer adds bytes, not elements. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef __SICC_STDATOMIC_H
 #define __SICC_STDATOMIC_H
 typedef enum {

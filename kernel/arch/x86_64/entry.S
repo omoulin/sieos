@@ -15,7 +15,7 @@
  * when it did not take it: NMIs and TLB shootdowns.) A task switch
  * happens with the lock held, and the task that resumes releases it.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
     .text
     .code64

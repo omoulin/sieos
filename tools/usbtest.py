@@ -7,7 +7,7 @@ partition is checked on the host (fsck.siefs, and the file read back).
 
 Usage: usbtest.py CPUS HOSTTOOLS IMAGE SHOTS QEMU-COMMAND...
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import atexit, json, os, select, socket, struct, subprocess, sys, tempfile, time
 

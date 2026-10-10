@@ -1,4 +1,4 @@
-/* Pointers, arrays, strings, function pointers. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Pointers, arrays, strings, function pointers. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 static int add(int a, int b) { return a + b; }
 static int mul(int a, int b) { return a * b; }

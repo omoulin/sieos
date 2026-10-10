@@ -18,7 +18,7 @@
  *   Raspberry Pi 5 (untested): the RP1 chip's USB controllers (DWC3 cores,
  *            in xHCI mode), at the address the firmware's PCIe window gives.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "usb.h"
 

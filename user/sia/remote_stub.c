@@ -3,7 +3,7 @@
  * which needs the network) until it exists: the Makefile links remote.c
  * when it is there, this file otherwise.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "backend.h"

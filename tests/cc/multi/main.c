@@ -1,5 +1,5 @@
 /* main.c - several sources on one command line: macros and statics stay per file.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #define X 1
 int printf(const char *, ...);
 int g(int);

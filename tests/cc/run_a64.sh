@@ -5,7 +5,7 @@
 # SIEOS's AArch64 types (long double = double, char unsigned) and the same
 # printf (a64/fmt.c), so both outputs must be identical.
 # Usage: run_a64.sh SICC QEMU [sicc options...]
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 SICC=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); QEMU=$2; shift 2; OPTS="$*"; D=$(cd "$(dirname "$0")" && pwd); OUT=${OUT:-/tmp/sicc-a64-tests}
 A="$SICC --target=aarch64"; RT="$OUT/rt"; mkdir -p "$RT"; pass=0; fail=0
 REF="-w -O1 -fno-builtin -mlong-double-64 -funsigned-char"

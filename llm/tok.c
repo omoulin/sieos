@@ -11,7 +11,7 @@
  *    the vocabulary lacks are spelled as byte tokens <0xNN>.
  * Special tokens ("<|im_start|>") are recognised in the text on request.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "internal.h"
 

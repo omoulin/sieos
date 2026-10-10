@@ -1,7 +1,7 @@
 """Checks sicc's AArch64 instruction encodings: assembles enc.S and compares
 each word of .text with the hex number in that line's comment.
 Usage: enc.py SICC  (OUT: the work directory)
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only"""
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only"""
 import os, struct, subprocess, sys
 
 here = os.path.dirname(os.path.abspath(__file__))

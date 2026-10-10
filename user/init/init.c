@@ -44,7 +44,7 @@
  * No wake-ups when nothing happens: the timer thread sleeps until the next
  * restart or idle question is due, or for good.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

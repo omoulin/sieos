@@ -6,7 +6,7 @@
  * Each reduces its argument to a small range, then sums a short series.
  * Computed in double precision, they are exact to float precision.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "internal.h"
 

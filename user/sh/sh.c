@@ -3,7 +3,7 @@
  * any other word is a program: /bin/NAME (or a path with a '/') is read
  * from the disk, started, and waited for.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

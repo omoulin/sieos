@@ -235,3 +235,8 @@ AArch64 port (QEMU, Raspberry Pi 4 in QEMU, card images). Next: the
 assistant's memory, the laptop (UEFI, NVMe, USB, NVIDIA compute), the Pis
 on real boards (USB, Ethernet), sicc running on SIEOS, encryption and
 snapshots. Details: [docs/status.md](docs/status.md).
+
+## License
+
+(c) Olivier Moulin. SIEOS is free software under the GNU General
+Public License, version 3 only (GPL-3.0-only): see [LICENSE](LICENSE).

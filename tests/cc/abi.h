@@ -1,5 +1,5 @@
 /* abi.h - structs of every System V passing class, shared by abi.c (sicc)
- * and abi_gcc.c (the host compiler). Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * and abi_gcc.c (the host compiler). Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 typedef struct { char c; } S1;
 typedef struct { short a; char b; } S3;
 typedef struct { int a, b; } S8;

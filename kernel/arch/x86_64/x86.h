@@ -1,7 +1,7 @@
 /*
  * x86.h - What the x86-64 files share among themselves (not the core).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 

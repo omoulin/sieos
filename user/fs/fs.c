@@ -22,7 +22,7 @@
  * One request at a time (the library is single-threaded); a helper thread
  * only times the commits, and sleeps for good while nothing has changed.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "siefs.h"

@@ -28,7 +28,7 @@
  * single rename, so a crash never leaves half a file. It hashes passwords
  * with Argon2id (16 MiB), and gives that memory back right after.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "mk/crypto.h"

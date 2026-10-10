@@ -9,7 +9,7 @@
  * an error after a change can only be the disk or memory failing, and then
  * the mount stops (fs->broken) rather than commit a half-done operation.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "siefs_int.h"
 

@@ -8,7 +8,7 @@
 Usage: siamemtest.py <cpus> <disk image> <qemu command line...>
 The image must be fresh (first start); the test works in a copy.
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import os, re, select, shutil, subprocess, sys, time
 SLOW = float(os.environ.get("SIEOS_SLOW", "1"))   # emulated processors: everything takes longer

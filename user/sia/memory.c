@@ -19,7 +19,7 @@
  * symbolic link could make it read or write anywhere. Here no path comes
  * from a user, and the uid is the one the kernel stamped on the request.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "memory.h"

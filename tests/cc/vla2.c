@@ -1,5 +1,5 @@
 /* vla2.c - more variable length array cases.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 struct S { int a; double b; };
 void proto(int n, int a[*][*]);

@@ -5,7 +5,7 @@ Mozilla list published at https://curl.se/ca/cacert.pem.
 
 Usage: netcerts.py cacert.pem rootfs/etc/ssl/roots
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import base64, re, sys
 

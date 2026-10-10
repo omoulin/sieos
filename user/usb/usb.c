@@ -20,7 +20,7 @@
  * enumeration thread handles ports and hubs; each disk has a thread of its
  * own (msc.c); events arrive on the interrupt or polling thread (xhci.c).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "usb.h"
 

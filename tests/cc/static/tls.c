@@ -2,7 +2,7 @@
  * builds the thread block (the template, then the thread control block whose first
  * word points to itself), points %fs at it, and checks the variables.
  * Prints "tls ok" and exits 0, or names the first wrong value and exits 1.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 extern char __tdata_start[], __tdata_end[], __tbss_size[];
 
 _Thread_local int a = 0x1234;

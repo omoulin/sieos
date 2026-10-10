@@ -3,7 +3,7 @@
 ECDSA on P-256 and P-384, RSA PKCS #1 v1.5 and PSS, written one per line
 for tests/net/crypto.c. Usage: gen.py OUTFILE
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import os, re, subprocess, sys, tempfile
 

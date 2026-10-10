@@ -11,7 +11,7 @@
  * packs what arrived into one batch for the network server ("net",
  * NET_FRAMES): each frame a 16-bit length, then the frame.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include "mk.h"

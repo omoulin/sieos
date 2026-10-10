@@ -3,7 +3,7 @@
  * and the synchronous exceptions: system calls ("svc"), faults, and the
  * first use of the FP/SIMD registers. (Interrupts: smp.c, trap_irq.)
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "arm64.h"

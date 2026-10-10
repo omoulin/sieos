@@ -1,5 +1,5 @@
 /* emmintrin.h - SSE2 intrinsics (__m128d: two doubles; __m128i: integers), for sicc.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef _EMMINTRIN_H
 #define _EMMINTRIN_H
 #include <xmmintrin.h>

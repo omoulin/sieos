@@ -6,7 +6,7 @@
  * mailbox 0. The firmware does not see the CPU's caches: the buffer is
  * written to memory before, and its cached lines dropped after (dma_sync).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "mk/fdt.h"

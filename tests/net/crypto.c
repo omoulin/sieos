@@ -4,7 +4,7 @@
  * 8439, 7748, the GCM specification) and against signatures made by the
  * host's openssl (tests/net/gen.py). Usage: crypto-test VECTORS-FILE
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdio.h>
 #include <stdlib.h>

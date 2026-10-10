@@ -14,7 +14,7 @@
  * thread takes a share of the rows. Up to BMAX tokens are read together,
  * so each weight row, once loaded, serves all of them.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "internal.h"
 

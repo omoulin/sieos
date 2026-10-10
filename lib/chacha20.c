@@ -4,7 +4,7 @@
  * rounds of add-rotate-xor; added to its starting value, it is 64 bytes of
  * keystream that cannot be predicted without the key.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk/crypto.h"
 #include "mk/lib.h"

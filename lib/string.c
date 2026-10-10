@@ -5,7 +5,7 @@
  * arm64, 16 bytes per step (two 64-bit words, which the compiler pairs into
  * one ldp/stp), unaligned allowed on ordinary memory.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdint.h>
 #include "mk/lib.h"

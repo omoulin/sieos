@@ -7,7 +7,7 @@ results can judge the C engine's.
   ref.py model.gguf info                 tensor types
   ref.py model.gguf logits out.bin ids…  logits of the last token of ids (float32)
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import struct, sys
 import numpy as np

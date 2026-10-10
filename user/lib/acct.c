@@ -5,7 +5,7 @@
  * One record per line, fields separated by tabs; '#' starts a comment.
  * (/etc/secrets, the password hashes, only the accounts server reads.)
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

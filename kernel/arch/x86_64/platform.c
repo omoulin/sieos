@@ -3,7 +3,7 @@
  * information (multiboot), the first serial port for the kernel log,
  * powering off and restarting, and the CPU's random number generator.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "x86.h"

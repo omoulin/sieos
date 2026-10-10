@@ -3,7 +3,7 @@
  * string ("name arg1 arg2") as the first argument (x86-64: rdi; arm64:
  * x0); __start (lib.c) splits it, calls main and exits with its result.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
     .text
     .global _start

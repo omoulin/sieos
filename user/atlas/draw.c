@@ -12,7 +12,7 @@
  *     squares; a terminal's new line: that window).
  * No floating point (programs are built without it): integers throughout.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "draw.h"

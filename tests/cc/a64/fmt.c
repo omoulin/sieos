@@ -9,7 +9,7 @@
  * rounded half-to-even. strtod divides exactly the same way. (long double is
  * double here, as on SIEOS's AArch64.)
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdarg.h>
 #include <stddef.h>

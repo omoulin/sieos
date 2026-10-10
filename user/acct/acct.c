@@ -9,7 +9,7 @@
  * Each only asks the accounts server (port "auth"), which decides from the
  * caller's identity: no program here has any power of its own.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "mk/crypto.h"

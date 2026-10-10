@@ -7,7 +7,7 @@
  * checked against the blob's size: a damaged tree gives "not found", never
  * a read out of bounds.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdint.h>
 #include "mk/lib.h"

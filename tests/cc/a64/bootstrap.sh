@@ -5,7 +5,7 @@
 #   stage 3: the same, compiled and linked by stage 2, running emulated.
 # The two programs must be identical. Then stage 3 runs the AArch64 tests.
 # Usage: bootstrap.sh SICC QEMU   (OUT: the work directory)
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 SICC=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); QEMU=$2; D=$(cd "$(dirname "$0")" && pwd); C=$(cd "$D/../../../cc" && pwd)
 OUT=${OUT:-/tmp/sicc-a64-boot}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 case $QEMU in */*) QEMU=$(cd "$(dirname "$QEMU")" && pwd)/$(basename "$QEMU");; esac

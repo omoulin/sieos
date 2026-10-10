@@ -1,4 +1,4 @@
-/* The preprocessor. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* The preprocessor. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 #define SQ(x) ((x) * (x))
 #define CAT(a, b) a ## b

@@ -3,7 +3,7 @@
  * yet (arm64, until the framebuffer phase): it says so and ends with 0, so
  * init does not restart it and login runs the first start on the terminal.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

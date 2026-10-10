@@ -22,7 +22,7 @@
  * to memory before the controller reads them, and dropped from the caches
  * before we read what it wrote (dma_sync).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "nic.h"
 #include "mk/fdt.h"

@@ -19,7 +19,7 @@
  * The instructions are written as bytes (".byte"), with the pointer in
  * %rdi: both gcc's assembler and sicc's accept them that way.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "x86.h"

@@ -8,7 +8,7 @@
  * (Repairing is not needed after a crash: a commit is all or nothing. A
  * damaged image falls back to the previous commit when mounted.)
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <string.h>
 #include "host.h"

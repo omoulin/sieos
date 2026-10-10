@@ -16,7 +16,7 @@
  * tables, fast in plain integer code) and AES-128-GCM, both with SHA-256.
  * Key exchange: X25519, or P-256 if the server asks for it (HelloRetryRequest).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "net.h"
 #include "mk/crypto.h"

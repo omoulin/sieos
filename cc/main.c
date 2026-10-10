@@ -10,7 +10,7 @@
  * ignored. Several sources may be given: each is compiled on its own (with
  * -c or -S, each to its own output unless -o names the one output).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "sicc.h"
 

@@ -1,4 +1,4 @@
-/* GNU extended inline assembly: constraints, modifiers, register variables. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* GNU extended inline assembly: constraints, modifiers, register variables. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 static long add(long a, long b) { asm("addq %1, %0" : "+r"(a) : "r"(b)); return a; }
 static int sub_imm(int a) { asm("subl %1, %0" : "+r"(a) : "i"(7)); return a; }

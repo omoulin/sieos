@@ -30,7 +30,7 @@
  *
  * Init gives siad a memory limit (4.5 GiB): the kernel refuses it more.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "mk/crypto.h"                  /* wipe */

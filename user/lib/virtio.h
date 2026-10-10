@@ -8,7 +8,7 @@
  * then the used ring on the next page), given to the device as a page
  * number. The drivers (vblk, vnet) only see these functions. virtio.c.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

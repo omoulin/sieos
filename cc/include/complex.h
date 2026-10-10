@@ -1,6 +1,6 @@
 /* complex.h - sicc's header: complex numbers. creal, cimag and conj are
  * operations of the compiler; the other functions (cabs, cexp...) belong to
- * the C library's mathematics. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * the C library's mathematics. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef __SICC_COMPLEX_H
 #define __SICC_COMPLEX_H
 #define complex _Complex

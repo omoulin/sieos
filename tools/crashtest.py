@@ -12,7 +12,7 @@ Then the disk is checked on the host (fsck.siefs, and fsloop's files).
 
 Usage: crashtest.py <cpus> <host tools dir> <disk image> <qemu command line...>
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import os, re, select, shutil, subprocess, sys, time
 SLOW = float(__import__("os").environ.get("SIEOS_SLOW", "1"))   # emulated processors (arm64 on a PC): everything takes longer

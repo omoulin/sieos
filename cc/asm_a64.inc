@@ -11,7 +11,7 @@
  * v0.16b (a vector: lanes and element), v0.s[1] and v2.4b[1] (an element),
  * {v1.16b} or {v1.16b, v2.16b} (a register list).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 
 enum { A_ABS64 = 257, A_ABS32 = 258, A_ABS16 = 259, A_PREL64 = 260, A_PREL32 = 261, A_PREL16 = 262,

@@ -7,7 +7,7 @@
  * aligned, the data. Every length and offset is checked against the file
  * size before use: a damaged file is refused, never trusted.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "internal.h"
 

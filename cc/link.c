@@ -16,7 +16,7 @@
  *    program: ELF header, program headers (one PT_LOAD per segment), the
  *    sections' bytes, section headers and a symbol table.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "sicc.h"
 

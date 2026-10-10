@@ -8,7 +8,7 @@
  * 0. The firmware writes its answers into the same buffer. The buffer must
  * be in the first GiB (the firmware sees no more) and 16-byte aligned.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

@@ -1,4 +1,4 @@
-/* Initializers of globals and locals. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Initializers of globals and locals. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 struct Item { const char *name; int qty; double price; };
 struct Item items[] = { { "apple", 3, 0.5 }, { .name = "pear", .price = 1.25 }, [3] = { "plum", 7, 2 } };

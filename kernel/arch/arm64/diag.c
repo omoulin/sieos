@@ -17,7 +17,7 @@
  * which boot.S does not clear (it clears .bss). Other machines (QEMU's virt)
  * have no such firmware: there it does nothing.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "arm64.h"

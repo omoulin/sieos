@@ -3,7 +3,7 @@
  * programs (printf). Supports %c %s %d %i %u %x %p %%, the 'l' size, the
  * '-' (left-align) and '0' (zero-pad) flags and a width: "%-8s", "%08lx".
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdint.h>
 #include "mk/lib.h"

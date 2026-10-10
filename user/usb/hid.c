@@ -11,7 +11,7 @@
  * Mice and tablets are read with their own "report descriptor", which
  * says where the buttons, X, Y and the wheel are in a report.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "usb.h"
 

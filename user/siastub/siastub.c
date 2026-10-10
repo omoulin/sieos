@@ -9,7 +9,7 @@
  * Stop); any other gets a short one with two actions, a file to open and a
  * project to go to.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

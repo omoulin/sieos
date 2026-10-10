@@ -9,7 +9,7 @@
  * (fmt.c), qsort (a stable merge sort), getenv, and thread-local storage
  * for the main thread.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdarg.h>
 #include <stddef.h>

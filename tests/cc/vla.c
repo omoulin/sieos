@@ -1,5 +1,5 @@
 /* vla.c - variable length arrays.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 
 static int sum2(int n, int m, int a[n][m]) {

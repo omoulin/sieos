@@ -1,6 +1,6 @@
 # Status
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 What works today, on each architecture, and how SIEOS got here. Last
 checked 2026-10-10: every test suite below passes, zero build warnings.

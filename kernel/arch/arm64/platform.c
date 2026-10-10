@@ -4,7 +4,7 @@
  * archive, the "initrd"), the serial port for the kernel log (PL011),
  * power (PSCI), and the CPU's random number generator (RNDR, ARMv8.5).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "arm64.h"

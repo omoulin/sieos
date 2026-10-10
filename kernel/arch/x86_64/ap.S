@@ -9,7 +9,7 @@
  * computed relative to ap_start: TR(x) is where x is once copied.
  * smp.c fills in ap_cr3, ap_stack and ap_cpu before each start.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #define TR(x) ((x) - ap_start + 0x8000)
 

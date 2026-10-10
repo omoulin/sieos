@@ -3,7 +3,7 @@
 block boundaries) with the independent implementation of the host's Python.
 Usage: check.py <crypto-test program>
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import hashlib, subprocess, sys
 

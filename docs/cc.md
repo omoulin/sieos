@@ -1,5 +1,7 @@
 # sicc: SIEOS's own C compiler
 
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+
 sicc is a C11 compiler, assembler and linker written from scratch for SIEOS.
 It is one program with no third-party code, about 17,500 lines in `cc/` (plus
 610 lines of headers), with two targets: x86-64 and AArch64 (for the

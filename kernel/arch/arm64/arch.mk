@@ -3,7 +3,7 @@
 # Everything is built by sicc, SIEOS's own compiler (--target=aarch64):
 # no other compiler is involved.
 #
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 # boot.S first (the Image header the loaders look for), then the rest
 KARCH_OBJS   := boot entry cpu fpu smp mmu platform fdt diag

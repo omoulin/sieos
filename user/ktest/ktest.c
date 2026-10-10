@@ -17,7 +17,7 @@
  * without the AVX part: sicc does not encode AVX instructions yet). On
  * arm64 both are built by sicc, and there is no AVX part.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

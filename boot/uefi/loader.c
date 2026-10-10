@@ -15,7 +15,7 @@
  *      and jumps to the kernel's 64-bit entry with a sieos_boot_t (mk/boot.h).
  * Any failure is printed and returned to the firmware (its boot menu).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "efi.h"
 #include "mk/boot.h"

@@ -17,7 +17,7 @@
  * kernel_exit() (task.c) gives it back on the way out. A thread switch
  * happens with the lock held; the thread that resumes releases it.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #define FRAME 272                   /* sizeof(regs_t): x0-x30, sp, pc, pstate */
 

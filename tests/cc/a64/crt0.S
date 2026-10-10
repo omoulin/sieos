@@ -1,6 +1,6 @@
 /* crt0.S - where an AArch64 test program starts, under the user-mode emulator:
  * the stack holds argc, then the argv pointers, a null, the environment.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
     .text
     .globl _start
 _start:

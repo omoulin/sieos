@@ -1,6 +1,6 @@
 /* Parameters whose address is taken live in frame slots of their own size:
  * storing a char or short must not touch its neighbours.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 static void show(const void *p, int n) { const unsigned char *b = p; for (int i = 0; i < n; i++) printf("%02x", b[i]); printf(" "); }
 static int f(float a, signed char c, signed char d, short e, _Bool g, unsigned char h, double x)

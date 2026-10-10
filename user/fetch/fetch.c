@@ -9,7 +9,7 @@
  *   fetch -r HOST                   the address of a name (DNS)
  *   fetch -l PORT                   answer one HTTP request on PORT (a test)
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "net.h"
 

@@ -19,7 +19,7 @@
  * interrupts never come), a thread polls the event ring instead: every 0.5
  * ms while someone waits, every 8 ms otherwise.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "usb.h"
 

@@ -1,5 +1,5 @@
 /* complex.c - _Complex arithmetic and passing.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 #define I (__extension__ 1.0iF)
 double _Complex gz = 1.5 + 2.0 * I, garr[2] = { 3.0, -1.0 * I };

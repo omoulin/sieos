@@ -4,7 +4,7 @@
  * x86-64): the kernel must be able to report a crash even when no driver
  * works.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 

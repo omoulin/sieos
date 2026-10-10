@@ -1,4 +1,4 @@
-/* stdint.h - sicc's freestanding header. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* stdint.h - sicc's freestanding header. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef __SICC_STDINT_H
 #define __SICC_STDINT_H
 typedef signed char int8_t;

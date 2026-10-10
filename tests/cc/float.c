@@ -1,4 +1,4 @@
-/* Floating point. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Floating point. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 static double half(double x) { return x / 2; }
 static float fsum(float a, float b, float c) { return a + b + c; }

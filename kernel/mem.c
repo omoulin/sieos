@@ -3,7 +3,7 @@
  * and the policy of address spaces (what is freed, quarantined, copied).
  * The page tables' format is the architecture's (arch/NAME/mmu.c).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 

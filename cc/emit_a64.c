@@ -12,7 +12,7 @@
  *                    [ stack slots: locals, spills ]   <- sp (16-aligned)
  * A leaf that needs none of it gets no frame at all.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "ir.h"
 

@@ -23,7 +23,7 @@
  * below the MTU), selective acknowledgements, keepalives, routing tables
  * beyond "local network or the gateway".
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

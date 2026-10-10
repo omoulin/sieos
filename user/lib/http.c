@@ -8,7 +8,7 @@
  * until the server closes the connection. One request per connection
  * ("Connection: close"): simple, and enough for fetch and the assistant.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "net.h"
 

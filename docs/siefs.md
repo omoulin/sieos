@@ -1,5 +1,7 @@
 # SieFS: the SIEOS file system
 
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+
 SieFS keeps files on a disk so that they survive anything: a crash or
 power cut at any moment leaves either the state of the last commit or the
 one before it, never a mix, and every block read is checked against a

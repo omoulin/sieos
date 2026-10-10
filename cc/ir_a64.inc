@@ -16,7 +16,7 @@
  * A struct result too large for x0/x1 (or v0-v3) goes to a buffer whose
  * address the caller passes in x8.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 
 enum { PA_REF, PA_GPR, PA_HFA, PA_FLT, PA_HVA };

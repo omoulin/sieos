@@ -1,5 +1,5 @@
 /* goto_computed.c - GNU computed goto: &&label, goto *p, label tables (static and local).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 
 /* a tiny bytecode interpreter dispatched through a static table */

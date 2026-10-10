@@ -3,7 +3,7 @@
 # each benchmark of ../bench built by sicc for AArch64 (run under QEMU), and,
 # for comparison, by sicc and by the host compiler for x86-64 (run natively).
 # Sizes: .text of the benchmark's object. Times: best of 3, milliseconds.
-# Usage: bench.sh SICC QEMU. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Usage: bench.sh SICC QEMU. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 SICC=$1; QEMU=$2; D=$(cd "$(dirname "$0")" && pwd); B="$D/../bench"; OUT=${OUT:-/tmp/sicc-a64-bench}; RT="$OUT/rt"; mkdir -p "$RT"
 A="$SICC --target=aarch64"
 $A -c -o "$RT/crt0.o" "$D/crt0.S" && for f in libc fmt; do $A -O2 -c -o "$RT/$f.o" "$D/$f.c" || exit 1; done && $A -O2 -c -o "$RT/rt.o" "$D/../../../cc/rt/rt.c" || exit 1

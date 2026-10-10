@@ -1,7 +1,7 @@
 /* t_neon.c - arm_neon.h on AArch64: each intrinsic checked against plain C
  * on pseudo-random data (prints "name ok" per group, the .expect file).
  * Also: vectors passed and returned by value in v registers (AAPCS64).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include <arm_neon.h>
 int printf(const char *, ...);
 

@@ -5,7 +5,7 @@
 #  3. the reference: logits and greedy decoding vs tests/llm/ref.py (numpy)
 #  4. the tokenizer vs the model's published one (if available)
 #  5. chats: several turns, budget refusal, a full context
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 set -e
 T=$1; B=$(dirname "$T"); M=models; PY=$B/llm-conda/bin/python
 S135=$M/SmolLM2-135M-Instruct-Q8_0.gguf; K135=$M/SmolLM2-135M-Instruct-Q4_K_M.gguf; S360=$M/smollm2-360m-instruct-q8_0.gguf

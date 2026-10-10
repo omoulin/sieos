@@ -4,7 +4,7 @@
  * are sent again if netd restarts during the call; a connection is not, its
  * state died with the old server: the caller gets -EPIPE and starts again.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "net.h"
 

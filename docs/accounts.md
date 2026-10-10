@@ -1,5 +1,7 @@
 # Users and logins in SIEOS
 
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+
 ## Who is who
 
 The kernel gives every process an identity when it starts: a user number

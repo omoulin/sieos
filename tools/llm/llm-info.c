@@ -2,7 +2,7 @@
  * llm-info - What a model file holds: its shape, tokenizer, memory needs.
  *   llm-info model.gguf [text]     (with a text: also its tokens, one per line)
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdio.h>
 #include <string.h>

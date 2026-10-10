@@ -13,7 +13,7 @@
  *   - from then on a switch away saves its registers, a switch to it loads them.
  * Threads that never compute in floating point (all servers) cost nothing.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "arm64.h"

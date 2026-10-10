@@ -39,7 +39,7 @@
  * so the buffer and the descriptors are written back (dma_sync) before the
  * controller reads them and dropped after it wrote them.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "mk/fdt.h"

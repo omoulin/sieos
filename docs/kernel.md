@@ -1,6 +1,6 @@
 # The kernel and the servers, file by file
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 This is the guided tour: how SIEOS starts, how its pieces talk, and what
 each file does. The architecture interface (x86-64, AArch64) is in

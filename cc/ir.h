@@ -13,7 +13,7 @@
  * matches C's integer promotions. Floating-point values (w = 4 float,
  * 8 double) live in xmm registers.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #ifndef SICC_IR_H
 #define SICC_IR_H

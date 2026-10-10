@@ -5,7 +5,7 @@ chosen by greedy decoding. Exit status 1 if a check fails.
 
   compare.py TOOLDIR PYTHON model.gguf "prompt" [steps]
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import subprocess, sys, os, numpy as np
 tools, py, model, prompt = sys.argv[1:5]

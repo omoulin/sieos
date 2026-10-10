@@ -2,7 +2,7 @@
  * crash - Fails at once (exit status 3): used to test that init backs off
  * and gives up on a service that cannot start (svc add crasher /bin/crash).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

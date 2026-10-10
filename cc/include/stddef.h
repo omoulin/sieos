@@ -1,4 +1,4 @@
-/* stddef.h - sicc's freestanding header. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* stddef.h - sicc's freestanding header. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef __SICC_STDDEF_H
 #define __SICC_STDDEF_H
 typedef unsigned long size_t;

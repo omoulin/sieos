@@ -2,7 +2,7 @@
  * siefs_int.h - SieFS inside: the on-disk formats and the library's state.
  * docs/siefs.md explains them with pictures; this file is the reference.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include "siefs.h"

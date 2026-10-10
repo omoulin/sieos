@@ -1,6 +1,6 @@
 # SIEOS on the Raspberry Pi 4 and 5
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 SIEOS runs on the Raspberry Pi 4 and 5 with the same kernel, servers and
 programs as on QEMU's `virt` machine, all built by sicc. This page says what

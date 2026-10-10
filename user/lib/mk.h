@@ -2,7 +2,7 @@
  * mk.h - What an SIEOS program can use: system calls, threads, the
  * console, printf, memory allocation, strings. There is no other C library (yet).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

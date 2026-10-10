@@ -1,5 +1,5 @@
 /* packed_bitfields.c - packed bit-fields across storage units.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 struct __attribute__((packed)) P { unsigned char a:3; unsigned int b:20; int c:13; long d:64; unsigned long e:61; signed char f:5; short g:12; };
 struct __attribute__((packed)) Q { char x; int y:24; };

@@ -1,4 +1,4 @@
-/* Scopes, shadowing, static locals, recursion, typedefs, enums, strings. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Scopes, shadowing, static locals, recursion, typedefs, enums, strings. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 typedef int T;
 static int depth(int n) { static int calls; calls++; return n ? depth(n - 1) : calls; }

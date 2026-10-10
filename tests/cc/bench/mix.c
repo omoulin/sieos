@@ -1,5 +1,5 @@
 /* mix.c - benchmark: 32-bit rotations and additions (a SHA-256-like compression loop).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 int printf(const char *fmt, ...);
 typedef unsigned u32;
 static u32 ror(u32 x, int n) { return x >> n | x << (32 - n); }

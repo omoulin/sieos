@@ -2,7 +2,7 @@
 # Bad programs: sicc must refuse each one, at the right place, with the expected message
 # (the first line of each file: "expect: line:col: error: text").
 # Usage: errors.sh SICC [sicc options, e.g. --target=aarch64]
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 SICC=$1; shift; D=$(dirname "$0")/errors; pass=0; fail=0
 for t in "$D"/*.c; do
     want=$(sed -n '1s/.*expect[^:]*: \(.*\) \*\/$/\1/p' "$t")

@@ -1,5 +1,5 @@
 /* smmintrin.h - SSE4.1 intrinsics, for sicc (-mavx/-mavx2: the instructions; else element by element).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef _SMMINTRIN_H
 #define _SMMINTRIN_H
 #include <tmmintrin.h>

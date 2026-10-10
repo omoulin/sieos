@@ -1,5 +1,5 @@
 /* div_const.c - division and remainder by constants (reciprocal multiplication), all signs and widths.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 #define D(T, d) static T d_##T##_##d(T x) { return x / d; } static T m_##T##_##d(T x) { return x % d; }
 #define N(T, d, n) static T d_##T##_n##n(T x) { return x / d; } static T m_##T##_n##n(T x) { return x % d; }

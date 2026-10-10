@@ -3,7 +3,7 @@
  * against the plain C ones, on random blocks: every format, the
  * several-vectors kernels, and the attention's half-precision helpers.
  * Built by sicc for AArch64 and run under the emulator (tests/llm/neon.sh).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "../../llm/internal.h"
 int printf(const char *, ...);

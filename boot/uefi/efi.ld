@@ -5,7 +5,7 @@
  * must then fix those), and writes the PE file UEFI wants.
  * The first page is left for the PE headers.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 ENTRY(efi_start)
 SECTIONS

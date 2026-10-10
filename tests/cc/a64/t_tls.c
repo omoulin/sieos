@@ -2,7 +2,7 @@
  * linker computes): initialized and zeroed variables, alignments up to 64,
  * arrays, addresses, structs, more than 4 KiB of offset (both halves of the
  * offset), statics in functions.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "../t.h"
 _Thread_local int counter = 5;
 __thread long big[600];                          /* 4800 bytes: later variables need the high offset part */

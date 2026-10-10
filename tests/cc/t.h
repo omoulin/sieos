@@ -1,5 +1,5 @@
 /* t.h - what the sicc tests use from the host's C library (printf & co.).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include <stddef.h>
 #include <stdarg.h>
 int printf(const char *fmt, ...);

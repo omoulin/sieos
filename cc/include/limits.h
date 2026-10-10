@@ -1,4 +1,4 @@
-/* limits.h - sicc's freestanding header. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* limits.h - sicc's freestanding header. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef __SICC_LIMITS_H
 #define __SICC_LIMITS_H
 #define CHAR_BIT 8

@@ -6,7 +6,7 @@
  * undefined-behaviour checkers by `make llm-test`.
  *   fuzz model.gguf [rounds]
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdio.h>
 #include <stdlib.h>

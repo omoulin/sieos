@@ -12,7 +12,7 @@ registers and stack bytes, and the generated C file compares, both ways:
 Unused register bits are filled with garbage: values narrower than a register
 must not be trusted to be extended.
 Usage: abi_a64.py SICC QEMU [cases] [seed]  (OUT: the work directory)
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only"""
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only"""
 import os, random, subprocess, sys
 
 sicc, qemu = sys.argv[1], sys.argv[2]

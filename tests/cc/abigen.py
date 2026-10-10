@@ -3,7 +3,7 @@ floats, structs and unions of every shape, many arguments: some on the stack,
 struct results, variadic calls) in two files, a caller and a callee; built
 with the callee by sicc and the caller by the host compiler, then the other
 way round. Both must print what the host compiler alone prints.
-Usage: abigen.py SICC [cases] [seed]. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only"""
+Usage: abigen.py SICC [cases] [seed]. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only"""
 import random, subprocess, sys, os
 sicc = sys.argv[1]
 ncase = int(sys.argv[2]) if len(sys.argv) > 2 else 40

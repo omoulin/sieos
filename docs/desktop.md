@@ -1,6 +1,6 @@
 # The desktop: Stage
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 The desktop (`user/atlas/`, the program `/bin/atlas`) shows **one project
 at a time and one thing in focus**. There are four ideas to learn:

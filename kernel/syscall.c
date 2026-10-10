@@ -4,7 +4,7 @@
  * (arch_defs.h) name the number, arguments and result in them. Any pointer
  * from a program is only used through vm_copy, which checks it.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 

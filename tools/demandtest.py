@@ -12,7 +12,7 @@ on the serial console:
   - a stopped service fails its callers at once instead of leaving them waiting
 Usage: demandtest.py <cpus> <disk image> <qemu command line...> (make demand-test)
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import re, select, shutil, subprocess, sys, time
 SLOW = float(__import__("os").environ.get("SIEOS_SLOW", "1"))   # emulated processors (arm64 on a PC): everything takes longer

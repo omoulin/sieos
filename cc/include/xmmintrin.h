@@ -2,7 +2,7 @@
  * The operations are vector operators, __builtin_shufflevector, and
  * __builtin_vec(operation, a, b, immediate): its operation numbers are
  * sicc's VOP_* (sicc.h). Intrinsics with an immediate are macros.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef _XMMINTRIN_H
 #define _XMMINTRIN_H
 enum { __VOP_ADD, __VOP_SUB, __VOP_MUL, __VOP_DIV, __VOP_AND, __VOP_OR, __VOP_XOR, __VOP_SHL, __VOP_SHR, __VOP_NEG, __VOP_NOT,

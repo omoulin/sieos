@@ -1,4 +1,4 @@
-/* 300x300 matrix products, integers and doubles. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* 300x300 matrix products, integers and doubles. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "../t.h"
 #define N 300
 static int a[N][N], b[N][N], c[N][N];

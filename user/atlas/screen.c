@@ -18,7 +18,7 @@
  * is not used. The clock: the CMOS clock (x86), the PL031 (QEMU
  * virt); the Pis have none (uptime, until the network gives the time).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 #include "draw.h"

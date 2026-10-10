@@ -12,7 +12,7 @@
  * so speed matters more than constant time here; the one secret (the P-256
  * key exchange's scalar) is a fresh random number used once.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk/crypto.h"
 #include "mk/lib.h"

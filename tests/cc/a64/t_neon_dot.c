@@ -1,6 +1,6 @@
 /* cflags: -march=armv8.2-a+dotprod */
 /* t_neon_dot.c - the dot product intrinsics (ARMv8.2: the Pi 5), checked
- * against plain C. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * against plain C. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include <arm_neon.h>
 int printf(const char *, ...);
 int main(void)

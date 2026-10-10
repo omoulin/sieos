@@ -1,6 +1,6 @@
 #!/bin/sh
 # Code speed: each benchmark built by the host compiler (-O2) and by sicc,
-# best of 3 runs each. Usage: run.sh SICC. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# best of 3 runs each. Usage: run.sh SICC. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 SICC=$1; D=$(dirname "$0"); OUT=${OUT:-/tmp/sicc-bench}; mkdir -p "$OUT"
 best() { b=999999; for k in 1 2 3; do s=$(date +%s%N); "$1" > /dev/null; e=$(( ($(date +%s%N) - s) / 1000000 )); [ $e -lt $b ] && b=$e; done; echo $b; }
 printf "%-8s %8s %8s %6s   %8s %8s\n" bench "gcc ms" "sicc ms" ratio "gcc B" "sicc B"

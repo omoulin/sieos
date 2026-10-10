@@ -1,5 +1,5 @@
 /* abi.c - calls between sicc and the host compiler, every struct class,
- * both directions (with abi_gcc.c). Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * both directions (with abi_gcc.c). Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 #include "abi.h"
 long s_take(S1 a, S3 b, S8 c, S12 d, S16 e, S24 f, D2 g, DL h, IFD i, F3 j, C5 k, int x, double y)

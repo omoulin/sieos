@@ -2,7 +2,7 @@
 """Print a flattened device tree (.dtb): nodes and properties, for looking at
 what a board's firmware describes. Usage: fdtdump.py file.dtb [path-filter]
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import struct, sys
 

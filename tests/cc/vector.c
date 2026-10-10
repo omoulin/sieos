@@ -1,6 +1,6 @@
 /* vector.c - GNU vector types: element-wise operators, shifts, compares,
  * scalars, subscripts, casts, shuffles, 8/16/32-byte vectors, passing.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 typedef int v4si __attribute__((vector_size(16)));
 typedef unsigned v4su __attribute__((vector_size(16)));

@@ -23,7 +23,7 @@
  * last conversation (sia keeps it on the disk); "New" starts another. Facts
  * sia offers to remember ("[remember: ...]") become "Remember" buttons.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "atlas.h"
 

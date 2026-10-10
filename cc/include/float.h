@@ -1,4 +1,4 @@
-/* float.h - sicc's freestanding header (long double: x87 80-bit extended; on AArch64 the same as double). Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* float.h - sicc's freestanding header (long double: x87 80-bit extended; on AArch64 the same as double). Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef __SICC_FLOAT_H
 #define __SICC_FLOAT_H
 #define FLT_RADIX 2

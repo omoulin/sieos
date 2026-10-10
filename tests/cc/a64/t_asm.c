@@ -1,7 +1,7 @@
 /* AArch64 GNU extended inline assembly: r/w/m/Q/i constraints, matching and
  * named operands, the w/x/s/d/q/c modifiers, register variables, clobbers,
  * system registers. (Output: t_asm.expect: the host cannot build this one.)
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "../t.h"
 static long add(long a, long b) { asm("add %0, %0, %1" : "+r"(a) : "r"(b)); return a; }
 static int sub_imm(int a) { asm("sub %w0, %w0, %1" : "+r"(a) : "I"(7)); return a; }

@@ -1,5 +1,7 @@
 # The network
 
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+
 SIEOS's network is three programs and a library, all written for SIEOS:
 
 ```

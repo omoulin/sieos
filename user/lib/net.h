@@ -3,7 +3,7 @@
  * port "net"), an HTTP/1.1 client, and TLS 1.3 for https (docs/net.md).
  * Errors are -E... (mk/abi.h, mk/proto.h).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include "mk.h"

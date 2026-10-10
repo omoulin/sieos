@@ -5,7 +5,7 @@
  * functions are always inlined. float16x4_t/float16x8_t hold half-precision
  * bits (unsigned short): vcvt_f32_f16 and vcvt_f16_f32 convert them.
  * The dot product (vdotq_s32...) needs -march=armv8.2-a+dotprod.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef _ARM_NEON_H
 #define _ARM_NEON_H
 #ifndef __aarch64__

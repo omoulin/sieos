@@ -1,7 +1,7 @@
 # The SIEOS AI model: plan
 
 Status: partly done (marked below). The assistant as built: [sia.md](sia.md),
-the engine: [llm.md](llm.md). Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+the engine: [llm.md](llm.md). Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 ## Goal
 

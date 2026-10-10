@@ -1,5 +1,5 @@
 /* long_double.c - long double (x87 80-bit).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 #include <float.h>
 long double gl = 1.0L / 3, garr[3] = { 1.5L, -2.25L, 1e300L * 1e300L };

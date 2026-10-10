@@ -17,7 +17,7 @@
  *  - TLB: invalidations are broadcast by the hardware ("tlbi ...is", mmu.c):
  *    no shootdown interrupts.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 #include "arm64.h"

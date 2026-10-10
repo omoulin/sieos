@@ -3,7 +3,7 @@
 # by sicc for AArch64 with the AArch64 test C library (tests/cc/a64), run
 # under QEMU's user-mode emulator (which has sdot: its CPU is "max").
 # Usage: neon.sh SICC QEMU   (OUT: the work directory)
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 SICC=$1; QEMU=$2; OUT=${OUT:-/tmp/llm-neon}; D=$(cd "$(dirname "$0")/../.." && pwd); T=$D/tests/cc/a64
 A="$SICC --target=aarch64 -O2"; mkdir -p "$OUT"
 $A -c -o "$OUT/crt0.o" "$T/crt0.S" && $A -c -o "$OUT/libc.o" "$T/libc.c" && $A -c -o "$OUT/fmt.o" "$T/fmt.c" &&

@@ -19,7 +19,7 @@
  * (platform), x29 (frame) and x30 (link) are never allocated; v0-v7 (the
  * argument registers) neither, for simpler calls.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "ir.h"
 

@@ -1,4 +1,4 @@
-/* tmmintrin.h - SSSE3 intrinsics, for sicc. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* tmmintrin.h - SSSE3 intrinsics, for sicc. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef _TMMINTRIN_H
 #define _TMMINTRIN_H
 #include <emmintrin.h>

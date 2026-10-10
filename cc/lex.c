@@ -7,7 +7,7 @@
  * Comments become white space. Each token remembers whether it starts a
  * line and whether white space precedes it: the preprocessor needs both.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "sicc.h"
 

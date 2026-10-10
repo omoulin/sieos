@@ -11,7 +11,7 @@
 #   make ARCH=arm64 DIAG_TEST=n   a kernel that faults on purpose after boot step n (tests the Pi's boot-step screen)
 #   make clean
 #
-# Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 # the build directory: build/ (x86-64), build-arm64/ (another one: B=...)
 B       := build$(if $(filter-out x86_64,$(ARCH)),-$(ARCH))

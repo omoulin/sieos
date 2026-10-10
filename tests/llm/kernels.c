@@ -6,7 +6,7 @@
  * All three must agree (the integer kernels exactly, up to float rounding).
  * Also: half-precision conversions both ways, and activation quantization.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdio.h>
 #include <stdlib.h>

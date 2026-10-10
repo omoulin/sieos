@@ -9,7 +9,7 @@
  * x86-64 or NEON ones on AArch64 (neon.c); the best the processor has is
  * chosen at load time (pick_kernels).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "internal.h"
 

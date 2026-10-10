@@ -1,5 +1,5 @@
 /* nbody.c - benchmark: floating point (five bodies, 4M steps of a simple integrator).
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 int printf(const char *fmt, ...);
 double sqrt(double x);
 typedef struct { double x, y, z, vx, vy, vz, m; } Body;

@@ -9,7 +9,7 @@
  * 1 the header ("EFI PART"), then the entries (128 bytes each); with 4 KiB
  * sectors, the header is in sector 1 as well (byte 4096).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

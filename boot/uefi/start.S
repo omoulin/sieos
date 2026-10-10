@@ -3,7 +3,7 @@
  * (Microsoft x64: arguments in rcx, rdx, r8, r9, then the stack above 32
  * bytes of "shadow space") and ours (System V: rdi, rsi, rdx, rcx, r8, r9).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
     .text
     .global efi_start, efi_call, efi_jump

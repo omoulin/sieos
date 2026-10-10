@@ -1,4 +1,4 @@
-/* Variable arguments. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* Variable arguments. Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "t.h"
 struct S { long a, b; }; struct T { double x; long y; };
 static long isum(int n, ...) { va_list ap; va_start(ap, n); long s = 0; for (int i = 0; i < n; i++) s += va_arg(ap, int); va_end(ap); return s; }

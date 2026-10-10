@@ -13,7 +13,7 @@
  *   api_key=...                       sent as "Authorization: Bearer ..."
  * The url may end with /v1, with /chat/completions, or be just the server.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "net.h"
 #include "backend.h"

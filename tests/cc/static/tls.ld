@@ -1,5 +1,5 @@
 /* tls.ld - a program at 4 MiB whose start-up code finds the thread-local template.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 ENTRY(_start)
 SECTIONS {
   . = 0x400000;

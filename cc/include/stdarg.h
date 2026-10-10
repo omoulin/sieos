@@ -1,4 +1,4 @@
-/* stdarg.h - sicc's freestanding header: variable arguments (System V). Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* stdarg.h - sicc's freestanding header: variable arguments (System V). Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #ifndef __SICC_STDARG_H
 #define __SICC_STDARG_H
 typedef __builtin_va_list va_list;

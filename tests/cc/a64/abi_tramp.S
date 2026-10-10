@@ -6,7 +6,7 @@
 //   0 x0-x7, 64 x8, 72 (pad), 80 v0-v7 (16 bytes each), 208 stack (256 bytes),
 //   464 mem size, 472 x19-x28 and d8-d15 (18 words), 616 sp after, 624 sp before
 //
-// Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+// Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
     .text
     .globl abi_rec

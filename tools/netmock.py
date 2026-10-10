@@ -8,7 +8,7 @@ message> (N messages)" in small pieces, streamed as Server-Sent Events
 Usage: netmock.py [port] [key]   (port 0: any; prints the port)
 Also importable: start(port, key) -> (server, port).
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import http.server, json, sys, threading, time
 

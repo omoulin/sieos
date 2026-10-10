@@ -2,7 +2,7 @@
  * host.c - A SieFS disk image in an ordinary file, for the host tools.
  * Block n lives at byte n * 4096 of the file. ISO C only.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdlib.h>
 #include <string.h>

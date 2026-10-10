@@ -28,7 +28,7 @@
  * is copied from. One request at a time: the file server (our only client)
  * sends one at a time anyway, and a request moves up to 128 KiB.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

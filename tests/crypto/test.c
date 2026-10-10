@@ -5,7 +5,7 @@
  * With "-x": print BLAKE2b digests of a fixed pattern, for check.py to
  * compare with an independent implementation.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include <stdio.h>
 #include <stdlib.h>

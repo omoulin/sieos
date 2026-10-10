@@ -16,7 +16,7 @@
  * the interrupts that occurred. A driver therefore needs no extra thread:
  * it waits for clients and hardware in the same ipc_recv.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "kernel.h"
 

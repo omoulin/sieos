@@ -1,6 +1,6 @@
 # sia's memory
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 sia, the assistant (`/bin/siad`, port `"sia"`), remembers. Each conversation
 is saved as it happens and can be continued later: after an idle stop,

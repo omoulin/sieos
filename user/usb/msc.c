@@ -18,7 +18,7 @@
  * same key: vendor, product, serial number, size), it is the same disk on
  * the same port, so the file server can carry on.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "usb.h"
 

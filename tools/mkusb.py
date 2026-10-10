@@ -15,7 +15,7 @@ The image is sparse: only what is written takes space. Usage:
   mkusb.py OUT --size BYTES --efi BOOTX64.EFI --kernel K --module M... \
            --mkfs MKFS --siefs-tool SIEFS --rootfs DIR [--put SRC DST]... [--esp MiB] [--screen WxH]
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import argparse, os, struct, subprocess, sys, tempfile, uuid, zlib
 

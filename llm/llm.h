@@ -15,7 +15,7 @@
  *   llm_ask(s, NULL, "And then?");                       // next turn, same cache
  *
  * Errors are negative numbers (LLM_E...); err[] gets a sentence.
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

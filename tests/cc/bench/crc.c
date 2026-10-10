@@ -1,4 +1,4 @@
-/* CRC-32 of 200 MB (table-driven). Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only */
+/* CRC-32 of 200 MB (table-driven). Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "../t.h"
 static unsigned table[256];
 static unsigned char buf[1 << 20];

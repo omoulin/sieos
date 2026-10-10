@@ -9,7 +9,7 @@
  * Ctrl+S saves, Esc closes (twice if there are unsaved changes), Ctrl+V
  * pastes the clipboard (atlas.c types it in).
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "atlas.h"
 

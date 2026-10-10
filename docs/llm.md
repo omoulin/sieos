@@ -5,7 +5,7 @@ written from scratch in C: it reads GGUF model files, runs Llama-family
 models (Llama, SmolLM2, Mistral, Qwen2), and holds conversations. It is the
 CPU backend of the future **sia** assistant (docs/ai-plan.md).
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 ```sh
 make llm                  # host tools: build/llm/llm-run, build/llm/llm-info

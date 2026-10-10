@@ -26,7 +26,7 @@
  * The virtio backend is below; user/lib/virtio.c has the transports and
  * user/vblk/vblk.c explains virtqueues.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "nic.h"
 #include "virtio.h"

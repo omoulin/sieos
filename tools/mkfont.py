@@ -4,7 +4,7 @@ wide and 7 tall (+2 rows below the baseline for g, j, p, q, y, comma...).
 On screen a character takes a 6 x 11 cell (1 pixel apart, 1 line above, 1
 below). This script turns the drawings into user/atlas/font.c.
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import sys
 
@@ -116,7 +116,7 @@ out = sys.argv[1] if len(sys.argv) > 1 else "user/atlas/font.c"
 with open(out, "w") as f:
     f.write("/* font.c - made by tools/mkfont.py from its drawings: do not edit.\n"
             " * The glyphs of characters 32..126, 9 rows of 5 pixels each (bit 4 = left).\n"
-            " *\n * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only\n */\n"
+            " *\n * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only\n */\n"
             "#include <stdint.h>\n\nconst uint8_t font[95][9] = {\n")
     for c, r in zip(range(32, 127), rows):
         f.write("    { %s },   /* %s */\n" % (r, repr(chr(c)) if chr(c) != '\\' else "'\\\\'"))

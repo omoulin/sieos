@@ -13,7 +13,7 @@ The FAT32 writer is our own: 512-byte sectors and clusters, long file names,
 one level of folders (the firmware's overlays/). Usage:
   mksdcard.py OUT --pi 4|5 --kernel K --initrd M --siefs S [--firmware DIR] [--fat MiB] [--pow2]
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import argparse, os, struct, sys
 

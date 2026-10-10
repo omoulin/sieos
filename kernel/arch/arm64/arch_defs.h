@@ -18,7 +18,7 @@
  *   0xFFFFFFFF80000000             the kernel image (wherever the boot loader
  *                                  put it physically: boot.S maps it here)
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

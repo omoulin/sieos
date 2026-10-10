@@ -13,7 +13,7 @@
  *   0xFFFFFF0000000000             the kernel's own device registers (APICs), uncached
  *   0xFFFFFFFF80000000             the kernel itself
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdint.h>

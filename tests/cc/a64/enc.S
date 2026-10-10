@@ -3,7 +3,7 @@
 // reference assembler; checked by enc.py). Weighted towards what a kernel
 // needs: system registers, TLB and cache maintenance, barriers, exceptions.
 //
-// Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+// Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
     nop                              // d503201f
     wfi                              // d503207f
     wfe                              // d503205f

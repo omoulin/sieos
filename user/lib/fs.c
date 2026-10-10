@@ -3,7 +3,7 @@
  * large reads and writes) to the file server, port "fs" (mk/proto.h).
  * Relative paths are made absolute here, with the current directory.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

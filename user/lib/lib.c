@@ -2,7 +2,7 @@
  * lib.c - Program start-up, the console client (printf and friends send
  * messages to the console server, port "console"), malloc, and threads.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 

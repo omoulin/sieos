@@ -5,7 +5,7 @@
  * programs. Walking a host directory (mkfs.siefs -d) is the one thing ISO C
  * cannot do: it lives apart, in tools/hostdir.c.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include <stdio.h>

@@ -15,7 +15,7 @@
  * and never freed one by one; the arena goes away with the process. That is
  * both the leanest bookkeeping and the fastest allocator.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #ifndef SICC_H
 #define SICC_H

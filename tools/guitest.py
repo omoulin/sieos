@@ -16,7 +16,7 @@ With /tmp/atlas.debug (made here), atlas logs where it drew things.
 Usage: guitest.py <cpus> <screenshots dir> <disk image> <qemu command line...>
 The test works in a copy of the image. Screenshots (PNG) are kept.
 
-Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import os, atexit, json, os, select, shutil, socket, subprocess, sys, time
 

@@ -10,7 +10,7 @@
  * Calls follow the x86-64 System V ABI (AArch64: AAPCS64, ir_a64.inc): classify() decides which struct
  * arguments travel in registers, and how.
  *
- * Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only
+ * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "ir.h"
 
