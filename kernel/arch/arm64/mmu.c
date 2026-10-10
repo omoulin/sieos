@@ -193,3 +193,19 @@ char *arch_uaddr(uint64_t as, uint64_t va, int write)
     if (!e || !(*e & D_VALID) || !(*e & D_USER) || (write == 1 && (*e & D_RO))) return 0;
     return (char *)P2V(*e & D_ADDR) + va % PAGE;
 }
+
+/* A program's code, just written through the data cache: the instruction
+ * cache does not see it by itself (QEMU has no caches, a real Pi does).
+ * Clean each data line to where both caches meet (PoU), then drop any old
+ * instruction lines, on every CPU (inner shareable). CTR_EL0 gives the
+ * smallest line sizes. */
+void arch_sync_code(void *p, uint64_t n)
+{
+    uint64_t ctr, a = (uint64_t)p, end = a + n;
+    asm volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    uint64_t dl = 4UL << (ctr >> 16 & 15), il = 4UL << (ctr & 15);
+    for (uint64_t x = a & ~(dl - 1); x < end; x += dl) asm volatile("dc cvau, %0" : : "r"(x) : "memory");
+    asm volatile("dsb ish" : : : "memory");
+    for (uint64_t x = a & ~(il - 1); x < end; x += il) asm volatile("ic ivau, %0" : : "r"(x) : "memory");
+    asm volatile("dsb ish; isb" : : : "memory");
+}

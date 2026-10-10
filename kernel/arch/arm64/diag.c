@@ -186,7 +186,8 @@ static int last_stage(void)
 }
 
 /* A failure before any program runs: the red band. kind: 1 exception,
- * 2 the boot modules are missing or damaged, 3 the kernel stopped (panic). */
+ * 2 the boot modules are missing or damaged, 3 the kernel stopped (panic),
+ * 4 init, the first program, faulted before its first system call. */
 void diag_fault(int kind, uint64_t esr, uint64_t elr, uint64_t far)
 {
     if (!D.on || D.faulted) return;

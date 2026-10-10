@@ -150,3 +150,6 @@ char *arch_uaddr(uint64_t as, uint64_t va, int write)
     if (!e || !(*e & PTE_P) || !(*e & PTE_U) || (write == 1 && !(*e & PTE_W))) return 0;
     return (char *)P2V(*e & PTE_ADDR) + va % PAGE;
 }
+
+/* x86 keeps its instruction cache coherent with memory by itself. */
+void arch_sync_code(void *p, uint64_t n) { (void)p; (void)n; }

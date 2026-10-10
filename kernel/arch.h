@@ -85,6 +85,7 @@ int   vm_map(uint64_t as, uint64_t va, uint64_t pa, uint64_t flags);
 uint64_t arch_vm_unmap(uint64_t as, uint64_t va, uint64_t *flags);  /* -> the page's pa (0: none) */
 void  arch_vm_free(uint64_t as, void (*leaf)(uint64_t pa, uint64_t flags));
 char *arch_uaddr(uint64_t as, uint64_t va, int write);   /* a user address, for the kernel */
+void  arch_sync_code(void *p, uint64_t n);  /* code just written at p (kernel address): make it runnable */
 int   arch_phys_forbidden(uint64_t pa, uint64_t size);   /* the kernel's own devices (SYS_MAP_PHYS) */
 int   arch_phys_screen(uint64_t pa, uint64_t size);      /* the firmware's frame buffer, inside RAM (SYS_MAP_PHYS) */
 

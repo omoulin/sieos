@@ -96,6 +96,7 @@ int trap_sync(regs_t *r)
     klock();
     rand_event(esr ^ ticks());
     if (ec == EC_FP && fpu_first_use(cur)) return 1;   /* the instruction runs again */
+    diag_fault(4, esr, r->pc, far);                    /* (on a Pi's screen, before step 12: init itself) */
     kprintf("mk: %s (pid %d) killed: %s at %lx (syndrome %lx, address %lx)\n",
             cur->proc->name, cur->proc->pid,
             ec == EC_DABT_LOW ? "bad memory access" : ec == EC_IABT_LOW ? "bad jump" : "exception",

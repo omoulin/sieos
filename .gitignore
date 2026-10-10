@@ -2,3 +2,4 @@ build/
 build-*/
 *.gguf
 gmon.out
+.hosttools/

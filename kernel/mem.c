@@ -260,6 +260,7 @@ static int copy(uint64_t das, void *dst, uint64_t sas, const void *src, uint64_t
         if (das) { if (c > PAGE - d % PAGE) c = PAGE - d % PAGE; if (!(dp = arch_uaddr(das, d, dmode))) return -EFAULT; }
         if (sas) { if (c > PAGE - s % PAGE) c = PAGE - s % PAGE; if (!(sp = arch_uaddr(sas, s, 0))) return -EFAULT; }
         memcpy(dp, sp, c);
+        if (dmode == 2) arch_sync_code(dp, c);   /* loading a program: its code must be runnable */
         d += c; s += c; n -= c;
     }
     return 0;

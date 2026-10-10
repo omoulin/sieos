@@ -165,7 +165,10 @@ green ACT LED: a repeating blink pattern is the firmware's own error code.
 - Top left: **dots = the last step reached** (the same count as its block).
 - Top right: **dots = what happened**: 1 = an exception (a fault in the
   kernel), 2 = the boot modules are missing, damaged, or overlap the
-  kernel's memory, 3 = the kernel stopped on purpose (a "panic").
+  kernel's memory, 3 = the kernel stopped on purpose (a "panic"), 4 = init,
+  the first program, faulted before its first system call (the rows below
+  are then its fault: `100100` = a data abort, `100000` = an instruction
+  abort, `000000` = an undefined instruction).
 - Then three rows of squares, read left to right, **white = 1**, dark = 0,
   in groups of 4 (one hexadecimal digit per group):
   1. the exception class (6 bits: `100101` = a data abort in the kernel,
