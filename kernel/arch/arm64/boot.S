@@ -26,7 +26,11 @@
                                        | UCT (programs may read the cache line size) | I | C | M (MMU) */
 #define DESC_TBL  3                 /* a table descriptor */
 #define DESC_GB   0x60000000000701  /* a 1 GiB block of RAM: valid, normal, shareable, accessed, XN */
-#define DESC_GBX  0x701             /*   the same, executable (identity map) */
+#define DESC_GBX  0xF01             /*   the same, executable by the kernel only, and not global
+                                      * (identity map): leaving it (arch_as_load: tlbi aside1)
+                                      * must drop it from the TLB, or a program's addresses
+                                      * would still reach the kernel's memory there */
+#define DESC_UXN  0x0040            /*   (bits 48-63) EL0 may not execute it */
 #define DESC_PAGE 0x703             /* a kernel page: valid, normal, shareable, accessed, executable */
 
     .section .text.boot, "ax"
@@ -197,6 +201,7 @@ build_tables:
     lsr   x3, x20, #30
     lsl   x3, x3, #30
     movz  x4, #DESC_GBX
+    movk  x4, #DESC_UXN, lsl #48
     orr   x3, x3, x4
     str   x3, [x1, x2, lsl #3]
     /* the tables were written with the MMU (and caches) off: drop any
