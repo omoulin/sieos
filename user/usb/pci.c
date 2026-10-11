@@ -174,7 +174,10 @@ static int ecam(uint32_t cls, uint32_t mask, hc_info_t *h, int nth)
 
 /* Raspberry Pi 4: BCM2711 PCIe (registers: root complex config at 0, the
  * other buses through EXT_CFG_INDEX 0x9000 / EXT_CFG_DATA 0x8000; link
- * status at 0x4068). UNTESTED: the firmware must have brought the link up. */
+ * status at 0x4068; resets at 0x9210, RGR1_SW_INIT_1: bit 1 the bridge,
+ * bit 0 PERST#). UNTESTED: the firmware must have brought the link up.
+ * While the bridge is held in reset, reading its other registers makes
+ * the bus fail (an SError, seen on a real Pi 4): check that one first. */
 static int pi4(hc_info_t *h, int nth)
 {
     int n = fdt_find(fdt, -1, "brcm,bcm2711-pcie");
@@ -182,6 +185,10 @@ static int pi4(hc_info_t *h, int nth)
     if (nth || n < 0 || fdt_reg(fdt, n, 0, &base, &size) || window(n, &wpci, &wcpu, &wsize)) return -1;
     volatile uint8_t *r = map_phys(base, 0x9310);
     if ((long)r < 0) return -1;
+    if (*(volatile uint32_t *)(r + 0x9210) & 3) {
+        log_line("usb: Pi 4 PCIe controller held in reset (the firmware did not start it): no USB yet\n");
+        return -1;
+    }
     uint32_t st = *(volatile uint32_t *)(r + 0x4068);
     if ((st & 0x30) != 0x30) { log_line("usb: Pi 4 PCIe link down: the USB chip is not reachable\n"); return -1; }
     volatile uint32_t *rc = (volatile uint32_t *)r;               /* the root complex (bus 0) */

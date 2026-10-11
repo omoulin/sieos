@@ -94,7 +94,7 @@ vectors:
     VENT  el0_sync
     VENT  el0_irq
     VENT  bad_entry
-    VENT  bad_entry
+    VENT  el0_sync                  /* SError: a program's access the bus refused (cpu.c) */
     VENT  bad_entry
     VENT  bad_entry
     VENT  bad_entry

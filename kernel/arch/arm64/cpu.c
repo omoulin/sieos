@@ -9,7 +9,7 @@
 #include "arm64.h"
 
 /* Exception classes (ESR_EL1 bits 31-26) we act on. */
-enum { EC_FP = 0x07, EC_SVC = 0x15, EC_IABT_LOW = 0x20, EC_DABT_LOW = 0x24 };
+enum { EC_FP = 0x07, EC_SVC = 0x15, EC_IABT_LOW = 0x20, EC_DABT_LOW = 0x24, EC_SERROR = 0x2F };
 
 /* A CPU's cpu_t: one page of the direct map (it needs no special mapping:
  * the processor finds it through TPIDR_EL1). */
@@ -87,7 +87,11 @@ void halt_others(void)
 }
 
 /* A synchronous exception from a program: a system call, its first FP/SIMD
- * instruction, or a fault (its process dies). Returns 1: the lock is held. */
+ * instruction, or a fault (its process dies). Also an SError taken while a
+ * program ran: the bus refused an access (on a Pi, a driver touching a
+ * device that is off or held in reset); it arrives a few instructions
+ * late, but a driver's own registers are the likely cause: that process
+ * dies too, not the whole system. Returns 1: the lock is held. */
 int trap_sync(regs_t *r)
 {
     uint64_t esr = sysreg_esr(), far = sysreg_far();
@@ -99,7 +103,8 @@ int trap_sync(regs_t *r)
     diag_fault(4, esr, r->pc, far);                    /* (on a Pi's screen, before step 12: init itself) */
     kprintf("mk: %s (pid %d) killed: %s at %lx (syndrome %lx, address %lx)\n",
             cur->proc->name, cur->proc->pid,
-            ec == EC_DABT_LOW ? "bad memory access" : ec == EC_IABT_LOW ? "bad jump" : "exception",
+            ec == EC_DABT_LOW ? "bad memory access" : ec == EC_IABT_LOW ? "bad jump" :
+            ec == EC_SERROR ? "bus error (SError)" : "exception",
             r->pc, esr, far);
     proc_exit(-1);
 }
