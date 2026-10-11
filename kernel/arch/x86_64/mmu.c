@@ -70,6 +70,7 @@ void *kmap(uint64_t pa, uint64_t size, uint64_t flags)
 }
 
 /* SYS_MAP_PHYS never maps the interrupt controllers (the kernel's own). */
+void arch_phys_mapped(uint64_t pa, uint64_t size) { (void)pa; (void)size; }
 int arch_phys_forbidden(uint64_t pa, uint64_t size) { return pa < 0xFF000000 && pa + size > 0xFEC00000; }
 /* The firmware's screen (a UEFI loader's frame buffer) may sit in what the
  * memory map calls RAM: only that range may then be mapped by the desktop. */

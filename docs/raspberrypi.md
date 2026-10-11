@@ -160,6 +160,12 @@ mailbox did not answer. Check that the card's boot partition holds
 `kernel8.img`, `sieos.mod` and `config.txt` (with `arm_64bit=1`), and the
 green ACT LED: a repeating blink pattern is the firmware's own error code.
 
+**The log under the blocks**: what the serial console shows (the kernel's
+lines and the programs': `vblk: ...`, `init: cannot start atlas ...`) is
+written in small text below the blocks until the desktop takes the screen.
+If all twelve blocks are there but no desktop appears, photograph it: its
+last lines say which server stopped or failed.
+
 **The red band** (bottom third): something went wrong before any program ran.
 
 - Top left: **dots = the last step reached** (the same count as its block).

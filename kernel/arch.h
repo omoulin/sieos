@@ -88,6 +88,7 @@ char *arch_uaddr(uint64_t as, uint64_t va, int write);   /* a user address, for 
 void  arch_sync_code(void *p, uint64_t n);  /* code just written at p (kernel address): make it runnable */
 int   arch_phys_forbidden(uint64_t pa, uint64_t size);   /* the kernel's own devices (SYS_MAP_PHYS) */
 int   arch_phys_screen(uint64_t pa, uint64_t size);      /* the firmware's frame buffer, inside RAM (SYS_MAP_PHYS) */
+void  arch_phys_mapped(uint64_t pa, uint64_t size);     /* SYS_MAP_PHYS gave a driver [pa, pa + size) */
 
 /* ---- The platform (platform.c): log output, power, hardware randomness. */
 void arch_putc(char c);                    /* one byte of the kernel log */

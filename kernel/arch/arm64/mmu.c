@@ -106,6 +106,7 @@ int arch_phys_screen(uint64_t pa, uint64_t size)
         if (pa >= screen[i].start && pa + size <= screen[i].end) return 1;
     return 0;
 }
+void arch_phys_mapped(uint64_t pa, uint64_t size) { diag_mapped(pa, size); }   /* the desktop took the screen? */
 int arch_phys_forbidden(uint64_t pa, uint64_t size)
 {
     for (int i = 0; i < nforbid; i++)

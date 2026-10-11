@@ -9,6 +9,11 @@
  * band at the bottom shows the step and the exception as rows of squares
  * (white = 1). A photo of the screen then says where it stopped.
  *
+ * Below the blocks, the kernel log (what the serial console shows: the
+ * kernel's lines and the programs', SYS_DEBUG) is written in small text
+ * until the desktop maps the screen for itself: when the boot goes past
+ * step 12 but no desktop appears, the photo shows the servers' messages.
+ *
  * This code also runs before the MMU is on (boot.S calls it from the first
  * instruction on), so it follows the rules of that world: memory behaves as
  * a device then (aligned accesses only: the device tree is read byte by
@@ -30,7 +35,15 @@ static struct {
     uint32_t w, h, pitch;   /* pixels, pixels, bytes per row */
     int on;                 /* 1 until the first program runs (then the screen is its) */
     int faulted;
+    int log;                /* 1 until the desktop maps the screen: the log is written */
 } D __attribute__((section(".data")));
+
+/* The log's text: the last LOGN lines, kept to scroll (only used once the
+ * kernel runs C at its high address: .bss is cleared by then). */
+#define LOGN 96
+#define LOGW 255
+static char lines[LOGN][LOGW + 1];
+static int nlines, col;             /* lines written (the last one: being written); its column */
 
 static uint32_t msg[36] __attribute__((aligned(16), section(".data")));
 
@@ -119,6 +132,69 @@ static uint32_t bsize(void) { return D.w / 16; }
 static uint32_t bx(int n)   { return D.w / 2 - (NSTAGE * bsize() + (NSTAGE - 1) * bsize() / 4) / 2 + (uint32_t)(n - 1) * (bsize() + bsize() / 4); }
 static uint32_t by(void)    { return D.h / 4; }
 
+/* ---- The log, in atlas's font (5 x 9 pixels per character), scaled to
+ * the screen: about 30 lines on a 1080-line screen, more on taller ones. */
+#include "../../../user/atlas/font.c"
+static uint32_t lscale(void) { return D.h >= 1080 ? D.h / 540 : 1; }
+static uint32_t lcw(void)    { return 6 * lscale(); }               /* a cell: 6 x 11 */
+static uint32_t lch(void)    { return 11 * lscale(); }
+static uint32_t ltop(void)   { return by() + bsize() * 3 / 2; }      /* under the blocks */
+static uint32_t lbottom(void){ return D.faulted ? D.h * 5 / 8 : D.h; }   /* above the red band */
+static int      lrows(void)  { return (int)((lbottom() - ltop()) / lch()); }
+static int      lcols(void)  { int n = (int)((D.w - 2 * lcw()) / lcw()); return n > LOGW ? LOGW : n; }
+
+static void glyph(int row, int c, char ch)
+{
+    uint32_t s = lscale(), x0 = lcw() * (uint32_t)(c + 1), y0 = ltop() + lch() * (uint32_t)row;
+    const uint8_t *g = font[ch >= 32 && ch < 127 ? ch - 32 : '?' - 32];
+    for (uint32_t j = 0; j < 9 * s; j++) {
+        volatile uint32_t *px = (volatile uint32_t *)(D.fb + D.base + (uint64_t)(y0 + j) * D.pitch) + x0;
+        for (uint32_t i = 0; i < 5 * s; i++) px[i] = g[j / s] >> (4 - i / s) & 1 ? 0xC8D6E5 : 0x0A0F1C;
+        for (uint64_t a = (uint64_t)px & ~63UL; a < (uint64_t)(px + 5 * s); a += 64)
+            asm volatile("dc cvac, %0" : : "r"(a) : "memory");
+    }
+    asm volatile("dsb sy" : : : "memory");
+}
+
+/* The last lines that fit, from the top of the log's area. */
+static void log_redraw(void)
+{
+    int rows = lrows(), first = nlines - rows < 0 ? 0 : nlines - rows;
+    if (rows < 1) return;
+    fill(0, ltop(), D.w, (uint32_t)rows * lch(), 0x0A0F1C);
+    for (int r = 0; first + r < nlines; r++)
+        for (int c = 0; lines[(first + r) % LOGN][c]; c++) glyph(r, c, lines[(first + r) % LOGN][c]);
+}
+
+/* arch_putc: one byte of the kernel log. */
+void diag_putc(char ch)
+{
+    if (!D.log || !D.fb) return;
+    if (!nlines) nlines = 1;
+    char *l = lines[(nlines - 1) % LOGN];
+    if (ch == '\r') return;
+    if (ch == '\n' || col >= lcols()) {          /* a new line (scrolling when the area is full) */
+        nlines++;
+        col = 0;
+        lines[(nlines - 1) % LOGN][0] = 0;
+        if (nlines > lrows()) log_redraw();
+        if (ch == '\n') return;
+        l = lines[(nlines - 1) % LOGN];
+    }
+    if (ch == '\t') ch = ' ';
+    l[col] = ch;
+    l[++col] = 0;
+    int row = nlines > lrows() ? lrows() - 1 : nlines - 1;
+    if (row >= 0) glyph(row, col - 1, ch);
+}
+
+/* SYS_MAP_PHYS: a driver mapped [pa, pa + size): if that is our screen,
+ * the desktop has it now: the log stops. */
+void diag_mapped(uint64_t pa, uint64_t size)
+{
+    if (D.fb && pa < D.fb + (uint64_t)D.pitch * D.h && pa + size > D.fb) D.log = 0;
+}
+
 /* ---- boot.S: the first thing, with the device tree's physical address. */
 void diag_init(uint64_t dtb)
 {
@@ -146,6 +222,7 @@ void diag_init(uint64_t dtb)
     D.fb = msg[23] & 0x3FFFFFFF;
     D.w = msg[10]; D.h = msg[11]; D.pitch = msg[28];
     D.on = 1;
+    D.log = 1;
     fill(0, 0, D.w, D.h, 0x0A0F1C);                  /* the background */
     for (int i = 1; i <= NSTAGE; i++) fill(bx(i), by() + bsize() + bsize() / 4, bsize(), bsize() / 10, 0x2A3550);
     diag_stage(1);
@@ -171,7 +248,7 @@ void diag_stage(int n)
 void diag_high(uint64_t phys, uint64_t dtb)
 {
     if (D.fb && (D.fb >> 30 == phys >> 30 || D.fb >> 30 == dtb >> 30)) D.base = DMAP;
-    else D.on = 0;
+    else D.on = D.log = 0;
     diag_stage(6);
 }
 
@@ -199,6 +276,7 @@ void diag_fault(int kind, uint64_t esr, uint64_t elr, uint64_t far)
     bits_row(y + 10 * sq, sq, esr >> 26 & 0x3F, 6, 0xFFFFFF);   /* exception class */
     bits_row(y + 12 * sq, sq, elr, 24, 0xFFFFFF);    /* where: the low 24 bits of the address */
     bits_row(y + 14 * sq, sq, far, 24, 0xFFE066);    /* the address it touched (yellow) */
+    if (D.log) log_redraw();                         /* the log's last lines, above the band */
 }
 
 /* arch_halt_forever: the kernel stops (a panic) before any program ran. */

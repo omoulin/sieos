@@ -40,3 +40,5 @@ void diag_stage(int n);
 void diag_high(uint64_t phys, uint64_t dtb);
 void diag_fault(int kind, uint64_t esr, uint64_t elr, uint64_t far);
 void diag_halt(void);
+void diag_putc(char c);
+void diag_mapped(uint64_t pa, uint64_t size);

@@ -25,3 +25,4 @@ KARCH_NOBINS :=
 # the tests' timeouts (tools/*.py): QEMU emulates these processors on a PC
 export SIEOS_SLOW ?= 4
 KTEST_CC = $(TCC)                # ktest-sicc (the same as ktest here: both by sicc)
+$(B)/kernel/diag.o: user/atlas/font.c   # (the boot screen's log uses atlas's font)

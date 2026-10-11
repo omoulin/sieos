@@ -33,6 +33,7 @@ static void add(range_t *r, int *n, int max, uint64_t pa, uint64_t len)
 static volatile uint32_t *uart;
 void arch_putc(char c)
 {
+    diag_putc(c);                       /* (on a Pi's screen too, until the desktop starts) */
     if (!uart) return;
     while (uart[0x18 / 4] & 1 << 5) ;   /* FR.TXFF: transmit FIFO full */
     uart[0] = (uint8_t)c;

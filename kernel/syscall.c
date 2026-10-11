@@ -79,6 +79,7 @@ static long map_phys(uint64_t pa, uint64_t size)
     uint64_t va = p->mmio, first = pa & ~(PAGE - 1);
     for (uint64_t a = first; a < pa + size; a += PAGE, p->mmio += PAGE)
         if (vm_map(p->as, p->mmio, a, VM_U | VM_W | VM_UC | wc | VM_DEV | VM_NX)) return -ENOMEM;
+    arch_phys_mapped(pa, size);
     return va + pa % PAGE;
 }
 
