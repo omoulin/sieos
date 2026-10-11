@@ -123,7 +123,7 @@ static void first_start(void)
     for (;;) {
         if (!screen_possible()) call(AUTH_DISPLAY, 0, 0, 0);    /* tell auth: no screen */
         else if (!told) {
-            printf("\nFirst start: please complete the setup on the screen.\n");
+            printf("\nFirst start: on the screen once it has a keyboard, else here.\n");
             told = 1;
         }
         msg_t m = { .w = { AUTH_STATE, AUTH_WAIT } };

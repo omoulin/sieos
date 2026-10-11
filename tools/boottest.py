@@ -10,7 +10,7 @@ works in a copy of it.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
-import os, select, shutil, subprocess, sys, time
+import re, os, select, shutil, subprocess, sys, time
 SLOW = float(__import__("os").environ.get("SIEOS_SLOW", "1"))   # emulated processors (arm64 on a PC): everything takes longer
 
 cpus, tools, image, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
@@ -36,7 +36,8 @@ def expect(text, timeout=20):
             sys.exit(f"FAIL: waiting for {text!r}\n--- output ---\n{out.decode(errors='replace')}")
         if select.select([qemu.stdout], [], [], left)[0]:
             out += qemu.stdout.read1(4096)
-    out = out[out.index(text.encode()) + len(text):]
+    got, out = out[:out.index(text.encode())], out[out.index(text.encode()) + len(text):]
+    return got
 
 def send(line):
     qemu.stdin.write(line.encode() + b"\r")
@@ -98,7 +99,8 @@ start = time.time()
 boot()
 expect(f"mk: {cpus} CPU")
 print(f"ok: {cpus} CPUs running")
-expect(": no desktop")    # no display card (or no screen driver: arm64): the desktop leaves,
+expect("atlas: no ")     # no display card: the desktop leaves; a screen without keyboard
+                          # or mouse (the Pi 4): it waits for one; either way
 expect("no screen, the terminal does it")             # and auth gives the first start to login
 expect("first start, and there is no screen")
 print(f"ok: first start on the terminal (no screen), after {time.time() - start:.2f} s")
@@ -135,8 +137,11 @@ logout()
 
 # ---- root: the system, the files, a second user, su
 times.append(login("root", "rootpass1"))
-check("svc", "atlas", "stopped")                 # no display: the desktop stopped once, cleanly
-print("ok: no screen: the desktop stopped cleanly (not restarted)")
+send("svc")                                      # no display: the desktop stopped once, cleanly;
+got = expect(prompt)                             # a screen without input (the Pi 4): it waits
+m = re.search(rb"atlas\s+(stopped|running)", got)
+if not m: qemu.kill(); sys.exit(f"FAIL: atlas neither stopped nor running\n{got.decode(errors='replace')}")
+print(f"ok: the desktop {'stopped cleanly (no screen)' if m.group(1) == b'stopped' else 'waits for a keyboard (a screen)'}")
 for cmd, answer in [("echo hello world", "hello world"), ("ps", "auth"), ("mem", f"processors: {cpus}"),
                     ("uptime", f"{cpus} CPUs"), ("nonsense", "unknown command")]:
     check(cmd, answer)

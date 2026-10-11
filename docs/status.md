@@ -13,7 +13,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | SieFS disk | virtio | virtio (MMIO) | SD card | SD card (untested) |
 | Users, login, permissions | yes | yes | yes (serial) | untested |
 | Supervisor, on-demand servers | yes | yes | yes | untested |
-| Desktop (Stage) | yes | yes (ramfb) | screen yes, no USB input yet | untested |
+| Desktop (Stage) | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
 | Network, TLS | yes | yes | no driver yet | no driver yet |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |

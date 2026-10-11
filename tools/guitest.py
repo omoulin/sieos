@@ -237,7 +237,7 @@ NAVY, ACC, TERM, TEXT, TERMFG, GLASS = "0a0f1c", "4be3c1", "070b14", "e6ecf5", "
 start = time.time()
 wait(f"mk: {cpus} CPU")
 wait("atlas: first start: accounts needed (setup on the screen)")
-expect("please complete the setup on the screen")    # the serial console only says so
+expect("First start: on the screen once it has a keyboard")    # the serial console only says so
 got = wait("atlas: greeter (1920x1080, full frame ")
 greeter_us = int(got.split()[0])
 print(f"ok: first start on the screen ({time.time() - start:.2f} s after start, full frame {greeter_us} us)")

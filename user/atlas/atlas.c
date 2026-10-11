@@ -99,6 +99,7 @@ int clip_n;
 static enum { GREETER, SESSION } mode;
 static char user[32], home[64], gname[32], gpw[128], gmsg[80], query[48];
 static int uid = -1, ugid = -1, gfield, first_start;
+static int no_input;                    /* no keyboard or pointer yet: the greeter says so */
 static mk_groups_t ugroups;
 static long port, auth_port;
 static int ptr_x = 960, ptr_y = 540, buttons, press_x, press_y;
@@ -638,6 +639,7 @@ static void draw_greeter(void)
         hitbox(x0 + 230, fy, x1 - 60, fy + 50, H_FIELD, f);
     }
     if (gmsg[0]) label(x0 + 60, y0 + 400, gmsg, 2, C_ERR);
+    else if (no_input) label(x0 + 60, y0 + 400, "No keyboard or mouse yet: plug one in", 2, C_DIM);
     pill(x1 - 60 - tw(6, 2) - 28, y1 - 80, "Log in", 1, H_LOGIN, 0);
 }
 
@@ -1822,25 +1824,19 @@ int main(int argc, char **argv)
     say("atlas: screen: %s, %d x %d\n", scr.name, SW, SH);
     long con = 0;
     msg_t hi = { .w = { CON_HASINPUT } };
-    if (call_named(&con, "console", &hi, 1) >= 0 && (long)hi.w[0] == 0) {
-        /* A screen but no keyboard or pointer: say so on the screen, and
-         * leave the first start and the logins to the serial console. */
-        static const char *const l[] = { "SIEOS", "This screen works, but there is no keyboard or mouse yet.",
-                                         "Use the serial console: log in there." };
-        dl_reset();
-        dl_rect(0, 0, SW, SH, 0, C_BG);
-        for (int i = 0; i < 3; i++)
-            dl_text(200, 380 + i * 70 + (i ? 60 : 0), l[i], strlen(l[i]), S(i ? 4 : 10), i ? C_TXT : C_ACC, 0, 0, SW, SH);
-        present(0, 0, SW, SH);
-        say("atlas: no keyboard or pointer: no desktop (the serial console is the way in)\n");
-        no_desktop();
-        return 0;
-    }
     rtc_read();
     port = port_create("atlas");
     if (port < 0) return 1;
     sys_child_port(port);                                /* our shells' ends */
-    greeter_check();
+    if (call_named(&con, "console", &hi, 1) >= 0 && (long)hi.w[0] == 0) {
+        /* A screen but no keyboard or pointer yet (a USB one may come at
+         * any time: its events then reach the input thread): the desktop
+         * starts anyway, and the first start, if any, goes to the serial
+         * console until a keyboard or mouse appears. */
+        no_input = 1;
+        say("atlas: no keyboard or pointer yet: the desktop waits for one\n");
+        no_desktop();
+    } else greeter_check();
     redraw();
     say("atlas: greeter (%dx%d, full frame %lu us)\n", SW, SH, (unsigned long)frame_us);
     thread_start(input_thread, 0, 16384);
@@ -1866,6 +1862,11 @@ int main(int argc, char **argv)
         if (m.pid == self && m.w[0] == ATLAS_INPUT) {    /* (our own threads only: nobody */
             int n = m.rlen / sizeof(con_event_t);
             reply_val(from, 0);
+            if (no_input) {                              /* the first keyboard or mouse: */
+                no_input = 0;                            /* still no account? this screen */
+                say("atlas: keyboard or pointer connected\n");
+                if (mode == GREETER) { greeter_check(); redraw(); }   /* does the first start now */
+            }
             for (int i = 0; i < n; i++) {
                 con_event_t *e = &((con_event_t *)buf)[i];
                 if (e->type == EV_KEY) key(e->code); else mouse(e);

@@ -122,13 +122,17 @@ mk: generic timer 54.0 MHz, GICv2 with ... lines
 mk: 4 CPUs running
 vblk: brcm,bcm2711-emmc2 at fe340000: SD card (high capacity), 4-bit, DDR50 at 50000 kHz (1.8 V), ADMA2 64-bit, interrupts; caps ... ...
 vblk: SD card disk, ... MiB (SieFS partition)
+usb: Pi 4 PCIe link up (status ...)            (Pi 4: SIEOS starts the PCIe bridge itself)
+usb: xHCI VL805 xHCI (Raspberry Pi 4), ... ports, interrupts
 atlas: screen: Raspberry Pi firmware          (Pi 5: firmware frame buffer)
-atlas: no keyboard or pointer: no desktop (the serial console is the way in)
-Welcome to SIEOS. This is the first start, and there is no screen: ...
+usb: port ...: ... keyboard/mouse             (one line per keyboard or mouse plugged in)
 ```
 
-Choose root's password and create your user on the serial console, then
-log in there. `poweroff` (as root) stops the board.
+The desktop starts with or without a keyboard and mouse; one plugged in
+later works at once. Without any at boot, the first start (root's
+password, your user) is offered on the serial console, and the screen
+takes it over as soon as a keyboard or mouse is plugged in. `poweroff`
+(as root) stops the board.
 
 ## Reading the boot steps without a serial cable
 
@@ -347,8 +351,9 @@ The Pis' devices do not see the processors' caches (QEMU's do), so:
 
 ## Not yet supported on the Pis
 
-- USB (Pi 4: the VL805 chip behind PCIe; Pi 5: the RP1 chip behind PCIe):
-  keyboard, mouse, USB drives.
+- USB on the Pi 5 (the RP1 chip behind PCIe). On the Pi 4 the PCIe bridge
+  and the VL805 USB chip are started by SIEOS (as Linux's pcie-brcmstb
+  does): written, untested on a board yet.
 - Wi-Fi, Bluetooth. (Ethernet: written, untested on hardware, see above.)
 - RP1's interrupts (MSI-X): the Pi 5's Ethernet is polled.
 - eMMC (Compute Modules): the card identification is the SD one; eMMC's

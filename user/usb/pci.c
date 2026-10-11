@@ -91,11 +91,12 @@ static int by_phandle(uint32_t ph)
     return -1;
 }
 
-/* The bridge's 32-bit memory window ("ranges": PCI address, CPU address, size). */
-static int window(int node, uint64_t *pci, uint64_t *cpu, uint64_t *size)
+/* The bridge's 32-bit memory window ("ranges": PCI address, CPU address,
+ * size; "dma-ranges": the same, the other way: where devices see our RAM). */
+static int window_of(int node, const char *prop, uint64_t *pci, uint64_t *cpu, uint64_t *size)
 {
     int len, pac = 2, sc = cellsof(node, "#size-cells", 2);
-    const uint8_t *r = fdt_prop(fdt, node, "ranges", &len);
+    const uint8_t *r = fdt_prop(fdt, node, prop, &len);
     int e = 4 * (3 + pac + sc);
     for (int i = 0; r && i + e <= len; i += e)
         if ((fdt_be32(r + i) >> 24 & 3) == 2) {
@@ -106,6 +107,7 @@ static int window(int node, uint64_t *pci, uint64_t *cpu, uint64_t *size)
         }
     return -1;
 }
+static int window(int node, uint64_t *pci, uint64_t *cpu, uint64_t *size) { return window_of(node, "ranges", pci, cpu, size); }
 
 /* Which GIC interrupt a device's pin (1..4) uses: the bridge's interrupt-map. */
 static int pin_irq(int node, uint32_t devfn_hi, int pin)
@@ -173,11 +175,81 @@ static int ecam(uint32_t cls, uint32_t mask, hc_info_t *h, int nth)
 }
 
 /* Raspberry Pi 4: BCM2711 PCIe (registers: root complex config at 0, the
- * other buses through EXT_CFG_INDEX 0x9000 / EXT_CFG_DATA 0x8000; link
- * status at 0x4068; resets at 0x9210, RGR1_SW_INIT_1: bit 1 the bridge,
- * bit 0 PERST#). UNTESTED: the firmware must have brought the link up.
- * While the bridge is held in reset, reading its other registers makes
- * the bus fail (an SError, seen on a real Pi 4): check that one first. */
+ * other buses through EXT_CFG_INDEX 0x9000 / EXT_CFG_DATA 0x8000). The
+ * firmware leaves the bridge held in reset, and reading its registers then
+ * makes the bus fail (an SError, seen on a real Pi 4): we start it as
+ * Linux's pcie-brcmstb does, then train the link to the VL805 USB chip. */
+#define P_MISC_CTRL      0x4008          /* SCB access, UR mode, burst size, SCB0 size */
+#define P_WIN0_LO        0x400C          /* outbound window 0: its PCI address, low and high */
+#define P_WIN0_HI        0x4010
+#define P_BAR1_LO        0x402C          /* inbound windows: BAR1 and BAR3 off, BAR2 our RAM */
+#define P_BAR2_LO        0x4034
+#define P_BAR2_HI        0x4038
+#define P_BAR3_LO        0x403C
+#define P_STATUS         0x4068          /* bit 4 PHY link up, 5 data link active, 7 root complex mode */
+#define P_WIN0_BASELIM   0x4070          /* outbound window 0: CPU base and limit, MiB, low bits */
+#define P_WIN0_BASE_HI   0x4080
+#define P_WIN0_LIMIT_HI  0x4084
+#define P_HARD_DEBUG     0x4204          /* bit 27 SerDes powered down, bit 1 CLKREQ# debug */
+#define P_MSI_CLR        0x4508
+#define P_MSI_MASK_SET   0x4510
+#define P_ID_VAL3        0x043C          /* the root complex's class code */
+#define P_VENDOR_REG1    0x0188          /* endianness of the inbound window */
+#define P_SW_INIT        0x9210          /* bit 1 the bridge in reset, bit 0 PERST# asserted */
+
+static int ilog2(uint64_t v) { int n = -1; while (v) { v >>= 1; n++; } return n; }
+
+/* -> 0 the link is up (it already was, or we brought it up). */
+static int pi4_start(volatile uint8_t *r, int n)
+{
+    #define R(o) (*(volatile uint32_t *)(r + (o)))
+    if (!(R(P_SW_INIT) & 3) && (R(P_STATUS) & 0x30) == 0x30) return 0;   /* the firmware did it */
+    uint64_t ipci, icpu, isize, opci, ocpu, osize;
+    if (window_of(n, "dma-ranges", &ipci, &icpu, &isize) || window(n, &opci, &ocpu, &osize)) {
+        log_line("usb: Pi 4 PCIe: no windows in the device tree\n");
+        return -1;
+    }
+    R(P_SW_INIT) |= 3;                                     /* bridge and PERST# in reset */
+    sys_sleep(200000);
+    R(P_SW_INIT) &= ~2u;                                   /* the bridge out of reset */
+    R(P_HARD_DEBUG) &= ~(1u << 27);                        /* SerDes on */
+    sys_sleep(200000);
+    uint32_t c = R(P_MISC_CTRL);
+    c = (c & ~0x300000u) | 1u << 12 | 1u << 13;            /* SCB access, UR reads as ~0, 128-byte bursts */
+    R(P_MISC_CTRL) = c;
+    /* inbound (BAR2): our RAM as the devices see it, a power of two */
+    uint64_t bsize = 1;
+    while (bsize < isize) bsize <<= 1;
+    int lg = ilog2(bsize);
+    uint32_t enc = lg >= 12 && lg <= 15 ? (uint32_t)(lg - 12) + 0x1C : lg >= 16 && lg <= 35 ? (uint32_t)(lg - 15) : 0;
+    R(P_BAR2_LO) = ((uint32_t)ipci & ~0x1Fu) | enc;        /* (at the window's PCI address) */
+    R(P_BAR2_HI) = (uint32_t)(ipci >> 32);
+    c = R(P_MISC_CTRL);
+    R(P_MISC_CTRL) = (c & ~0xF8000000u) | (uint32_t)(lg - 15) << 27;   /* SCB0 size */
+    R(P_BAR1_LO) &= ~0x1Fu;
+    R(P_BAR3_LO) &= ~0x1Fu;
+    R(P_MSI_MASK_SET) = ~0u;                               /* no MSI interrupts (INTx only) */
+    R(P_MSI_CLR) = ~0u;
+    R(P_SW_INIT) &= ~1u;                                   /* PERST# released: the link trains */
+    for (int i = 0; i < 20 && (R(P_STATUS) & 0x30) != 0x30; i++) sys_sleep(5000000);
+    uint32_t st = R(P_STATUS);
+    if ((st & 0x30) != 0x30) { log_line("usb: Pi 4 PCIe link down (status %x): the USB chip is not reachable\n", st); return -1; }
+    if (!(st & 0x80)) { log_line("usb: Pi 4 PCIe not in root complex mode\n"); return -1; }
+    /* outbound window 0: CPU ocpu.. -> PCI opci.. */
+    R(P_WIN0_LO) = (uint32_t)opci;
+    R(P_WIN0_HI) = (uint32_t)(opci >> 32);
+    uint64_t bmb = ocpu >> 20, lmb = (ocpu + osize - 1) >> 20;
+    R(P_WIN0_BASELIM) = (R(P_WIN0_BASELIM) & ~0xFFF0FFF0u) | (uint32_t)(bmb & 0xFFF) << 4 | (uint32_t)(lmb & 0xFFF) << 20;
+    R(P_WIN0_BASE_HI) = (R(P_WIN0_BASE_HI) & ~0xFFu) | (uint32_t)(bmb >> 12 & 0xFF);
+    R(P_WIN0_LIMIT_HI) = (R(P_WIN0_LIMIT_HI) & ~0xFFu) | (uint32_t)(lmb >> 12 & 0xFF);
+    R(P_ID_VAL3) = (R(P_ID_VAL3) & ~0xFFFFFFu) | 0x060400; /* a PCI-to-PCI bridge */
+    R(P_VENDOR_REG1) &= ~0xCu;                             /* little-endian inbound */
+    R(P_HARD_DEBUG) |= 2;                                  /* refclk gated by CLKREQ# */
+    log_line("usb: Pi 4 PCIe link up (status %x)\n", st);
+    return 0;
+    #undef R
+}
+
 static int pi4(hc_info_t *h, int nth)
 {
     int n = fdt_find(fdt, -1, "brcm,bcm2711-pcie");
@@ -185,12 +257,7 @@ static int pi4(hc_info_t *h, int nth)
     if (nth || n < 0 || fdt_reg(fdt, n, 0, &base, &size) || window(n, &wpci, &wcpu, &wsize)) return -1;
     volatile uint8_t *r = map_phys(base, 0x9310);
     if ((long)r < 0) return -1;
-    if (*(volatile uint32_t *)(r + 0x9210) & 3) {
-        log_line("usb: Pi 4 PCIe controller held in reset (the firmware did not start it): no USB yet\n");
-        return -1;
-    }
-    uint32_t st = *(volatile uint32_t *)(r + 0x4068);
-    if ((st & 0x30) != 0x30) { log_line("usb: Pi 4 PCIe link down: the USB chip is not reachable\n"); return -1; }
+    if (pi4_start(r, n)) return -1;
     volatile uint32_t *rc = (volatile uint32_t *)r;               /* the root complex (bus 0) */
     rc[6] = 0x00010100;                                           /* buses: primary 0, secondary 1, subordinate 1 */
     rc[8] = (uint32_t)((wpci >> 16 & 0xFFF0) | ((wpci + wsize - 1) & 0xFFF00000));   /* memory base/limit */
