@@ -110,7 +110,35 @@ Check the device name twice: `dd` overwrites whatever it is given.
 | Pi 4 | GPIO header: pin 6 GND, pin 8 GPIO14 (TX), pin 10 GPIO15 (RX) | adapter RX to pin 8, adapter TX to pin 10, GND to pin 6 |
 | Pi 5 | the 3-pin "UART" connector between the HDMI ports | the official Debug Probe cable, or an adapter wired to it |
 
-On the PC: `screen /dev/ttyUSB0 115200` (or `picocom -b 115200 /dev/ttyUSB0`).
+**A 4-wire USB serial cable on the Pi 4** (the common USB-to-TTL kind:
+black, white, green and red wires; 3.3 V logic). With the Pi off, find
+pins 6, 8 and 10: the 3rd, 4th and 5th pins of the header's outer row (the
+board's edge), counting from the SD card's end:
+
+```
+ outer row (board edge):  2   4  [6]  [8]  [10]  12 ...
+                          5V  5V  GND  TXD  RXD
+ inner row:               1   3   5    7    9   11 ...
+```
+
+| Cable wire | Usual colour | Pi pin |
+|---|---|---|
+| GND | black | pin 6 (GND) |
+| RX (into the cable) | white | pin 8 (GPIO14, the Pi's TX) |
+| TX (out of the cable) | green | pin 10 (GPIO15, the Pi's RX) |
+| 5 V | red | not connected (the Pi has its own supply) |
+
+Colours vary: go by the labels (GND, TXD, RXD, VCC) when the adapter has
+them. Its logic must be 3.3 V: 5 V signals can damage the Pi's GPIO. The
+card's `config.txt` already turns the port on (`enable_uart=1`,
+`dtoverlay=disable-bt`).
+
+On the PC (Debian): `sudo apt install picocom`, and
+`sudo usermod -aG dialout $USER` (then log in again) to use the port
+without sudo. Then `picocom -b 115200 /dev/ttyUSB0` (or
+`screen /dev/ttyUSB0 115200`); Ctrl-A Ctrl-X leaves picocom. `dmesg | tail`
+names the port if it is not `ttyUSB0`. Nothing at all: swap the white and
+green wires (harmless); garbage: check the speed, 115200.
 
 ### 5. Boot
 
