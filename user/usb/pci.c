@@ -271,8 +271,12 @@ static int pi4(hc_info_t *h, int nth)
     sys_sleep(100000000);
     int pin = c[15] >> 8 & 0xFF;
     h->irq = pin ? pin_irq(n, 1u << 16, pin) : -1;
-    uint64_t bus;
+    /* Where the VL805 sees our RAM: the buses above the bridge, then the
+     * bridge's own "dma-ranges" (the firmware may put RAM at PCI
+     * 0x4_0000_0000 rather than 0, as on an 8 GB Pi 4). */
+    uint64_t bus, ipci, icpu, isize;
     h->bus_off = fdt_bus_addr(fdt, n, 0, &bus) ? 0 : (int64_t)bus;
+    if (!window_of(n, "dma-ranges", &ipci, &icpu, &isize)) h->bus_off += (int64_t)(ipci - icpu);
     h->low = 1;
     sfmt(h->what, sizeof h->what, "VL805 xHCI (Raspberry Pi 4)");
     return 0;

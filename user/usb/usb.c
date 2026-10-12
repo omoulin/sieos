@@ -161,10 +161,15 @@ static usbdev_t *attach(usbdev_t *hub, int port, int speed)
     d->mps0 = speed >= 4 ? 512 : speed == 3 ? 64 : 8;
     int cs = ctx_size();
     if (!(d->ctx = dmem(cs * 32, &d->ctx_bus)) || !(d->in = dmem(cs * 33, &d->in_bus)) ||
-        !(d->cbuf = dmem(4096, &d->cbuf_bus)) || ring_init(&d->ep[1], 32) ||
-        xhci_cmd(0, 0, 0, 9 << 10, &d->slot) != CC_SUCCESS) {
-        log_line("usb: port %d: no slot for a new device\n", port);
+        !(d->cbuf = dmem(4096, &d->cbuf_bus)) || ring_init(&d->ep[1], 32)) {
+        log_line("usb: port %d: no memory for a new device\n", port);
         return 0;                                      /* (the memory stays: rare) */
+    }
+    int cc = xhci_cmd(0, 0, 0, 9 << 10, &d->slot);
+    if (cc != CC_SUCCESS) {
+        log_line("usb: port %d: no slot for a new device (completion %d%s)\n", port, cc,
+                 cc == CC_TIMEOUT ? ": the controller did not answer" : "");
+        return 0;
     }
     slot_dev(d->slot, d);
     hc_dcbaa[d->slot] = d->ctx_bus;
