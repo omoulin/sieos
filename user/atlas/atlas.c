@@ -1536,8 +1536,7 @@ static void mouse(const con_event_t *e)
             if (!drag_on) { focus_win(wm_grabbed()); drag_on = 1; redraw(); }
             wm_motion(x, y);
             dl_pointer(x, y);
-            present(ox, oy, ox + 12, oy + 19);
-            present(x, y, x + 12, y + 19);
+            present_pointer(ox, oy, x, y);
             return;
         }
         if (!drag_on) {                                  /* the selection starts where the button went down */
@@ -1579,8 +1578,7 @@ static void mouse(const con_event_t *e)
         }
     }
     dl_pointer(x, y);                                   /* only the pointer moved: */
-    present(ox, oy, ox + 12, oy + 19);                  /* where it was, where it is */
-    present(x, y, x + 12, y + 19);
+    present_pointer(ox, oy, x, y);                      /* where it was, where it is */
 }
 
 /* The input thread: waits for events from con, hands them to the main

@@ -36,6 +36,7 @@
 #include "draw.h"
 
 extern const uint8_t font[95][9];   /* font.c (tools/mkfont.py) */
+extern const uint8_t font15[95][16][9];   /* font15.c (tools/mkfont15.py): the native one at 1.5 */
 
 #define STRIP 16
 #define MAXP  4096                  /* display list entries (more are dropped) */
@@ -244,25 +245,66 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
             }
         }
         break;
-    case P_TEXT: {                   /* each screen pixel looks up its font pixel (nearest) */
+    case P_TEXT: {                   /* each screen pixel: how much of it the font's pixels cover */
         int s = p->scale, cl = p->x0 > lo ? p->x0 : lo, cr = p->x1 < hi ? p->x1 : hi;
         int glow = look == LOOK_PHOSPHOR || look == LOOK_AMBER;
+        if (s == 3 << 15) {          /* 1.5: the native 9 x 16 font, pixel for pixel (100%) */
+            for (int y = ya; y < yb; y++) {
+                int row = y - p->cy0;
+                if (row < 0 || row >= 16) continue;
+                uint32_t *d = strip + (y - sy) * PW;
+                for (int x = cl; x < cr; x++) {
+                    int k = (x - p->cx0) / 9, col = (x - p->cx0) % 9;
+                    if (k >= p->len) break;
+                    unsigned ch = (uint8_t)arena[p->text + k];
+                    int a = font15[ch >= 32 && ch < 127 ? ch - 32 : '?' - 32][row][col];
+                    if (!a) continue;
+                    a += a >> 7;                                 /* (0..255 -> 0..256) */
+                    if (glow && a >= 200) {
+                        if (x > cl && d[x - 1] != p->c) d[x - 1] = halo(d[x - 1], p->c);
+                        if (x + 1 < cr) d[x + 1] = halo(d[x + 1], p->c);
+                    }
+                    uint32_t o = d[x], c = p->c;
+                    d[x] = a >= 256 ? c : ((((o >> 16 & 255) * (256 - a) + (c >> 16 & 255) * a) >> 8) << 16) |
+                                          ((((o >> 8 & 255) * (256 - a) + (c >> 8 & 255) * a) >> 8) << 8) |
+                                          (((o & 255) * (256 - a) + (c & 255) * a) >> 8);
+                }
+            }
+            break;
+        }
+        int64_t step = ((int64_t)1 << 32) / s;          /* a screen pixel, in font pixels (16.16) */
         for (int y = ya; y < yb; y++) {
-            int gy = (int)(((int64_t)(y - p->cy0) << 16) / s) - 1;   /* glyph row (one blank row above) */
-            if (gy < 0 || gy >= 9) continue;
+            int64_t v0 = ((int64_t)(y - p->cy0) << 32) / s, v1 = v0 + step;
+            int r0 = (int)(v0 >> 16), r1 = (int)((v1 - 1) >> 16);
+            if (r1 < 1 || r0 > 9) continue;              /* (font row 0 is blank; glyphs: rows 1..9) */
             uint32_t *d = strip + (y - sy) * PW;
-            int64_t step = ((int64_t)1 << 32) / s, acc = ((int64_t)(cl - p->cx0) << 32) / s;
-            for (int x = cl; x < cr; x++, acc += step) {
-                int fx = (int)(acc >> 16);                       /* font pixels from the text's start */
-                int k = fx / CW, b = fx % CW;
-                if (k >= p->len || b >= 5) continue;
-                unsigned ch = (uint8_t)arena[p->text + k];
-                if (!(font[ch >= 32 && ch < 127 ? ch - 32 : '?' - 32][gy] & 0x10 >> b)) continue;
-                if (glow) {                                      /* (the halo: beside the stroke, never on one) */
+            int64_t u0 = ((int64_t)(cl - p->cx0) << 32) / s;
+            for (int x = cl; x < cr; x++, u0 += step) {
+                int64_t u1 = u0 + step, cov = 0;
+                int c0 = (int)(u0 >> 16), c1 = (int)((u1 - 1) >> 16);
+                for (int j = r0; j <= r1; j++) {
+                    if (j < 1 || j > 9) continue;
+                    int64_t oy = (v1 < ((int64_t)(j + 1) << 16) ? v1 : (int64_t)(j + 1) << 16) - (v0 > ((int64_t)j << 16) ? v0 : (int64_t)j << 16);
+                    for (int i = c0; i <= c1; i++) {
+                        int k = i / CW, b = i % CW;
+                        if (k >= p->len || b >= 5) continue;
+                        unsigned ch = (uint8_t)arena[p->text + k];
+                        if (!(font[ch >= 32 && ch < 127 ? ch - 32 : '?' - 32][j - 1] & 0x10 >> b)) continue;
+                        int64_t ox = (u1 < ((int64_t)(i + 1) << 16) ? u1 : (int64_t)(i + 1) << 16) - (u0 > ((int64_t)i << 16) ? u0 : (int64_t)i << 16);
+                        cov += ox * oy >> 16;
+                    }
+                }
+                if (!cov) continue;
+                int a = (int)(cov * 256 / ((u1 - u0) * (v1 - v0) >> 16));   /* 0..256 */
+                if (a >= 250) a = 256;
+                if (glow && a >= 160) {                          /* (the halo: beside the stroke) */
                     if (x > cl && d[x - 1] != p->c) d[x - 1] = halo(d[x - 1], p->c);
                     if (x + 1 < cr) d[x + 1] = halo(d[x + 1], p->c);
                 }
-                d[x] = p->c;
+                uint32_t o = d[x], c = p->c;
+                d[x] = a == 256 ? c : ((((o >> 16 & 255) * (256 - a) + (c >> 16 & 255) * a) >> 8) << 16) |
+                                      ((((o >> 8 & 255) * (256 - a) + (c >> 8 & 255) * a) >> 8) << 8) |
+                                      (((o & 255) * (256 - a) + (c & 255) * a) >> 8);
             }
         }
         break;
@@ -289,10 +331,20 @@ static void pointer(int sy, int n, int lo, int hi)
     }
 }
 
+static void present_px(int x0, int y0, int x1, int y1);
 void present(int x0, int y0, int x1, int y1)          /* (a box of the picture) */
 {
-    x0 = sc(x0); y0 = sc(y0);
-    x1 = (int)(((int64_t)x1 * Z + 65535) >> 16); y1 = (int)(((int64_t)y1 * Z + 65535) >> 16);
+    present_px(sc(x0), sc(y0), (int)(((int64_t)x1 * Z + 65535) >> 16), (int)(((int64_t)y1 * Z + 65535) >> 16));
+}
+/* Only the pointer moved: where it was and where it is, at the arrow's own
+ * size on the screen (it is not zoomed). */
+void present_pointer(int ox, int oy, int x, int y)
+{
+    present_px(sc(ox), sc(oy), sc(ox) + 13, sc(oy) + 20);
+    present_px(sc(x), sc(y), sc(x) + 13, sc(y) + 20);
+}
+static void present_px(int x0, int y0, int x1, int y1)   /* (a box of the screen) */
+{
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 > PW) x1 = PW;

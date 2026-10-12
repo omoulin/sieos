@@ -40,6 +40,7 @@ int  text_w(int n, int scale);      /* width in pixels of n characters */
 void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *keys, const uint32_t *cols, int scale);
 void dl_pointer(int x, int y);      /* where the mouse pointer is drawn (on top of everything) */
 void present(int x0, int y0, int x1, int y1);   /* draw this region of the picture on the screen (picture coordinates) */
+void present_pointer(int ox, int oy, int x, int y);   /* the pointer moved from (ox, oy): both places */
 /* The look (draw.c): how the picture's colours reach the screen. */
 enum { LOOK_PHOSPHOR, LOOK_AMBER, LOOK_GLASS, NLOOK };
 void draw_look(int look);

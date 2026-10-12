@@ -176,8 +176,14 @@ The size works the same way, in `draw.c`: the desktop lays out a picture
 of the screen's size divided by the zoom (at 100%, 0.75 screen pixels per
 picture pixel: 2560 x 1440 on a 1920 x 1080 screen; at 200%, 1280 x 720),
 and every item is scaled as it is added: boxes, corners, lines (never
-thinner than a pixel), text (the font takes any scale) and icons. So it is
-drawn sharp, not stretched, and the rest of the desktop does not know.
+thinner than a pixel), text and icons. So it is drawn sharp, not
+stretched, and the rest of the desktop does not know. Text at 100% uses
+a **native 9 x 16 font** (`font15.c`, rendered once from DejaVu Sans Mono
+by `tools/mkfont15.py`), drawn pixel for pixel; at other sizes the 6 x 11
+pixel font is scaled, each screen pixel taking the share of the font's
+pixels it covers (smooth edges, even strokes). The pointer is never
+zoomed: when it moves, its old and new places are redrawn at its own
+size on the screen (`present_pointer`), so it leaves no trail.
 The pointer's position comes as a fraction of the screen, so clicks land
 at any size. Windows keep their place and size in proportion to the desk
 when the size (or the screen's) changes.
