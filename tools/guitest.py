@@ -590,6 +590,127 @@ if f"Inbox={before + 1}" not in got:
     fail(f"keyboard lost after the console server restarted: {got}")
 print("ok: console server killed and restarted; the keyboard still reaches the desktop")
 
+# ---- the Standard desktop: chosen at login; windows move, resize, snap,
+# maximize, minimize to the dock and close; the rail rolls up
+def window(w):
+    """The last place logged for window w -> (x0, y0, x1, y1)."""
+    drain()
+    text = full.decode(errors="replace")
+    k = text.rfind(f"atlas: dbg window {w} at ")
+    if k < 0:
+        fail(f"no place logged for window {w}")
+    return tuple(int(v) for v in text[k:].split(" at ", 1)[1].split()[:4])
+
+def settle_log():
+    """Make atlas log where things are (a terminal's command: it redraws and logs)."""
+    type_text("\n")
+    time.sleep(0.6)
+
+click(260, 1017)                                   # Log out
+wait("atlas: greeter", "log", 10)
+time.sleep(0.4)
+img = shot("18-login-switch")
+click(1150, 665)                                   # Desktop: Standard
+wait("atlas: login desktop Standard")
+type_text("\talice\talicepass1\n")
+t1 = opened()                                      # (the login's shell opens before "ok")
+wait("atlas: login alice: ok (Standard desktop)")
+w1 = int(wait("atlas: window ").split()[0])
+time.sleep(0.8)
+settle_log()
+img = shot("19-standard")
+if not has_colour(img, "111829", at_least=2000) or not has_colour(img, TERM, at_least=20000) or not has_colour(img, ACC, at_least=50):
+    fail("the Standard desktop does not look right")
+mid = colours(img, (40, 300, 320, 800))
+if mid.get(bytes.fromhex(GLASS), 0) > 50:
+    fail("the rail is not rolled up")
+x0, y0, x1, y1 = window(w1)
+print(f"ok: Standard desktop chosen at login; a terminal window at {x0},{y0}-{x1},{y1}; the rail rolled up")
+
+bx, by = latest("wbar", f"Terminal {t1}")         # move it by its title bar
+drag(bx, by, bx + 200, by + 120)
+got = wait(f"atlas: window {w1} at ")
+nx0, ny0 = map(int, got.split()[:2])
+if (nx0 - x0, ny0 - y0) != (200, 120):
+    fail(f"moved by {(nx0 - x0, ny0 - y0)}, not (200, 120)")
+settle_log()
+x0, y0, x1, y1 = window(w1)
+drag(x1 - 3, y1 - 3, x1 - 203, y1 - 103)           # resize from the bottom-right corner
+got = wait(f"atlas: window {w1} at ")
+a = [int(v) for v in got.split()[:4]]
+if (a[2] - a[0], a[3] - a[1]) != (x1 - x0 - 200, y1 - y0 - 100):
+    fail(f"resized to {a}, from {(x0, y0, x1, y1)}")
+print(f"ok: moved by its bar (+200, +120), resized by its corner (-200, -100) -> {a}")
+
+keys("ctrl", "t")                                  # a second window: in front, the first one's bar sinks
+t2 = opened()
+w2 = int(wait("atlas: window ").split()[0])
+time.sleep(0.8)
+settle_log()
+img = shot("20-two-windows")
+sx, sy = latest("wslot", f"Terminal {t1}")        # the first one's title, sunk in its slot: click it
+click(sx, sy)
+wait(f"atlas: window {w1} in front")
+time.sleep(0.6)
+settle_log()
+print(f"ok: a second window (terminal {t2}) took the focus; a click on the first one's slot brought it back")
+
+bx, by = latest("wbar", f"Terminal {t1}")
+drag(bx, by, 0, 500)                               # to the left edge: snaps to the left half
+wait(f"atlas: window {w1} snapped")
+time.sleep(0.5)
+settle_log()
+x0, y0, x1, y1 = window(w1)
+if x0 > 40 or x1 > 1100:
+    fail(f"not the left half: {(x0, y0, x1, y1)}")
+bx, by = latest("wbar", f"Terminal {t1}")
+click(bx, by); time.sleep(0.1); click(bx, by)       # double-click: maximized
+wait(f"atlas: window {w1} maximized")
+time.sleep(0.5)
+settle_log()
+x0, y0, x1, y1 = window(w1)
+if x1 - x0 < 1700:
+    fail(f"not maximized: {(x0, y0, x1, y1)}")
+time.sleep(0.3)
+shot("21-maximized")
+print(f"ok: dragged to the left edge -> left half; double-click on the bar -> maximized {x0},{y0}-{x1},{y1}")
+
+click(*latest("wbtn", f"{w1} 0"))                  # "_": minimized, the other one in front
+wait(f"atlas: window {w1} minimized")
+time.sleep(0.6)
+settle_log()
+click(*latest("chip", f"Terminal {t1}"))           # its chip in the dock
+wait(f"atlas: window {w1} shown")
+time.sleep(0.6)
+print("ok: minimized to the dock, restored from its chip")
+
+mouse_to(120, 110)                                 # the rail unrolls under the pointer
+time.sleep(0.6)
+img = shot("22-rail-open")
+if colours(img, (40, 300, 320, 800)).get(bytes.fromhex(GLASS), 0) < 200:
+    fail("the rail did not unroll")
+mouse_to(1000, 500)
+time.sleep(0.6)
+img = shot("23-rail-rolled")
+if colours(img, (40, 300, 320, 800)).get(bytes.fromhex(GLASS), 0) > 50:
+    fail("the rail did not roll up again")
+print("ok: the rail unrolls under the pointer and rolls up when it leaves")
+
+keys("ctrl", "w")                                  # close the focused window
+got = wait("atlas: terminal ")
+while "closed" not in got:
+    got = wait("atlas: terminal ")
+print(f"ok: Ctrl+W closed a window (terminal {got.split()[0]})")
+send("svc")
+expect("UPTIME")
+got = expect("atlas ")
+send(f"kill {[w for w in got.split() if w.isdigit()][0]}")   # back to the Focused desktop for what follows
+wait("atlas: greeter", "log", 10)
+time.sleep(1.0)
+type_text("alice\talicepass1\n")
+wait("atlas: login alice: ok (Focused desktop)")
+time.sleep(0.8)
+
 # ---- measurements: frame times (logged with each settled picture), memory per process
 frames = [int(l.split(b"frame ")[1].split()[0]) for l in full.split(b"\n") if b"atlas: dbg stage " in l]
 if frames:

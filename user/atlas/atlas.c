@@ -39,9 +39,14 @@
  * window, Ctrl+\ show/hide beside, Ctrl+W window to the shelf, Ctrl+T a
  * terminal, Ctrl+S save (editor), Ctrl+V paste, Esc back.
  *
+ * The login screen offers two desktops: Focused (the stage above, the
+ * default) and Standard (wm.c): free windows that move, resize, snap and
+ * minimize to a dock, the rail rolled up until the pointer comes to it.
+ *
  * Nothing runs when nothing happens: no animation loop. The picture
  * changes only on an event (input, a shell's output, a piece of an answer,
- * the clock's minute), and only the changed region is sent to the screen.
+ * the clock's minute, a frame of a Standard animation while one runs), and
+ * only the changed region is sent to the screen.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -61,6 +66,7 @@
 #define W_EDIT MAXTERM              /* window ids: 0..MAXTERM-1 terminals, then these two */
 #define W_SIA (MAXTERM + 1)
 #define NWIN (MAXTERM + 2)
+_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA, "wm.c knows the window ids");
 #define INBOX "Inbox"               /* the project of what has none (one name, kept here) */
 #define TBAR 48                     /* a window's title strip */
 #define CARDW 252
@@ -100,6 +106,8 @@ static enum { GREETER, SESSION } mode;
 static char user[32], home[64], gname[32], gpw[128], gmsg[80], query[48];
 static int uid = -1, ugid = -1, gfield, first_start;
 static int no_input;                    /* no keyboard or pointer yet: the greeter says so */
+static int std_ui, g_std;               /* the Standard desktop: this session's; the login screen's choice */
+static int rail_menu;                   /* a menu of the rail is open (the rolled-up rail stays open) */
 static mk_groups_t ugroups;
 static long port, auth_port;
 static int ptr_x = 960, ptr_y = 540, buttons, press_x, press_y;
@@ -107,6 +115,9 @@ static uint64_t frame_us;
 
 /* ---- The layout, computed from the screen's size (any size works). */
 static int M, RX1, SX0, SX1, SY0, SY1, SHY;   /* margin; rail's right; stage; the shelf's label */
+static int DY0;                                 /* Standard: the dock's top */
+#define RAIL_TOP 44                             /* Standard: the rolled-up rail's title line ... */
+#define RAIL_BOT 64                             /* ... and its bottom line (you, Log out) */
 static void geometry(void)
 {
     M = SW >= 1600 ? 30 : 20;
@@ -114,6 +125,8 @@ static void geometry(void)
     SX0 = RX1 + M; SX1 = SW - M; SY0 = 90;
     SHY = SH - M - CARDH - 44;
     SY1 = SHY - 16;
+    DY0 = SH - M - 52;
+    wm_area(M, SY0 + RAIL_TOP + 8 + WM_RISE, SX1, DY0 - 14);   /* (the rolled-up rail leaves its column free) */
 }
 static void slot(int w, int *x0, int *x1)       /* where window w is drawn on the stage, or 0 */
 {
@@ -143,7 +156,7 @@ enum { P_NEWFILE = 1, P_NEWPROJ, P_RENAME };
 static struct { int on, act; char title[48], buf[32], proj[32]; } pr;
 
 /* What a held left button does once the pointer moves. */
-static enum { D_NONE, D_CARD, D_SEL } drag;
+static enum { D_NONE, D_CARD, D_SEL, D_WIN } drag;   /* D_WIN: Standard, moving or resizing a window */
 static int drag_on, drag_arg;
 static struct { int t, on; uint64_t al, bl; int ac, bc; } sel = { -1, 0, 0, 0, 0, 0 };
 
@@ -483,9 +496,43 @@ static void win_title(int w, char *t, size_t cap)
     else strlcpy(t, "sia", cap);
 }
 
-/* Keep each project's stage pointing at its own live windows only. */
+/* Where window w is on the screen (either desktop) -> 1, or 0: not shown. */
+static int win_box(int w, int *x0, int *y0, int *x1, int *y1)
+{
+    if (std_ui) return win_used(w) && !strcmp(win_proj(w), cur) && wm_box(w, x0, y0, x1, y1);
+    slot(w, x0, x1);
+    *y0 = SY0; *y1 = SY1;
+    return *x1 > *x0;
+}
+
+/* The Standard desktop asks: is window w here, its title, draw its inside. */
+int wm_state(int w) { return !win_used(w) ? 0 : strcmp(win_proj(w), cur) ? 1 : 2; }
+void wm_title(int w, char *t, size_t cap) { win_title(w, t, cap); }
+void wm_info(int w, char *t, size_t cap)
+{
+    if (w < MAXTERM) {                                   /* "terminal  80 x 25", "history -12" */
+        char *p = t + strlcpy(t, terms[w].back ? "history -" : "terminal  ", cap);
+        if (terms[w].back) { p[num(p, terms[w].back)] = 0; return; }
+        p += num(p, terms[w].cols); p += strlcpy(p, " x ", 4); p[num(p, terms[w].rows)] = 0;
+    } else if (w == W_EDIT) strlcpy(t, edit_path(), cap);
+    else strlcpy(t, "assistant", cap);
+}
+static void draw_term_body(int ti, int x0, int y0, int x1, int y1, int f);
+void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
+{
+    if (w < MAXTERM) draw_term_body(w, x0, y0, x1, y1, keys);
+    else if (w == W_EDIT) edit_draw(x0, y0, x1, y1, keys);
+    else panel_draw(x0, y0, x1, y1, keys);
+}
+
+/* Keep each project's stage pointing at its own live windows only.
+ * (Standard: the focus on a window of this project that is on the screen.) */
 static void tidy(void)
 {
+    if (std_ui) {
+        if (focus >= 0 && (wm_state(focus) != 2 || wm_minimized(focus))) focus = wm_top();
+        return;
+    }
     for (int i = 0; i < nproj; i++) {
         proj_t *p = &projs[i];
         if (p->main >= 0 && (!win_used(p->main) || strcmp(win_proj(p->main), p->name))) p->main = -1;
@@ -506,6 +553,7 @@ static void say_stage(void)
 
 static void put_main(int w)                              /* on the stage, wide, with the keys */
 {
+    if (std_ui) { wm_show(w); focus = w; lens_on = 0; say("atlas: window %d shown\n", w); return; }   /* (Standard: in front) */
     proj_t *p = here();
     if (p->beside == w) p->beside = -1;
     if (p->main == W_SIA && w != W_SIA && p->beside < 0) p->beside = W_SIA;   /* (the assistant stays in view) */
@@ -516,6 +564,7 @@ static void put_main(int w)                              /* on the stage, wide, 
 }
 static void put_beside(int w)
 {
+    if (std_ui) { int known = wm_box(w, &(int){0}, &(int){0}, &(int){0}, &(int){0}); put_main(w); if (!known) wm_snap(w, 1); return; }   /* (Standard: the right half) */
     proj_t *p = here();
     if (p->main == w) { p->main = p->beside; }
     p->beside = w;
@@ -526,6 +575,7 @@ static void put_beside(int w)
 }
 static void to_shelf(int w)
 {
+    if (std_ui) { wm_min(w); if (focus == w) focus = -1; tidy(); if (focus < 0) focus = wm_top(); say("atlas: window %d minimized\n", w); return; }
     proj_t *p = here();
     if (p->main == w) { p->main = p->beside; p->beside = -1; }
     else if (p->beside == w) p->beside = -1;
@@ -619,11 +669,11 @@ static const uint32_t dots[6] = { 0x4be3c1, 0x8b7bff, 0xffb86b, 0x6bb8ff, 0xff7a
 static void draw_greeter(void)
 {
     if (first_start) { setup_draw(); return; }          /* no account yet: the welcome screen */
-    int x0 = SW / 2 - 360, y0 = SH / 2 - 250, x1 = SW / 2 + 360, y1 = SH / 2 + 250;
+    int x0 = SW / 2 - 360, y0 = SH / 2 - 290, x1 = SW / 2 + 360, y1 = SH / 2 + 290;
     dl_rect(x0, y0, x1, y1, 24, C_GLASS);
     dl_frame(x0, y0, x1, y1, 24, 1, C_LINE);
     label(x0 + 60, y0 + 50, "SIEOS", 7, C_ACC);
-    label(x0 + 60, y0 + 140, "one project, one focus", 2, C_DIM);
+    label(x0 + 60, y0 + 140, g_std ? "your windows, where you put them" : "one project, one focus", 2, C_DIM);
     const char *names[2] = { "Name", "Password" };
     for (int f = 0; f < 2; f++) {
         int fy = y0 + 210 + f * 90;
@@ -638,8 +688,20 @@ static void draw_greeter(void)
         if (gfield == f) dl_rect(x0 + 252 + cw, fy + 12, x0 + 264 + cw, fy + 38, 0, C_ACC);
         hitbox(x0 + 230, fy, x1 - 60, fy + 50, H_FIELD, f);
     }
-    if (gmsg[0]) label(x0 + 60, y0 + 400, gmsg, 2, C_ERR);
-    else if (no_input) label(x0 + 60, y0 + 400, "No keyboard or mouse yet: plug one in", 2, C_DIM);
+    /* the desktop: Focused (the stage) or Standard (free windows); Focused each time */
+    int fy = y0 + 390, mid = (x0 + 230 + x1 - 60) / 2;
+    label(x0 + 60, fy + 12, "Desktop", 2, C_DIM);
+    dl_rect(x0 + 230, fy, x1 - 60, fy + 50, 10, C_BG);
+    dl_frame(x0 + 230, fy, x1 - 60, fy + 50, 10, gfield == 2 ? 2 : 1, gfield == 2 ? C_ACC : C_LINE);
+    static const char *dk[2] = { "Focused", "Standard" };
+    for (int k = 0; k < 2; k++) {
+        int a = k ? mid + 2 : x0 + 234, b = k ? x1 - 64 : mid - 2;
+        if (g_std == k) { dl_rect(a, fy + 4, b, fy + 46, 8, C_SEL); dl_frame(a, fy + 4, b, fy + 46, 8, 1, C_ACC); }
+        label((a + b) / 2 - tw(strlen(dk[k]), 2) / 2, fy + 14, dk[k], 2, g_std == k ? C_ACC : C_DIM);
+        hitbox(a, fy, b, fy + 50, H_GMODE, k);
+    }
+    if (gmsg[0]) label(x0 + 60, y0 + 480, gmsg, 2, C_ERR);
+    else if (no_input) label(x0 + 60, y0 + 480, "No keyboard or mouse yet: plug one in", 2, C_DIM);
     pill(x1 - 60 - tw(6, 2) - 28, y1 - 80, "Log in", 1, H_LOGIN, 0);
 }
 
@@ -860,32 +922,9 @@ static void draw_lens(void)
     if (nfound > nres) { char t[48]; t[num(t, nfound - nres)] = 0; strlcpy(t + strlen(t), " more", 8); label(x0 + 26, y + 8, t, 2, C_DIM); }
 }
 
-static void build(void)
+/* The rail: the projects, then the Inbox, then you. */
+static void draw_rail(void)
 {
-    dl_reset();
-    nhit = 0;
-    frame++;
-    dl_rect(0, 0, SW, SH, 0, C_BG);
-    if (mode == GREETER) { dl_grid(0, 0, 40, C_BG, 0x111829); draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
-
-    /* ---- the top bar: name, the Lens (drawn last: its results go over the stage), status */
-    label(M, 26, "SIEOS", 2, C_TXT);
-    char st[48], ck[8];
-    long d = now_day();
-    int k = 0;
-    ck[k++] = '0' + d / 36000; ck[k++] = '0' + d / 3600 % 10; ck[k++] = ':';
-    ck[k++] = '0' + d / 600 % 6; ck[k++] = '0' + d / 60 % 10; ck[k] = 0;
-    int rx = SW - M - tw(5, 2);
-    label(rx, 26, ck, 2, C_TXT);
-    panel_status(st, sizeof st);
-    rx -= tw(strlen(st), 2) + 30;
-    label(rx, 26, st, 2, C_DIM);
-    const char *net = port_find("net") > 0 ? "network" : "network: off";
-    rx -= tw(strlen(net), 2) + 30;
-    if (rx > lens_x1() + 10) label(rx, 26, net, 2, C_DIM);
-    if (toast[0]) dl_text(M, 60, toast, strlen(toast), S(2), C_ACC, 0, 0, lens_x0() - 10, SH);
-
-    /* ---- the rail: projects, then the Inbox, then you */
     dl_rect(M, SY0, RX1, SH - M, 16, C_GLASS);
     dl_frame(M, SY0, RX1, SH - M, 16, 1, C_LINE);
     hitbox(M, SY0, RX1, SH - M, H_PROJ, -1);
@@ -914,6 +953,137 @@ static void build(void)
     dl_rect(M + 14, SH - M - 64, RX1 - 14, SH - M - 63, 0, C_LINE);
     dl_text(M + 24, SH - M - 46, user, strlen(user), S(2), C_TXT, M, 0, RX1 - 130, SH);
     pill(RX1 - 14 - tw(7, 2) - 28, SH - M - 54, "Log out", 0, H_BTN, 2);
+}
+
+/* Standard: the rail rolled up to its title line (with the project on the
+ * screen) and its bottom line; open while the pointer is on it. */
+static void draw_rail_std(void)
+{
+    int e = wm_rail_open();
+    if (e >= 1024) { draw_rail(); return; }
+    int top1 = SY0 + RAIL_TOP + (SH - M - RAIL_BOT - 8 - SY0 - RAIL_TOP) * e / 1024;
+    dl_rect(M, SY0, RX1, top1, 16, C_GLASS);
+    dl_frame(M, SY0, RX1, top1, 16, 1, C_LINE);
+    hitbox(M, SY0, RX1, top1, H_PROJ, -1);
+    label(M + 20, SY0 + 12, "PROJECTS", 2, C_DIM);
+    int k = proj_find(cur);
+    if (k >= 0 && e < 200) {                             /* rolled up: where you are */
+        dl_rect(M + 132, SY0 + 18, M + 142, SY0 + 28, 5, k == nproj - 1 ? C_DIM : dots[k % 6]);
+        dl_text(M + 154, SY0 + 12, cur, strlen(cur), S(2), C_TXT, M, SY0, RX1 - 14, SY0 + RAIL_TOP);
+    }
+    for (int i = 0, y = SY0 + 56; i < nproj && y + 46 <= top1 - 6; i++, y += 50) {   /* unrolling: the rows that fit */
+        proj_t *p = &projs[i];
+        int on = !strcmp(p->name, cur);
+        if (on) dl_rect(M + 10, y, RX1 - 10, y + 46, 12, C_BAR);
+        dl_rect(M + 24, y + 18, M + 34, y + 28, 5, i == nproj - 1 ? C_DIM : dots[i % 6]);
+        dl_text(M + 48, y + 12, p->name, strlen(p->name), S(2), on ? C_TXT : C_DIM, M, y, RX1 - 60, y + 46);
+        hitbox(M + 10, y, RX1 - 10, y + 46, H_PROJ, i);
+    }
+    int b0 = SH - M - RAIL_BOT;
+    dl_rect(M, b0, RX1, SH - M, 16, C_GLASS);
+    dl_frame(M, b0, RX1, SH - M, 16, 1, C_LINE);
+    dl_text(M + 24, SH - M - 46, user, strlen(user), S(2), C_TXT, M, 0, RX1 - 130, SH);
+    pill(RX1 - 14 - tw(7, 2) - 28, SH - M - 54, "Log out", 0, H_BTN, 2);
+}
+
+/* Standard: the dock: this project's windows, its files and apps, + Add
+ * (the shelf's cards, as chips). */
+static void dock_list(void)
+{
+    ncards = 0;
+    for (int w = 0; w < NWIN; w++) if (wm_state(w) == 2) cards[ncards++] = (typeof(cards[0])){ C_WINDOW, w };
+    for (int a = 0; a < 2; a++)
+        for (int i = 0; i < nitems; i++)
+            if (items[i].app == a && !strcmp(items[i].proj, cur)) cards[ncards++] = (typeof(cards[0])){ C_ITEM, i };
+    cards[ncards++] = (typeof(cards[0])){ C_ADD, 0 };
+}
+static void draw_dock(void)
+{
+    dl_rect(SX0, DY0, SX1, SH - M, 14, C_GLASS);
+    dl_frame(SX0, DY0, SX1, SH - M, 14, 1, C_LINE);
+    hitbox(SX0, DY0, SX1, SH - M, H_BTN, 0);
+    dock_list();
+    if (shelf_off > ncards - 1) shelf_off = ncards - 1;
+    if (shelf_off < 0) shelf_off = 0;
+    int x = SX0 + 8, last = C_WINDOW;
+    for (int k = shelf_off; k < ncards; k++) {
+        char t[48];
+        if (cards[k].kind == C_WINDOW) win_title(cards[k].i, t, sizeof t);
+        else if (cards[k].kind == C_ITEM) strlcpy(t, items[cards[k].i].name, sizeof t);
+        else strlcpy(t, "+ Add", sizeof t);
+        if (strlen(t) > 22) { t[20] = '.'; t[21] = '.'; t[22] = 0; }
+        if (cards[k].kind != last) { dl_rect(x + 4, DY0 + 10, x + 5, SH - M - 10, 0, C_LINE); x += 14; last = cards[k].kind; }
+        int w = tw(strlen(t), 2) + 28 + (cards[k].kind == C_WINDOW ? 16 : 0);
+        if (x + w > SX1 - 8) break;
+        int win = cards[k].kind == C_WINDOW ? cards[k].i : -1, on = win >= 0 && win == focus, mini = win >= 0 && wm_minimized(win);
+        int y0 = DY0 + 6, y1 = SH - M - 6;
+        dl_rect(x, y0, x + w, y1, 8, cards[k].kind == C_WINDOW && !mini ? C_BG : C_GLASS);
+        dl_frame(x, y0, x + w, y1, 8, 1, on ? C_ACC : C_LINE);
+        int tx = x + 14;
+        if (win >= 0) { dl_rect(tx, (y0 + y1) / 2 - 1, tx + 8, (y0 + y1) / 2 + 1, 0, on ? C_ACC : mini ? C_LINE : C_DIM); tx += 16; wm_chip(win, x, y0, x + w, y1); }
+        uint32_t c = on ? C_ACC : mini ? C_DIM : cards[k].kind == C_WINDOW ? C_TXT : cards[k].kind == C_ADD ? C_TXT : C_DIM;
+        dl_text(tx, y0 + 9, t, strlen(t), S(2), c, x, y0, x + w - 6, y1);
+        hitbox(x, y0, x + w, y1, H_CARD, k);
+        if (atlas_debug) say("atlas: dbg chip %s at %d %d\n", t, x + w / 2, (y0 + y1) / 2);
+        x += w + 8;
+    }
+}
+
+static void build_std(void)
+{
+    int ox = M, oy = SY0, ox1 = RX1, oy1 = SH - M;       /* the rail: open while the pointer (or its menu) is on it */
+    int e = wm_rail_open(), in = ptr_x >= ox && ptr_x < ox1 && ptr_y >= oy && ptr_y < oy1 &&
+        (e > 0 || ptr_y < oy + RAIL_TOP || ptr_y >= oy1 - RAIL_BOT);
+    wm_rail(in || (mn.on && rail_menu) || (drag == D_CARD && drag_on && ptr_x < ox1), ox, oy, ox1, oy1);
+    tidy();
+    if (wm_top() < 0) {
+        static const char *t[2] = { "No windows here.", "Ctrl+T: a terminal. The dock below: this project's files." };
+        for (int i = 0; i < 2; i++) label((SX0 + SX1) / 2 - tw(strlen(t[i]), 2) / 2, (SY0 + DY0) / 2 - 20 + i * 36, t[i], 2, i ? C_DIM : C_TXT);
+    }
+    wm_draw(focus, lens_on ? -1 : focus);
+    draw_rail_std();
+    draw_dock();
+    if (drag == D_CARD && drag_on) draw_card(drag_arg, ptr_x - CARDW / 2, ptr_y - 30, 1);
+    for (int i = 0; i < nitems; i++)                     /* (memory follows the view) */
+        if (items[i].pv && items[i].seen != frame) { free(items[i].pv); items[i].pv = 0; }
+}
+
+static void build(void)
+{
+    dl_reset();
+    nhit = 0;
+    frame++;
+    dl_rect(0, 0, SW, SH, 0, C_BG);
+    if (mode == SESSION && std_ui) dl_grid(0, 0, 40, C_BG, 0x111829);
+    if (mode == GREETER) { dl_grid(0, 0, 40, C_BG, 0x111829); draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
+
+    /* ---- the top bar: name, the Lens (drawn last: its results go over the stage), status */
+    label(M, 26, "SIEOS", 2, C_TXT);
+    char st[48], ck[8];
+    long d = now_day();
+    int k = 0;
+    ck[k++] = '0' + d / 36000; ck[k++] = '0' + d / 3600 % 10; ck[k++] = ':';
+    ck[k++] = '0' + d / 600 % 6; ck[k++] = '0' + d / 60 % 10; ck[k] = 0;
+    int rx = SW - M - tw(5, 2);
+    label(rx, 26, ck, 2, C_TXT);
+    panel_status(st, sizeof st);
+    rx -= tw(strlen(st), 2) + 30;
+    label(rx, 26, st, 2, C_DIM);
+    const char *net = port_find("net") > 0 ? "network" : "network: off";
+    rx -= tw(strlen(net), 2) + 30;
+    if (rx > lens_x1() + 10) label(rx, 26, net, 2, C_DIM);
+    if (toast[0]) dl_text(M, 60, toast, strlen(toast), S(2), C_ACC, 0, 0, lens_x0() - 10, SH);
+
+    /* ---- the rail: projects, then the Inbox, then you */
+    if (!std_ui) draw_rail();
+    else {
+        build_std();
+        draw_lens();
+        draw_menu();
+        draw_prompt();
+        dl_pointer(ptr_x, ptr_y);
+        return;
+    }
 
     /* ---- the stage: at most two windows */
     tidy();
@@ -977,13 +1147,10 @@ static void settle(void)
     atlas_debug = mode == SESSION && !fs_stat("/tmp/atlas.debug", &st, 1);
     redraw();
     if (atlas_debug) {
-        proj_t *p = here();
-        for (int w = 0; w < MAXTERM; w++)
-            if (w == p->main || w == p->beside) {
-                int x0, x1;
-                slot(w, &x0, &x1);
-                say("atlas: terminal %d at %d %d cell %d %d\n", terms[w].chan, x0 + 14, SY0 + TBAR + 8, KW, KH);
-            }
+        for (int w = 0; w < MAXTERM; w++) {
+            int x0, y0, x1, y1;
+            if (terms[w].used && win_box(w, &x0, &y0, &x1, &y1)) say("atlas: terminal %d at %d %d cell %d %d\n", terms[w].chan, x0 + 14, y0 + TBAR + 8, KW, KH);
+        }
         say("atlas: dbg stage %d %d %d %d, frame %lu us\n", SX0, SY0, SX1, SY1, (unsigned long)frame_us);
     }
     atlas_debug = 0;
@@ -995,7 +1162,7 @@ static void open_project(const char *name)
     strlcpy(cur, name, sizeof cur);
     shelf_off = 0;
     tidy();
-    focus = here()->main;
+    focus = std_ui ? wm_top() : here()->main;
     lens_on = 0;
     say("atlas: project %s\n", cur);
     say_stage();
@@ -1091,6 +1258,7 @@ static void close_term(term_t *t)
     if (!t->used) return;
     say("atlas: terminal %d closed\n", t->chan);
     if (t->tty.reader) reply_val(t->tty.reader, -EIO);
+    if (std_ui) wm_gone(t - terms);                      /* (Standard: it folds away) */
     t->used = 0;
     free(t->ring);
     t->ring = 0;
@@ -1110,6 +1278,7 @@ static void close_win(int w)
 {
     if (w < MAXTERM) { if (terms[w].used) sys_kill(terms[w].pid); return; }   /* (closed when its shell ends) */
     if (w == W_EDIT) { if (edit_dirty()) { edit_key(27); if (edit_active()) { strlcpy(toast, "Not saved: Close again to discard.", sizeof toast); settle(); return; } } else edit_close(); }
+    if (std_ui) wm_gone(w);
     if (w == W_SIA) { sia_on = 0; say("atlas: assistant closed\n"); }
     tidy();
     say_stage();
@@ -1127,6 +1296,8 @@ static void logout(void)
     mode = GREETER;
     uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = 0; gfield = 0;
     nres = nfound = 0; lens_on = 0; mn.on = pr.on = 0; focus = -1;
+    std_ui = g_std = 0;                                 /* (the login screen offers Focused first, each time) */
+    wm_reset();
     say("atlas: greeter\n");
 }
 
@@ -1185,17 +1356,19 @@ static void login(void)
     strlcpy(home, u.home, sizeof home);
     rescan();
     strlcpy(cur, projs[0].name, sizeof cur);            /* the first project (the Inbox if none) */
+    std_ui = g_std;                                     /* (the first window goes where this desktop puts it) */
     long t = open_term(gpw);                            /* (auth checks the password: it starts the shell) */
     wipe(gpw, sizeof gpw);
     if (t < 0) {
-        uid = ugid = -1; ugroups.n = 0; nitems = nproj = 0;
+        uid = ugid = -1; ugroups.n = 0; nitems = nproj = 0; std_ui = 0;
         strlcpy(gmsg, "Wrong name or password.", sizeof gmsg);
         say("atlas: login %s: refused\n", gname);
         return;
     }
-    say("atlas: login %s: ok\n", user);
+    say("atlas: login %s: ok (%s desktop)\n", user, g_std ? "Standard" : "Focused");
     gmsg[0] = 0;
     mode = SESSION;
+    std_ui = g_std;
     scan_apps();
     put_main(t);
     say("atlas: project %s\n", cur);
@@ -1325,7 +1498,8 @@ static void ask_sia(const char *q)                       /* the assistant's wind
 {
     if (!sia_on || strcmp(sia_proj, cur)) { sia_on = 1; strlcpy(sia_proj, cur, sizeof sia_proj); }
     proj_t *p = here();
-    if (p->main != W_SIA && p->beside != W_SIA) { if (p->main >= 0) put_beside(W_SIA); else put_main(W_SIA); }
+    if (std_ui) put_main(W_SIA);
+    else if (p->main != W_SIA && p->beside != W_SIA) { if (p->main >= 0) put_beside(W_SIA); else put_main(W_SIA); }
     focus = W_SIA; lens_on = 0;
     say("atlas: assistant open\n");
     if (q && *q) panel_ask(q);
@@ -1380,6 +1554,7 @@ static void menu_projects(int act, const char *except)
 
 static void card_menu(int k, int x, int y)
 {
+    rail_menu = 0;
     if (cards[k].kind == C_ADD) {
         menu_new("Add to this project", 0, cur, -1);
         menu_add("New file", A_NEWFILE, 0);
@@ -1410,6 +1585,7 @@ static void card_menu(int k, int x, int y)
 
 static void proj_menu(int i, int x, int y)
 {
+    rail_menu = 1;
     if (i < 0 || i == nproj - 1) {                       /* the rail's empty part, or the Inbox */
         menu_new("Projects", 0, 0, -1);
         menu_add("New project", A_NEWPROJ, 0);
@@ -1543,7 +1719,11 @@ static void open_result(int i)
     ask_sia(s);
 }
 
-static void focus_win(int w) { focus = w; lens_on = 0; }
+static void focus_win(int w)
+{
+    focus = w; lens_on = 0;
+    if (std_ui) { wm_show(w); say("atlas: window %d in front\n", w); }   /* (Standard: to the front) */
+}
 
 static void click(int x, int y)
 {
@@ -1561,14 +1741,40 @@ static void click(int x, int y)
     switch (k) {
     case H_FIELD: if (first_start) setup_click(k, a); else gfield = a;
                   redraw(); return;
+    case H_GMODE: g_std = a; gfield = 2; say("atlas: login desktop %s\n", a ? "Standard" : "Focused"); redraw(); return;
+    case H_WBAR: {                                       /* a click on a title: in front; twice: maximize */
+        static uint64_t last_t;
+        static int last_w = -1;
+        uint64_t t = sys_clock();
+        focus_win(a);
+        if (a == last_w && t - last_t < 450000000) { wm_toggle_max(a); last_w = -1; }
+        else { last_w = a; last_t = t; }
+        redraw();
+        return;
+    }
+    case H_WEDGE: focus_win(a / 16); redraw(); return;
+    case H_WMBTN: {
+        int w = a / 4, b = a % 4;
+        if (b == 0) to_shelf(w);
+        else if (b == 1) { focus_win(w); wm_toggle_max(w); }
+        else { close_win(w); return; }
+        settle();
+        return;
+    }
     case H_SETUP: setup_click(k, a); redraw(); return;
     case H_LOGIN: login(); redraw(); return;
     case H_LENS:  lens_on = 1; search(); redraw(); return;
     case H_RES:   open_result(a); return;
     case H_PROJ:  if (a >= 0 && a < nproj) open_project(projs[a].name); return;
     case H_CARD:
-        if (cards[a].kind == C_ADD) { card_menu(a, x, y - 300); return; }
-        if (cards[a].kind == C_WINDOW) { put_main(cards[a].i); settle(); return; }
+        if (cards[a].kind == C_ADD) { card_menu(a, x, std_ui ? y - 340 : y - 300); return; }
+        if (cards[a].kind == C_WINDOW) {
+            int w = cards[a].i;
+            if (std_ui && w == focus && !wm_minimized(w)) to_shelf(w);   /* (Standard: the focused one's chip minimizes it) */
+            else put_main(w);
+            settle();
+            return;
+        }
         if (items[cards[a].i].app) { app_start(items[cards[a].i].path, 0); return; }
         open_file(items[cards[a].i].path);
         return;
@@ -1595,9 +1801,16 @@ static void key(int c)
 {
     if (mode == GREETER) {
         if (first_start) { setup_key(c); redraw(); return; }
+        if (gfield == 2) {                               /* the desktop switch */
+            if (c == ' ' || c == KEY_LEFT || c == KEY_RIGHT) g_std = !g_std;
+            else if (c == '\t') gfield = 0;
+            else if (c == '\n') login();
+            redraw();
+            return;
+        }
         char *f = gfield ? gpw : gname;
         size_t n = strlen(f), max = gfield ? sizeof gpw : sizeof gname;
-        if (c == '\t') gfield = !gfield;
+        if (c == '\t') gfield = (gfield + 1) % 3;
         else if (c == '\n') { if (!gfield) gfield = 1; else login(); }
         else if (c == '\b') { if (n) f[n - 1] = 0; }
         else if (c >= 32 && c < 127 && n + 1 < max) { f[n] = c; f[n + 1] = 0; }
@@ -1618,7 +1831,16 @@ static void key(int c)
     if (c == 20) { new_term(0); return; }                                                                 /* Ctrl+T */
     if (c == 22) { paste(); return; }                                                                     /* Ctrl+V */
     if (c >= KEY_C1 && c < KEY_C1 + 9) { int k = c - KEY_C1; if (k < nproj) open_project(projs[k].name); return; }   /* Ctrl+1..9 */
-    if (c == 23) { if (focus >= 0) { to_shelf(focus); settle(); } return; }                               /* Ctrl+W */
+    if (c == 23) { if (focus >= 0) { if (std_ui) close_win(focus); else { to_shelf(focus); settle(); } } return; }   /* Ctrl+W (Standard: close) */
+    if (c == 28 && std_ui) { if (focus >= 0) { wm_snap(focus, 1); say("atlas: window %d snapped\n", focus); } return; }   /* Ctrl+\ (Standard: the right half) */
+    if (c == KEY_CTAB && std_ui) {                       /* Standard: the next window of this project, in front */
+        for (int k = 1; k <= NWIN; k++) {
+            int w = (focus + k + NWIN) % NWIN;
+            if (wm_state(w) == 2) { put_main(w); break; }
+        }
+        settle();
+        return;
+    }
     if (c == 28) {                                                                                         /* Ctrl+\ */
         if (p->beside >= 0) to_shelf(p->beside);
         else { shelf_list(); for (int k = 0; k < ncards; k++) if (cards[k].kind == C_WINDOW) { put_beside(cards[k].i); break; } }
@@ -1655,19 +1877,19 @@ static void key(int c)
         return;
     }
     term_t *t = &terms[focus];                           /* the focused terminal */
-    int x0, x1;
-    slot(focus, &x0, &x1);
+    int x0, x1, y0, y1;
+    if (!win_box(focus, &x0, &y0, &x1, &y1)) x0 = x1 = y0 = y1 = 0;
     if (c == KEY_PGUP || c == KEY_PGDN) {                /* its history */
         int b = t->back + (c == KEY_PGUP ? t->rows / 2 : -t->rows / 2);
         t->back = b < 0 ? 0 : b > hist_max(t) ? hist_max(t) : b;
         say("atlas: terminal %d back %d\n", t->chan, t->back);
-        redraw_box(x0, SY0, x1, SY1);
+        redraw_box(x0, y0, x1, y1);
         return;
     }
     if (c < 0x100) {
         t->back = 0;
         tty_input(&t->tty, c);
-        redraw_box(x0, SY0, x1, SY1);
+        redraw_box(x0, y0, x1, y1);
     }
 }
 
@@ -1675,9 +1897,9 @@ static void key(int c)
 static void cell_at(int ti, int x, int y, uint64_t *l, int *c)
 {
     term_t *t = &terms[ti];
-    int x0, x1;
-    slot(ti, &x0, &x1);
-    int r = (y - SY0 - TBAR - 8) / KH, k = (x - x0 - 14) / KW;
+    int x0, x1, y0, y1;
+    if (!win_box(ti, &x0, &y0, &x1, &y1)) x0 = y0 = 0;
+    int r = (y - y0 - TBAR - 8) / KH, k = (x - x0 - 14) / KW;
     r = r < 0 ? 0 : r >= t->rows ? t->rows - 1 : r;
     k = k < 0 ? 0 : k >= t->cols ? t->cols - 1 : k;
     *l = t->top - t->back + r;
@@ -1689,7 +1911,14 @@ static void cell_at(int ti, int x, int y, uint64_t *l, int *c)
 static void drop(void)
 {
     int k = drag_arg, x = ptr_x, y = ptr_y;
-    if (x >= SX0 && x < SX1 && y >= SY0 && y < SY1 && cards[k].kind != C_ADD) {
+    if (std_ui && x >= RX1 && x < SX1 && y >= SY0 && y < DY0 && cards[k].kind != C_ADD) {   /* Standard: onto the desk: open it */
+        say("atlas: card dropped on the desk\n");
+        if (cards[k].kind == C_WINDOW) { put_main(cards[k].i); settle(); return; }
+        item_t *it = &items[cards[k].i];
+        if (it->app) app_start(it->path, 0); else open_file_beside(it->path, 0);
+        return;
+    }
+    if (!std_ui && x >= SX0 && x < SX1 && y >= SY0 && y < SY1 && cards[k].kind != C_ADD) {
         int beside = x >= (SX0 + SX1) / 2;
         say("atlas: card dropped on the stage (%s)\n", beside ? "beside" : "main");
         if (cards[k].kind == C_WINDOW) { if (beside) put_beside(cards[k].i); else put_main(cards[k].i); settle(); return; }
@@ -1724,8 +1953,10 @@ static void press(int x, int y)
     drag = D_NONE; drag_on = 0;
     int i = hit_at(x, y);
     if (mode != SESSION || i < 0 || mn.on || pr.on) return;
-    if (hit[i].kind == H_CARD && cards[hit[i].arg].kind != C_ADD) { drag = D_CARD; drag_arg = hit[i].arg; }
-    else if (hit[i].kind == H_WIN && hit[i].arg < MAXTERM && y > SY0 + TBAR) { drag = D_SEL; drag_arg = hit[i].arg; }
+    int x0, y0, x1, y1;
+    if (std_ui && (hit[i].kind == H_WBAR || hit[i].kind == H_WEDGE) && wm_grab(hit[i].kind, hit[i].arg, x, y)) drag = D_WIN;
+    else if (hit[i].kind == H_CARD && cards[hit[i].arg].kind != C_ADD) { drag = D_CARD; drag_arg = hit[i].arg; }
+    else if (hit[i].kind == H_WIN && hit[i].arg < MAXTERM && win_box(hit[i].arg, &x0, &y0, &x1, &y1) && y > y0 + TBAR) { drag = D_SEL; drag_arg = hit[i].arg; }
 }
 
 static void mouse(const con_event_t *e)
@@ -1737,7 +1968,7 @@ static void mouse(const con_event_t *e)
     if (e->code && mode == SESSION) {                    /* the wheel */
         int16_t w = (int16_t)e->code;
         int i = hit_at(x, y);
-        if (y >= SHY && x >= SX0) { shelf_off -= w; redraw(); return; }   /* the shelf */
+        if (std_ui ? y >= DY0 && x >= SX0 : y >= SHY && x >= SX0) { shelf_off -= w; redraw(); return; }   /* the shelf, the dock */
         if (i >= 0 && (hit[i].kind == H_WIN || hit[i].kind == H_ED || hit[i].kind == H_PANEL)) {
             int a = hit[i].kind == H_ED ? W_EDIT : hit[i].kind == H_PANEL ? W_SIA : hit[i].arg;
             if (a == W_EDIT) edit_wheel(w);
@@ -1755,6 +1986,14 @@ static void mouse(const con_event_t *e)
     if ((b & MB_LEFT) && !(was & MB_LEFT)) press(x, y);
     if ((b & MB_LEFT) && mode == SESSION && drag != D_NONE &&
         (drag_on || (x - press_x) * (x - press_x) + (y - press_y) * (y - press_y) > 64)) {
+        if (drag == D_WIN) {                             /* Standard: a window moving or resizing */
+            if (!drag_on) { focus_win(wm_grabbed()); drag_on = 1; redraw(); }
+            wm_motion(x, y);
+            dl_pointer(x, y);
+            present(ox, oy, ox + 12, oy + 19);
+            present(x, y, x + 12, y + 19);
+            return;
+        }
         if (!drag_on && drag == D_SEL) {                 /* the selection starts where the button went down */
             cell_at(drag_arg, press_x, press_y, &sel.al, &sel.ac);
             sel.t = drag_arg; sel.on = 1;
@@ -1767,6 +2006,7 @@ static void mouse(const con_event_t *e)
     if (!(b & MB_LEFT) && (was & MB_LEFT)) {
         int d = drag, on = drag_on;
         drag = D_NONE; drag_on = 0;
+        if (d == D_WIN) { if (on) { wm_drop(); return; } wm_ungrab(); }
         if (!on) click(x, y);
         else if (d == D_CARD) { drag = D_CARD; drop(); drag = D_NONE; }
         else if (d == D_SEL) { if (sel.al != sel.bl || sel.ac != sel.bc) copy_sel(); else sel.on = 0; redraw(); }
@@ -1778,9 +2018,14 @@ static void mouse(const con_event_t *e)
         if (k == H_MENU) return;
         mn.on = 0;
         if (k == H_CARD) { card_menu(hit[i].arg, x, y - 200); return; }
-        if (k == H_PROJ) { proj_menu(hit[i].arg, x, y); return; }
+        if (k == H_PROJ) { proj_menu(hit[i].arg, x < RX1 ? RX1 - 40 : x, y); return; }
         redraw();
         return;
+    }
+    if (std_ui && mode == SESSION) {                    /* Standard: the rail unrolls under the pointer */
+        int e = wm_rail_open(), in = x >= M && x < RX1 && y >= SY0 && y < SH - M && (e > 0 || y < SY0 + RAIL_TOP || y >= SH - M - RAIL_BOT);
+        int was = ox >= M && ox < RX1 && oy >= SY0 && oy < SH - M && (e > 0 || oy < SY0 + RAIL_TOP || oy >= SH - M - RAIL_BOT);
+        if (in != was) { if (!in && !mn.on) rail_menu = 0; redraw_box(M, SY0, RX1, SH - M); }   /* (build starts the roll) */
     }
     dl_pointer(x, y);                                   /* only the pointer moved: */
     present(ox, oy, ox + 12, oy + 19);                  /* where it was, where it is */
@@ -1842,6 +2087,7 @@ int main(int argc, char **argv)
     thread_start(input_thread, 0, 16384);
     thread_start(clock_thread, 0, 4096);
     panel_init(port);
+    wm_init(port);
 
     mk_info_t in;
     sys_info(&in);
@@ -1878,6 +2124,11 @@ int main(int argc, char **argv)
             panel_event(&m, buf);
             continue;
         }
+        if (m.pid == self && m.w[0] == ATLAS_ANIM) {     /* Standard: the next frame of what moves */
+            reply_val(from, 0);
+            if (mode == SESSION && std_ui) wm_tick();
+            continue;
+        }
         if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the clock's corner */
             reply_val(from, 0);
             if (mode == SESSION) redraw_box(SW - 600, 10, SW, 70);
@@ -1891,9 +2142,8 @@ int main(int argc, char **argv)
         case CON_WRITE: {
             term_write(t, buf, m.rlen);
             reply_val(from, m.rlen);
-            int x0, x1;
-            slot(t - terms, &x0, &x1);
-            if (mode == SESSION && x1 > x0 && !strcmp(t->proj, cur)) redraw_box(x0, SY0, x1, SY1);
+            int x0, y0, x1, y1;
+            if (mode == SESSION && win_box(t - terms, &x0, &y0, &x1, &y1) && !strcmp(t->proj, cur)) redraw_box(x0, y0, x1, y1);
             break;
         }
         case CON_READ:                                   /* the shell wants the next line: */

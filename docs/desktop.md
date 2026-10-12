@@ -7,6 +7,10 @@ at a time and one thing in focus**. There are four ideas to learn:
 projects, the stage, the shelf and the Lens. This page is the tour first,
 then the reference: what is stored where, the keys and the menus.
 
+This is the **Focused** desktop, the one the login screen offers first.
+The login screen's *Desktop* switch also offers a **Standard** one: free
+windows in the same colours (see [The Standard desktop](#the-standard-desktop)).
+
 ![two terminals: one on main, one beside](screens/stage.png)
 
 ```
@@ -84,6 +88,49 @@ project on the screen. Opening a file takes you to the file's project.
 
 Shift-click is not used: mouse events carry no modifier keys, so "open
 beside" is a drag to the right half or the card's right-click menu.
+
+## The Standard desktop
+
+The login screen's switch, **Desktop: Focused | Standard**, is set to
+Focused each time it appears (Tab reaches it after the password; Space or
+the arrows flip it). Standard keeps the projects, the Lens, the windows'
+insides, the menus and the keys, but the windows go where you put them:
+
+- **Windows.** Any number of a project's windows on the desk, the one in
+  front in focus. The focused window's **title bar rises** out of the top
+  of its frame (with a small overshoot) and an accent line runs along its
+  top edge; the others' bars **sink** back in, leaving the title in a
+  slot. Click a window to bring it in front.
+- **Move:** drag the raised bar or a sunken slot. **Resize:** drag an edge
+  or a corner (accent brackets mark the bottom corners). Windows stay on
+  the desk; the smallest is 420 x 240.
+- **Snap:** drag a window to the screen's left or right edge (an outline
+  shows where it will go) for that half, to the top edge to maximize.
+  **Maximize:** the bar's `[]` button or a double-click on the bar; again
+  to restore.
+- **Minimize:** `_` on the bar: the window flies into its chip in the
+  dock. **Close:** `x` on the bar or Ctrl+W: it folds into a line, then a
+  dot (the editor still asks first if the file is not saved).
+- **The dock** (the bottom line): the project's windows (the focused one
+  in accent, minimized ones dim), its files and apps, then *+ Add*. Click
+  a window's chip to bring it in front, or to minimize the focused one;
+  a file's chip opens it. Right-click and drag work as on the shelf.
+- **The rail rolls up** to its title line (with the project on the
+  screen) and its bottom line (you, *Log out*), so the windows have the
+  room. It unrolls while the pointer is on it, or while one of its menus
+  is open, and rolls up when the pointer leaves.
+- **Keys:** the same as Focused, except Ctrl+W closes, Ctrl+\ snaps the
+  focused window to the right half, and Ctrl+Tab brings the project's next
+  window in front.
+
+The animations (`user/atlas/wm.c`) are in integers and need no
+transparency: the bar is drawn before its window's glass, so only what
+rose above the frame shows, and the glow is two solid lines. While a box
+flies or unfolds only its glass and frame are drawn; the window's inside
+comes back when it lands. A thread ticks every 16 ms **only while
+something moves**, and each tick redraws only what the moving things
+cover (a bar's strip, or a moving window's old and new place); at rest,
+nothing runs.
 
 ## Windows
 
@@ -207,8 +254,9 @@ between processes.
   pointer's two small squares, a terminal's window, the clock's corner.
 - **The font** (`tools/mkfont.py` -> `font.c`): drawn for SIEOS, 6 x 11
   pixels a cell, shown twice as large (12 x 22) on the desktop.
-- **Nothing runs when nothing happens:** no animation, no timer except
-  the clock thread, which sleeps until the next minute. Atlas looks at the
+- **Nothing runs when nothing happens:** no timer except the clock
+  thread, which sleeps until the next minute (and, on the Standard
+  desktop, the animation thread while something moves). Atlas looks at the
   files again when a terminal's shell asks for its next line (a command
   has just run), so a `tag` shows at once, with no polling.
 - **Login:** the login screen first (the password goes to `auth`, which
@@ -257,7 +305,11 @@ shell); the Lens (a file, an app, a question to the stand-in sia, Esc);
 the answer's buttons and Stop; *+ New project*, *+ Add* → *New file* and
 *Open app*; a card dragged onto another project; Rename; atlas killed and
 restarted by init with the projects kept; Delete (the files go to the
-Inbox); the console server killed. With `/tmp/atlas.debug` present
+Inbox); the console server killed; then the Standard desktop, chosen on
+the login screen: the rail rolled up, a window moved by its bar and
+resized by its corner, a second window, a click on a sunken slot, a snap
+to the left half, a double-click to maximize, minimize and restore from
+the dock, the rail unrolled under the pointer, Ctrl+W. With `/tmp/atlas.debug` present
 (the test makes it), atlas logs where it drew the projects, cards, window
 buttons and terminals, and the time of each full frame; nothing is
 logged without it. `make gui-test-real` does the same with the real sia

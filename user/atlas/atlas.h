@@ -34,7 +34,8 @@ void redraw_box(int x0, int y0, int x1, int y1);
 
 /* ---- Click boxes: what a click at (x, y) means; searched from the last. */
 enum { H_BTN = 1, H_PROJ, H_CARD, H_WIN, H_WBTN, H_LENS, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,
-       H_PANEL, H_PIN, H_PSEND, H_PSTOP, H_PSUG, H_PACT, H_PCLOSE, H_PMODE, H_SETUP };
+       H_PANEL, H_PIN, H_PSEND, H_PSTOP, H_PSUG, H_PACT, H_PCLOSE, H_PMODE, H_SETUP,
+       H_GMODE, H_WBAR, H_WEDGE, H_WMBTN };
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg);
 int  pill(int x, int y, const char *s, int on, int kind, int arg);   /* -> its right edge */
 void label(int x, int y, const char *s, int k, uint32_t c);
@@ -84,3 +85,37 @@ int  edit_key(int c);                                 /* 1 if taken; Esc may clo
 void edit_click(int x, int y);
 void edit_wheel(int w);
 void edit_close(void);
+
+/* ---- The Standard desktop's windows (wm.c), chosen at login instead of
+ * the Focused one (the stage). Window ids are atlas's: 0..7 terminals, 8
+ * the editor, 9 sia. */
+#define WM_MAX 10
+#define WM_SIA 9
+#define WM_RISE 44                                    /* how far the focused window's title bar rises */
+#define ATLAS_ANIM 103                                /* message: the animation thread -> atlas */
+void wm_init(long atlas_port);
+void wm_reset(void);                                  /* logout: no windows */
+void wm_area(int x0, int y0, int x1, int y1);         /* where windows may go */
+void wm_show(int w);                                  /* on screen, in front (a new one unfolds) */
+void wm_min(int w);                                   /* to its chip in the dock */
+void wm_toggle_max(int w);
+void wm_snap(int w, int side);                        /* -1 left half, 1 right half */
+void wm_gone(int w);                                  /* closed: it folds away */
+void wm_chip(int w, int x0, int y0, int x1, int y1);  /* where its chip is in the dock */
+int  wm_minimized(int w);
+int  wm_box(int w, int *x0, int *y0, int *x1, int *y1);   /* 1: on screen at that box */
+int  wm_top(void);                                    /* the front window of this project, or -1 */
+int  wm_grab(int kind, int arg, int x, int y);        /* a press on a bar or an edge: 1 if it starts a move */
+void wm_motion(int x, int y);
+void wm_drop(void);
+int  wm_grabbed(void);                                /* the window being moved or resized */
+void wm_ungrab(void);                                 /* the press was only a click */
+void wm_rail(int open, int x0, int y0, int x1, int y1);   /* the project rail: open or rolled up */
+int  wm_rail_open(void);                              /* 0 rolled up .. 1024 open */
+void wm_draw(int focus, int keys);
+void wm_tick(void);                                   /* ATLAS_ANIM: the next frame of what moves */
+/* (atlas.c) */
+int  wm_state(int w);                                 /* 0 no such window, 1 in another project, 2 here */
+void wm_title(int w, char *t, size_t cap);
+void wm_info(int w, char *t, size_t cap);           /* what the strip under a raised bar says */
+void wm_body(int w, int x0, int y0, int x1, int y1, int keys);
