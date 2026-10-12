@@ -13,7 +13,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | SieFS disk | virtio | virtio (MMIO) | SD card | SD card (untested) |
 | Users, login, permissions | yes | yes | yes (serial) | untested |
 | Supervisor, on-demand servers | yes | yes | yes | untested |
-| Desktop (Stage) | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
+| Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
 | Network, TLS | yes | yes | no driver yet | no driver yet |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
@@ -33,7 +33,7 @@ checklist in [raspberrypi.md](raspberrypi.md).
 - The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
   Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
 - The Pis: USB input, Ethernet, faster SD; running on the real boards.
-- sicc on SIEOS itself (a C library), encryption, snapshots.
+- A `make` for SIEOS (sicc runs there now: `/bin/cc`), encryption, snapshots.
 
 ## History
 
@@ -55,3 +55,13 @@ checklist in [raspberrypi.md](raspberrypi.md).
   ([desktop.md](desktop.md)): projects (one per file, the Inbox),
   at most two windows, a shelf of cards, the Lens; island attributes
   migrated on first sight.
+- **2026-10-12.** Stage replaced by a desktop laid out as BeOS's was, in
+  SIEOS's colours ([desktop.md](desktop.md)): windows with title tabs
+  (move, resize, zoom, minimize), the Deskbar (menu, apps, clock), 4
+  workspaces, the sia strip, a Files window; Settings (screen size, mouse,
+  sia's model, local or online).
+- **2026-10-12, later.** sicc keeps NEON vectors in registers (the engine's
+  kernels 1.9× faster under emulation, up to 5×; a dot-product loop from
+  214 instructions to 15) and runs on SIEOS itself: `/bin/cc`, with SIEOS's
+  headers and library in `/lib/sicc` ([cc.md](cc.md)); a program starts in
+  its parent's current folder.

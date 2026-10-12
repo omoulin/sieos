@@ -258,6 +258,7 @@ enum { VOP_ADD, VOP_SUB, VOP_MUL, VOP_DIV, VOP_AND, VOP_OR, VOP_XOR, VOP_SHL, VO
        VOP_UZP1, VOP_UZP2, VOP_TRN1, VOP_TRN2, /* (zip: VOP_UNPCKLO/HI) */
        VOP_EXT, VOP_DUPL, VOP_TBL, VOP_CNT, VOP_BSL,   /* bytes from a:b at imm; element imm everywhere; table; bit counts; acc ? a : b */
        VOP_FCVTL, VOP_FCVTL2, VOP_FCVTN,       /* half <-> single precision */
+       VOP_GETLO, VOP_GETHI, VOP_COMBINE,      /* a's low or high 8 bytes; a (low half) beside b (high half) */
        VOP_COUNT };
 Type *vector_of(Type *elem, int size, Token *tok);
 

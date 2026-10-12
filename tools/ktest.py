@@ -75,7 +75,7 @@ def ok(name, cond, detail=""):
 
 if what == "kernel":
     for prog in ("ktest", "ktest-sicc"):
-        for t in (["fpu", "24"], ["avx", "24"], ["tls", "16"], ["quota"], ["ipc"]):
+        for t in (["fpu", "24"], ["avx", "24"], ["tls", "16"], ["quota"], ["ipc"], ["log"]):
             if t[0] == "avx" and (prog == "ktest-sicc" or A64):   # (AVX: x86-64, built by gcc)
                 continue
             r = run(f"{prog} {' '.join(t)}", 120)

@@ -3,7 +3,8 @@
  *   svc                       list them: state, pid, restarts, last status, uptime, memory
  *   svc restart NAME          stop it if running, start it again (root)
  *   svc stop NAME             stop it for good (root)
- *   svc add [-p PORT [-i SECONDS]] NAME PATH [always|on-failure|never] [ARGS...]
+ *   svc add [-p PORT [-i SECONDS]] [-w PORT] NAME PATH [always|on-failure|never] [ARGS...]
+ *           (-w: init pings PORT and ends the server if it stops answering)
  *                             supervise a program from the disk (root); with -p it
  *                             starts on demand, when PORT is looked up
  *   svc idle NAME SECONDS     an on-demand service stops after this long unused
@@ -91,11 +92,12 @@ int main(int argc, char **argv)
         return r < 0 ? fail(argv[2], r) : 0;
     }
     if (argc >= 4 && !strcmp(argv[1], "add")) {
-        const char *dport = "";            /* -p PORT -i SECONDS: started on demand */
+        const char *dport = "", *wport = "";   /* -p PORT -i SECONDS: started on demand; -w PORT: watched */
         uint64_t idle = 0;
         while (argc >= 6 && argv[2][0] == '-') {
             if (!strcmp(argv[2], "-p")) dport = argv[3];
             else if (!strcmp(argv[2], "-i")) idle = strnum(argv[3]);
+            else if (!strcmp(argv[2], "-w")) wport = argv[3];
             else break;
             argv += 2; argc -= 2;
         }
@@ -116,7 +118,8 @@ int main(int argc, char **argv)
         }
         if (n >= sizeof req) return fail("add", -EINVAL);
         req[n++] = 0;
-        n += strlcpy(req + n, dport, sizeof req - n) + 1;   /* "name\0path\0args\0port" */
+        n += strlcpy(req + n, dport, sizeof req - n) + 1;   /* "name\0path\0args\0port\0watched port" */
+        n += strlcpy(req + n, wport, sizeof req - n) + 1;
         if (n > sizeof req) return fail("add", -EINVAL);
         msg_t m = { .w = { INIT_ADD, pol, idle }, .sbuf = req, .slen = n };
         long r = call(&m);

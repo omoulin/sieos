@@ -403,6 +403,12 @@ static long serve(msg_t *m, long token)
         if (!r) note("auth: password of %s changed\n", s[0]);
         return r;
     }
+    case AUTH_CHECK: {                          /* "name\0password": the desktop asks before a system change */
+        if (!root) return -EPERM;
+        if (split(s, 2, m->rlen)) return -EINVAL;
+        if (!verify(s[0], s[1])) { sys_sleep(1000000000); return -EACCES; }
+        return 0;
+    }
     case AUTH_USERADD: {
         if (!root) return -EPERM;
         if (split(s, 3, m->rlen)) return -EINVAL;

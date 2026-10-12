@@ -1,6 +1,6 @@
 /*
  * panel.c - The assistant in the desktop: a conversation with sia (port
- * "sia", SIA_* in mk/proto.h), shown as a window of the stage.
+ * "sia", SIA_* in mk/proto.h), shown as a window of the desktop.
  *
  * The desktop must never wait for the assistant, which may be slow, absent
  * or restarting. So one thread of ours does all the talking with sia, and
@@ -15,9 +15,8 @@
  *              ◄──ATLAS_SIA done───    SIA_NEXT ◄── 0 (the end) ──
  *
  * Answers may carry actions, each on a line of its own, which become
- * buttons: [fly:PATH] opens a file; [project:NAME] opens a project;
- * [island:KEY=VALUE] lists the files with that attribute in the Lens (the
- * older [island:NAME] opens the project NAME).
+ * buttons: [fly:PATH] opens a file; [island:KEY=VALUE] lists the files
+ * with that attribute under the sia strip.
  * The conversation's own instructions (SIA_CONTEXT, sent when it is opened)
  * tell the model so, and list the user's files. The panel continues the
  * last conversation (sia keeps it on the disk); "New" starts another. Facts
@@ -189,16 +188,16 @@ static pmsg_t *add(int who, const char *s, int n)
 }
 static void note(int who, const char *s) { add(who, s, strlen(s)); }
 
-/* Take the actions out of an answer: "[fly:...]", "[project:...]", "[island:k=v]". */
+/* Take the actions out of an answer: "[fly:...]", "[island:k=v]". */
 static void actions(pmsg_t *m)
 {
     char *t = m->text;
     for (char *p = t; (p = strchr(p, '[')); ) {
-        int fly = !memcmp(p, "[fly:", 5), isl = !memcmp(p, "[island:", 8), prj = !memcmp(p, "[project:", 9);
+        int fly = !memcmp(p, "[fly:", 5), isl = !memcmp(p, "[island:", 8) && strchr(p, '=') && strchr(p, '=') < strchr(p, ']');
         char *e = strchr(p, ']');
         if (!memcmp(p, "[remember:", 10) && e) { memmove(p, e + 1, strlen(e + 1) + 1); continue; }   /* (a button, from sia) */
-        if ((!fly && !isl && !prj) || !e || m->nact == NACT) { p++; continue; }
-        char *a = p + (fly ? 5 : prj ? 9 : 8);
+        if ((!fly && !isl) || !e || m->nact == NACT) { p++; continue; }
+        char *a = p + (fly ? 5 : 8);
         size_t n = e - a < 95 ? e - a : 95;
         m->act[m->nact].fly = fly;
         memcpy(m->act[m->nact].arg, a, n);
@@ -216,10 +215,9 @@ static void ask(const char *q)
     static char full[SIA_MAX];
     int n = 0;
     if (conv_new) {                                      /* the first question: what the model should know */
-        int c = strlcpy(pctx, "The user's desktop is Stage: projects on the left "   /* (sent once, as the */
-            "(each file belongs to one project, or to the Inbox), at most two windows in the middle, "   /* conversation's */
-            "and the project's other things on a shelf below. To offer a button that opens a file, "    /* own instructions) */
-            "add a line [fly:PATH]. To offer a button that opens a project, add a line [project:NAME]. "
+        int c = strlcpy(pctx, "The user's desktop has windows with title tabs, a Deskbar at the top "   /* (sent once, as */
+            "right (the menu, the apps, 4 workspaces) and the sia strip at the top left. "   /* the conversation's */
+            "To offer a button that opens a file, add a line [fly:PATH]. "                  /* own instructions) */
             "To list the files with an attribute, add a line [island:KEY=VALUE], for example "
             "[island:topic=notes]. The user's files:\n", sizeof pctx);
         c += atlas_files(pctx + c, sizeof pctx - c - 1 > 0 ? sizeof pctx - c - 1 : 0);
@@ -303,7 +301,7 @@ void panel_event(msg_t *m, const char *data)
 }
 
 /* ---- Input. */
-static const char *sugg[3] = { "What is in this project?", "Show my demo files", "Find my notes" };
+static const char *sugg[3] = { "What files do I have?", "Show my notes", "What can you do?" };
 
 static void run_action(int i, int a)
 {
@@ -325,12 +323,7 @@ static void run_action(int i, int a)
         return;
     }
     char k[24], *eq = strchr(msgs[i].act[a].arg, '=');
-    if (!eq) {                                           /* [project:NAME]: open it */
-        long e = atlas_open_project(msgs[i].act[a].arg);
-        say("atlas: sia: action project %s -> %ld\n", msgs[i].act[a].arg, e);
-        if (e < 0) { strlcpy(t, "No such project: ", sizeof t); strlcpy(t + strlen(t), msgs[i].act[a].arg, sizeof t - strlen(t)); note(WHO_NOTE, t); }
-        return;
-    }
+    if (!eq) return;
     size_t kl = eq - msgs[i].act[a].arg < 23 ? (size_t)(eq - msgs[i].act[a].arg) : 23;
     memcpy(k, msgs[i].act[a].arg, kl);
     k[kl] = 0;
@@ -395,7 +388,7 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
     dl_text(x0 + 24, y0 + 68, st, strlen(st), S(2), C_DIM, x0, y0, x1 - 120, y1);
     int ty0 = y0 + 112, ty1 = y1 - 96, chars = (x1 - x0 - 48) / tw(1, 2);
     if (!nmsg) {                                         /* nothing yet: what to ask */
-        label(x0 + 24, ty0 + 6, "Ask about your files and projects.", 2, C_TXT);
+        label(x0 + 24, ty0 + 6, "Ask about your files.", 2, C_TXT);
         for (int i = 0; i < 3; i++) pill(x0 + 24, ty0 + 50 + i * 54, sugg[i], 0, H_PSUG, i);
     }
     int nr = 0;                                          /* the rows of every message */

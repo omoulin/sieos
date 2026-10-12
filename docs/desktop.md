@@ -1,152 +1,83 @@
-# The desktop: Stage
+# The desktop
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
-The desktop (`user/atlas/`, the program `/bin/atlas`) shows **one project
-at a time and one thing in focus**. There are four ideas to learn:
-projects, the stage, the shelf and the Lens. This page is the tour first,
-then the reference: what is stored where, the keys and the menus.
+The desktop (`user/atlas/`, the program `/bin/atlas`) is laid out as
+BeOS's was, in SIEOS's own colours: windows with a **title tab** as wide
+as their title, the **Deskbar** at the top right, **4 workspaces**, and
+the **sia strip** at the top left to find a file, start an app or ask the
+assistant. (It replaces the older "Stage" desktop of projects, a stage and
+a shelf.)
 
-This is the **Focused** desktop, the one the login screen offers first.
-The login screen's *Desktop* switch also offers a **Standard** one: free
-windows in the same colours (see [The Standard desktop](#the-standard-desktop)).
-
-![two terminals: one on main, one beside](screens/stage.png)
+![a terminal, the sia strip and the Deskbar](screens/desktop.png)
 
 ```
- ┌──────────── Lens: one line to find a file, start an app, ask sia ─── status, clock ┐
- │ PROJECTS  │ ┌──────────── main ────────────┐ ┌──── beside ────┐                     │
- │ ● demo  1 │ │ the window in focus (accent  │ │ optional,      │                     │
- │ ● notes 4 │ │ border): terminal, editor,   │ │ about 38 %     │                     │
- │ + New     │ │ or the assistant             │ │                │                     │
- │           │ └──────────────────────────────┘ └────────────────┘                     │
- │ ● Inbox 2 │ IN THIS PROJECT  [Terminal 2] [note.txt] [Hello] [+ Add]   the shelf     │
- └───────────┴──────────────────────────────────────────────────────────────────────────┘
+ ┌─ sia │ Ask sia, open a file, run an app...      network ─┐ ┌─ (cube) SIEOS    v ─┐ the menu
+ └──────────────────────────────────────────────────────────┘ │ sia: idle    11:38   │ tray
+ ┌──────────────────┐                                          │ Terminal           > │ apps (running:
+ │ x  Terminal 1  □ │  the tab: close, title, zoom             │ sia                  │ bold, with >)
+ ├──────────────────┴─────────────┐                            │ Files                │
+ │                                │                            │ Text editor          │
+ │  a window (dark glass)         │                            │ Settings             │
+ │                            ⟋⟋⟋ │  the grip: resize          │ [1] [2] [3] [4]      │ workspaces
+ └────────────────────────────────┘                            └──────────────────────┘
 ```
-
-## The four ideas
-
-- **Projects** (the rail on the left, the only navigation). A file
-  belongs to **one** project: its attribute `project` = `NAME`. Files
-  without one are in the **Inbox**, at the bottom of the rail. The file
-  server indexes attributes, so `find project=demo` lists a project at
-  once. The number beside a project is how many files it has. Projects
-  with no files yet (made with *+ New project*) are kept in
-  `~/.projects`, one name per line. Click a project, or press Ctrl+1 to
-  Ctrl+9, to go to it.
-- **The stage** (the middle). It holds at most **two windows**: *main*
-  (wide) and, if you want, one *beside* it (about 38 % of the width). A
-  window is a **terminal** (a shell as you), the **editor** (one file), or
-  the **assistant** (sia). The window with the keys has the accent
-  border. Each window has three buttons in its title strip: *Swap* (main
-  and beside change places), *Shelf* (it leaves the stage but keeps
-  running), *Close* (it ends: a terminal's shell is stopped, the editor
-  asks first if the file is not saved).
-- **The shelf** (the bottom). It shows everything else in the project:
-  its windows not on the stage, then its files, then its apps, as small
-  cards drawn from their text (a terminal shows its last lines, a file its
-  first lines, read only while the card is shown). No pictures are kept.
-  - Click a card: it goes on main.
-  - Drag a card up: onto the left half of the stage it goes on main,
-    onto the right half it goes beside.
-  - Drag a card onto a project of the rail: it **moves** there.
-  - Right-click a card: *Open*, *Open beside*, *Move to project*, *Move
-    to the Inbox* (files), *Close* (windows).
-  - The last card, **+ Add**: *New file*, *New terminal*, *Open app*,
-    *Ask sia*, all in this project.
-  - The wheel over the shelf scrolls it when there are more cards than
-    fit.
-- **The Lens** (the line at the top, Ctrl+Space). Type a few letters to
-  get grouped results: **Files** (by name, in every project), **Apps**
-  (your apps and those of `/etc/apps`), and **Ask sia**. Enter opens the
-  first result, Tab asks sia, Esc closes the results. Text starting with
-  `?` only offers the question.
-
-A window opened anywhere (Ctrl+T, an app, the assistant) belongs to the
-project on the screen. Opening a file takes you to the file's project.
-
-![the Lens](screens/lens.png)
-
-![an empty stage: the project's shelf below](screens/empty-stage.png)
-
-![the + Add card's menu](screens/add-menu.png)
-
-## Keys
-
-| Keys | What they do |
-|---|---|
-| Ctrl+Space (or Ctrl+F) | the Lens |
-| Ctrl+1 .. Ctrl+9 | the first nine projects of the rail |
-| Ctrl+Tab | the project's next window on main |
-| Ctrl+\ | beside: hide it, or show the shelf's first window there |
-| Ctrl+W | the focused window goes to the shelf |
-| Ctrl+T | a new terminal on main |
-| Ctrl+S | save (editor) |
-| Ctrl+V, middle button | paste (terminal, editor, assistant, Lens) |
-| Esc | back: closes the Lens, a menu or a name box; in the editor, closes the file (twice if not saved); in the assistant, stops an answer |
-| Page Up/Down, the wheel | a terminal's history (500 lines) |
-
-Shift-click is not used: mouse events carry no modifier keys, so "open
-beside" is a drag to the right half or the card's right-click menu.
-
-## The Standard desktop
-
-The login screen's switch, **Desktop: Focused | Standard**, is set to
-Focused each time it appears (Tab reaches it after the password; Space or
-the arrows flip it). Standard keeps the projects, the Lens, the windows'
-insides, the menus and the keys, but the windows go where you put them:
-
-- **Windows.** Any number of a project's windows on the desk, the one in
-  front in focus. The focused window's **title bar rises** out of the top
-  of its frame (with a small overshoot) and an accent line runs along its
-  top edge; the others' bars **sink** back in, leaving the title in a
-  slot. Click a window to bring it in front.
-- **Move:** drag the raised bar or a sunken slot. **Resize:** drag an edge
-  or a corner (accent brackets mark the bottom corners). Windows stay on
-  the desk; the smallest is 420 x 240.
-- **Snap:** drag a window to the screen's left or right edge (an outline
-  shows where it will go) for that half, to the top edge to maximize.
-  **Maximize:** the bar's `[]` button or a double-click on the bar; again
-  to restore.
-- **Minimize:** `_` on the bar: the window flies into its chip in the
-  dock. **Close:** `x` on the bar or Ctrl+W: it folds into a line, then a
-  dot (the editor still asks first if the file is not saved).
-- **The dock** (the bottom line): the project's windows (the focused one
-  in accent, minimized ones dim), its files and apps, then *+ Add*. Click
-  a window's chip to bring it in front, or to minimize the focused one;
-  a file's chip opens it. Right-click and drag work as on the shelf.
-- **The rail rolls up** to its title line (with the project on the
-  screen) and its bottom line (you, *Log out*), so the windows have the
-  room. It unrolls while the pointer is on it, or while one of its menus
-  is open, and rolls up when the pointer leaves.
-- **Keys:** the same as Focused, except Ctrl+W closes, Ctrl+\ snaps the
-  focused window to the right half, and Ctrl+Tab brings the project's next
-  window in front.
-
-The animations (`user/atlas/wm.c`) are in integers and need no
-transparency: the bar is drawn before its window's glass, so only what
-rose above the frame shows, and the glow is two solid lines. While a box
-flies or unfolds only its glass and frame are drawn; the window's inside
-comes back when it lands. A thread ticks every 16 ms **only while
-something moves**, and each tick redraws only what the moving things
-cover (a bar's strip, or a moving window's old and new place); at rest,
-nothing runs.
 
 ## Windows
+
+- **The tab** sits on the window's top left, as wide as its title. The
+  focused window's tab **rises** out of its frame in the accent colour
+  (220 ms, a slight overshoot); when another window takes the focus, it
+  **sinks** back in (170 ms) and the title stays, dim, in the strip at
+  the window's top (drag the strip to move a window that has no tab up).
+  With the tab up, the strip's right side says more (a terminal's size,
+  whether a file is saved, the folder in Files). A thread ticks every
+  16 ms only while a tab moves; nothing redraws at rest. **x** closes,
+  **□** zooms (the whole desk; again: back). Drag the tab to move the
+  window; **double-click** it to minimize; right-click it for the window's
+  menu: *Minimize*, *Zoom*, *Send to workspace N*, *Close*.
+- **Resize** with the grip (bottom right) or any edge; the smallest is
+  360 x 200. New windows go down and to the right of the front one, so
+  every tab stays in view; sia opens on the right.
+- **Past the screen's edges:** a window may be moved (or resized) past
+  the bottom, the right or the left side; only its tab must stay wholly
+  on the screen. Past the left side the tab slides along to stay in view.
+- **Minimized** windows come back from the Deskbar (their app's row, or
+  the menu, where they are marked "(hidden)").
+- **Workspaces:** each window lives on one of 4; the Deskbar's cells or
+  Ctrl+1..4 switch, *Send to workspace* moves a window. Bringing a window
+  back (from the Deskbar or its menu) goes to its workspace.
+
+![workspace 2](screens/workspaces.png)
+
+What a window can be:
 
 - **Terminals.** Each one is a shell started by `auth` **as you** (never
   as root), with its own console, `atlas#N`: the client library sends the
   shell's console requests to atlas, the window's number in `w[3]`. The
-  terminal takes the size its slot gives it (main or beside), up to 132 x
-  60 characters, with 500 lines of history (66 KiB per terminal, given
-  back when it closes). Drag across the text to select it: it is copied
-  at once.
-- **The editor.** One file at a time, up to 64 KiB (bigger or binary
-  files, or files you may not change: read only); the text is in memory
-  only while it is open. Arrows, Home/End, Page Up/Down, Backspace, Del,
-  Enter, Tab; Ctrl+S saves, Esc closes (twice if there are unsaved
-  changes). Opening another file while this one has unsaved changes is
-  refused, with a message on the top bar.
+  terminal takes the size of its window, up to 132 x 60 characters, with
+  500 lines of history (66 KiB per terminal, given back when it closes).
+  Drag across the text to select it: it is copied at once.
+- **The editor**, laid out like a code editor. On the left, the
+  **Explorer**: the tree of your files, from your home folder (`..` shows
+  the folder above); a click opens or closes a folder (`[+]` / `[-]`) or
+  opens a file. On the right, the open files as **tabs** (up to 10): a
+  click shows one, its `x` closes it; a changed file's tab shows a small
+  square instead, and closing it asks a second click. Under the tabs, the
+  file's path; then the text with line numbers, the cursor's line lit, a
+  block cursor, and colours for C (and the like), shell and Python, and
+  Markdown (keywords bright and bold, comments dim). At the bottom, an
+  inverse status bar: the file, line and column, its kind, saved or
+  changed. Files up to 64 KiB (bigger or binary files, or files you may
+  not change: read only). Keys: arrows, Home/End, Page Up/Down,
+  Backspace, Del, Enter, Tab; Ctrl+S saves; Ctrl+W or Esc closes the tab;
+  F5 / F6 the tab before / after; Ctrl+B hides or shows the tree. The
+  last tab closed closes the window.
+- **Files** (`files.c`). A folder's contents, one row each (icon, name,
+  size), folders first; it starts in your home folder. Double-click (or
+  Enter): a folder opens in place, a file in the editor, a launcher
+  (`.app`) starts. *Up* (or Backspace) goes to the parent folder. Only
+  what you may read is shown.
 - **The assistant** (`panel.c`). A conversation with `sia`, shown as it is
   written. A thread of atlas does all the talking (`SIA_OPEN`, `SIA_ASK`,
   then `SIA_NEXT` piece after piece), so the desktop never waits. sia
@@ -155,16 +86,103 @@ nothing runs.
   something, a *Remember: ...* button keeps it (sia's memory). Answers may
   carry actions, each on a line of its own, shown as buttons:
   - `[fly:PATH]`: open that file (a path's end, like `note.txt`, is
-    enough); the assistant stays beside it;
-  - `[project:NAME]`: go to that project;
-  - `[island:KEY=VALUE]`: list the files with that attribute in the Lens.
+    enough);
+  - `[island:KEY=VALUE]`: list the files with that attribute under the
+    sia strip.
 
   The first question of a conversation tells the model these conventions
-  and lists your files with their projects.
+  and lists your files.
+- **Pins** (`pins.c`): the Raspberry Pi's GPIO pins as the tracks of a
+  sequencer: outputs play their patterns, inputs record their level at
+  each step (simulated pins elsewhere). See [gpio.md](gpio.md).
+- **Settings** (`settings.c`): below.
 
-![the assistant beside a file it opened](screens/asked-open.png)
+![Files](screens/files.png)
 
 ![the editor](screens/editor.png)
+
+![sia's answer opened a file](screens/asked-open.png)
+
+## The Deskbar
+
+- **The menu** (the SIEOS cube): Terminal, sia, Files, Text editor,
+  Settings; the apps of `/etc/apps`; every open window (minimized ones
+  "(hidden)"); *Log out*.
+- **The tray:** sia's state (idle, local, online) and the clock.
+- **The apps:** Terminal, sia, Files, Text editor, Pins, Settings. A running
+  one is in bold with a **>**: a click brings its window back in front
+  (the terminal used last, for Terminal); otherwise a click starts it.
+  Right-click: *New ...* and its windows.
+- **The workspaces**, 1 to 4: the current one in the accent colour.
+
+Right-click the desk itself for a menu to start things, and *Log out*.
+
+## The sia strip
+
+Click it or press Ctrl+Space, then type a few letters: the results drop
+down under it, grouped: **Files** (by name, in your home folder), **Apps**
+(your `.app` launchers and those of `/etc/apps`), and **Ask sia**. Enter
+opens the first result, Tab asks sia, Esc closes the results. Text
+starting with `?` only offers the question. Typing when no window has the
+keys goes to the strip too.
+
+![the sia strip](screens/strip.png)
+
+## Keys
+
+| Keys | What they do |
+|---|---|
+| Ctrl+Space (or Ctrl+F) | the sia strip |
+| Ctrl+T | a new terminal |
+| Ctrl+W | close the window in focus (the editor: its tab) |
+| Ctrl+Tab | the next window of this workspace, in front |
+| Ctrl+1 .. Ctrl+4 | a workspace |
+| Ctrl+S | save (editor) |
+| Ctrl+V, middle button | paste (terminal, editor, assistant, strip, Settings) |
+| PgUp / PgDn, the wheel | a terminal's history |
+| Esc | back: closes the strip's results, a menu or a name box; in the editor, closes the tab (twice if not saved); in the assistant, stops an answer |
+
+Mouse events carry no modifier keys: everything is reachable with clicks,
+right-clicks and the keys above.
+
+## Settings
+
+*Settings* (the Deskbar, its menu, or the strip: "settings") is a window
+of the desktop, on every machine:
+
+| Section | What | Kept in |
+|---|---|---|
+| Screen | the size: 1280 x 720, 1366 x 768, 1600 x 900, 1920 x 1080, 2560 x 1440 where the screen can take any (QEMU's VGA and ramfb, the Pi 4, whose firmware scales the picture to the monitor). It changes at once and **goes back by itself after 15 s** unless you press *Keep*, so a monitor that cannot show it is never a dead end. A firmware's fixed screen (UEFI, the Pi 5) shows its size. | `/etc/display.conf` (the login screen too) |
+| Look | **Phosphor** (the default: a green monitor, with scanlines and glowing text), **Amber 1984** (amber, square corners, a grid of dots) or **Glass** (the desktop's own colours); the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% | `~/.look`, applied at your login (the login screen: Phosphor, 100%) |
+| Mouse | pointer speed (Slow, Normal, Fast, Faster), right- or left-handed buttons, the wheel normal or reversed | `~/.mouse`, applied at your login |
+| Assistant | sia's model: the one on this computer, or **online**, any service with an OpenAI-compatible API (server URL, model name, API key). A system setting: root's password is asked unless root is logged in. | `/etc/sia.conf`, the key in `/etc/sia.key` (root only) |
+
+The speed is applied by the console server (`CON_MOUSE`: how far a mouse
+count moves the pointer, for this screen's size), the buttons and wheel by
+the desktop. Root's password is checked by `auth` (`AUTH_CHECK`). A
+running sia restarts with the new model settings.
+
+The looks are made where the picture reaches the screen (`draw.c`): the
+desktop draws in its own colours, and each pixel goes out as its
+brightness in the look's colour (a 256-entry table; a darker table for
+the scanline rows, every third row in Phosphor, every fourth in Amber).
+Text glows: a dim halo beside each stroke. Amber also squares the
+corners and draws the grid as dots. Nothing else in the desktop knows
+about looks, so icons, terminals and new windows follow by themselves.
+Phosphor costs about 30% more per full frame than Glass (5.5 ms instead
+of 4.2 ms at 1920 x 1080 under QEMU on x86-64).
+
+The size works the same way, in `draw.c`: the desktop lays out a picture
+of the screen's size divided by the zoom (at 100%, 0.75 screen pixels per
+picture pixel: 2560 x 1440 on a 1920 x 1080 screen; at 200%, 1280 x 720),
+and every item is scaled as it is added: boxes, corners, lines (never
+thinner than a pixel), text (the font takes any scale) and icons. So it is
+drawn sharp, not stretched, and the rest of the desktop does not know.
+The pointer's position comes as a fraction of the screen, so clicks land
+at any size. Windows keep their place and size in proportion to the desk
+when the size (or the screen's) changes.
+
+![Settings](screens/settings.png)
 
 ## Apps
 
@@ -180,54 +198,17 @@ kind=terminal
 
 | Key | Meaning |
 |---|---|
-| `name` | what the card, the Lens and the menus show |
+| `name` | what the strip and the menus show |
 | `run` | the program (absolute path) |
 | `args` | its arguments (one line) |
-| `kind` | `terminal`: runs in a new terminal; `editor`: asks for a file name and opens the editor |
+| `kind` | `terminal`: runs in a new terminal; `editor`: asks for a file name and opens the editor; `settings`: opens Settings |
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
-  Services, Hello, Fetch a web page, Disk benchmark.
-- *+ Add* → *Open app* copies the launcher to `~/apps` (once) and puts it
-  in the project: from then on it is a card on that project's shelf, and
-  can be moved like a file. An app started from the Lens is not copied.
-- Starting an app opens a terminal **as you** in the current project; its
-  shell runs the app's command when it first asks for a line. When the
-  app ends, the shell stays (`exit` closes it).
-
-## Projects: the menus
-
-Right-click a project of the rail:
-
-| Entry | What it does |
-|---|---|
-| Rename | every file's `project` attribute is changed to the new name; its windows follow |
-| Delete the project | asks first; then only the attribute goes: the files go to the Inbox, nothing is deleted |
-| New project | a name box; the project is empty until something is put in it |
-
-Right-click the Inbox or the empty rail: *New project*. Both Rename and
-Delete skip the files you may not change, and say how many.
-
-![a project's menu](screens/project-menu.png)
-
-## Attributes and files
-
-| What | Where |
-|---|---|
-| a file's project | attribute `project` = `NAME` (none: the Inbox) |
-| empty projects | `~/.projects`, one name per line |
-| apps opened in a project | `~/apps/*.app` (with their `project`) |
-
-A project that loses its last file by a move from the desktop stays on
-the rail (it is added to `~/.projects`). Hard links share attributes, so
-they share a project.
-
-**From the older map desktop (Atlas).** Files carried `island.NAME` =
-`1` attributes (several per file) and places in `atlas.*`. The first time
-the desktop sees such a file, the first island that is not Driftwood
-becomes its project, and the `island.*` and `atlas.*` attributes are
-removed (Driftwood alone means the Inbox). Empty islands listed in
-`~/.islands` become empty projects, and that file is removed. Files you
-may not change are shown that way but left alone.
+  Settings, Services, Hello, Fetch a web page, Disk benchmark. Yours are
+  any `.app` file in your home folder (the strip and Files find them).
+- Starting an app opens a terminal **as you**; its shell runs the app's
+  command when it first asks for a line. When the app ends, the shell
+  stays (`exit` closes it).
 
 ## How it works
 
@@ -242,37 +223,46 @@ between processes.
                                        └── draws ──► video memory
 ```
 
+| File | What it does |
+|---|---|
+| `atlas.c` | the session: terminals, the Deskbar, the sia strip, menus, input, login |
+| `wm.c` | the windows: tabs, boxes, moving and resizing, the stacking order, workspaces |
+| `files.c`, `edit.c`, `panel.c`, `settings.c` | the windows' insides: Files, the editor, sia, Settings |
+| `icons.c` | the icons (12 x 12 pixel maps) and the SIEOS cube (16 x 16) |
+| `setup.c` | the first start on the screen (the accounts) |
+| `draw.c`, `font.c`, `screen.c` | drawing (and the looks), the font, the screen |
+
 - **The screen** (`screen.c`): x86, QEMU's standard VGA card or the UEFI
   firmware's screen (GOP); AArch64, QEMU's ramfb on `virt`, the
   firmware's framebuffer on the Pi 4, `simple-framebuffer` on the Pi 5.
-  The layout is computed from the screen's size (1920 x 1080 by
-  default); below 1600 pixels wide the rail and the margins are narrower.
+  The layout is computed from the screen's size; below 1600 pixels wide
+  the Deskbar is narrower.
 - **Drawing** (`draw.c`): a display list (rectangles with round corners,
-  outlines, text) turned into pixels 16 rows at a time in a 120 KiB
-  strip, each finished strip copied to video memory. No second
-  full-screen image, and only the region that changed is redrawn: the
-  pointer's two small squares, a terminal's window, the clock's corner.
+  outlines, text, small pixel images for the icons) turned into pixels 16
+  rows at a time in a 120 KiB strip, each finished strip copied to video
+  memory. No second full-screen image, and only the region that changed
+  is redrawn: the pointer's two small squares, a terminal's window, a
+  moved window's old and new place, the clock's corner. Windows wholly
+  hidden behind another are not drawn.
 - **The font** (`tools/mkfont.py` -> `font.c`): drawn for SIEOS, 6 x 11
-  pixels a cell, shown twice as large (12 x 22) on the desktop.
-- **Nothing runs when nothing happens:** no timer except the clock
-  thread, which sleeps until the next minute (and, on the Standard
-  desktop, the animation thread while something moves). Atlas looks at the
+  pixels a cell, shown twice as large (12 x 22) on the desktop; bold is
+  the text drawn twice, a pixel apart.
+- **Nothing runs when nothing happens:** no animation, no timer except
+  the clock thread, which sleeps until the next minute. Atlas looks at the
   files again when a terminal's shell asks for its next line (a command
-  has just run), so a `tag` shows at once, with no polling.
+  has just run), so a new file shows at once, with no polling.
 - **Login:** the login screen first (the password goes to `auth`, which
-  starts your first shell, on main, in your first project); on a new
-  disk, the welcome screen creates the accounts first
-  (`user/atlas/setup.c`, [accounts.md](accounts.md)).
+  starts your first shell, in a window); on a new disk, the welcome
+  screen creates the accounts first (`user/atlas/setup.c`,
+  [accounts.md](accounts.md)).
 - **Rights:** atlas runs as root (it owns the screen and starts your
-  shells through `auth`), so before it reads a file's text, changes its
-  attributes, makes a file or starts an app, it checks the rights of the
-  user logged in. Files it makes (new files, `~/apps`, `~/.projects`) are
-  given to that user.
+  shells through `auth`), so before it reads a file or a folder, makes a
+  file or starts an app, it checks the rights of the user logged in.
+  Files it makes (new files, `~/.mouse`) are given to that user.
 - **If atlas crashes** (or is killed), init starts it again within a few
-  milliseconds: the login screen comes back, the old session's shells end,
-  and the projects are still there (they are in the files). If con
-  crashes, atlas takes the keyboard and mouse again as soon as the new con
-  is up.
+  milliseconds: the login screen comes back and the old session's shells
+  end. If con crashes, atlas takes the keyboard and mouse again as soon as
+  the new con is up.
 
 ![the login screen](screens/login.png)
 
@@ -283,34 +273,37 @@ QEMU, x86-64 with KVM, 4 CPUs, 1920 x 1080 (`make gui-test`); AArch64
 
 | | x86-64 | AArch64 (emulated) |
 |---|---|---|
-| a full frame (whole screen) | median 4.1 ms (max 13 ms) | median 14 ms (max 22 ms) |
-| atlas, end of the test (2 terminals) | 732 KiB | 9.7 MiB (8 MiB of it the ramfb picture) |
-| atlas with 4 terminals and the assistant | 860 KiB | |
-| the whole system, session open | 3.6 MiB | 13.8 MiB |
+| a full frame (whole screen), median over the test | 9.8 ms (max 24 ms) | 18.6 ms (max 40 ms) |
+| the login screen, a full frame | 4.1 ms | |
 | idle | no work: the clock thread wakes once a minute | same |
 
-Most pictures are partial (a terminal's window, the pointer), far cheaper
-than a full frame. For comparison, the map desktop (Atlas) used 916 KiB
-with 4 terminals, and the whole system 3.6 to 3.9 MiB.
+A full frame now draws every window of the workspace, back to front, so
+it costs more when several overlap (the test ends with five windows
+open); the Stage desktop showed at most two (4.1 ms). Most pictures are
+partial (a terminal's window, a menu, the pointer), far cheaper.
 
 ## Tests
 
 `make gui-test` (x86-64, gcc) and `make ARCH=arm64 gui-test` (AArch64,
 sicc) drive QEMU through its control socket: the first start on the
-screen; projects from `tag`, and the migration of `island.*` attributes,
-Driftwood and `~/.islands`; two terminals on the stage (both checked to
-run as the user, uid 1000), a card dragged beside, *Swap*, Ctrl+W, Ctrl+\,
-Ctrl+Tab; history, copy and paste; the editor (save, read back by the
-shell); the Lens (a file, an app, a question to the stand-in sia, Esc);
-the answer's buttons and Stop; *+ New project*, *+ Add* → *New file* and
-*Open app*; a card dragged onto another project; Rename; atlas killed and
-restarted by init with the projects kept; Delete (the files go to the
-Inbox); the console server killed; then the Standard desktop, chosen on
-the login screen: the rail rolled up, a window moved by its bar and
-resized by its corner, a second window, a click on a sunken slot, a snap
-to the left half, a double-click to maximize, minimize and restore from
-the dock, the rail unrolled under the pointer, Ctrl+W. With `/tmp/atlas.debug` present
-(the test makes it), atlas logs where it drew the projects, cards, window
-buttons and terminals, and the time of each full frame; nothing is
-logged without it. `make gui-test-real` does the same with the real sia
-and a model on the test disk.
+screen; a file made by the user's shell; a second terminal (checked to run
+as the user, uid 1000) moved by its tab and resized by its grip, moved
+past the bottom right and the left side (its tab still on the screen), zoomed
+and back, minimized by a double-click on its tab and brought back by the
+Deskbar, sent to workspace 2 from its tab's menu, closed by its close box;
+history, copy and paste (the pasted command runs); Files (a double-click
+opens a file in the editor, which saves it; a second file from the
+editor's tree in a second tab, tabs shown and closed; Up); the sia strip (a file, an
+app, Esc, a question to the stand-in sia; the answer's buttons; Stop);
+Settings: pointer speed and left-handed buttons (kept in `~/.mouse`), the
+looks (Amber 1984, Glass, Phosphor again: checked on the screen's pixels,
+scanlines included; kept in `~/.look`), everything at 200% and back (a
+click lands at both), the
+screen at 1600 x 900 (kept), 1366 x 768 then *Go back*, 1920 x 1080
+again, sia online (a wrong root password refused) and local again; atlas
+killed and restarted by init; the console server killed. With
+`/tmp/atlas.debug` present (the test makes it), atlas logs where it drew
+the tabs, boxes, Deskbar rows, workspaces, files and Settings' controls,
+and the time of each full frame; nothing is logged without it. `make
+gui-test-real` does the same with the real sia and a model on the test
+disk.

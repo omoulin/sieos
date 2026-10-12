@@ -13,7 +13,7 @@
 #ifndef SICC_SYS_H
 #define SICC_SYS_H
 
-#ifndef __SICC__
+#if !defined(__SICC__) && !defined(SICC_SIEOS)        /* (SICC_SIEOS: on SIEOS, cc/libc/sieos.c) */
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>

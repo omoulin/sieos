@@ -3,13 +3,14 @@
 (QMP): screenshots, key presses and absolute mouse events, checked against
 the desktop's log lines on the serial port and against the pixels.
 
-  first start on the screen (accounts) -> alice on the stage -> files and
-  projects from the terminal, older island attributes migrated -> the
-  stage: two terminals, beside, swap, the shelf, keys -> history, copy and
-  paste -> the editor -> the Lens (a file, an app, a question to sia) ->
-  projects: new, a file and an app in one, a card dragged onto another,
-  rename -> kill atlas: init restarts it, the projects stay -> delete a
-  project -> kill the console server -> memory and frame times.
+  first start on the screen (accounts) -> alice's first terminal -> a
+  file from the shell -> windows: a second terminal moved by its tab,
+  resized by its grip, zoomed, minimized (double-click) and back from the
+  Deskbar, sent to another workspace, closed -> history, copy and paste ->
+  Files and the editor -> the sia strip (a file, an app, a question to sia,
+  its buttons, Stop) -> Settings (mouse, screen size, sia's model) -> kill
+  atlas: init restarts it -> kill the console server -> memory and frame
+  times.
 
 With /tmp/atlas.debug (made here), atlas logs where it drew things.
 
@@ -34,6 +35,8 @@ atexit.register(lambda: qemu.poll() is None and qemu.kill())
 full = b""                      # everything from the serial port
 pos = {"con": 0, "log": 0}      # two readers: the text console, and atlas's log lines
                                 # (they share the port, so their order may vary)
+
+TAB = 34                                    # a window tab's height (atlas.h TAB_H)
 
 def fail(msg):
     qemu.kill()
@@ -117,10 +120,15 @@ def type_text(s):
         q("send-key", keys=[{"type": "qcode", "data": k} for k in keys])
         time.sleep(0.02)
 
+SCREEN = [1920, 1080]           # the screen's size in pixels (Settings may change it)
+ZOOM = [0.75]                   # screen pixels per pixel of the desktop's picture (100%: 0.75)
+
 def mouse_to(x, y):
-    """Move the pointer to screen pixel (x, y) of the 1920 x 1080 screen."""
-    q("input-send-event", events=[{"type": "abs", "data": {"axis": "x", "value": x * 32767 // 1919}},
-                                  {"type": "abs", "data": {"axis": "y", "value": y * 32767 // 1079}}])
+    """Move the pointer to (x, y) of the desktop's picture (where atlas logs things)."""
+    w, h = SCREEN
+    z = ZOOM[0]
+    q("input-send-event", events=[{"type": "abs", "data": {"axis": "x", "value": int((x * z + 0.5) * 32768 / w)}},
+                                  {"type": "abs", "data": {"axis": "y", "value": int((y * z + 0.5) * 32768 / h)}}])
     time.sleep(0.05)
 
 def button(name, down):
@@ -198,17 +206,35 @@ def latest(prefix, name=None):
     x, y = text[k:].split(" at ", 1)[1].split()[:2]
     return int(x), int(y)
 
-def projects():
-    """The last "atlas: projects:" line already printed -> {name: files}."""
-    k = full.rfind(b"atlas: projects: ")
-    line = full[k + 17: full.find(b"\n", k)].decode()
-    return {a: int(b) for a, b in (w.rsplit("=", 1) for w in line.split())}
+def shown(w=None):
+    """Wait for the next window shown (or window w) -> its id."""
+    while True:
+        got = wait("atlas: window ", "log", 20)
+        if got.split()[1:2] == ["shown"] and (w is None or int(got.split()[0]) == w):
+            return int(got.split()[0])
 
-def stage(text):
-    """Wait for the stage line that says `text` ("demo: main=Terminal 3 beside=-")."""
-    got = wait("atlas: stage ", "log", 10)
-    while not got.startswith(text):
-        got = wait("atlas: stage ", "log", 10)
+def window(w):
+    """The last place logged for window w -> (x0, y0, x1, y1)."""
+    drain()
+    text = full.decode(errors="replace")
+    k = text.rfind(f"atlas: dbg window {w} at ")
+    if k < 0:
+        fail(f"no place logged for window {w}")
+    return tuple(int(v) for v in text[k:].split(" at ", 1)[1].split()[:4])
+
+def term_geo(chan):
+    """Where terminal chan's text starts, and its cell size (logged when settled)."""
+    drain()
+    k = full.rfind(f"atlas: terminal {chan} at ".encode())
+    if k < 0:
+        fail(f"no place logged for terminal {chan}")
+    v = full[k:].split(b"\n")[0].decode().split()
+    return int(v[4]), int(v[5]), int(v[7]), int(v[8])
+
+def settle_log():
+    """Make atlas log where things are (a command in the focused terminal: it settles)."""
+    type_text("\n")
+    time.sleep(0.6)
 
 def ps_uid(pid):
     """The owner (uid) of process `pid`, from ps on the serial console."""
@@ -231,7 +257,20 @@ def term_pid(chan):
     k = full.rfind(f"atlas: terminal {chan} opened (pid ".encode())
     return int(full[k:].split(b"(pid ")[1].split(b")")[0])
 
-NAVY, ACC, TERM, TEXT, TERMFG, GLASS = "0a0f1c", "4be3c1", "070b14", "e6ecf5", "9fe8c8", "141a28"
+def look(rgb, kind=0, scan=False):
+    """A colour atlas draws -> what the screen shows in look `kind` (0 Phosphor,
+    1 Amber 1984, 2 Glass; draw.c's draw_look), on a row or a scanline row."""
+    if kind == 2:
+        return rgb
+    r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
+    v = min(255, ((r * 77 + g * 150 + b * 29) >> 8) * 5 // 4)
+    if scan:
+        v = v * 5 // 8 if kind == 0 else v * 3 // 4
+    t = (0x46, 0xff, 0x7a) if kind == 0 else (0xff, 0xb0, 0x38)
+    return "".join(f"{c * v // 255:02x}" for c in t)
+
+RAW = dict(NAVY="0a0f1c", ACC="4be3c1", TERM="070b14", TEXT="e6ecf5", TERMFG="9fe8c8", GLASS="141a28", GRID="111829")
+NAVY, ACC, TERM, TEXT, TERMFG, GLASS, GRID = (look(RAW[k]) for k in ("NAVY", "ACC", "TERM", "TEXT", "TERMFG", "GLASS", "GRID"))   # (Phosphor: the default)
 
 # ---- first start: the accounts are made on the screen
 start = time.time()
@@ -264,7 +303,7 @@ time.sleep(0.5)
 shot("02-setup-user")
 type_text("\t\t\t\n")
 wait("atlas: setup: step 3")
-click(980, 811)                                    # "Add another user"
+click(SCREEN[0] / ZOOM[0] / 2 + 20, SCREEN[1] / ZOOM[0] / 2 + 271)   # "Add another user" (the dialog is centred)
 wait("atlas: setup: another user")
 type_text("bob\tBob Example\tbobpass11\tbobpass11\n")
 wait("atlas: setup: step 3")
@@ -273,13 +312,14 @@ shot("03-setup-ready")
 type_text("\n")                                    # "Create accounts"
 wait("atlas: setup: accounts created (root and 2 user(s))", "log", 20)
 wait("atlas: login alice: ok", "log", 20)
-stage("Inbox: main=Terminal 1 beside=-")
+t1 = 1
+w1 = shown()
 expect("login: ")                                  # the serial console's prompt, now that accounts exist
 time.sleep(0.8)
 img = shot("04-logged-in")
 if not has_colour(img, TERM, at_least=20000) or not has_colour(img, TERMFG, at_least=20) or not has_colour(img, ACC, at_least=50):
-    fail("no terminal on the stage after the setup")
-print("ok: accounts made on the screen (root, alice, bob; bad ones refused); alice on the stage with a terminal")
+    fail("no terminal window after the setup")
+print("ok: accounts made on the screen (root, alice, bob; bad ones refused); alice's first terminal window")
 
 # ---- root on the serial console: places logged (tests only), the stand-in assistant
 send("root")
@@ -295,86 +335,120 @@ else:
     send("siastub &")
     stub = "ready" in wait("siastub: ", "con", 10)
 
-# ---- files and projects from the terminal; older island attributes migrated
-type_text("echo hello from stage > note.txt\n")
-wait("atlas: projects: Inbox=1 ")
-type_text("tag note.txt project=demo\n")
-got = wait("atlas: projects: ")
-if "demo=1" not in got:
-    fail(f"the project 'demo' did not appear: {got}")
-type_text("echo old > old.txt\n")
-type_text("tag old.txt island.legacy=1\n")
-wait("atlas: migrated /home/alice/old.txt: project legacy")
-type_text("tag old.txt atlas.zoom=3\n")
-wait("atlas: migrated /home/alice/old.txt: project legacy")
-type_text("echo drift > drift.txt\n")
-type_text("tag drift.txt island.Driftwood=1\n")
-wait("atlas: migrated /home/alice/drift.txt: project Inbox")
-type_text("echo oldisle > .islands\n")            # the older desktop's empty islands
-got = wait("atlas: projects: ")
-while "oldisle=0" not in got:
-    got = wait("atlas: projects: ")
-send("tags /home/alice/old.txt")
-expect("project")
-drain()
-if b"island." in full[pos["con"]:] or b"atlas." in full[pos["con"]:]:
-    fail("old.txt kept its island attributes")
-print(f"ok: projects from tags ({got.strip()}); island.* -> project, Driftwood -> Inbox, ~/.islands -> empty project")
-shot("05-projects")
+# ---- a file from alice's shell
+type_text("echo hello from the desktop > note.txt\n")
+wait("atlas: files: ")
+type_text("tag note.txt topic=notes\n")
+time.sleep(0.5)
+img = shot("05-desktop")
+if not has_colour(img, GRID, at_least=2000) or not has_colour(img, GLASS, (1600, 16, 1904, 400), 200):
+    fail("no desk grid or no Deskbar")
+print("ok: note.txt made by alice's shell; the desk and the Deskbar are drawn")
 
-# ---- the stage: a project, two terminals, beside, swap, the shelf
-click(*latest("project", "demo"))
-stage("demo: main=- beside=-")
-time.sleep(0.3)
-shot("06-empty-stage")
+# ---- windows: a second terminal, moved, resized, zoomed, minimized, sent away, closed
 keys("ctrl", "t")
 c2 = opened()
-stage(f"demo: main=Terminal {c2} beside=-")
-keys("ctrl", "t")
-c3 = opened()
-stage(f"demo: main=Terminal {c3} beside=-")
-for c in (c2, c3):
-    if ps_uid(term_pid(c)) != "1000":
-        fail(f"terminal {c} does not run as alice")
-print(f"ok: project 'demo', Ctrl+T twice: terminals {c2} and {c3} (both run as alice, uid 1000)")
-x, y = latest("card", f"Terminal {c2}")
-drag(x, y, 1600, 400)                             # up onto the right half: beside
-wait("atlas: card dropped on the stage (beside)")
-stage(f"demo: main=Terminal {c3} beside=Terminal {c2}")
-time.sleep(0.6)
-img = shot("07-main-beside")
-print("ok: dragged a terminal's card up to the right: beside")
-click(*latest("wbtn", f"Terminal {c3} Swap"))
-stage(f"demo: main=Terminal {c2} beside=Terminal {c3}")
-keys("ctrl", "w")                                  # the focused one (now main) to the shelf
-stage(f"demo: main=Terminal {c3} beside=-")
-keys("ctrl", "backslash")                          # the shelf's first window beside
-stage(f"demo: main=Terminal {c3} beside=Terminal {c2}")
-keys("ctrl", "backslash")
-stage(f"demo: main=Terminal {c3} beside=-")
+w2 = shown()
+if ps_uid(term_pid(c2)) != "1000":
+    fail(f"terminal {c2} does not run as alice")
+time.sleep(0.4)
+x0, y0, x1, y1 = window(w2)
+tx, ty = latest("wtab", f"Terminal {c2}")
+drag(tx, ty, tx + 150, ty + 80)
+got = wait(f"atlas: window {w2} at ")
+a = [int(v) for v in got.split()[:4]]
+if (a[0] - x0, a[1] - y0) != (150, 80):
+    fail(f"moved by {(a[0] - x0, a[1] - y0)}, not (150, 80)")
+x0, y0, x1, y1 = a
+drag(x1 - 10, y1 - 10, x1 - 210, y1 - 110)         # the grip, bottom right
+got = wait(f"atlas: window {w2} at ")
+b = [int(v) for v in got.split()[:4]]
+if (b[2] - b[0], b[3] - b[1]) != (x1 - x0 - 200, y1 - y0 - 100):
+    fail(f"resized to {b}, from {(x0, y0, x1, y1)}")
+print(f"ok: terminal {c2} (as alice) moved by its tab (+150, +80), resized by its grip (-200, -100)")
+# past the screen's sides: the window may go, its tab stays wholly on the screen
+x0, y0, x1, y1 = b
+settle_log()
+tx, ty = latest("wtab", f"Terminal {c2}")
+LW, LH = round(SCREEN[0] / ZOOM[0]), round(SCREEN[1] / ZOOM[0])   # (the desktop's picture)
+drag(tx, ty, LW - 5, LH - 5)
+got = [int(v) for v in wait(f"atlas: window {w2} at ").split()[:4]]
+if got[2] <= LW or got[3] <= LH or got[1] > LH - 8:
+    fail(f"not past the bottom right: {got}")
+settle_log()
+tx, ty = latest("wtab", f"Terminal {c2}")
+if not (0 < tx < LW and TAB // 2 <= ty <= LH - TAB // 2):
+    fail(f"the tab left the screen: at {tx} {ty}")
+drag(tx, ty, 5, ty)
+got = [int(v) for v in wait(f"atlas: window {w2} at ").split()[:4]]
+settle_log()
+tx2, ty2 = latest("wtab", f"Terminal {c2}")
+if got[0] >= 0 or tx2 - tx < -LW or tx2 < 0:
+    fail(f"not past the left side, or the tab off it: {got}, tab at {tx2}")
+drag(tx2, ty2, tx2 + (x0 - got[0]), ty2 + (y0 - got[1]))       # back where it was
+got = [int(v) for v in wait(f"atlas: window {w2} at ").split()[:4]]
+if got != b:
+    fail(f"not back: {got}, not {b}")
+print("ok: past the bottom right and the left side, its tab always on the screen (slid along at the left)")
+settle_log()
+click(*latest("wzoom", str(w2)))
+wait(f"atlas: window {w2} zoomed")
+time.sleep(0.4)
+img = shot("06-zoomed")
+click(*latest("wzoom", str(w2)))
+wait(f"atlas: window {w2} unzoomed")
+time.sleep(0.3)
+tx, ty = latest("wtab", f"Terminal {c2}")
+click(tx, ty); time.sleep(0.1); click(tx, ty)      # double-click the tab: minimized
+wait(f"atlas: window {w2} minimized")
+click(*latest("dbapp", "Terminal"))                 # the Deskbar brings it back
+shown(w2)
+print("ok: zoom and back; a double-click on the tab minimized it; the Deskbar's Terminal brought it back")
+time.sleep(0.4)
+tx, ty = latest("wtab", f"Terminal {c2}")
+click(tx, ty, "right")
+wait(f"atlas: menu Terminal {c2}")
+menu_pick("Send to workspace 2")
+wait(f"atlas: window {w2} to workspace 2")
+click(*latest("ws", "2"))
+wait("atlas: workspace 2")
+time.sleep(0.4)
+img = shot("07-workspace-2")
+settle_log()
+click(*latest("wclose", str(w2)))                  # close: its shell ends
+got = wait("atlas: terminal ")
+while "closed" not in got:
+    got = wait("atlas: terminal ")
+if int(got.split()[0]) != c2:
+    fail(f"closed the wrong terminal: {got}")
+click(*latest("ws", "1"))
+wait("atlas: workspace 1")
 keys("ctrl", "tab")
-stage(f"demo: main=Terminal {c2} beside=-")
-print("ok: Swap, Ctrl+W (to the shelf), Ctrl+\\ (beside on/off), Ctrl+Tab (next window)")
+time.sleep(0.4)
+print(f"ok: right-click the tab -> Send to workspace 2, workspace 2 shown, the close box ended terminal {c2}")
 
 # ---- a terminal's history and copy / paste
-geo = wait(f"atlas: terminal {c2} at ").split()
-tx, ty, cw, ch = int(geo[0]), int(geo[1]), int(geo[3]), int(geo[4])
+settle_log()
+tx, ty, cw, ch = term_geo(t1)
 type_text("help\n")
 type_text("ls -l /bin\n")
 time.sleep(0.8)
 keys("pgup")
-got = wait(f"atlas: terminal {c2} back ")
+got = wait(f"atlas: terminal {t1} back ")
 if int(got.split()[0]) <= 0:
     fail(f"no history to scroll back to: {got}")
 keys("pgdn")
 back = got.split()[0]
-wait(f"atlas: terminal {c2} back 0")
+wait(f"atlas: terminal {t1} back 0")
 type_text("clear\n")
 time.sleep(0.4)
-cmd = "ln drift.txt pasted.txt"
+settle_log()
+tx, ty, cw, ch = term_geo(t1)
+cmd = "ln note.txt pasted.txt"
+type_text(f"clear\n")
+time.sleep(0.4)
 type_text(f"echo {cmd}\n")                        # its output, on the second line, is a command
 time.sleep(0.6)
-inbox = projects()["Inbox"]
 y = ty + ch + ch // 2
 mouse_to(tx + cw // 2, y); button("left", True)
 mouse_to(tx + 10 * cw, y); mouse_to(tx + (len(cmd) - 1) * cw + cw // 2, y); button("left", False)
@@ -382,35 +456,88 @@ got = wait("atlas: copied ")
 if not got.startswith(f"{len(cmd)} bytes"):
     fail(f"the selection: {got}")
 shot("08-selection")
+drain()
+k = full.rfind(b"atlas: files: ")
+before = int(full[k + 14:].split()[0])
 keys("ctrl", "v")
 wait(f"atlas: pasted {len(cmd)} bytes")
 type_text("\n")
-got = wait("atlas: projects: ")
-if f"Inbox={inbox + 1}" not in got:              # pasted.txt (a link to drift.txt: no project either)
-    fail(f"the pasted command did not run: {got}")
+got = wait("atlas: files: ")
+while int(got.split()[0]) == before:
+    got = wait("atlas: files: ")
+if int(got.split()[0]) != before + 1:
+    fail(f"the pasted command did not make pasted.txt: {before} -> {got}")
 print(f"ok: history (PgUp went back {back} lines), selected {len(cmd)} bytes, pasted with Ctrl+V, it ran")
 
-# ---- the editor: a card of the shelf, type, Ctrl+S, Esc
-click(*latest("card", "note.txt"))
+# ---- Files and the editor
+click(*latest("dbapp", "Files"))
+wait("atlas: files /home/alice: ")
+wf = shown()
+time.sleep(0.4)
+shot("09-files")
+for k, line in enumerate(("/* a demo */", "int main(void)", "{", "    return 42;", "}")):   # (a C file, as root)
+    send(f'echo "{line}" {">" if k == 0 else ">>"} /home/alice/demo.c')
+    time.sleep(0.3)
+time.sleep(0.3)
+fx, fy = latest("file", "note.txt")
+click(fx, fy); time.sleep(0.1); click(fx, fy)      # double-click: the editor
 wait("atlas: editing note.txt")
-stage("demo: main=note.txt")
-type_text("edited in stage\n")
+type_text("edited on the desktop\n")
 keys("ctrl", "s")
 got = wait("atlas: saved note.txt ")
+keys("end"); time.sleep(0.6)                      # (a redraw: the places logged; no change)
+click(*latest("etree", "demo.c"))                  # the tree: a second file, in a second tab
+wait("atlas: editing demo.c")
 time.sleep(0.3)
-shot("09-editor")
-keys("esc")
+keys("end"); time.sleep(0.6)                      # (a redraw: the places logged; no change)
+click(*latest("etab", "note.txt"))                 # the first tab again ...
+time.sleep(0.2)
+click(*latest("etab", "demo.c"))                   # ... and the second
+time.sleep(0.4)
+shot("10-editor")
+keys("end"); time.sleep(0.6)                      # (a redraw: the places logged; no change)
+click(*latest("etabx", "demo.c"))                  # its x closes it
+wait("atlas: editor closed demo.c")
+keys("esc")                                        # Esc: the last tab, and the window
 wait("atlas: editor closed note.txt")
 send("cat /home/alice/note.txt")
-expect("edited in stage")
-print(f"ok: note.txt opened from its card, edited, saved ({got.strip()}); the shell reads the new text")
+expect("edited on the desktop")
+click(*latest("dbapp", "Files"))                   # (in front again: its places logged)
+time.sleep(0.4)
+click(*latest("fileup"))
+wait("atlas: files /home: ")
+print(f"ok: Files listed the home folder; note.txt opened by a double-click, edited, saved ({got.strip()}); demo.c from the tree in a second tab; tabs shown and closed; Up")
 
-# ---- the Lens: a file, an app, a question
+# ---- Pins: the GPIO pins as sequencer tracks (simulated pins under QEMU)
+click(*latest("dbapp", "Pins"))
+got = wait("atlas: pins open: ")
+time.sleep(0.5)
+click(*latest("pins", "1004"))                     # track 1 (BCM 17), step 5: off (the demo had it on)
+wait("atlas: pins: BCM 17 step 5 off")
+time.sleep(0.3)
+click(*latest("pins", "128"))                      # track 3 (BCM 22): an input (pull-up)
+wait("atlas: pins: BCM 22 in")
+time.sleep(0.3)
+click(*latest("pins", "1"))                        # Play: the server plays the outputs, records the inputs
+wait("atlas: pins: playing 16 steps of 100 ms on ")
+time.sleep(2.0)
+wait("atlas: pins: recorded BCM 22 1111111111111111")   # (simulated pins: an input reads its pull at every step)
+wait("atlas: pins: recorded BCM 27 1111111111111111")
+img = shot("31-pins")
+send("gpio")                                       # (the server, from the console: BCM 17 is an output)
+expect(" 17  out")
+click(*latest("pins", "1"))                        # Stop
+wait("atlas: pins: stopped")
+keys("ctrl", "w")
+wait("atlas: pins closed")
+print(f"ok: Pins: {got.split(',')[0]}; a step set, a track made an input; played by the GPIO server, the inputs recorded at each step; stopped; closed")
+
+# ---- the sia strip: a file, an app, a question
 keys("ctrl", "spc")
-wait("atlas: lens")
+wait("atlas: strip")
 type_text("note")
 time.sleep(0.4)
-shot("10-lens")
+shot("11-strip")
 type_text("\n")
 wait("atlas: editing note.txt")
 keys("esc")
@@ -419,7 +546,7 @@ keys("ctrl", "spc")
 type_text("hello")
 time.sleep(0.3)
 type_text("\n")
-got = wait("atlas: app Hello started in demo (terminal ")
+got = wait("atlas: app Hello started (terminal ")
 ch_app = int(got.split(")")[0])
 if ps_uid(term_pid(ch_app)) != "1000":
     fail("the app does not run as alice")
@@ -427,42 +554,40 @@ keys("ctrl", "spc")
 type_text("zzz")
 keys("esc")                                        # Esc: the results close, nothing opens
 time.sleep(0.3)
-print(f"ok: Lens: 'note' opened the file, 'hello' started the Hello app (terminal {ch_app}, as alice), Esc closed it")
+print(f"ok: strip: 'note' opened the file, 'hello' started the Hello app (terminal {ch_app}, as alice), Esc closed it")
 
 keys("ctrl", "spc")
 type_text("show me my note")
 type_text("\t")                                    # Tab: ask sia
-wait("atlas: ask from the lens")
+wait("atlas: ask from the strip")
 wait("atlas: assistant open")
 wait("atlas: sia: ask")
 which, got = wait_any(["atlas: sia: done ", "atlas: sia: error "], "log", 120)
 if stub and "done" not in which:
     fail(f"the stand-in did not answer: {got}")
 time.sleep(0.4)
-img = shot("11-assistant")
-print(f"ok: Lens -> Ask sia: {which.split(': ')[-1].strip()} {got.strip()}")
+img = shot("12-assistant")
+print(f"ok: strip -> Ask sia: {which.split(': ')[-1].strip()} {got.strip()}")
 if stub:
     if "2 actions" not in got:
         fail(f"the answer's actions were not found: {got}")
     b0 = wait("atlas: sia: button 0 at ").split()
-    b1 = wait("atlas: sia: button 1 at ").split()
     click(int(b0[0]), int(b0[1]))
-    stage("demo: main=note.txt beside=sia")         # (logged before the action's own line)
     if not wait("atlas: sia: action fly ").strip().endswith("-> 0"):
         fail("the 'Open note.txt' button did not find the file")
     time.sleep(0.4)
-    shot("12-asked-open")
+    shot("13-asked-open")
     keys("esc")
     wait("atlas: editor closed note.txt")
-    b1 = None
     drain()
     k = full.rfind(b"atlas: sia: button 1 at ")
     b1 = full[k + 24:].split()[:2]
     click(int(b1[0]), int(b1[1]))
-    got = wait("atlas: sia: action project ")
-    if not got.strip().endswith("-> 0"):
-        fail(f"the 'Project demo' button: {got}")
-    print("ok: the answer's buttons: 'Open note.txt' (the editor, sia beside), 'Project demo'")
+    got = wait("atlas: sia: action find ")
+    if not got.strip().endswith("-> 1"):
+        fail(f"the 'topic=notes' button: {got}")
+    print("ok: the answer's buttons: 'Open note.txt' (the editor), the files with topic=notes (1, under the strip)")
+    keys("esc")
     keys("ctrl", "spc")
     type_text("please count slowly\t")
     wait("atlas: sia: first piece", "log", 30)
@@ -470,67 +595,123 @@ if stub:
     got = wait("atlas: sia: stopped after ", "log", 20)
     print(f"ok: Esc stopped a long answer after {got.split()[0]} pieces")
 
-# ---- projects: new, a new file and an app in it, a file moved in, rename, delete
-click(*latest("newproject"))
-wait("atlas: prompt Name of the new project")
-type_text("work\n")
-wait("atlas: new project work")
-stage("work: main=- beside=-")
-click(*latest("card", "+ Add"))
-wait("atlas: menu Add to this project")
-time.sleep(0.3)
-shot("13-add-menu")
-menu_pick("New file")
-wait("atlas: prompt New file")
-type_text("plan.txt\n")
-got = wait("atlas: new file plan.txt in work ")
-if not got.startswith("(0)"):
-    fail(f"new file: {got}")
-wait("atlas: editing plan.txt")
-type_text("the plan\n")
-keys("ctrl", "s")
-wait("atlas: saved plan.txt ")
-keys("esc")
-wait("atlas: editor closed plan.txt")
-click(*latest("card", "+ Add"))
-wait("atlas: menu Add to this project")
-menu_pick("Open app")
-wait("atlas: menu Open app")
-menu_pick("Hello")
-got = wait("atlas: app Hello started in work (terminal ")
-send("find project=work")
-expect("/home/alice/apps/hello.app")
-print("ok: '+ New project' work; '+' card -> New file plan.txt (edited, saved), Open app Hello: both in 'work'")
+# ---- Settings: the mouse, the screen's size, the assistant's model
+click(*latest("dbapp", "Settings"))
+wait("atlas: settings open")
+time.sleep(0.5)
+click(*latest("set", "32"))                        # pointer speed: Fast
+wait("atlas: mouse speed 150 swap 0 reverse 0")
+click(*latest("set", "41"))                        # Left-handed: the buttons swap ...
+wait("atlas: mouse speed 150 swap 1 reverse 0")
+click(*latest("set", "40"), "right")               # ... so the right button now clicks
+wait("atlas: mouse speed 150 swap 0 reverse 0")
+send("cat /home/alice/.mouse")
+expect("speed=150"); expect("swap=0")
+print("ok: Settings: pointer speed Fast, left-handed (then back with the other button), kept in ~/.mouse")
 
-x, y = latest("card", "plan.txt")
-lx, ly = latest("project", "legacy")
-drag(x, y, lx, ly)                                 # a card onto a project of the rail: it moves there
-got = wait("atlas: plan.txt moved to legacy ")
-if not got.startswith("(0)"):
-    fail(f"move: {got}")
-got = wait("atlas: projects: ")
-if "work=1" not in got or "legacy=2" not in got:
-    fail(f"the move: {got}")
-print(f"ok: dragged plan.txt's card onto 'legacy' in the rail: it moved ({got.strip()})")
-
-click(*latest("project", "work"), "right")
-wait("atlas: menu Project work")
-time.sleep(0.3)
-shot("14-project-menu")
-menu_pick("Rename")
-wait("atlas: prompt Rename")
-type_text("\b\b\b\bplans\n")
-got = wait("atlas: project work renamed to plans ")
-if not got.startswith("(1 files, 0 not allowed)"):
-    fail(f"rename: {got}")
-got = wait("atlas: projects: ")
-if "plans=1" not in got or "work" in got:
-    fail(f"rename: {got}")
+click(*latest("set", "101"))                       # the look: Amber 1984 ...
+wait("atlas: look 1")
+time.sleep(0.5)
+img = shot("27-look-amber")
+if not has_colour(img, look(RAW["ACC"], 1), at_least=50) or has_colour(img, ACC, at_least=50):
+    fail("Amber 1984 is not on the screen")
+settle_log()
+click(*latest("set", "102"))                       # ... Glass: atlas's own colours ...
+wait("atlas: look 2")
+time.sleep(0.5)
+img = shot("28-look-glass")
+if not has_colour(img, RAW["ACC"], at_least=50) or not has_colour(img, RAW["GLASS"], at_least=2000):
+    fail("Glass is not on the screen")
+settle_log()
+click(*latest("set", "100"))                       # ... and Phosphor again
+wait("atlas: look 0")
+send("cat /home/alice/.look")
+expect("look=0")
 time.sleep(0.4)
-shot("15-renamed")
-print("ok: right-click 'work' -> Rename: it is 'plans' (its app and its terminal go with it)")
+img = shot("29-look-phosphor")
+if not has_colour(img, ACC, at_least=50) or not has_colour(img, look(RAW["NAVY"], 0, True), at_least=2000):
+    fail("Phosphor (and its scanlines) is not on the screen")
+print("ok: Settings: the look: Amber 1984, Glass, then Phosphor again, kept in ~/.look")
 
-# ---- kill the desktop: init restarts it; the login screen; the projects stay
+settle_log()
+click(*latest("set", "115"))                       # everything at 200% ...
+wait("atlas: zoom 200% (1280 x 720)")
+ZOOM[0] = 1.5
+time.sleep(0.6)
+img = shot("30-zoom-200")
+settle_log()
+click(*latest("set", "112"))                       # ... and 100% again (a click at 200% lands)
+wait("atlas: zoom 100% (2560 x 1440)")
+ZOOM[0] = 0.75
+send("cat /home/alice/.look")
+expect("zoom=100")
+time.sleep(0.4)
+settle_log()
+print("ok: Settings: everything at 200%, then 100% again (clicks land at both), kept in ~/.look")
+
+click(*latest("set", "12"))                        # 1600 x 900
+wait("atlas: screen size 1600 x 900 (back to 1920 x 1080 in 15 s unless kept)")
+SCREEN[:] = [1600, 900]
+time.sleep(0.6)
+img = shot("24-settings-1600")
+if img[:2] != (1600, 900):
+    fail(f"the screen is {img[:2]}, not 1600 x 900")
+click(*latest("set", "90"))                        # Keep
+wait("atlas: screen size 1600 x 900 kept")
+send("cat /etc/display.conf")
+expect("size=1600x900")
+click(*latest("set", "11"))                        # 1366 x 768, then "Go back"
+wait("atlas: screen size 1366 x 768")
+SCREEN[:] = [1366, 768]
+time.sleep(0.4)
+click(*latest("set", "91"))
+wait("atlas: screen size back to 1600 x 900")
+SCREEN[:] = [1600, 900]
+time.sleep(0.4)
+click(*latest("set", "13"))                        # 1920 x 1080 again, kept
+wait("atlas: screen size 1920 x 1080")
+SCREEN[:] = [1920, 1080]
+time.sleep(0.4)
+click(*latest("set", "90"))
+wait("atlas: screen size 1920 x 1080 kept")
+if shot("25-settings-1920")[:2] != (1920, 1080):
+    fail("the screen did not come back to 1920 x 1080")
+print("ok: Settings: screen 1600 x 900 kept (/etc/display.conf), 1366 x 768 then 'Go back', 1920 x 1080 again")
+
+click(*latest("dbapp", "Settings"))                         # (shown again: the rows moved up without "Keep")
+time.sleep(0.5)
+click(*latest("wzoom", "10"))                      # Settings zoomed: room for the online model's fields
+wait("atlas: window 10 zoomed")
+time.sleep(0.4)
+click(*latest("set", "61"))                        # the assistant: online
+time.sleep(0.3)
+click(*latest("dbapp", "Settings"))                         # (shown again: where the new fields are)
+time.sleep(0.5)
+click(*latest("set", "70")); type_text("http://10.0.2.2:9/v1")
+click(*latest("set", "71")); type_text("test-model")
+click(*latest("set", "72")); type_text("sk-test")
+click(*latest("set", "73")); type_text("wrongpass")
+click(*latest("set", "80"))
+wait("atlas: settings: root's password refused")
+click(*latest("set", "73")); type_text("rootpass1\n")
+wait("atlas: settings: sia online")
+send("cat /etc/sia.conf")
+expect("backend=remote"); expect("url=http://10.0.2.2:9/v1"); expect("api_model=test-model")
+send("cat /etc/sia.key")
+expect("sk-test")
+time.sleep(0.4)
+shot("26-settings-online")
+click(*latest("set", "60"))                        # back to the local model
+click(*latest("dbapp", "Settings"))
+time.sleep(0.5)
+click(*latest("set", "73")); type_text("rootpass1\n")
+wait("atlas: settings: sia local")
+send("cat /etc/sia.conf")
+expect("backend=local")
+print("ok: Settings: sia online (URL, model, key; a wrong root password refused), then local again")
+
+
+# ---- kill the desktop: init restarts it; the login screen
 send("svc")
 expect("UPTIME")
 got = expect("atlas ")
@@ -540,8 +721,8 @@ time.sleep(1.0)
 type_text("alice\twrong\n")
 wait("atlas: login alice: refused", "log", 10)
 img = shot("16-login")
-if not has_colour(img, ACC, (560, 290, 1360, 790), 50):
-    fail("no login panel")
+if not has_colour(img, ACC, (560, 260, 1360, 820), 50):
+    fail("no login card")
 send("ps")
 expect("NAME")
 drain(0.6)
@@ -550,30 +731,7 @@ if any(l.split()[2:3] == ["1000"] for l in listing.splitlines() if len(l.split()
     fail("alice's shells still run after the desktop restarted:\n" + listing)
 type_text("alicepass1\n")
 wait("atlas: login alice: ok")
-p = projects()
-for name, n in (("plans", 1), ("legacy", 2), ("oldisle", 0), ("demo", 1)):
-    if p.get(name) != n:
-        fail(f"project {name} after the restart: {p}")
-print(f"ok: atlas killed -> init restarted it; old shells ended; wrong password refused; projects kept: {p}")
-
-click(*latest("project", "plans"), "right")
-wait("atlas: menu Project plans")
-menu_pick("Delete the project")
-wait("atlas: menu Delete plans")
-menu_pick("Delete the project")
-got = wait("atlas: project plans deleted ")
-if not got.startswith("(1 files to the Inbox, 0 not allowed)"):
-    fail(f"delete: {got}")
-got = wait("atlas: projects: ")
-if "plans" in got:
-    fail(f"delete: {got}")
-send("ls /home/alice/apps")
-expect("hello.app")
-time.sleep(0.4)
-shot("17-inbox")
-print(f"ok: right-click 'plans' -> Delete (confirmed): its files went to the Inbox ({got.strip()})")
-keys("ctrl", "t")
-opened()
+print("ok: atlas killed -> init restarted it; old shells ended; wrong password refused; logged in again")
 time.sleep(0.8)
 
 # ---- kill the console server (keyboard and mouse): the desktop gets them back
@@ -583,136 +741,17 @@ got = expect("con ")
 send(f"kill {[w for w in got.split() if w.isdigit()][0]}")
 wait("init: con")
 time.sleep(1.0)
-before = projects().get("Inbox", 0)
+drain()
+k = full.rfind(b"atlas: files: ")
+before = int(full[k + 14:].split()[0])
 type_text("echo still typing > after-con.txt\n")
-got = wait("atlas: projects: ")
-if f"Inbox={before + 1}" not in got:
-    fail(f"keyboard lost after the console server restarted: {got}")
+got = wait("atlas: files: ")
+while int(got.split()[0]) == before:
+    got = wait("atlas: files: ")
 print("ok: console server killed and restarted; the keyboard still reaches the desktop")
 
-# ---- the Standard desktop: chosen at login; windows move, resize, snap,
-# maximize, minimize to the dock and close; the rail rolls up
-def window(w):
-    """The last place logged for window w -> (x0, y0, x1, y1)."""
-    drain()
-    text = full.decode(errors="replace")
-    k = text.rfind(f"atlas: dbg window {w} at ")
-    if k < 0:
-        fail(f"no place logged for window {w}")
-    return tuple(int(v) for v in text[k:].split(" at ", 1)[1].split()[:4])
-
-def settle_log():
-    """Make atlas log where things are (a terminal's command: it redraws and logs)."""
-    type_text("\n")
-    time.sleep(0.6)
-
-click(260, 1017)                                   # Log out
-wait("atlas: greeter", "log", 10)
-time.sleep(0.4)
-img = shot("18-login-switch")
-click(1150, 665)                                   # Desktop: Standard
-wait("atlas: login desktop Standard")
-type_text("\talice\talicepass1\n")
-t1 = opened()                                      # (the login's shell opens before "ok")
-wait("atlas: login alice: ok (Standard desktop)")
-w1 = int(wait("atlas: window ").split()[0])
-time.sleep(0.8)
-settle_log()
-img = shot("19-standard")
-if not has_colour(img, "111829", at_least=2000) or not has_colour(img, TERM, at_least=20000) or not has_colour(img, ACC, at_least=50):
-    fail("the Standard desktop does not look right")
-mid = colours(img, (40, 300, 320, 800))
-if mid.get(bytes.fromhex(GLASS), 0) > 50:
-    fail("the rail is not rolled up")
-x0, y0, x1, y1 = window(w1)
-print(f"ok: Standard desktop chosen at login; a terminal window at {x0},{y0}-{x1},{y1}; the rail rolled up")
-
-bx, by = latest("wbar", f"Terminal {t1}")         # move it by its title bar
-drag(bx, by, bx + 200, by + 120)
-got = wait(f"atlas: window {w1} at ")
-nx0, ny0 = map(int, got.split()[:2])
-if (nx0 - x0, ny0 - y0) != (200, 120):
-    fail(f"moved by {(nx0 - x0, ny0 - y0)}, not (200, 120)")
-settle_log()
-x0, y0, x1, y1 = window(w1)
-drag(x1 - 3, y1 - 3, x1 - 203, y1 - 103)           # resize from the bottom-right corner
-got = wait(f"atlas: window {w1} at ")
-a = [int(v) for v in got.split()[:4]]
-if (a[2] - a[0], a[3] - a[1]) != (x1 - x0 - 200, y1 - y0 - 100):
-    fail(f"resized to {a}, from {(x0, y0, x1, y1)}")
-print(f"ok: moved by its bar (+200, +120), resized by its corner (-200, -100) -> {a}")
-
-keys("ctrl", "t")                                  # a second window: in front, the first one's bar sinks
-t2 = opened()
-w2 = int(wait("atlas: window ").split()[0])
-time.sleep(0.8)
-settle_log()
-img = shot("20-two-windows")
-sx, sy = latest("wslot", f"Terminal {t1}")        # the first one's title, sunk in its slot: click it
-click(sx, sy)
-wait(f"atlas: window {w1} in front")
-time.sleep(0.6)
-settle_log()
-print(f"ok: a second window (terminal {t2}) took the focus; a click on the first one's slot brought it back")
-
-bx, by = latest("wbar", f"Terminal {t1}")
-drag(bx, by, 0, 500)                               # to the left edge: snaps to the left half
-wait(f"atlas: window {w1} snapped")
-time.sleep(0.5)
-settle_log()
-x0, y0, x1, y1 = window(w1)
-if x0 > 40 or x1 > 1100:
-    fail(f"not the left half: {(x0, y0, x1, y1)}")
-bx, by = latest("wbar", f"Terminal {t1}")
-click(bx, by); time.sleep(0.1); click(bx, by)       # double-click: maximized
-wait(f"atlas: window {w1} maximized")
-time.sleep(0.5)
-settle_log()
-x0, y0, x1, y1 = window(w1)
-if x1 - x0 < 1700:
-    fail(f"not maximized: {(x0, y0, x1, y1)}")
-time.sleep(0.3)
-shot("21-maximized")
-print(f"ok: dragged to the left edge -> left half; double-click on the bar -> maximized {x0},{y0}-{x1},{y1}")
-
-click(*latest("wbtn", f"{w1} 0"))                  # "_": minimized, the other one in front
-wait(f"atlas: window {w1} minimized")
-time.sleep(0.6)
-settle_log()
-click(*latest("chip", f"Terminal {t1}"))           # its chip in the dock
-wait(f"atlas: window {w1} shown")
-time.sleep(0.6)
-print("ok: minimized to the dock, restored from its chip")
-
-mouse_to(120, 110)                                 # the rail unrolls under the pointer
-time.sleep(0.6)
-img = shot("22-rail-open")
-if colours(img, (40, 300, 320, 800)).get(bytes.fromhex(GLASS), 0) < 200:
-    fail("the rail did not unroll")
-mouse_to(1000, 500)
-time.sleep(0.6)
-img = shot("23-rail-rolled")
-if colours(img, (40, 300, 320, 800)).get(bytes.fromhex(GLASS), 0) > 50:
-    fail("the rail did not roll up again")
-print("ok: the rail unrolls under the pointer and rolls up when it leaves")
-
-keys("ctrl", "w")                                  # close the focused window
-got = wait("atlas: terminal ")
-while "closed" not in got:
-    got = wait("atlas: terminal ")
-print(f"ok: Ctrl+W closed a window (terminal {got.split()[0]})")
-send("svc")
-expect("UPTIME")
-got = expect("atlas ")
-send(f"kill {[w for w in got.split() if w.isdigit()][0]}")   # back to the Focused desktop for what follows
-wait("atlas: greeter", "log", 10)
-time.sleep(1.0)
-type_text("alice\talicepass1\n")
-wait("atlas: login alice: ok (Focused desktop)")
-time.sleep(0.8)
-
 # ---- measurements: frame times (logged with each settled picture), memory per process
-frames = [int(l.split(b"frame ")[1].split()[0]) for l in full.split(b"\n") if b"atlas: dbg stage " in l]
+frames = [int(l.split(b"frame ")[1].split()[0]) for l in full.split(b"\n") if b"atlas: dbg frame " in l]
 if frames:
     print(f"    frames: {len(frames)} full pictures, median {sorted(frames)[len(frames) // 2]} us, max {max(frames)} us")
 send("ps")

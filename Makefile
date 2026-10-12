@@ -14,9 +14,11 @@
 # Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 # the build directory: build/ (x86-64), build-arm64/ (another one: B=...)
+.DEFAULT_GOAL := all             # (arch.mk files define rules before "all")
 B       := build$(if $(filter-out x86_64,$(ARCH)),-$(ARCH))
 # our C compiler (defined early: rules below list it as a prerequisite)
 SICC      := $(B)/host/sicc
+SICC_SRC  := util lex pp parse ir opt vecreg ra emit emit_a64 asm link main
 .SECONDEXPANSION:                 # lets user/$$*/$$*.c name a program's source
 CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-pic \
            -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns \
@@ -32,10 +34,10 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs acct tty fmt string fdt virtio mbox blake2b argon2 chacha20 sha2 aead x25519 pubkey net http tls x509   # the library: a program gets only what it uses
+ULIBOBJ := fs acct tty fmt string fdt virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 pubkey net http tls x509   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
-BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey   # programs on the disk, in /bin
+BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio   # programs on the disk, in /bin
 LINKS   := passwd su useradd userdel    # other names of /bin/acct (symbolic links)
 SIEFS_CORE := crc tree space fs         # the SieFS library, linked into the file server
 
@@ -119,7 +121,7 @@ $(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/mk.h include/mk/*.h $(TO
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The desktop has several files; its font is drawn in tools/mkfont.py.
-ATLAS   := atlas panel edit setup draw font screen wm
+ATLAS   := atlas panel edit setup draw font screen wm settings files icons pins
 $(B)/atlas.elf: $(ATLAS:%=$(B)/user/atlas/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(ATLAS:%=$(B)/user/atlas/%.o) $(ULIB)
 $(B)/user/atlas/%.o: user/atlas/%.c user/atlas/draw.h user/atlas/atlas.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
@@ -127,6 +129,26 @@ $(B)/user/atlas/%.o: user/atlas/%.c user/atlas/draw.h user/atlas/atlas.h user/li
 	$(TCC) $(UCFLAGS) -c $< -o $@
 user/atlas/font.c: tools/mkfont.py
 	python3 tools/mkfont.py $@
+
+# ---- sicc on SIEOS: /bin/cc (docs/cc.md, "sicc on SIEOS"): the compiler as a
+# SIEOS program, with the C library it needs (cc/libc: sieos.c on SIEOS's
+# library, fmt.c for formatting and exact number parsing); /lib/sicc holds
+# what programs are built with (headers, start, library, linker script).
+CC_CF   := $(filter-out -mgeneral-regs-only -Wall -Wextra,$(UCFLAGS)) -w -DSICC_SIEOS -Icc
+SICC_LIB := $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) $(B)/user/cc/rt.o user/user.ld
+# (the compiler's runtime: sicc's rt.c; gcc's code on x86-64 also wants libgcc's)
+CC_RT   := $(B)/user/cc/rt.o $(if $(filter x86_64,$(ARCH)),$(shell gcc -print-libgcc-file-name))
+$(B)/cc.elf: $(SICC_SRC:%=$(B)/user/cc/%.o) $(B)/user/cc/libc-sieos.o $(B)/user/cc/libc-fmt.o $(B)/user/cc/rt.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(SICC_SRC:%=$(B)/user/cc/%.o) $(B)/user/cc/libc-sieos.o $(B)/user/cc/libc-fmt.o $(ULIB) $(CC_RT)
+$(B)/user/cc/rt.o: cc/rt/rt.c $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(CC_CF) -c $< -o $@
+$(B)/user/cc/%.o: cc/%.c cc/*.inc cc/sicc.h cc/ir.h cc/sys.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(CC_CF) $(if $(filter main,$*),-Dmain=sicc_main) -c $< -o $@
+$(B)/user/cc/libc-%.o: cc/libc/%.c user/lib/mk.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(CC_CF) -DFMT_NO_STDOUT -c $< -o $@
 
 # ---- sia, the assistant (user/sia, docs/ai-plan.md): siad, the server,
 # is siad.c + its backends + our language-model engine (llm/); sia, the
@@ -165,9 +187,11 @@ $(FPU_PROGS:%=$(B)/user/%.o): UCFLAGS := $(filter-out -mgeneral-regs-only,$(UCFL
 DISK    ?= 3G
 TESTDISK ?= 64M
 ROOTFS  := $(shell find rootfs -type f)
-$(B)/rootfs.stamp: $(ROOTFS) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf)
+$(B)/rootfs.stamp: $(ROOTFS) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB)
 	rm -rf $(B)/rootfs && mkdir -p $(B)/rootfs && cp -R rootfs/. $(B)/rootfs/
 	mkdir -p $(B)/rootfs/bin $(B)/rootfs/home $(B)/rootfs/tmp
+	mkdir -p $(B)/rootfs/lib/sicc/include/mk && cp cc/include/*.h user/lib/mk.h user/lib/gpio.h siefs/siefs.h $(B)/rootfs/lib/sicc/include/ && \
+	    cp include/mk/*.h $(B)/rootfs/lib/sicc/include/mk/ && cp $(SICC_LIB) $(B)/rootfs/lib/sicc/
 	for p in $(BINS); do cp $(B)/$$p.elf $(B)/rootfs/bin/$$p; done
 	$(if $(filter atlas,$(KARCH_NOBINS)),cp $(B)/noscreen.elf $(B)/rootfs/bin/atlas)
 	for l in $(LINKS); do ln -s acct $(B)/rootfs/bin/$$l; done
@@ -292,6 +316,22 @@ sia-mem-test: all
 	python3 tools/siamemtest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # demand-test: servers started on demand (the network, the assistant), stopped
 # when unused and started again; calls racing a stop (tools/demandtest.py)
+# cc-sieos-test: sicc on SIEOS (/bin/cc) compiles tests/cc/sieos/*.c there, and they run
+# gfxhat's text part (the console's log on a GFX HAT), on this machine
+gfxhat-test:
+	tests/gfxhat/run.sh
+
+# gpio-test: the GPIO server, its library and /bin/gpio (simulated pins on QEMU)
+gpio-test: all
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
+	for f in tests/gpio/*.c; do $(B)/host/siefs $(B)/test.img put $$f /tmp/t/$$(basename $$f) || exit 1; done
+	python3 tools/gpiotest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+cc-sieos-test: all
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
+	for f in tests/cc/sieos/*.c; do $(B)/host/siefs $(B)/test.img put $$f /tmp/t/$$(basename $$f) || exit 1; done
+	python3 tools/cctest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 demand-test: all
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /models && $(B)/host/siefs $(B)/test.img put models/$(SIATEST_MODEL) /models/$(SIATEST_MODEL)
@@ -303,12 +343,14 @@ clean:
 distclean:
 	rm -rf $(B)
 
-.PHONY: all run run-nox test crash-test gui-test gui-test-real kernel-test sia-test sia-mem-test demand-test model clean distclean newdisk FORCE
+.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test gfxhat-test sia-test sia-mem-test demand-test model clean distclean newdisk FORCE
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.
 #   make ARCH=arm64 PI=4 sdcard [FIRMWARE=dir] [SDMODEL=1]   an SD card image, build-arm64/sieos-pi4.img
-#                                                (SDMODEL=1: with the assistant's model, models/$(MODEL))
+#                                                (SDMODEL=1: with the assistant's model, models/$(PIMODEL):
+#                                                smaller than a PC's, for the Pis' speed; sia takes it
+#                                                when the PC's default model is not on the disk)
 #   make ARCH=arm64 run-pi4                      QEMU's Raspberry Pi 4 (raspi4b) with that kind of card
 #   make ARCH=arm64 pi4-test                     the boot and crash tests on QEMU's raspi4b
 #   make ARCH=arm64 pi4-sdbench / sdhci-bench    SD card speed (raspi4b; virt with a PCI SD controller: DMA)
@@ -317,11 +359,12 @@ distclean:
 # firmware files are added from FIRMWARE (see docs/raspberrypi.md).
 PI      ?= 4
 SDDISK  ?= 2G
+PIMODEL ?= smollm2-360m-instruct-q8_0.gguf
 .hosttools/rpi/%.dtb:
 	mkdir -p $(@D) && curl -sfL -o $@ https://raw.githubusercontent.com/raspberrypi/firmware/master/boot/$*.dtb
 sdcard: all
 	rm -f $(B)/sd-siefs.img && $(B)/host/mkfs.siefs -s $(SDDISK) -L SIEOS -d $(B)/rootfs $(B)/sd-siefs.img
-	$(if $(SDMODEL),$(B)/host/siefs $(B)/sd-siefs.img mkdir /models && $(B)/host/siefs $(B)/sd-siefs.img put models/$(MODEL) /models/$(MODEL))
+	$(if $(SDMODEL),$(B)/host/siefs $(B)/sd-siefs.img mkdir /models && $(B)/host/siefs $(B)/sd-siefs.img put models/$(PIMODEL) /models/$(PIMODEL))
 	python3 tools/mksdcard.py $(B)/sieos-pi$(PI).img --pi $(PI) --kernel $(B)/kernel.bin --initrd $(B)/modules.img \
 	    --siefs $(B)/sd-siefs.img $(if $(FIRMWARE),--firmware $(FIRMWARE))
 	rm -f $(B)/sd-siefs.img
@@ -481,7 +524,6 @@ crypto-test: $(B)/host/crypto-test
 #   make cc-sieos       all of SIEOS compiled, assembled and linked by sicc (build-sicc/), then its tests
 #   make cc-a64-test    the tests for AArch64, under emulation (QEMU_A64=path of qemu-aarch64)
 #   make cc-a64-bootstrap  sicc for AArch64 compiles itself (emulated): stages 2 and 3 identical
-SICC_SRC  := util lex pp parse ir opt ra emit emit_a64 asm link main
 cc: $(SICC)
 $(SICC): $(SICC_SRC:%=cc/%.c) cc/*.inc cc/sicc.h cc/ir.h cc/sys.h cc/include/*.h
 	@mkdir -p $(@D)

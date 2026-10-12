@@ -158,9 +158,9 @@ for t in ALL:
             w(f"__SI {UN8} vqmovun_{t}({V16} a) {{ return __N(QXTUN, {UN8}, a, 0, 0, 0); }}")
     # halves
     V8, V16 = vt(t, 0), vt(t, 1)
-    w(f"__SI {V8} vget_low_{t}({V16} a) {{ {V8} r; memcpy(&r, &a, 8); return r; }}")
-    w(f"__SI {V8} vget_high_{t}({V16} a) {{ {V8} r; memcpy(&r, (char *)&a + 8, 8); return r; }}")
-    w(f"__SI {V16} vcombine_{t}({V8} lo, {V8} hi) {{ {V16} r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }}")
+    w(f"__SI {V8} vget_low_{t}({V16} a) {{ return __N(GETLO, {V8}, a, 0, 0, 0); }}")
+    w(f"__SI {V8} vget_high_{t}({V16} a) {{ return __N(GETHI, {V8}, a, 0, 0, 0); }}")
+    w(f"__SI {V16} vcombine_{t}({V8} lo, {V8} hi) {{ return __N(COMBINE, {V16}, lo, hi, 0, 0); }}")
     w("")
 
 w("/* tables, half precision, reinterpretation */")
@@ -174,8 +174,8 @@ w("__SI float16x4_t vcvt_f16_f32(float32x4_t a) { return __N(FCVTN, float16x4_t,
 w("__SI float16x4_t vld1_f16(const void *p) { float16x4_t r; memcpy(&r, p, 8); return r; }")
 w("__SI float16x8_t vld1q_f16(const void *p) { float16x8_t r; memcpy(&r, p, 16); return r; }")
 w("__SI void vst1_f16(void *p, float16x4_t a) { memcpy(p, &a, 8); }")
-w("__SI float16x4_t vget_low_f16(float16x8_t a) { float16x4_t r; memcpy(&r, &a, 8); return r; }")
-w("__SI float16x4_t vget_high_f16(float16x8_t a) { float16x4_t r; memcpy(&r, (char *)&a + 8, 8); return r; }")
+w("__SI float16x4_t vget_low_f16(float16x8_t a) { return __N(GETLO, float16x4_t, a, 0, 0, 0); }")
+w("__SI float16x4_t vget_high_f16(float16x8_t a) { return __N(GETHI, float16x4_t, a, 0, 0, 0); }")
 for q in (0, 1):
     names = ALL + ["f16"]
     for a in names:

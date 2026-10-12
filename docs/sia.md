@@ -126,6 +126,12 @@ and stores one only on `SIA_F_ADD`, that is, on the user's OK.
 
 ### Settings (`/etc/sia.conf`, `sia config KEY=VALUE`, root)
 
+On the desktop, *Settings* → *Assistant* switches between the model on
+this computer and an online one (server URL, model name, API key), with
+root's password ([desktop.md](desktop.md#settings)). With no `model=`, sia
+uses the 1.7B model, or the first `.gguf` file in `/models` if that one
+is not there (a Raspberry Pi's card carries the 360M model).
+
 | Key | Default | Meaning |
 |---|---|---|
 | `memory` | `on` | `off`: nothing is saved (conversations live in memory only) |

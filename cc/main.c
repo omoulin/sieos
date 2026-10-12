@@ -10,11 +10,20 @@
  * ignored. Several sources may be given: each is compiled on its own (with
  * -c or -S, each to its own output unless -o names the one output).
  *
+ * On SIEOS (built with SICC_SIEOS, as /bin/cc): its headers are in
+ * /lib/sicc/include (sicc's own, and SIEOS's: mk.h...), and a program is
+ * linked as SIEOS's are (user.ld, crt0.o, lib.o, libsieos.a, all in
+ * /lib/sicc), unless -nostdlib or -T says otherwise. __SIEOS__ is defined.
+ *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "sicc.h"
 
 int target;                                 /* T_X86_64 or T_AARCH64 */
+#define SIEOS_LIB "/lib/sicc"               /* (SICC_SIEOS: what SIEOS programs are built with) */
+#ifdef SICC_SIEOS
+void sicc_executable(const char *path);
+#endif
 
 static const char *base_name(const char *p)
 {
@@ -126,6 +135,10 @@ int main(int argc, char **argv)
     }
     for (int i = 0; i < user_inc.n; i++) pp_add_include(user_inc.v[i]);
     const char *inc = getenv("SICC_INCLUDE");
+#ifdef SICC_SIEOS
+    pp_define("__SIEOS__");
+    if (!inc) inc = SIEOS_LIB "/include";
+#endif
     if (!inc) {
         const char *s = strrchr(argv[0], '/');
         inc = s ? fmt("%.*s/sicc-include", (int)(s - argv[0]), argv[0]) : "sicc-include";
@@ -166,9 +179,25 @@ int main(int argc, char **argv)
         if (mode != 'c') { vec_push(&link, objfile); vec_push(&temps, objfile); }
     }
     if (mode) return 0;
+#ifdef SICC_SIEOS
+    int own = 0;                                 /* -nostdlib, -T or -r: the caller links */
+    for (int i = 1; i < link.n; i++) own |= !strcmp(link.v[i], "-nostdlib") || !strcmp(link.v[i], "-T") || !strcmp(link.v[i], "-r");
+    if (!own) {                                  /* a SIEOS program: its start, its library */
+        static char *pre[] = { "-T", SIEOS_LIB "/user.ld", "-z", "max-page-size=4096", SIEOS_LIB "/crt0.o", SIEOS_LIB "/lib.o" };
+        int np = sizeof pre / sizeof *pre;
+        for (int k = 0; k < np; k++) vec_push(&link, 0);
+        memmove(&link.v[1 + np], &link.v[1], sizeof(void *) * (link.n - 1 - np));
+        for (int k = 0; k < np; k++) link.v[1 + k] = pre[k];
+        vec_push(&link, SIEOS_LIB "/libsieos.a");
+        vec_push(&link, SIEOS_LIB "/rt.o");
+    }
+#endif
     vec_push(&link, "-o");
     vec_push(&link, (void *)(outfile ? outfile : "a.out"));
     int r = link_main(link.n, (char **)link.v);
     for (int k = 0; k < temps.n; k++) remove(temps.v[k]);
+#ifdef SICC_SIEOS
+    if (!r) sicc_executable(outfile ? outfile : "a.out");   /* (rwxr-xr-x: cc/libc/sieos.c) */
+#endif
     return r;
 }

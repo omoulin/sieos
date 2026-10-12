@@ -169,6 +169,19 @@ if s[0] != "GIVEN UP":
     fail(f"crasher is {s[0]!r}")
 print(f"ok: crasher given up after {s[2]} restarts (backoff 10, 20, 40, 80 ms)")
 
+# ---- a stuck server (it never answers its port): init's watcher ends it, and it starts again
+sync()
+send("svc add -w hangme hanger /bin/crash always hang hangme")
+time.sleep(SLOW * 0.3)
+first = svc()["hanger"][1]
+t0 = time.time()
+again = restarted("hanger", first, 60)           # (pinged every 10 s; stuck after 30 s without an answer)
+took = time.time() - t0
+send("svc stop hanger")
+if took < 25:
+    fail(f"hanger was ended after {took:.0f} s: too early (it must have 30 s to answer)")
+print(f"ok: a stuck server (pid {first}) found by init's pings after {took:.0f} s, ended and started again (pid {again})")
+
 # ---- a user may not kill root's processes
 fs_pid = svc()["fs"][1]
 send("logout")                          # the session ends: now login comes back

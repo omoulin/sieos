@@ -1,52 +1,41 @@
 /*
- * atlas - The SIEOS desktop, "Stage": one project at a time, one thing in
- * focus, the rest on a shelf. (The program keeps its old name, /bin/atlas.)
+ * atlas - The SIEOS desktop, laid out as BeOS was, in SIEOS's colours.
  *
  * One process does it all, to keep the system small: it drives the screen
  * (screen.c), draws (draw.c), shows the login screen and the first start
  * (setup.c), is the terminal of the shells in its windows, edits files
- * (edit.c) and talks to the assistant (panel.c). init supervises it.
+ * (edit.c), lists folders (files.c), keeps the settings (settings.c) and
+ * talks to the assistant (panel.c). init supervises it.
  *
  *     con ──input events──► atlas ◄──CON_WRITE / CON_READ ("atlas#3")── sh
  *      (keyboard, mouse)      │  ├──AUTH_LOGIN──► auth ──starts──► sh (as you)
  *                             │  └──SIA_ASK / SIA_NEXT (its own thread)──► sia
  *                             └──draws──► the screen
  *
- * The screen, and the only four ideas to learn:
+ * The screen:
  *
- *   ┌──────────── Lens: one line to find a file, start an app, ask sia ──────┐
- *   │ PROJECTS │ ┌─────────── main ───────────┐ ┌──── beside ────┐           │
- *   │ SIEOS    │ │ the window in focus        │ │ (optional)     │           │
- *   │ Pi port  │ └────────────────────────────┘ └────────────────┘           │
- *   │ Inbox    │ IN THIS PROJECT: [card] [card] [card] [+]   the shelf       │
- *   └──────────┴─────────────────────────────────────────────────────────────┘
+ *   ┌─ sia strip: find a file, start an app, ask sia ─┐ ┌── Deskbar ──────┐
+ *   │                                                 │ │ (cube) SIEOS    │ the menu
+ *   └─────────────────────────────────────────────────┘ │ sia: idle  12:30│
+ *   ┌────────────┐                                      │ > Terminal      │ apps: running
+ *   │ - Terminal □│                                     │   sia           │ ones have >
+ *   ├────────────┴───────────────┐                      │   Files         │
+ *   │  windows: a tab each,      │                      │   ...           │
+ *   │  moved, resized, zoomed    │                      │ [1][2][3][4]    │ workspaces
+ *   └────────────────────────────┘                      └─────────────────┘
  *
- *   Projects   A file belongs to one project: its attribute "project=NAME"
- *              (the file server's index finds a project's files at once).
- *              Files without one are in the Inbox. Empty projects are kept
- *              in ~/.projects. Older "island.*" attributes are turned into
- *              a project the first time the desktop sees them.
- *   Stage      At most two windows: main (wide) and beside (narrow). A
- *              window is a terminal (a shell as you), the file editor, or
- *              the assistant. Every window belongs to a project.
- *   Shelf      The project's other windows, its files and its apps, as
- *              small cards drawn from their text (no pictures kept).
- *              Click: on the stage; drag up: main (left) or beside (right);
- *              drag onto a project: it moves there.
- *   Lens       Type to find files (by name), apps, or ask sia.
+ * Windows (wm.c): terminals (a shell as you), the editor, sia, Settings,
+ * Files. Right-click: a window's tab, its menu; a Deskbar app, its windows;
+ * the desk, a menu to start things. Minimized windows come back from the
+ * Deskbar or its menu.
  *
- * Keys: Ctrl+Space the Lens, Ctrl+1..9 a project, Ctrl+Tab the next
- * window, Ctrl+\ show/hide beside, Ctrl+W window to the shelf, Ctrl+T a
- * terminal, Ctrl+S save (editor), Ctrl+V paste, Esc back.
- *
- * The login screen offers two desktops: Focused (the stage above, the
- * default) and Standard (wm.c): free windows that move, resize, snap and
- * minimize to a dock, the rail rolled up until the pointer comes to it.
+ * Keys: Ctrl+Space the sia strip, Ctrl+T a terminal, Ctrl+W close the
+ * window, Ctrl+Tab the next window, Ctrl+1..4 a workspace, Ctrl+V paste,
+ * Ctrl+S save (editor), Esc back.
  *
  * Nothing runs when nothing happens: no animation loop. The picture
  * changes only on an event (input, a shell's output, a piece of an answer,
- * the clock's minute, a frame of a Standard animation while one runs), and
- * only the changed region is sent to the screen.
+ * the clock's minute), and only the changed region is sent to the screen.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -60,20 +49,18 @@
 #define TRMAX 60
 #define HIST 500                    /* lines kept per terminal, scrollback included */
 #define MAXITEM 256
-#define MAXPROJ 24
 #define MAXTERM 8
 #define MAXAPP 16
-#define W_EDIT MAXTERM              /* window ids: 0..MAXTERM-1 terminals, then these two */
+#define W_EDIT MAXTERM              /* window ids: 0..MAXTERM-1 terminals, then these */
 #define W_SIA (MAXTERM + 1)
-#define NWIN (MAXTERM + 2)
-_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA, "wm.c knows the window ids");
-#define INBOX "Inbox"               /* the project of what has none (one name, kept here) */
-#define TBAR 48                     /* a window's title strip */
-#define CARDW 252
-#define CARDH 140
+#define W_SET (MAXTERM + 2)
+#define W_FILES (MAXTERM + 3)
+#define W_PINS (MAXTERM + 4)
+#define NWIN (MAXTERM + 5)
+_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS, "wm.c knows the window ids");
+#define TBAR 48                     /* the insides of a window start this far below their top */
 
-typedef struct { char name[48], path[160], proj[32]; uint64_t size; int app; unsigned seen; char *pv; } item_t;
-typedef struct { char name[32]; int n, main, beside; } proj_t;   /* main/beside: window ids, or -1 */
+typedef struct { char name[48], path[160]; int app; } item_t;
 typedef struct {
     int used, chan, pid, cols, rows;
     int cx, cy, esc, back;          /* cursor (on the screen rows); scrolled back by `back` lines */
@@ -81,22 +68,18 @@ typedef struct {
     unsigned seen;                  /* lines typed when we last looked at the files */
     char *ring;                     /* the last HIST lines, TCMAX characters each */
     tty_t tty;
-    char proj[32];                  /* its project (for this session) */
     char pend[160];                 /* an app's command line, typed when its shell first reads */
 } term_t;
 
-static item_t items[MAXITEM];
-static proj_t projs[MAXPROJ];
+static item_t items[MAXITEM];       /* the user's files (for the sia strip and sia) */
 static term_t terms[MAXTERM];
-static struct { char name[48], path[96]; } apps[MAXAPP];   /* the system's launchers (/etc/apps) */
-static int nitems, nproj, napps, next_chan = 1;
-static char cur[32] = INBOX;        /* the project on the screen */
+static struct { char name[48], path[96]; int kind; } apps[MAXAPP];   /* the system's launchers (/etc/apps) */
+static int nitems, napps, next_chan = 1;
 static int focus = -1;              /* the window with the keys, or -1 */
-static int lens_on;                 /* the Lens has the keys */
-static char edit_proj[32], sia_proj[32];
-static int sia_on;                  /* the assistant's window exists */
-static int shelf_off;               /* first card shown on the shelf */
-static char toast[96];              /* a short message on the top bar (until the next action) */
+static int strip_on;                /* the sia strip has the keys */
+static int sia_on, set_on, files_on, pins_on;   /* those windows exist */
+static int last_term = -1;          /* the terminal used last (the Deskbar shows it) */
+static char toast[96];              /* a short message under the strip (until the next action) */
 int atlas_debug;                     /* /tmp/atlas.debug exists: log places (tests) */
 char clip[4096];
 int clip_n;
@@ -106,57 +89,45 @@ static enum { GREETER, SESSION } mode;
 static char user[32], home[64], gname[32], gpw[128], gmsg[80], query[48];
 static int uid = -1, ugid = -1, gfield, first_start;
 static int no_input;                    /* no keyboard or pointer yet: the greeter says so */
-static int std_ui, g_std;               /* the Standard desktop: this session's; the login screen's choice */
-static int rail_menu;                   /* a menu of the rail is open (the rolled-up rail stays open) */
+static int m_speed = 100, m_swap, m_rev;   /* the user's mouse (~/.mouse): speed %, left-handed, wheel reversed */
+static screen_t scr;
 static mk_groups_t ugroups;
 static long port, auth_port;
 static int ptr_x = 960, ptr_y = 540, buttons, press_x, press_y;
 static uint64_t frame_us;
 
 /* ---- The layout, computed from the screen's size (any size works). */
-static int M, RX1, SX0, SX1, SY0, SY1, SHY;   /* margin; rail's right; stage; the shelf's label */
-static int DY0;                                 /* Standard: the dock's top */
-#define RAIL_TOP 44                             /* Standard: the rolled-up rail's title line ... */
-#define RAIL_BOT 64                             /* ... and its bottom line (you, Log out) */
+static int M, DBW, DBX, STX1, STY1;     /* margin; the Deskbar's width and left; the strip's right and bottom */
+#define DB_MENU 52                      /* the Deskbar: its menu row, tray, app rows, workspaces */
+#define DB_TRAY 40
+#define DB_ROW 40
+#define DB_WS 48
 static void geometry(void)
 {
-    M = SW >= 1600 ? 30 : 20;
-    RX1 = M + (SW >= 1600 ? 300 : 230);
-    SX0 = RX1 + M; SX1 = SW - M; SY0 = 90;
-    SHY = SH - M - CARDH - 44;
-    SY1 = SHY - 16;
-    DY0 = SH - M - 52;
-    wm_area(M, SY0 + RAIL_TOP + 8 + WM_RISE, SX1, DY0 - 14);   /* (the rolled-up rail leaves its column free) */
-}
-static void slot(int w, int *x0, int *x1)       /* where window w is drawn on the stage, or 0 */
-{
-    proj_t *p = 0;
-    for (int i = 0; i < nproj; i++) if (!strcmp(projs[i].name, cur)) p = &projs[i];
-    int both = p && p->main >= 0 && p->beside >= 0, mid = SX0 + (SX1 - SX0 - 20) * 62 / 100;
-    *x0 = *x1 = 0;
-    if (!p) return;
-    if (p->main == w) { *x0 = SX0; *x1 = both ? mid : SX1; }
-    if (p->beside == w) { *x0 = both ? mid + 20 : SX0; *x1 = SX1; }
+    M = 16;
+    DBW = SW >= 1600 ? 300 : 260;
+    DBX = SW - M - DBW;
+    STX1 = DBX - M; STY1 = M + 48;
+    wm_area(M, STY1 + 14 + TAB_H, STX1, SH - M);     /* (windows: under the strip, beside the Deskbar) */
 }
 
-/* ---- Menus: one at a time, a title and entries. */
-enum { A_OPEN = 1, A_BESIDE, A_SUB_MOVE, A_MOVE, A_INBOX, A_CLOSEWIN, A_NEWFILE, A_NEWTERM, A_SUB_APPS,
-       A_RUNAPP, A_ASK, A_RENAME, A_DELETE, A_DELETE_YES, A_NEWPROJ, A_CANCEL };
-#define MAXMENT 14
-#define MENW 440
-#define MENH 44
+/* ---- Menus: one at a time; entries with an icon, separators. */
+enum { A_SEP = 1, A_TERM, A_SIA, A_FILES, A_EDITOR, A_SETTINGS, A_PINS, A_RUNAPP, A_WINDOW, A_LOGOUT,
+       A_MIN, A_ZOOM, A_SENDWS, A_CLOSE };
+#define MAXMENT 28
+#define MENH 36
+#define MENSEP 12
 static struct {
-    int on, x, y, n, win;                   /* win: the window it is about, or -1 */
-    char title[48], path[160], proj[32];    /* the card's file; the project it is about */
-    struct { char label[48], arg[160]; int act; } e[MAXMENT];
+    int on, x, y, w, n, win, hover;          /* win: the window it is about, or -1 */
+    char title[48];
+    struct { char label[48], arg[160]; int act, icon; } e[MAXMENT];
 } mn;
 
-/* A name typed in a small box ("New file", "New project", "Rename"). */
-enum { P_NEWFILE = 1, P_NEWPROJ, P_RENAME };
-static struct { int on, act; char title[48], buf[32], proj[32]; } pr;
+/* A name typed in a small box (a new file's). */
+static struct { int on; char title[48], buf[32]; } pr;
 
 /* What a held left button does once the pointer moves. */
-static enum { D_NONE, D_CARD, D_SEL, D_WIN } drag;   /* D_WIN: Standard, moving or resizing a window */
+static enum { D_NONE, D_SEL, D_WIN } drag;
 static int drag_on, drag_arg;
 static struct { int t, on; uint64_t al, bl; int ac, bc; } sel = { -1, 0, 0, 0, 0, 0 };
 
@@ -259,8 +230,8 @@ static void term_resize(term_t *t, int cols, int rows)
     t->back = 0;
 }
 
-/* ---- Files: the home folder, each file in one project (or the Inbox).
- * Launchers ("*.app") become app cards, named by their "name=". */
+/* ---- Files: the home folder (for the sia strip and sia). Launchers
+ * ("*.app") are named by their "name=". */
 static int same_n(const char *a, const char *b, size_t n)   /* the first n characters (stops at a 0) */
 {
     for (size_t i = 0; i < n; i++) { if (a[i] != b[i]) return 0; if (!a[i]) return 1; }
@@ -291,7 +262,7 @@ static void app_name(const char *path, char *out, size_t cap)   /* a launcher's 
     free(f);
 }
 
-/* Atlas runs as root (it starts the shells, it owns the screen), so the
+/* Atlas runs as root (it owns the screen, it starts the shells), so the
  * file server would let it do anything: before reading a file's text or
  * changing a file, atlas checks the rights of the user logged in. */
 int atlas_may(const char *path, int write)
@@ -303,47 +274,6 @@ int atlas_may(const char *path, int write)
     if ((int)st.uid == uid) return st.mode >> 6 & bit;
     for (int i = 0; i < ugroups.n && !in; i++) in = ugroups.g[i] == (int)st.gid;
     return in ? st.mode >> 3 & bit : st.mode & bit;
-}
-
-/* The older desktop put files on "islands" (attributes "island.NAME", and
- * places in "atlas.*"). The first island that is not Driftwood becomes the
- * project; the rest goes. (Only if the user may change the file; else it is
- * read that way and left alone.) */
-static void migrate(const char *path, char *proj)
-{
-    static char xa[2048];
-    long n = fs_listxattr(path, xa, sizeof xa);
-    int old = 0;
-    char first[32] = "";
-    for (const char *p = xa; n > 0 && p < xa + n; p += strlen(p) + 1) {
-        if (!memcmp(p, "island.", 7) && p[7] && strcmp(p + 7, "Driftwood") && !first[0]) strlcpy(first, p + 7, sizeof first);
-        old |= !memcmp(p, "island.", 7) || !memcmp(p, "atlas.", 6);
-    }
-    if (!old) return;
-    if (!proj[0] && first[0]) strlcpy(proj, first, 32);
-    if (!atlas_may(path, 1)) return;
-    if (proj[0]) fs_setxattr(path, "project", proj, strlen(proj));
-    for (const char *p = xa; n > 0 && p < xa + n; p += strlen(p) + 1)
-        if (!memcmp(p, "island.", 7) || !memcmp(p, "atlas.", 6)) fs_rmxattr(path, p);
-    say("atlas: migrated %s: project %s\n", path, proj[0] ? proj : INBOX);
-}
-
-static void scan_file(const char *name, const char *path)
-{
-    if (nitems == MAXITEM) return;
-    item_t *it = &items[nitems];
-    memset(it, 0, sizeof *it);
-    long pl = fs_getxattr(path, "project", it->proj, sizeof it->proj - 1);
-    it->proj[pl > 0 ? pl : 0] = 0;
-    migrate(path, it->proj);
-    if (!it->proj[0] || !strcmp(it->proj, INBOX)) strlcpy(it->proj, INBOX, sizeof it->proj);
-    siefs_stat_t st;
-    it->size = fs_stat(path, &st, 1) ? 0 : st.size;
-    it->app = is_app(name);
-    strlcpy(it->path, path, sizeof it->path);
-    if (it->app && it->size < 4096) app_name(path, it->name, sizeof it->name);
-    else strlcpy(it->name, name, sizeof it->name);
-    nitems++;
 }
 
 static void scan_dir(const char *dir, int depth)
@@ -365,226 +295,89 @@ static void scan_dir(const char *dir, int depth)
             if (path[k - 1] != '/') path[k++] = '/';
             strlcpy(path + k, name, sizeof path - k);
             if (type == 4 && depth < 4) { scan_dir(path, depth + 1); continue; }
-            if (type == 8) scan_file(name, path);
+            if (type != 8 || nitems == MAXITEM) continue;
+            item_t *it = &items[nitems++];
+            strlcpy(it->path, path, sizeof it->path);
+            it->app = is_app(name);
+            if (it->app) app_name(path, it->name, sizeof it->name); else strlcpy(it->name, name, sizeof it->name);
         }
     free(buf);
     fs_close(h);
 }
-
-/* Projects that have nothing in them yet ("New project"): one name per
- * line in ~/.projects. (The older ~/.islands is read too, once.) */
-static void home_file(char *p, const char *name) { size_t k = strlcpy(p, home, 64); strlcpy(p + k, name, 32); }
-static void empty_set(const char *add, const char *drop)   /* add a name, or drop one */
-{
-    char p[96], out[1024];
-    size_t n = 0, len;
-    home_file(p, "/.projects");
-    char *f = file_get(p, &len);
-    for (char *l = f; l && *l; ) {
-        char *e = strchr(l, '\n');
-        size_t ll = e ? (size_t)(e - l) : strlen(l);
-        if (ll && ll < 32 && n + ll + 2 < sizeof out && !(drop && strlen(drop) == ll && same_n(l, drop, ll)) &&
-            !(add && strlen(add) == ll && same_n(l, add, ll))) {
-            memcpy(out + n, l, ll); n += ll; out[n++] = '\n';
-        }
-        l = e ? e + 1 : l + ll;
-    }
-    free(f);
-    if (add && strlen(add) < 32 && n + strlen(add) + 2 < sizeof out) { n += strlcpy(out + n, add, 32); out[n++] = '\n'; }
-    fs_unlink(p);
-    long h = fs_open(p, FS_WRONLY | FS_CREAT, 0644);
-    if (h >= 0) { fs_write(h, 0, out, n); fs_close(h); fs_chown(p, uid, ugid); }
-}
-
-static int proj_find(const char *name)
-{
-    for (int i = 0; i < nproj; i++) if (!strcmp(projs[i].name, name)) return i;
-    return -1;
-}
-static proj_t *here(void) { int i = proj_find(cur); return i >= 0 ? &projs[i] : &projs[nproj - 1]; }
-
-static void proj_add(proj_t *out, int *n, const proj_t *old, int nold, const char *name)
-{
-    if (!name[0] || *n >= MAXPROJ - 1) return;
-    for (int i = 0; i < *n; i++) if (!strcmp(out[i].name, name)) return;
-    proj_t *p = &out[(*n)++];
-    strlcpy(p->name, name, sizeof p->name);
-    p->n = 0; p->main = p->beside = -1;
-    for (int i = 0; i < nold; i++) if (!strcmp(old[i].name, name)) { p->main = old[i].main; p->beside = old[i].beside; }
-}
-
-/* Look at the home folder again: files, projects (sorted, the Inbox last). */
 static void rescan(void)
 {
-    for (int i = 0; i < nitems; i++) { free(items[i].pv); items[i].pv = 0; }
     nitems = 0;
-    scan_dir(home, 0);
-    char p[96];
-    size_t len;
-    home_file(p, "/.islands");                           /* (once: the older empty islands) */
-    char *f = file_get(p, &len);
-    if (f) {
-        for (char *l = f, *e; *l; l = e ? e + 1 : l + strlen(l)) {
-            e = strchr(l, '\n');
-            if (e) *e = 0;
-            if (*l && strcmp(l, "Driftwood")) empty_set(l, 0);
-            if (!e) break;
-        }
-        free(f);
-        fs_unlink(p);
-    }
-    static proj_t old[MAXPROJ];
-    int nold = nproj;
-    memcpy(old, projs, sizeof *projs * nproj);
-    nproj = 0;
-    for (int i = 0; i < nitems; i++) if (strcmp(items[i].proj, INBOX)) proj_add(projs, &nproj, old, nold, items[i].proj);
-    home_file(p, "/.projects");
-    if ((f = file_get(p, &len))) {
-        for (char *l = f, *e; *l; l = e ? e + 1 : l + strlen(l)) {
-            e = strchr(l, '\n');
-            if (e) *e = 0;
-            if (*l && strcmp(l, INBOX)) proj_add(projs, &nproj, old, nold, l);
-            if (!e) break;
-        }
-        free(f);
-    }
-    if (strcmp(cur, INBOX)) proj_add(projs, &nproj, old, nold, cur);   /* (a window's project stays) */
-    for (int i = 1; i < nproj; i++)                      /* sorted by name */
-        for (int j = i; j > 0 && strcmp(projs[j - 1].name, projs[j].name) > 0; j--) {
-            proj_t t = projs[j]; projs[j] = projs[j - 1]; projs[j - 1] = t;
-        }
-    proj_t inbox = { INBOX, 0, -1, -1 };
-    for (int i = 0; i < nold; i++) if (!strcmp(old[i].name, INBOX)) { inbox.main = old[i].main; inbox.beside = old[i].beside; }
-    projs[nproj++] = inbox;
-    for (int i = 0; i < nitems; i++) { int k = proj_find(items[i].proj); if (k >= 0) projs[k].n++; }
-    char l[240];
-    size_t n = 0;
-    for (int i = 0; i < nproj && n < sizeof l - 50; i++) {
-        n += strlcpy(l + n, projs[i].name, 33);
-        l[n++] = '=';
-        n += num(l + n, projs[i].n);
-        l[n++] = ' ';
-    }
-    l[n] = 0;
-    say("atlas: projects: %s\n", l);
+    if (home[0]) scan_dir(home, 0);
+    say("atlas: files: %d\n", nitems);
 }
 
-/* A file's first lines (for its card), read only while the card is drawn. */
-static void preview(item_t *it)
-{
-    if (it->pv || it->app) return;
-    char buf[240];
-    long h = atlas_may(it->path, 0) ? fs_open(it->path, FS_RDONLY, 0) : -EACCES;
-    long n = h < 0 ? 0 : fs_read(h, 0, buf, sizeof buf);
-    if (h >= 0) fs_close(h);
-    if (n < 0) n = 0;
-    if (!(it->pv = malloc(n + 1))) return;
-    memcpy(it->pv, buf, n);
-    it->pv[n] = 0;
-}
-
-/* ---- Windows: what each one is, and where. */
+/* ---- Windows: what each one is. */
 static int win_used(int w)
 {
-    return w >= 0 && w < MAXTERM ? terms[w].used : w == W_EDIT ? edit_active() : w == W_SIA ? sia_on : 0;
+    return w >= 0 && w < MAXTERM ? terms[w].used : w == W_EDIT ? edit_active() : w == W_SIA ? sia_on :
+           w == W_SET ? set_on : w == W_FILES ? files_on : w == W_PINS ? pins_on : 0;
 }
-static const char *win_proj(int w) { return w < MAXTERM ? terms[w].proj : w == W_EDIT ? edit_proj : sia_proj; }
 static void win_title(int w, char *t, size_t cap)
 {
     if (w < MAXTERM) { size_t n = strlcpy(t, "Terminal ", cap); t[n + num(t + n, terms[w].chan)] = 0; }
     else if (w == W_EDIT) { strlcpy(t, base_name(edit_path()), cap); if (edit_dirty()) strlcpy(t + strlen(t), " *", cap - strlen(t)); }
-    else strlcpy(t, "sia", cap);
+    else if (w == W_SIA) strlcpy(t, "sia", cap);
+    else if (w == W_SET) strlcpy(t, "Settings", cap);
+    else if (w == W_PINS) strlcpy(t, "Pins", cap);
+    else strlcpy(t, "Files", cap);
+    if (w < MAXTERM && terms[w].back) { size_t n = strlen(t); n += strlcpy(t + n, " [history -", 16); t[n + num(t + n, terms[w].back)] = 0; strlcpy(t + strlen(t), "]", 2); }
 }
+static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : I_FOLDER; }
 
-/* Where window w is on the screen (either desktop) -> 1, or 0: not shown. */
-static int win_box(int w, int *x0, int *y0, int *x1, int *y1)
-{
-    if (std_ui) return win_used(w) && !strcmp(win_proj(w), cur) && wm_box(w, x0, y0, x1, y1);
-    slot(w, x0, x1);
-    *y0 = SY0; *y1 = SY1;
-    return *x1 > *x0;
-}
-
-/* The Standard desktop asks: is window w here, its title, draw its inside. */
-int wm_state(int w) { return !win_used(w) ? 0 : strcmp(win_proj(w), cur) ? 1 : 2; }
+/* wm.c asks: is it there, its title, draw its inside. */
+static void draw_term_body(int ti, int x0, int y0, int x1, int y1, int f);
+int wm_state(int w) { return win_used(w); }
 void wm_title(int w, char *t, size_t cap) { win_title(w, t, cap); }
-void wm_info(int w, char *t, size_t cap)
+void wm_info(int w, char *t, size_t cap)                 /* the strip's right side, its tab up */
 {
-    if (w < MAXTERM) {                                   /* "terminal  80 x 25", "history -12" */
-        char *p = t + strlcpy(t, terms[w].back ? "history -" : "terminal  ", cap);
+    t[0] = 0;
+    if (w < MAXTERM) {                                   /* "80 x 25", "history -12" */
+        char *p = t + strlcpy(t, terms[w].back ? "history -" : "", cap);
         if (terms[w].back) { p[num(p, terms[w].back)] = 0; return; }
         p += num(p, terms[w].cols); p += strlcpy(p, " x ", 4); p[num(p, terms[w].rows)] = 0;
-    } else if (w == W_EDIT) strlcpy(t, edit_path(), cap);
-    else strlcpy(t, "assistant", cap);
+    } else if (w == W_EDIT) strlcpy(t, edit_dirty() ? "not saved" : "saved", cap);
+    else if (w == W_FILES) strlcpy(t, files_dir(), cap);
+    else if (w == W_PINS) strlcpy(t, "GPIO", cap);
 }
-static void draw_term_body(int ti, int x0, int y0, int x1, int y1, int f);
 void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
 {
     if (w < MAXTERM) draw_term_body(w, x0, y0, x1, y1, keys);
     else if (w == W_EDIT) edit_draw(x0, y0, x1, y1, keys);
-    else panel_draw(x0, y0, x1, y1, keys);
+    else if (w == W_SIA) panel_draw(x0, y0, x1, y1, keys);
+    else if (w == W_SET) settings_draw(x0, y0, x1, y1, keys);
+    else if (w == W_PINS) pins_draw(x0, y0, x1, y1, keys);
+    else files_draw(x0, y0, x1, y1, keys);
 }
 
-/* Keep each project's stage pointing at its own live windows only.
- * (Standard: the focus on a window of this project that is on the screen.) */
+/* Where window w is on the screen -> 1, or 0: not shown. (y0: its top;
+ * its insides start at y0 + WM_BODY_DY + TBAR + 8: wm_body is given y0 + WM_BODY_DY.) */
+static int win_box(int w, int *x0, int *y0, int *x1, int *y1) { return win_used(w) && wm_box(w, x0, y0, x1, y1); }
+
+/* Keep the keys on a window that is on the screen. */
 static void tidy(void)
 {
-    if (std_ui) {
-        if (focus >= 0 && (wm_state(focus) != 2 || wm_minimized(focus))) focus = wm_top();
-        return;
-    }
-    for (int i = 0; i < nproj; i++) {
-        proj_t *p = &projs[i];
-        if (p->main >= 0 && (!win_used(p->main) || strcmp(win_proj(p->main), p->name))) p->main = -1;
-        if (p->beside >= 0 && (!win_used(p->beside) || strcmp(win_proj(p->beside), p->name))) p->beside = -1;
-        if (p->main < 0 && p->beside >= 0) { p->main = p->beside; p->beside = -1; }
-    }
-    if (focus >= 0 && (!win_used(focus) || (here()->main != focus && here()->beside != focus))) focus = here()->main;
+    if (focus >= 0 && (!win_used(focus) || !wm_box(focus, &(int){0}, &(int){0}, &(int){0}, &(int){0}))) focus = wm_top();
 }
-
-static void say_stage(void)
+static void show_win(int w)                              /* on the screen, in front, with the keys */
 {
-    proj_t *p = here();
-    char a[48] = "-", b[48] = "-";
-    if (p->main >= 0) win_title(p->main, a, sizeof a);
-    if (p->beside >= 0) win_title(p->beside, b, sizeof b);
-    say("atlas: stage %s: main=%s beside=%s\n", p->name, a, b);
+    wm_show(w);
+    focus = w; strip_on = 0;
+    if (w < MAXTERM) last_term = w;
+    say("atlas: window %d shown\n", w);
 }
-
-static void put_main(int w)                              /* on the stage, wide, with the keys */
+static void min_win(int w)
 {
-    if (std_ui) { wm_show(w); focus = w; lens_on = 0; say("atlas: window %d shown\n", w); return; }   /* (Standard: in front) */
-    proj_t *p = here();
-    if (p->beside == w) p->beside = -1;
-    if (p->main == W_SIA && w != W_SIA && p->beside < 0) p->beside = W_SIA;   /* (the assistant stays in view) */
-    p->main = w;
-    focus = w; lens_on = 0;
-    tidy();
-    say_stage();
-}
-static void put_beside(int w)
-{
-    if (std_ui) { int known = wm_box(w, &(int){0}, &(int){0}, &(int){0}, &(int){0}); put_main(w); if (!known) wm_snap(w, 1); return; }   /* (Standard: the right half) */
-    proj_t *p = here();
-    if (p->main == w) { p->main = p->beside; }
-    p->beside = w;
-    if (p->main < 0) { p->main = w; p->beside = -1; }
-    focus = w; lens_on = 0;
-    tidy();
-    say_stage();
-}
-static void to_shelf(int w)
-{
-    if (std_ui) { wm_min(w); if (focus == w) focus = -1; tidy(); if (focus < 0) focus = wm_top(); say("atlas: window %d minimized\n", w); return; }
-    proj_t *p = here();
-    if (p->main == w) { p->main = p->beside; p->beside = -1; }
-    else if (p->beside == w) p->beside = -1;
-    tidy();
-    say_stage();
+    wm_min(w);
+    if (focus == w) focus = wm_top();
 }
 
 /* ---- Click boxes. */
-#define MAXHIT 500
+#define MAXHIT 600
 static struct { int x0, y0, x1, y1, kind, arg; } hit[MAXHIT];
 static int nhit;
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg)
@@ -610,8 +403,13 @@ int pill(int x, int y, const char *s, int on, int kind, int arg)
     return x + w;
 }
 void label(int x, int y, const char *s, int k, uint32_t c) { dl_text(x, y, s, strlen(s), S(k), c, 0, 0, SW, SH); }
+static void bold(int x, int y, const char *s, uint32_t c, int cx1)   /* (twice, a pixel apart) */
+{
+    dl_text(x, y, s, strlen(s), S(2), c, 0, 0, cx1, SH);
+    dl_text(x + 1, y, s, strlen(s), S(2), c, 0, 0, cx1, SH);
+}
 
-/* ---- The Lens: files (by name, every project), apps, and "Ask sia". */
+/* ---- The sia strip: files (by name), apps, and "Ask sia". */
 enum { R_FILE = 1, R_APP, R_SYSAPP, R_ASK };
 #define MAXRES 8
 static struct { int kind, i; } res[MAXRES];
@@ -657,26 +455,29 @@ int atlas_find(const char *key, const char *value)
     size_t k = strlcpy(query, key, sizeof query);
     if (k + 1 < sizeof query) { query[k] = '='; strlcpy(query + k + 1, value, sizeof query - k - 1); }
     nfound = total;
-    lens_on = 1;
-    say("atlas: lens %s: %d files\n", query, total);
+    strip_on = 1;
+    say("atlas: strip %s: %d files\n", query, total);
     return total;
 }
 
 /* ---- The picture. */
-static unsigned frame;                  /* pictures built: a preview not shown in this one is dropped */
-static const uint32_t dots[6] = { 0x4be3c1, 0x8b7bff, 0xffb86b, 0x6bb8ff, 0xff7aa8, 0xc6e36b };
-
 static void draw_greeter(void)
 {
     if (first_start) { setup_draw(); return; }          /* no account yet: the welcome screen */
-    int x0 = SW / 2 - 360, y0 = SH / 2 - 290, x1 = SW / 2 + 360, y1 = SH / 2 + 290;
-    dl_rect(x0, y0, x1, y1, 24, C_GLASS);
-    dl_frame(x0, y0, x1, y1, 24, 1, C_LINE);
-    label(x0 + 60, y0 + 50, "SIEOS", 7, C_ACC);
-    label(x0 + 60, y0 + 140, g_std ? "your windows, where you put them" : "one project, one focus", 2, C_DIM);
+    int x0 = SW / 2 - 360, y0 = SH / 2 - 230, x1 = SW / 2 + 360, y1 = SH / 2 + 250;
+    static const char wt[] = "Welcome to SIEOS";     /* the card is a window: its tab first */
+    int t = 44 + tw(sizeof wt - 1, 2) + 24;
+    dl_rect(x0, y0 - TAB_H, x0 + t, y0 + 12, 10, C_ACC);
+    bold(x0 + 22, y0 - TAB_H + 6, wt, C_BG, SW);
+    dl_rect(x0, y0, x1, y1, 16, C_GLASS);
+    dl_frame(x0, y0, x1, y1, 16, 2, C_ACC);
+    dl_rect(x0 + 2, y0, x0 + t - 2, y0 + 2, 0, C_ACC);
+    logo(x0 + 50, y0 + 40, 5);
+    label(x0 + 150, y0 + 46, "SIEOS", 6, C_ACC);
+    label(x0 + 152, y0 + 120, "your windows, your files, sia", 2, C_DIM);
     const char *names[2] = { "Name", "Password" };
     for (int f = 0; f < 2; f++) {
-        int fy = y0 + 210 + f * 90;
+        int fy = y0 + 190 + f * 90;
         label(x0 + 60, fy + 12, names[f], 2, C_DIM);
         dl_rect(x0 + 230, fy, x1 - 60, fy + 50, 10, C_BG);
         dl_frame(x0 + 230, fy, x1 - 60, fy + 50, 10, gfield == f ? 2 : 1, gfield == f ? C_ACC : C_LINE);
@@ -688,20 +489,8 @@ static void draw_greeter(void)
         if (gfield == f) dl_rect(x0 + 252 + cw, fy + 12, x0 + 264 + cw, fy + 38, 0, C_ACC);
         hitbox(x0 + 230, fy, x1 - 60, fy + 50, H_FIELD, f);
     }
-    /* the desktop: Focused (the stage) or Standard (free windows); Focused each time */
-    int fy = y0 + 390, mid = (x0 + 230 + x1 - 60) / 2;
-    label(x0 + 60, fy + 12, "Desktop", 2, C_DIM);
-    dl_rect(x0 + 230, fy, x1 - 60, fy + 50, 10, C_BG);
-    dl_frame(x0 + 230, fy, x1 - 60, fy + 50, 10, gfield == 2 ? 2 : 1, gfield == 2 ? C_ACC : C_LINE);
-    static const char *dk[2] = { "Focused", "Standard" };
-    for (int k = 0; k < 2; k++) {
-        int a = k ? mid + 2 : x0 + 234, b = k ? x1 - 64 : mid - 2;
-        if (g_std == k) { dl_rect(a, fy + 4, b, fy + 46, 8, C_SEL); dl_frame(a, fy + 4, b, fy + 46, 8, 1, C_ACC); }
-        label((a + b) / 2 - tw(strlen(dk[k]), 2) / 2, fy + 14, dk[k], 2, g_std == k ? C_ACC : C_DIM);
-        hitbox(a, fy, b, fy + 50, H_GMODE, k);
-    }
-    if (gmsg[0]) label(x0 + 60, y0 + 480, gmsg, 2, C_ERR);
-    else if (no_input) label(x0 + 60, y0 + 480, "No keyboard or mouse yet: plug one in", 2, C_DIM);
+    if (gmsg[0]) label(x0 + 60, y0 + 380, gmsg, 2, C_ERR);
+    else if (no_input) label(x0 + 60, y0 + 380, "No keyboard or mouse yet: plug one in", 2, C_DIM);
     pill(x1 - 60 - tw(6, 2) - 28, y1 - 80, "Log in", 1, H_LOGIN, 0);
 }
 
@@ -743,126 +532,132 @@ static void draw_term_body(int ti, int x0, int y0, int x1, int y1, int f)
     hitbox(x0, y0 + TBAR, x1, y1, H_WIN, ti);
 }
 
-/* A window of the stage: its frame and title strip with buttons, then its body. */
-enum { WB_SWAP, WB_SHELF, WB_CLOSE };
-static void draw_window(int w, int x0, int x1)
+/* ---- The Deskbar: the menu (the cube), a tray (sia, the clock), the
+ * apps (running ones in bold, with a >), the workspaces. */
+static const struct { const char *name; int icon, act; } dbapps[] = {
+    { "Terminal", I_TERM, A_TERM }, { "sia", I_SIA, A_SIA }, { "Files", I_FOLDER, A_FILES },
+    { "Text editor", I_FILE, A_EDITOR }, { "Pins", I_PINS, A_PINS }, { "Settings", I_SETTINGS, A_SETTINGS },
+};
+#define NDB (int)(sizeof dbapps / sizeof dbapps[0])
+static int db_running(int k)
 {
-    int y0 = SY0, y1 = SY1, f = focus == w && !lens_on;
-    dl_rect(x0, y0, x1, y1, 16, C_GLASS);
-    dl_frame(x0, y0, x1, y1, 16, f ? 2 : 1, f ? C_ACC : C_LINE);
-    hitbox(x0, y0, x1, y1, H_WIN, w);
-    char t[64];
-    win_title(w, t, sizeof t);
-    if (w < MAXTERM && terms[w].back) { size_t n = strlen(t); n += strlcpy(t + n, "  [history -", 16); t[n + num(t + n, terms[w].back)] = 0; strlcpy(t + strlen(t), "]", 2); }
-    dl_text(x0 + 20, y0 + 14, t, strlen(t), S(2), f ? C_ACC : C_TXT, x0, y0, x1 - 260, y0 + TBAR);
-    proj_t *p = here();
-    int bx = x1 - 12;
-    static const char *bl[3] = { "Swap", "Shelf", "Close" };
-    for (int b = 2; b >= 0; b--) {
-        if (b == WB_SWAP && !(p->main >= 0 && p->beside >= 0)) continue;
-        bx -= tw(strlen(bl[b]), 2) + 28;
-        pill(bx, y0 + 3, bl[b], 0, H_WBTN, w * 4 + b);
-        if (atlas_debug) say("atlas: dbg wbtn %s %s at %d %d\n", t, bl[b], bx + 30, y0 + 24);
-        bx -= 8;
+    if (dbapps[k].act == A_TERM) { for (int t = 0; t < MAXTERM; t++) if (terms[t].used) return 1; return 0; }
+    return win_used(dbapps[k].act == A_SIA ? W_SIA : dbapps[k].act == A_FILES ? W_FILES : dbapps[k].act == A_EDITOR ? W_EDIT : dbapps[k].act == A_PINS ? W_PINS : W_SET);
+}
+static int db_h(void) { return DB_MENU + DB_TRAY + NDB * DB_ROW + DB_WS + 10; }
+static void clock_text(char *ck)
+{
+    long d = now_day();
+    ck[0] = '0' + d / 36000; ck[1] = '0' + d / 3600 % 10; ck[2] = ':';
+    ck[3] = '0' + d / 600 % 6; ck[4] = '0' + d / 60 % 10; ck[5] = 0;
+}
+static void draw_deskbar(void)
+{
+    int x0 = DBX, y0 = M, x1 = DBX + DBW, y1 = M + db_h();
+    dl_rect(x0, y0, x1, y1, 14, C_GLASS);
+    dl_frame(x0, y0, x1, y1, 14, 1, C_LINE);
+    hitbox(x0, y0, x1, y1, H_DESK, -1);
+    int menu_open = mn.on && mn.win == -2;               /* the menu row: the cube, SIEOS */
+    if (menu_open || (ptr_x >= x0 && ptr_x < x1 && ptr_y >= y0 && ptr_y < y0 + DB_MENU)) dl_rect(x0 + 6, y0 + 6, x1 - 6, y0 + DB_MENU - 4, 10, C_BAR);
+    logo(x0 + 16, y0 + 10, 2);
+    bold(x0 + 60, y0 + 15, "SIEOS", C_TXT, x1);
+    label(x1 - 34, y0 + 15, "v", 2, C_DIM);
+    hitbox(x0 + 6, y0 + 6, x1 - 6, y0 + DB_MENU - 4, H_DBMENU, 0);
+    if (atlas_debug) say("atlas: dbg dbmenu at %d %d\n", x0 + 100, y0 + DB_MENU / 2);
+    int ty = y0 + DB_MENU;                               /* the tray */
+    dl_rect(x0 + 10, ty, x1 - 10, ty + 1, 0, C_LINE);
+    char st[48], ck[8];
+    panel_status(st, sizeof st);
+    clock_text(ck);
+    dl_text(x0 + 16, ty + 9, st, strlen(st), S(2), C_DIM, 0, 0, x1 - 90, SH);
+    label(x1 - 16 - tw(5, 2), ty + 9, ck, 2, C_TXT);
+    int ry = ty + DB_TRAY;                               /* the apps */
+    dl_rect(x0 + 10, ry, x1 - 10, ry + 1, 0, C_LINE);
+    for (int k = 0; k < NDB; k++) {
+        int y = ry + 4 + k * DB_ROW, run = db_running(k);
+        if (ptr_x >= x0 && ptr_x < x1 && ptr_y >= y && ptr_y < y + DB_ROW) dl_rect(x0 + 6, y, x1 - 6, y + DB_ROW - 2, 8, C_BAR);
+        icon(dbapps[k].icon, x0 + 14, y + 7, 2);
+        if (run) {
+            bold(x0 + 50, y + 8, dbapps[k].name, C_TXT, x1 - 30);
+            for (int c = 0; c < 5; c++) dl_rect(x1 - 26 + c, y + 11 + c, x1 - 25 + c, y + 29 - c, 0, C_ACC);   /* > */
+        } else label(x0 + 50, y + 8, dbapps[k].name, 2, C_DIM);
+        hitbox(x0 + 6, y, x1 - 6, y + DB_ROW - 2, H_DBAPP, k);
+        if (atlas_debug) say("atlas: dbg dbapp %s at %d %d\n", dbapps[k].name, x0 + 120, y + DB_ROW / 2);
     }
-    dl_rect(x0 + 1, y0 + TBAR - 1, x1 - 1, y0 + TBAR, 0, C_LINE);
-    if (w < MAXTERM) draw_term_body(w, x0, y0, x1, y1, f);
-    else if (w == W_EDIT) edit_draw(x0, y0, x1, y1, f);
-    else panel_draw(x0, y0, x1, y1, f);
-}
-
-/* The shelf: what is in this project but not on the stage. */
-enum { C_WINDOW = 1, C_ITEM, C_ADD };
-#define MAXCARD (MAXITEM + NWIN + 1)
-static struct { short kind, i; } cards[MAXCARD];
-static int ncards;
-static void shelf_list(void)
-{
-    proj_t *p = here();
-    ncards = 0;
-    for (int w = 0; w < NWIN; w++)
-        if (win_used(w) && !strcmp(win_proj(w), p->name) && w != p->main && w != p->beside) cards[ncards++] = (typeof(cards[0])){ C_WINDOW, w };
-    for (int a = 0; a < 2; a++)                          /* files, then apps */
-        for (int i = 0; i < nitems; i++)
-            if (items[i].app == a && !strcmp(items[i].proj, p->name) &&
-                !((p->main == W_EDIT || p->beside == W_EDIT) && !strcmp(items[i].path, edit_path()))) cards[ncards++] = (typeof(cards[0])){ C_ITEM, i };
-    cards[ncards++] = (typeof(cards[0])){ C_ADD, 0 };
-}
-static int card_x(int k) { return SX0 + (k - shelf_off) * (CARDW + 18); }
-static int shelf_fit(void) { return (SX1 - SX0 + 18) / (CARDW + 18); }
-
-static void card_text(int k, char *title, size_t cap, char *kind, size_t kcap, const char *line[3])
-{
-    line[0] = line[1] = line[2] = 0;
-    if (cards[k].kind == C_ADD) { strlcpy(title, "+ Add", cap); strlcpy(kind, "file, terminal, app", kcap); return; }
-    if (cards[k].kind == C_WINDOW) {
-        int w = cards[k].i;
-        win_title(w, title, cap);
-        if (w < MAXTERM) {                               /* its last non-empty lines */
-            strlcpy(kind, "terminal", kcap);
-            term_t *t = &terms[w];
-            int got = 0;
-            for (int r = t->rows - 1; r >= 0 && got < 2; r--) {
-                const char *l = tline(t, t->top + r);
-                int e = t->cols;
-                while (e && l[e - 1] == ' ') e--;
-                if (e) line[1 - got++] = l;
-            }
-        } else if (w == W_EDIT) strlcpy(kind, "editing", kcap);
-        else { strlcpy(kind, "assistant", kcap); line[0] = panel_last(1); line[1] = panel_last(0); }
-        return;
+    int wy = ry + 8 + NDB * DB_ROW, cw = (DBW - 20 - 3 * 8) / WM_NWS;   /* the workspaces */
+    dl_rect(x0 + 10, wy - 2, x1 - 10, wy - 1, 0, C_LINE);
+    for (int k = 0; k < WM_NWS; k++) {
+        int cx = x0 + 10 + k * (cw + 8), on = k == wm_workspace();
+        char d[2] = { (char)('1' + k), 0 };
+        dl_rect(cx, wy + 6, cx + cw, wy + 40, 8, on ? C_ACC : C_BG);
+        dl_frame(cx, wy + 6, cx + cw, wy + 40, 8, 1, on ? C_ACC : C_LINE);
+        label(cx + cw / 2 - KW / 2, wy + 12, d, 2, on ? C_BG : C_DIM);
+        hitbox(cx, wy + 6, cx + cw, wy + 40, H_DBWS, k);
+        if (atlas_debug) say("atlas: dbg ws %d at %d %d\n", k + 1, cx + cw / 2, wy + 23);
     }
-    item_t *it = &items[cards[k].i];
-    strlcpy(title, it->name, cap);
-    if (it->app) { strlcpy(kind, "app", kcap); return; }
-    char *p = kind + strlcpy(kind, "file  ", kcap);
-    uint64_t s = it->size;
-    p += num(p, s >= 1024 ? (long)(s / 1024) : (long)s);
-    strlcpy(p, s >= 1024 ? " KB" : " bytes", 8);
-    preview(it);
-    it->seen = frame;
-    line[0] = it->pv;
-    line[1] = it->pv && strchr(it->pv, '\n') ? strchr(it->pv, '\n') + 1 : 0;
 }
 
-static void draw_card(int k, int x, int y, int lifted)
+/* The sia strip, and its results under it. */
+static void draw_strip(void)
 {
-    char title[48], kind[32];
-    const char *line[3];
-    card_text(k, title, sizeof title, kind, sizeof kind, line);
-    int add = cards[k].kind == C_ADD, chars = (CARDW - 28) / KW;
-    dl_rect(x, y, x + CARDW, y + CARDH, 14, add ? C_BG : C_GLASS);
-    dl_frame(x, y, x + CARDW, y + CARDH, 14, lifted ? 2 : 1, lifted ? C_ACC : C_LINE);
-    if (cards[k].kind == C_ITEM && items[cards[k].i].app) {   /* an app: a square with its initial */
-        dl_rect(x + 14, y + 14, x + 44, y + 44, 8, C_ACC);
-        dl_text(x + 23, y + 18, title, 1, S(2), C_BG, x, y, x + CARDW, y + CARDH);
-        dl_text(x + 56, y + 18, title, strlen(title) < (size_t)chars - 3 ? strlen(title) : (size_t)chars - 3, S(2), C_TXT, x, y, x + CARDW - 8, y + CARDH);
-    } else dl_text(x + 14, y + 14, title, strlen(title) < (size_t)chars ? strlen(title) : (size_t)chars, S(2), add ? C_DIM : C_TXT, x, y, x + CARDW - 8, y + CARDH);
-    label(x + 14, y + 52, kind, 2, C_DIM);
-    for (int b = 0; b < 2; b++) {                        /* its first (or last) lines, small */
-        if (!line[b]) continue;
-        int n = 0;
-        while (line[b][n] && line[b][n] != '\n' && n < (CARDW - 28) / CW) n++;
-        dl_text(x + 14, y + 88 + b * 16, line[b], n, S(1), C_DIM, x, y, x + CARDW - 10, y + CARDH - 6);
+    int x0 = M, y0 = M, x1 = STX1, y1 = STY1;
+    dl_rect(x0, y0, x1, y1, 24, C_GLASS);
+    dl_frame(x0, y0, x1, y1, 24, strip_on ? 2 : 1, strip_on ? C_ACC : C_LINE);
+    hitbox(x0, y0, x1, y1, H_STRIP, 0);
+    if (atlas_debug) say("atlas: dbg strip at %d %d\n", (x0 + x1) / 2, (y0 + y1) / 2);
+    bold(x0 + 24, y0 + 13, "sia", C_ACC, x1);
+    int qx = x0 + 24 + tw(3, 2) + 24;
+    dl_rect(qx - 12, y0 + 10, qx - 11, y1 - 10, 0, C_LINE);
+    const char *net = port_find("net") > 0 ? "network" : "network: off";
+    int nx = x1 - 24 - tw(strlen(net), 2);
+    if (nx > qx + 400) label(nx, y0 + 13, net, 2, C_DIM); else nx = x1 - 20;
+    if (query[0]) dl_text(qx, y0 + 13, query, strlen(query), S(2), C_TXT, x0, y0, nx - 20, y1);
+    else label(qx, y0 + 13, strip_on ? "a file, an app, or a question" : "Ask sia, open a file, run an app...  Ctrl+Space", 2, C_DIM);
+    if (strip_on) { int cw = tw(strlen(query), 2); dl_rect(qx + 2 + cw, y0 + 11, qx + 12 + cw, y0 + 35, 0, C_ACC); }
+    if (toast[0]) dl_text(x0 + 24, y1 + 6, toast, strlen(toast), S(2), C_ACC, 0, 0, x1, SH);
+    if (!strip_on || (!nres && !nfound)) return;
+    int rx1 = x0 + 900 < x1 ? x0 + 900 : x1, y = y1 + 6, last = 0, h = 16;
+    for (int i = 0; i < nres; i++) h += 46 + (res[i].kind != last ? 32 : 0), last = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
+    if (nfound > nres) h += 40;
+    dl_rect(x0, y, rx1, y + h, 16, C_GLASS);
+    dl_frame(x0, y, rx1, y + h, 16, 1, C_ACC);
+    y += 8; last = 0;
+    static const char *grp[5] = { "", "FILES", "APPS", "APPS", "ASK SIA" };
+    for (int i = 0; i < nres; i++) {
+        int g = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
+        if (g != last) { label(x0 + 26, y + 8, grp[g], 2, C_DIM); y += 32; last = g; }
+        dl_rect(x0 + 10, y, rx1 - 10, y + 42, 10, i == 0 ? C_BAR : C_GLASS);
+        char t[96] = "", w[48] = "";
+        int ic = I_FILE;
+        if (res[i].kind == R_FILE) strlcpy(t, items[res[i].i].name, sizeof t);
+        else if (res[i].kind == R_APP) { strlcpy(t, items[res[i].i].name, sizeof t); ic = I_APP; }
+        else if (res[i].kind == R_SYSAPP) { strlcpy(t, apps[res[i].i].name, sizeof t); strlcpy(w, "app", sizeof w); ic = I_APP; }
+        else { strlcpy(t, query[0] == '?' ? query + 1 : query, sizeof t); strlcpy(w, "Tab", sizeof w); ic = I_SIA; }
+        icon(ic, x0 + 22, y + 9, 2);
+        dl_text(x0 + 58, y + 10, t, strlen(t), S(2), C_TXT, x0, y, rx1 - 30 - tw(strlen(w), 2), y + 42);
+        label(rx1 - 26 - tw(strlen(w), 2), y + 10, w, 2, C_DIM);
+        hitbox(x0 + 10, y, rx1 - 10, y + 42, H_RES, i);
+        if (atlas_debug) say("atlas: dbg res %d %s at %d %d\n", i, t, (x0 + rx1) / 2, y + 21);
+        y += 46;
     }
-    hitbox(x, y, x + CARDW, y + CARDH, H_CARD, k);
+    if (nfound > nres) { char t[48]; t[num(t, nfound - nres)] = 0; strlcpy(t + strlen(t), " more", 8); label(x0 + 26, y + 8, t, 2, C_DIM); }
 }
 
+static int menu_h(void) { int h = 16; for (int i = 0; i < mn.n; i++) h += mn.e[i].act == A_SEP ? MENSEP : MENH; return h; }
 static void draw_menu(void)
 {
     if (!mn.on) return;
-    int h = 52 + mn.n * MENH + 8;
-    dl_rect(mn.x, mn.y, mn.x + MENW, mn.y + h, 14, C_GLASS);
-    dl_frame(mn.x, mn.y, mn.x + MENW, mn.y + h, 14, 2, C_ACC);
-    dl_text(mn.x + 18, mn.y + 16, mn.title, strlen(mn.title), S(2), C_DIM, mn.x, mn.y, mn.x + MENW - 10, mn.y + 52);
+    int h = menu_h(), y = mn.y + 8;
+    dl_rect(mn.x, mn.y, mn.x + mn.w, mn.y + h, 12, C_GLASS);
+    dl_frame(mn.x, mn.y, mn.x + mn.w, mn.y + h, 12, 2, C_ACC);
     for (int i = 0; i < mn.n; i++) {
-        int iy = mn.y + 52 + i * MENH;
-        if (i) dl_rect(mn.x + 14, iy, mn.x + MENW - 14, iy + 1, 0, C_BAR);
-        int sub = mn.e[i].act == A_SUB_MOVE || mn.e[i].act == A_SUB_APPS;
-        uint32_t c = mn.e[i].act == A_CANCEL ? C_DIM : mn.e[i].act == A_DELETE_YES ? C_ERR : C_TXT;
-        dl_text(mn.x + 26, iy + 12, mn.e[i].label, strlen(mn.e[i].label), S(2), c, mn.x, iy, mn.x + MENW - 40, iy + MENH);
-        if (sub) label(mn.x + MENW - 36, iy + 12, ">", 2, C_DIM);
-        hitbox(mn.x, iy, mn.x + MENW, iy + MENH, H_MENU, i);
+        if (mn.e[i].act == A_SEP) { dl_rect(mn.x + 14, y + MENSEP / 2, mn.x + mn.w - 14, y + MENSEP / 2 + 1, 0, C_LINE); y += MENSEP; continue; }
+        if (i == mn.hover) dl_rect(mn.x + 6, y, mn.x + mn.w - 6, y + MENH, 8, C_BAR);
+        if (mn.e[i].icon >= 0) icon(mn.e[i].icon, mn.x + 16, y + 6, 2);
+        uint32_t c = mn.e[i].act == A_CLOSE || mn.e[i].act == A_LOGOUT ? C_ERR : C_TXT;
+        dl_text(mn.x + 54, y + 7, mn.e[i].label, strlen(mn.e[i].label), S(2), c, mn.x, y, mn.x + mn.w - 14, y + MENH);
+        hitbox(mn.x, y, mn.x + mn.w, y + MENH, H_MENU, i);
+        y += MENH;
     }
 }
 
@@ -883,244 +678,21 @@ static void draw_prompt(void)
     pill(okx - 20 - (tw(6, 2) + 28), y1 - 66, "Cancel", 0, H_PR, 0);
 }
 
-/* The Lens: the field, and its results under it. */
-static int lens_x0(void) { int w = SW - 2 * 420 > 900 ? 900 : SW - 2 * 420 < 420 ? 420 : SW - 2 * 420; return SW / 2 - w / 2; }
-static int lens_x1(void) { return SW - lens_x0(); }
-static void draw_lens(void)
-{
-    int x0 = lens_x0(), x1 = lens_x1();
-    dl_rect(x0, 16, x1, 64, 24, C_GLASS);
-    dl_frame(x0, 16, x1, 64, 24, lens_on ? 2 : 1, lens_on ? C_ACC : C_LINE);
-    hitbox(x0, 16, x1, 64, H_LENS, 0);
-    if (query[0]) dl_text(x0 + 26, 29, query, strlen(query), S(2), C_TXT, x0, 16, x1 - 20, 64);
-    else label(x0 + 26, 29, lens_on ? "a file, an app, or a question" : "Ask sia, open a file, run an app...  Ctrl+Space", 2, C_DIM);
-    if (lens_on) { int cw = tw(strlen(query), 2); dl_rect(x0 + 28 + cw, 28, x0 + 38 + cw, 52, 0, C_ACC); }
-    if (!lens_on || (!nres && !nfound)) return;
-    int y = 72, last = 0;
-    int h = 16;
-    for (int i = 0; i < nres; i++) h += 46 + (res[i].kind != last ? 32 : 0), last = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
-    if (nfound > nres) h += 40;
-    dl_rect(x0, y, x1, y + h, 16, C_GLASS);
-    dl_frame(x0, y, x1, y + h, 16, 1, C_LINE);
-    y += 8; last = 0;
-    static const char *grp[5] = { "", "FILES", "APPS", "APPS", "ASK SIA" };
-    for (int i = 0; i < nres; i++) {
-        int g = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
-        if (g != last) { label(x0 + 26, y + 8, grp[g], 2, C_DIM); y += 32; last = g; }
-        dl_rect(x0 + 10, y, x1 - 10, y + 42, 10, i == 0 ? C_BAR : C_GLASS);
-        char t[96] = "", w[48] = "";
-        if (res[i].kind == R_FILE) { strlcpy(t, items[res[i].i].name, sizeof t); strlcpy(w, items[res[i].i].proj, sizeof w); }
-        else if (res[i].kind == R_APP) { strlcpy(t, items[res[i].i].name, sizeof t); strlcpy(w, items[res[i].i].proj, sizeof w); }
-        else if (res[i].kind == R_SYSAPP) { strlcpy(t, apps[res[i].i].name, sizeof t); strlcpy(w, "start in this project", sizeof w); }
-        else { strlcpy(t, query[0] == '?' ? query + 1 : query, sizeof t); strlcpy(w, "Tab", sizeof w); }
-        dl_text(x0 + 26, y + 10, t, strlen(t), S(2), C_TXT, x0, y, x1 - 30 - tw(strlen(w), 2), y + 42);
-        label(x1 - 26 - tw(strlen(w), 2), y + 10, w, 2, C_DIM);
-        hitbox(x0 + 10, y, x1 - 10, y + 42, H_RES, i);
-        if (atlas_debug) say("atlas: dbg res %d %s at %d %d\n", i, t, (x0 + x1) / 2, y + 21);
-        y += 46;
-    }
-    if (nfound > nres) { char t[48]; t[num(t, nfound - nres)] = 0; strlcpy(t + strlen(t), " more", 8); label(x0 + 26, y + 8, t, 2, C_DIM); }
-}
-
-/* The rail: the projects, then the Inbox, then you. */
-static void draw_rail(void)
-{
-    dl_rect(M, SY0, RX1, SH - M, 16, C_GLASS);
-    dl_frame(M, SY0, RX1, SH - M, 16, 1, C_LINE);
-    hitbox(M, SY0, RX1, SH - M, H_PROJ, -1);
-    label(M + 20, SY0 + 18, "PROJECTS", 2, C_DIM);
-    for (int i = 0, y = SY0 + 56; i < nproj; i++, y += 50) {
-        int ymax = SH - M - 170;                         /* (more projects than room: the last ones are not shown) */
-        if (i < nproj - 1 && y > ymax - 50) continue;
-        if (i == nproj - 1) {                            /* "+ New project" under the others, the Inbox at the bottom */
-            if (y > ymax) y = ymax;
-            label(M + 24, y + 12, "+ New project", 2, C_DIM);
-            hitbox(M + 10, y, RX1 - 10, y + 46, H_BTN, 1);
-            if (atlas_debug) say("atlas: dbg newproject at %d %d\n", (M + RX1) / 2, y + 23);
-            y = SH - M - 120;
-        }
-        proj_t *p = &projs[i];
-        int on = !strcmp(p->name, cur);
-        if (on) dl_rect(M + 10, y, RX1 - 10, y + 46, 12, C_BAR);
-        dl_rect(M + 24, y + 18, M + 34, y + 28, 5, i == nproj - 1 ? C_DIM : dots[i % 6]);
-        dl_text(M + 48, y + 12, p->name, strlen(p->name), S(2), on ? C_TXT : C_DIM, M, y, RX1 - 60, y + 46);
-        char c[8];
-        c[num(c, p->n)] = 0;
-        label(RX1 - 24 - tw(strlen(c), 2), y + 12, c, 2, C_DIM);
-        hitbox(M + 10, y, RX1 - 10, y + 46, H_PROJ, i);
-        if (atlas_debug) say("atlas: dbg project %s at %d %d\n", p->name, (M + RX1) / 2, y + 23);
-    }
-    dl_rect(M + 14, SH - M - 64, RX1 - 14, SH - M - 63, 0, C_LINE);
-    dl_text(M + 24, SH - M - 46, user, strlen(user), S(2), C_TXT, M, 0, RX1 - 130, SH);
-    pill(RX1 - 14 - tw(7, 2) - 28, SH - M - 54, "Log out", 0, H_BTN, 2);
-}
-
-/* Standard: the rail rolled up to its title line (with the project on the
- * screen) and its bottom line; open while the pointer is on it. */
-static void draw_rail_std(void)
-{
-    int e = wm_rail_open();
-    if (e >= 1024) { draw_rail(); return; }
-    int top1 = SY0 + RAIL_TOP + (SH - M - RAIL_BOT - 8 - SY0 - RAIL_TOP) * e / 1024;
-    dl_rect(M, SY0, RX1, top1, 16, C_GLASS);
-    dl_frame(M, SY0, RX1, top1, 16, 1, C_LINE);
-    hitbox(M, SY0, RX1, top1, H_PROJ, -1);
-    label(M + 20, SY0 + 12, "PROJECTS", 2, C_DIM);
-    int k = proj_find(cur);
-    if (k >= 0 && e < 200) {                             /* rolled up: where you are */
-        dl_rect(M + 132, SY0 + 18, M + 142, SY0 + 28, 5, k == nproj - 1 ? C_DIM : dots[k % 6]);
-        dl_text(M + 154, SY0 + 12, cur, strlen(cur), S(2), C_TXT, M, SY0, RX1 - 14, SY0 + RAIL_TOP);
-    }
-    for (int i = 0, y = SY0 + 56; i < nproj && y + 46 <= top1 - 6; i++, y += 50) {   /* unrolling: the rows that fit */
-        proj_t *p = &projs[i];
-        int on = !strcmp(p->name, cur);
-        if (on) dl_rect(M + 10, y, RX1 - 10, y + 46, 12, C_BAR);
-        dl_rect(M + 24, y + 18, M + 34, y + 28, 5, i == nproj - 1 ? C_DIM : dots[i % 6]);
-        dl_text(M + 48, y + 12, p->name, strlen(p->name), S(2), on ? C_TXT : C_DIM, M, y, RX1 - 60, y + 46);
-        hitbox(M + 10, y, RX1 - 10, y + 46, H_PROJ, i);
-    }
-    int b0 = SH - M - RAIL_BOT;
-    dl_rect(M, b0, RX1, SH - M, 16, C_GLASS);
-    dl_frame(M, b0, RX1, SH - M, 16, 1, C_LINE);
-    dl_text(M + 24, SH - M - 46, user, strlen(user), S(2), C_TXT, M, 0, RX1 - 130, SH);
-    pill(RX1 - 14 - tw(7, 2) - 28, SH - M - 54, "Log out", 0, H_BTN, 2);
-}
-
-/* Standard: the dock: this project's windows, its files and apps, + Add
- * (the shelf's cards, as chips). */
-static void dock_list(void)
-{
-    ncards = 0;
-    for (int w = 0; w < NWIN; w++) if (wm_state(w) == 2) cards[ncards++] = (typeof(cards[0])){ C_WINDOW, w };
-    for (int a = 0; a < 2; a++)
-        for (int i = 0; i < nitems; i++)
-            if (items[i].app == a && !strcmp(items[i].proj, cur)) cards[ncards++] = (typeof(cards[0])){ C_ITEM, i };
-    cards[ncards++] = (typeof(cards[0])){ C_ADD, 0 };
-}
-static void draw_dock(void)
-{
-    dl_rect(SX0, DY0, SX1, SH - M, 14, C_GLASS);
-    dl_frame(SX0, DY0, SX1, SH - M, 14, 1, C_LINE);
-    hitbox(SX0, DY0, SX1, SH - M, H_BTN, 0);
-    dock_list();
-    if (shelf_off > ncards - 1) shelf_off = ncards - 1;
-    if (shelf_off < 0) shelf_off = 0;
-    int x = SX0 + 8, last = C_WINDOW;
-    for (int k = shelf_off; k < ncards; k++) {
-        char t[48];
-        if (cards[k].kind == C_WINDOW) win_title(cards[k].i, t, sizeof t);
-        else if (cards[k].kind == C_ITEM) strlcpy(t, items[cards[k].i].name, sizeof t);
-        else strlcpy(t, "+ Add", sizeof t);
-        if (strlen(t) > 22) { t[20] = '.'; t[21] = '.'; t[22] = 0; }
-        if (cards[k].kind != last) { dl_rect(x + 4, DY0 + 10, x + 5, SH - M - 10, 0, C_LINE); x += 14; last = cards[k].kind; }
-        int w = tw(strlen(t), 2) + 28 + (cards[k].kind == C_WINDOW ? 16 : 0);
-        if (x + w > SX1 - 8) break;
-        int win = cards[k].kind == C_WINDOW ? cards[k].i : -1, on = win >= 0 && win == focus, mini = win >= 0 && wm_minimized(win);
-        int y0 = DY0 + 6, y1 = SH - M - 6;
-        dl_rect(x, y0, x + w, y1, 8, cards[k].kind == C_WINDOW && !mini ? C_BG : C_GLASS);
-        dl_frame(x, y0, x + w, y1, 8, 1, on ? C_ACC : C_LINE);
-        int tx = x + 14;
-        if (win >= 0) { dl_rect(tx, (y0 + y1) / 2 - 1, tx + 8, (y0 + y1) / 2 + 1, 0, on ? C_ACC : mini ? C_LINE : C_DIM); tx += 16; wm_chip(win, x, y0, x + w, y1); }
-        uint32_t c = on ? C_ACC : mini ? C_DIM : cards[k].kind == C_WINDOW ? C_TXT : cards[k].kind == C_ADD ? C_TXT : C_DIM;
-        dl_text(tx, y0 + 9, t, strlen(t), S(2), c, x, y0, x + w - 6, y1);
-        hitbox(x, y0, x + w, y1, H_CARD, k);
-        if (atlas_debug) say("atlas: dbg chip %s at %d %d\n", t, x + w / 2, (y0 + y1) / 2);
-        x += w + 8;
-    }
-}
-
-static void build_std(void)
-{
-    int ox = M, oy = SY0, ox1 = RX1, oy1 = SH - M;       /* the rail: open while the pointer (or its menu) is on it */
-    int e = wm_rail_open(), in = ptr_x >= ox && ptr_x < ox1 && ptr_y >= oy && ptr_y < oy1 &&
-        (e > 0 || ptr_y < oy + RAIL_TOP || ptr_y >= oy1 - RAIL_BOT);
-    wm_rail(in || (mn.on && rail_menu) || (drag == D_CARD && drag_on && ptr_x < ox1), ox, oy, ox1, oy1);
-    tidy();
-    if (wm_top() < 0) {
-        static const char *t[2] = { "No windows here.", "Ctrl+T: a terminal. The dock below: this project's files." };
-        for (int i = 0; i < 2; i++) label((SX0 + SX1) / 2 - tw(strlen(t[i]), 2) / 2, (SY0 + DY0) / 2 - 20 + i * 36, t[i], 2, i ? C_DIM : C_TXT);
-    }
-    wm_draw(focus, lens_on ? -1 : focus);
-    draw_rail_std();
-    draw_dock();
-    if (drag == D_CARD && drag_on) draw_card(drag_arg, ptr_x - CARDW / 2, ptr_y - 30, 1);
-    for (int i = 0; i < nitems; i++)                     /* (memory follows the view) */
-        if (items[i].pv && items[i].seen != frame) { free(items[i].pv); items[i].pv = 0; }
-}
-
 static void build(void)
 {
     dl_reset();
     nhit = 0;
-    frame++;
-    dl_rect(0, 0, SW, SH, 0, C_BG);
-    if (mode == SESSION && std_ui) dl_grid(0, 0, 40, C_BG, 0x111829);
-    if (mode == GREETER) { dl_grid(0, 0, 40, C_BG, 0x111829); draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
-
-    /* ---- the top bar: name, the Lens (drawn last: its results go over the stage), status */
-    label(M, 26, "SIEOS", 2, C_TXT);
-    char st[48], ck[8];
-    long d = now_day();
-    int k = 0;
-    ck[k++] = '0' + d / 36000; ck[k++] = '0' + d / 3600 % 10; ck[k++] = ':';
-    ck[k++] = '0' + d / 600 % 6; ck[k++] = '0' + d / 60 % 10; ck[k] = 0;
-    int rx = SW - M - tw(5, 2);
-    label(rx, 26, ck, 2, C_TXT);
-    panel_status(st, sizeof st);
-    rx -= tw(strlen(st), 2) + 30;
-    label(rx, 26, st, 2, C_DIM);
-    const char *net = port_find("net") > 0 ? "network" : "network: off";
-    rx -= tw(strlen(net), 2) + 30;
-    if (rx > lens_x1() + 10) label(rx, 26, net, 2, C_DIM);
-    if (toast[0]) dl_text(M, 60, toast, strlen(toast), S(2), C_ACC, 0, 0, lens_x0() - 10, SH);
-
-    /* ---- the rail: projects, then the Inbox, then you */
-    if (!std_ui) draw_rail();
-    else {
-        build_std();
-        draw_lens();
-        draw_menu();
-        draw_prompt();
-        dl_pointer(ptr_x, ptr_y);
-        return;
-    }
-
-    /* ---- the stage: at most two windows */
+    dl_grid(0, 0, 40, C_BG, 0x111829);
+    if (mode == GREETER) { draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
+    hitbox(0, 0, SW, SH, H_DESK, 0);                     /* (the desk itself: its menu) */
     tidy();
-    proj_t *p = here();
-    if (p->main < 0) {
-        dl_rect(SX0, SY0, SX1, SY1, 16, C_BG);
-        dl_frame(SX0, SY0, SX1, SY1, 16, 1, C_LINE);
-        static const char *e[3] = { "Nothing on the stage.", "Click a card on the shelf below,",
-                                    "or press Ctrl+T for a terminal, Ctrl+Space to find or ask." };
-        for (int i = 0; i < 3; i++) label(SX0 + (SX1 - SX0) / 2 - tw(strlen(e[i]), 2) / 2, (SY0 + SY1) / 2 - 50 + i * 36, e[i], 2, i ? C_DIM : C_TXT);
+    if (wm_top() < 0) {
+        static const char *t[2] = { "No windows on this workspace.", "Ctrl+T: a terminal. The Deskbar (top right): everything else." };
+        for (int i = 0; i < 2; i++) label((M + STX1) / 2 - tw(strlen(t[i]), 2) / 2, SH / 2 - 20 + i * 36, t[i], 2, i ? C_DIM : C_TXT);
     }
-    for (int w = 0; w < NWIN; w++) {
-        int x0, x1;
-        if (w != p->main && w != p->beside) continue;
-        slot(w, &x0, &x1);
-        if (x1 > x0) draw_window(w, x0, x1);
-    }
-
-    /* ---- the shelf */
-    shelf_list();
-    int fit = shelf_fit();
-    if (shelf_off > ncards - fit) shelf_off = ncards - fit;
-    if (shelf_off < 0) shelf_off = 0;
-    char sl[80];
-    strlcpy(sl, "IN THIS PROJECT", sizeof sl);
-    if (ncards > fit) strlcpy(sl + strlen(sl), "  (scroll for more)", sizeof sl - strlen(sl));
-    label(SX0, SHY + 8, sl, 2, C_DIM);
-    for (int c = shelf_off; c < ncards && c < shelf_off + fit; c++) {
-        if (drag == D_CARD && drag_on && c == drag_arg) continue;
-        draw_card(c, card_x(c), SH - M - CARDH, 0);
-        if (atlas_debug) { char t[48], kd[32]; const char *l[3]; card_text(c, t, sizeof t, kd, sizeof kd, l); say("atlas: dbg card %s at %d %d\n", t, card_x(c) + CARDW / 2, SH - M - CARDH + 30); }
-    }
-    if (drag == D_CARD && drag_on) draw_card(drag_arg, ptr_x - CARDW / 2, ptr_y - 30, 1);   /* (being dragged) */
-    for (int i = 0; i < nitems; i++)                     /* memory follows the view */
-        if (items[i].pv && items[i].seen != frame) { free(items[i].pv); items[i].pv = 0; }
-
-    draw_lens();
+    wm_draw(focus, strip_on ? -1 : focus);
+    draw_deskbar();
+    draw_strip();
     draw_menu();
     draw_prompt();
     dl_pointer(ptr_x, ptr_y);
@@ -1149,75 +721,149 @@ static void settle(void)
     if (atlas_debug) {
         for (int w = 0; w < MAXTERM; w++) {
             int x0, y0, x1, y1;
-            if (terms[w].used && win_box(w, &x0, &y0, &x1, &y1)) say("atlas: terminal %d at %d %d cell %d %d\n", terms[w].chan, x0 + 14, y0 + TBAR + 8, KW, KH);
+            if (win_box(w, &x0, &y0, &x1, &y1)) say("atlas: terminal %d at %d %d cell %d %d\n", terms[w].chan, x0 + 14, y0 + WM_BODY_DY + TBAR + 8, KW, KH);
         }
-        say("atlas: dbg stage %d %d %d %d, frame %lu us\n", SX0, SY0, SX1, SY1, (unsigned long)frame_us);
+        say("atlas: dbg frame %lu us\n", (unsigned long)frame_us);
     }
     atlas_debug = 0;
 }
 
-/* ---- Projects: switching, and what their menus do. */
-static void open_project(const char *name)
+/* ---- For Settings: the screen's size, the mouse. */
+int atlas_uid(void) { return uid; }
+const char *atlas_home(void) { return uid >= 0 ? home : ""; }
+int atlas_screen(int *w, int *h) { *w = PW; *h = PH; return scr.resizable; }
+
+static void mouse_apply(void)                           /* con: how far a count goes, on this screen */
 {
-    strlcpy(cur, name, sizeof cur);
-    shelf_off = 0;
-    tidy();
-    focus = std_ui ? wm_top() : here()->main;
-    lens_on = 0;
-    say("atlas: project %s\n", cur);
-    say_stage();
-    settle();
+    long con = 0;
+    msg_t m = { .w = { CON_MOUSE, m_speed, PW, PH } };
+    call_named(&con, "console", &m, 1);
 }
-int atlas_open_project(const char *name)
+
+int atlas_set_size(int w, int h)
 {
-    if (proj_find(name) < 0) return -ENOENT;
-    open_project(name);
+    int ow = PW, oh = PH, osw = SW, osh = SH;
+    screen_t ns;
+    if (!scr.resizable || w < 1024 || h < 600) return -EINVAL;
+    PW = w; PH = h;
+    if (screen_init(&ns)) { PW = ow; PH = oh; if (!screen_init(&ns)) scr = ns; draw_init(&scr); return -EIO; }
+    scr = ns;
+    draw_init(&scr);
+    geometry();
+    ptr_x = ptr_x * SW / osw; ptr_y = ptr_y * SH / osh;
+    mouse_apply();
+    settle();
     return 0;
 }
 
-static long set_project(const char *path, const char *proj)   /* move a file (to the Inbox: no attribute) */
+void atlas_mouse_get(int *speed, int *swap, int *reverse) { *speed = m_speed; *swap = m_swap; *reverse = m_rev; }
+void atlas_mouse(int speed, int swap, int reverse)
 {
-    if (!atlas_may(path, 1)) return -EACCES;
-    if (!strcmp(proj, INBOX)) { fs_rmxattr(path, "project"); return 0; }
-    return fs_setxattr(path, "project", proj, strlen(proj));
-}
-
-/* A file moved by hand: its project stays on the rail even if that was its last file. */
-static long move_item(int i, const char *to)
-{
-    char from[32];
-    strlcpy(from, items[i].proj, sizeof from);
-    long e = set_project(items[i].path, to);
-    int k = proj_find(from);
-    if (!e && k >= 0 && projs[k].n == 1 && strcmp(from, INBOX)) empty_set(from, 0);
-    say("atlas: %s moved to %s (%ld)\n", base_name(items[i].path), to, e);
-    if (e < 0) strlcpy(toast, "Not allowed: not your file.", sizeof toast);
-    return e;
-}
-
-static void rename_or_delete(const char *from, const char *to)   /* to = 0: delete (files to the Inbox) */
-{
-    int done = 0, denied = 0;
-    for (int i = 0; i < nitems; i++) {
-        if (strcmp(items[i].proj, from)) continue;
-        if (set_project(items[i].path, to ? to : INBOX) < 0) denied++; else done++;
+    m_speed = speed; m_swap = swap; m_rev = reverse;
+    mouse_apply();
+    char path[96], line[64], *p = line;
+    strlcpy(path + strlcpy(path, home, sizeof path), "/.mouse", 8);
+    p += strlcpy(p, "speed=", 8); p += num(p, speed);
+    p += strlcpy(p, "\nswap=", 8); p += num(p, swap);
+    p += strlcpy(p, "\nreverse=", 10); p += num(p, reverse);
+    *p++ = '\n'; *p = 0;
+    if (atlas_may(home, 1)) {
+        long f = fs_open(path, FS_WRONLY | FS_CREAT | FS_TRUNC, 0644);
+        if (f >= 0) { fs_write(f, 0, line, strlen(line)); fs_close(f); fs_chown(path, uid, ugid); }
     }
-    for (int t = 0; t < MAXTERM; t++) if (terms[t].used && !strcmp(terms[t].proj, from)) strlcpy(terms[t].proj, to ? to : INBOX, 32);
-    if (!strcmp(edit_proj, from)) strlcpy(edit_proj, to ? to : INBOX, sizeof edit_proj);
-    if (!strcmp(sia_proj, from)) strlcpy(sia_proj, to ? to : INBOX, sizeof sia_proj);
-    empty_set(to, from);
-    if (to) say("atlas: project %s renamed to %s (%d files, %d not allowed)\n", from, to, done, denied);
-    else say("atlas: project %s deleted (%d files to the Inbox, %d not allowed)\n", from, done, denied);
-    if (!strcmp(cur, from)) strlcpy(cur, to ? to : INBOX, sizeof cur);
-    rescan();
+    say("atlas: mouse speed %d swap %d reverse %d\n", speed, swap, reverse);
+}
+
+static int conf_num(const char *text, const char *key, int def)   /* "key=N" in a small file */
+{
+    size_t kl = strlen(key);
+    for (const char *p = text; p && *p; ) {
+        if (same_n(p, key, kl) && p[kl] == '=') {
+            int v = 0, any = 0;
+            for (p += kl + 1; *p >= '0' && *p <= '9'; p++) { v = v * 10 + *p - '0'; any = 1; }
+            return any ? v : def;
+        }
+        p = strchr(p, '\n');
+        if (p) p++;
+    }
+    return def;
+}
+/* The look (draw.c) and the zoom: the user's own (~/.look), Phosphor at
+ * 100% before a login. 100% is 0.75 screen pixels per picture pixel. */
+static int zoom_pct = 100;
+int atlas_look_get(void) { return draw_look_get(); }
+int atlas_zoom_get(void) { return zoom_pct; }
+static void zoom_apply(int pct)
+{
+    int osw = SW, osh = SH;
+    zoom_pct = pct;
+    draw_zoom(49152 * pct / 100);
+    geometry();
+    ptr_x = ptr_x * SW / osw; ptr_y = ptr_y * SH / osh;
+}
+static void look_save(void)
+{
+    char path[96], line[32], *p = line;
+    strlcpy(path + strlcpy(path, home, sizeof path), "/.look", 7);
+    p += strlcpy(p, "look=", 6); p += num(p, draw_look_get());
+    p += strlcpy(p, "\nzoom=", 7); p += num(p, zoom_pct); *p++ = '\n'; *p = 0;
+    if (uid >= 0 && atlas_may(home, 1)) {
+        long f = fs_open(path, FS_WRONLY | FS_CREAT | FS_TRUNC, 0644);
+        if (f >= 0) { fs_write(f, 0, line, strlen(line)); fs_close(f); fs_chown(path, uid, ugid); }
+    }
+}
+void atlas_look(int k)
+{
+    if (k < 0 || k >= NLOOK) return;
+    draw_look(k);
+    look_save();
+    say("atlas: look %d\n", k);
+    redraw();
+}
+void atlas_zoom(int pct)
+{
+    if (pct < 50 || pct > 400) return;
+    zoom_apply(pct);
+    look_save();
+    say("atlas: zoom %d%% (%d x %d)\n", pct, SW, SH);
     settle();
 }
-
-static int good_name(const char *s)                      /* letters, digits, ". _ -" and spaces */
+static void look_load(void)
 {
-    if (!*s || *s == '.' || *s == ' ') return 0;
-    for (; *s; s++) if (!((*s | 32) >= 'a' && (*s | 32) <= 'z') && !(*s >= '0' && *s <= '9') && !strchr("._- ", *s)) return 0;
-    return 1;
+    int k = LOOK_PHOSPHOR, z = 100;
+    if (uid >= 0) {
+        char path[96];
+        size_t n = 0;
+        strlcpy(path + strlcpy(path, home, sizeof path), "/.look", 7);
+        char *f = atlas_may(path, 0) ? file_get(path, &n) : 0;
+        if (f) {
+            int v = conf_num(f, "look", k); k = v >= 0 && v < NLOOK ? v : k;
+            v = conf_num(f, "zoom", z); z = v >= 50 && v <= 400 ? v : z;
+            free(f);
+        }
+    }
+    draw_look(k);
+    if (z != zoom_pct) zoom_apply(z);
+}
+
+static void mouse_load(void)                            /* at login: the user's mouse; at logout: the default */
+{
+    look_load();
+    m_speed = 100; m_swap = m_rev = 0;
+    if (uid >= 0) {
+        char path[96];
+        size_t n = 0;
+        strlcpy(path + strlcpy(path, home, sizeof path), "/.mouse", 8);
+        char *f = atlas_may(path, 0) ? file_get(path, &n) : 0;
+        if (f) {
+            int sp = conf_num(f, "speed", 100);
+            m_speed = sp >= 25 && sp <= 400 ? sp : 100;
+            m_swap = conf_num(f, "swap", 0) == 1;
+            m_rev = conf_num(f, "reverse", 0) == 1;
+            free(f);
+        }
+    }
+    mouse_apply();
 }
 
 /* ---- Terminals: open (a shell for the user, on "atlas#N"), close. */
@@ -1247,7 +893,6 @@ static long open_term(const char *pw)
     w->ring = ring;
     memset(ring, ' ', HIST * TCMAX);
     w->used = 1; w->chan = chan; w->pid = pid; w->cols = 80; w->rows = 25;
-    strlcpy(w->proj, cur, sizeof w->proj);
     tty_init(&w->tty, echo_out, w);
     say("atlas: terminal %d opened (pid %ld)\n", chan, pid);
     return t;
@@ -1258,46 +903,49 @@ static void close_term(term_t *t)
     if (!t->used) return;
     say("atlas: terminal %d closed\n", t->chan);
     if (t->tty.reader) reply_val(t->tty.reader, -EIO);
-    if (std_ui) wm_gone(t - terms);                      /* (Standard: it folds away) */
     t->used = 0;
     free(t->ring);
     t->ring = 0;
     if (sel.t == t - terms) sel.on = 0;
+    wm_gone(t - terms);
+    if (last_term == t - terms) last_term = -1;
     tidy();
 }
 
-static void new_term(int beside)
+static void new_term(void)
 {
     long t = open_term(0);
-    if (t < 0) { settle(); return; }
-    if (beside) put_beside(t); else put_main(t);
+    if (t >= 0) show_win(t);
     settle();
 }
 
 static void close_win(int w)
 {
+    if (w < 0) return;
     if (w < MAXTERM) { if (terms[w].used) sys_kill(terms[w].pid); return; }   /* (closed when its shell ends) */
-    if (w == W_EDIT) { if (edit_dirty()) { edit_key(27); if (edit_active()) { strlcpy(toast, "Not saved: Close again to discard.", sizeof toast); settle(); return; } } else edit_close(); }
-    if (std_ui) wm_gone(w);
+    if (w == W_EDIT && !edit_close_window()) { strlcpy(toast, "Not saved: close it again to discard.", sizeof toast); settle(); return; }
     if (w == W_SIA) { sia_on = 0; say("atlas: assistant closed\n"); }
-    tidy();
-    say_stage();
+    if (w == W_SET) { set_on = 0; settings_close(); say("atlas: settings closed\n"); }
+    if (w == W_FILES) { files_on = 0; say("atlas: files closed\n"); }
+    if (w == W_PINS) { pins_on = 0; pins_close(); say("atlas: pins closed\n"); }
+    wm_gone(w);
+    if (focus == w) focus = wm_top();
     settle();
 }
 
 static void logout(void)
 {
     for (int t = 0; t < MAXTERM; t++) if (terms[t].used) { sys_kill(terms[t].pid); close_term(&terms[t]); }
-    for (int i = 0; i < nitems; i++) { free(items[i].pv); items[i].pv = 0; }
     edit_close();
-    sia_on = 0;
-    nitems = nproj = 0;
-    strlcpy(cur, INBOX, sizeof cur);
+    sia_on = set_on = files_on = pins_on = 0;
+    pins_logout();
+    settings_close();
+    nitems = 0;
     mode = GREETER;
-    uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = 0; gfield = 0;
-    nres = nfound = 0; lens_on = 0; mn.on = pr.on = 0; focus = -1;
-    std_ui = g_std = 0;                                 /* (the login screen offers Focused first, each time) */
+    uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = home[0] = 0; gfield = 0;
+    nres = nfound = 0; strip_on = 0; mn.on = pr.on = 0; focus = -1; last_term = -1;
     wm_reset();
+    mouse_load();                                       /* (uid -1: the default mouse) */
     say("atlas: greeter\n");
 }
 
@@ -1322,7 +970,8 @@ void greeter_login(const char *name, const char *pw)
     login();                                            /* (wipes gpw) */
 }
 
-/* The system's launchers, for the Lens and "Open app". */
+/* The system's launchers (/etc/apps), for the strip and the menu. */
+enum { K_TERMINAL, K_EDITOR, K_SETTINGS };
 static void scan_apps(void)
 {
     napps = 0;
@@ -1338,6 +987,11 @@ static void scan_apps(void)
             if (type != 8 || !is_app(name)) continue;
             strlcpy(apps[napps].path, "/etc/apps/", sizeof apps[0].path);
             strlcpy(apps[napps].path + 10, name, sizeof apps[0].path - 10);
+            size_t len = 0;
+            char *f = file_get(apps[napps].path, &len), kind[16];
+            app_field(f, "kind", kind, sizeof kind);
+            free(f);
+            apps[napps].kind = !strcmp(kind, "editor") ? K_EDITOR : !strcmp(kind, "settings") ? K_SETTINGS : K_TERMINAL;
             app_name(apps[napps].path, apps[napps].name, sizeof apps[0].name);
             napps++;
         }
@@ -1351,58 +1005,39 @@ static void login(void)
     strlcpy(gmsg, "checking...", sizeof gmsg);
     redraw();
     if (acct_user(user, 0, &u)) { wipe(gpw, sizeof gpw); strlcpy(gmsg, "Wrong name or password.", sizeof gmsg); say("atlas: login %s: refused\n", gname); return; }
-    uid = u.uid; ugid = u.gid;                          /* (for rescan's rights; undone if refused) */
+    uid = u.uid; ugid = u.gid;                          /* (for the rights checks; undone if refused) */
     if (acct_groups(user, &ugroups) < 0) ugroups.n = 0;
     strlcpy(home, u.home, sizeof home);
-    rescan();
-    strlcpy(cur, projs[0].name, sizeof cur);            /* the first project (the Inbox if none) */
-    std_ui = g_std;                                     /* (the first window goes where this desktop puts it) */
     long t = open_term(gpw);                            /* (auth checks the password: it starts the shell) */
     wipe(gpw, sizeof gpw);
     if (t < 0) {
-        uid = ugid = -1; ugroups.n = 0; nitems = nproj = 0; std_ui = 0;
+        uid = ugid = -1; ugroups.n = 0; home[0] = 0;
         strlcpy(gmsg, "Wrong name or password.", sizeof gmsg);
         say("atlas: login %s: refused\n", gname);
         return;
     }
-    say("atlas: login %s: ok (%s desktop)\n", user, g_std ? "Standard" : "Focused");
+    say("atlas: login %s: ok\n", user);
     gmsg[0] = 0;
     mode = SESSION;
-    std_ui = g_std;
+    rescan();
+    mouse_load();
     scan_apps();
-    put_main(t);
-    say("atlas: project %s\n", cur);
+    show_win(t);
     settle();
 }
 
 /* ---- Files and apps: opening them. */
-static int item_find(const char *path)
+static int open_file(const char *path)                   /* in the editor */
 {
-    for (int i = 0; i < nitems; i++) if (!strcmp(items[i].path, path)) return i;
-    return -1;
-}
-
-static int open_file_beside(const char *path, int beside)   /* in the editor, in the file's project */
-{
-    if (edit_active() && strcmp(edit_path(), path) && edit_dirty()) {
-        strlcpy(toast, "Save or close the file being edited first.", sizeof toast);
-        say("atlas: %s: another file is being edited\n", path);
-        settle();
-        return -EBUSY;
-    }
-    if (edit_open(path) < 0) { settle(); return -EACCES; }
-    int i = item_find(path);
-    const char *proj = i >= 0 ? items[i].proj : INBOX;
-    if (strcmp(cur, proj)) { strlcpy(cur, proj, sizeof cur); shelf_off = 0; say("atlas: project %s\n", cur); }
-    strlcpy(edit_proj, cur, sizeof edit_proj);
-    if (beside) put_beside(W_EDIT); else put_main(W_EDIT);
+    if (!atlas_may(path, 0) || edit_open(path) < 0) { strlcpy(toast, "Cannot open that file.", sizeof toast); settle(); return -EACCES; }
+    show_win(W_EDIT);
     settle();
     return 0;
 }
-static int open_file(const char *path) { return open_file_beside(path, 0); }
 
 int atlas_open_file(const char *path)
 {
+    if (path[0] == '/' && atlas_may(path, 0)) return open_file(path) < 0 ? -EACCES : 0;
     int best = -1;
     for (int i = 0; i < nitems; i++) {
         if (!strcmp(items[i].path, path)) { best = i; break; }
@@ -1413,20 +1048,32 @@ int atlas_open_file(const char *path)
     return open_file(items[best].path) < 0 ? -EACCES : 0;
 }
 
-static void prompt_open(int act, const char *title, const char *proj, const char *init)
+static void prompt_open(const char *title, const char *init)
 {
     mn.on = 0;
-    pr.on = 1; pr.act = act;
+    pr.on = 1;
     strlcpy(pr.title, title, sizeof pr.title);
-    strlcpy(pr.proj, proj ? proj : "", sizeof pr.proj);
     strlcpy(pr.buf, init ? init : "", sizeof pr.buf);
     say("atlas: prompt %s\n", title);
     redraw();
 }
 
-/* Start an app: a terminal (a shell as the logged-in user, never root) in
- * the current project, which runs the app's command when it first reads. */
-static void app_start(const char *path, int beside)
+static void open_settings(void)
+{
+    if (!set_on) { settings_open(); set_on = 1; }
+    show_win(W_SET);
+    settle();
+}
+static void open_files(void)
+{
+    if (!files_on) { files_open(home); files_on = 1; }
+    show_win(W_FILES);
+    settle();
+}
+
+/* Start an app: a terminal (a shell as the logged-in user, never root)
+ * which runs the app's command when it first asks for a line. */
+static void app_start(const char *path)
 {
     size_t n = 0;
     char *f = atlas_may(path, 0) || !memcmp(path, "/etc/apps/", 10) ? file_get(path, &n) : 0;
@@ -1437,7 +1084,8 @@ static void app_start(const char *path, int beside)
     app_field(f, "args", args, sizeof args);
     app_field(f, "kind", kind, sizeof kind);
     free(f);
-    if (!strcmp(kind, "editor")) { prompt_open(P_NEWFILE, "New file: its name?", cur, 0); return; }
+    if (!strcmp(kind, "editor")) { prompt_open("New file: its name?", 0); return; }
+    if (!strcmp(kind, "settings")) { open_settings(); return; }
     if (rn[0] != '/') { say("atlas: app %s: no program\n", nm); settle(); return; }
     long t = open_term(0);
     if (t < 0) { settle(); return; }
@@ -1446,35 +1094,13 @@ static void app_start(const char *path, int beside)
         p += strlcpy(p, rn, 64);
         if (args[0]) { *p++ = ' '; strlcpy(p, args, 96); }
     }
-    say("atlas: app %s started in %s (terminal %d)\n", nm, cur, terms[t].chan);
-    if (beside) put_beside(t); else put_main(t);
+    say("atlas: app %s started (terminal %d)\n", nm, terms[t].chan);
+    show_win(t);
     settle();
 }
+int atlas_run_app(const char *path) { app_start(path); return 0; }
 
-/* "Open app" in a project: its launcher is copied to ~/apps (once) and put
- * in the project, so it is on the project's shelf; then it starts. */
-static void pin_app(const char *sys)
-{
-    char dir[96], path[160];
-    strlcpy(dir + strlcpy(dir, home, sizeof dir), "/apps", 8);
-    strlcpy(path + strlcpy(path, dir, sizeof path), "/", 2);
-    strlcpy(path + strlen(path), base_name(sys), sizeof path - strlen(path));
-    siefs_stat_t st;
-    if (atlas_may(home, 1)) {
-        if (fs_stat(dir, &st, 1) && !fs_mkdir(dir, 0755)) fs_chown(dir, uid, ugid);
-        if (fs_stat(path, &st, 1)) {
-            size_t n = 0;
-            char *f = file_get(sys, &n);
-            long h = f ? fs_open(path, FS_WRONLY | FS_CREAT | FS_EXCL, 0644) : -ENOENT;
-            if (h >= 0) { fs_write(h, 0, f, n); fs_close(h); fs_chown(path, uid, ugid); }
-            free(f);
-        }
-        if (!fs_stat(path, &st, 1)) { set_project(path, cur); rescan(); app_start(path, 0); return; }
-    }
-    app_start(sys, 0);                                   /* (not kept on the shelf) */
-}
-
-static void new_file(const char *proj, const char *name)
+static void new_file(const char *name)
 {
     char path[160];
     size_t k = strlcpy(path, home, sizeof path);
@@ -1487,8 +1113,8 @@ static void new_file(const char *proj, const char *name)
         e = h < 0 ? h : 0;
         if (h >= 0) fs_close(h);
     }
-    if (!e) { fs_chown(path, uid, ugid); set_project(path, proj); }   /* (created by root: it is the user's) */
-    say("atlas: new file %s in %s (%ld)\n", name, proj, e);
+    if (!e) fs_chown(path, uid, ugid);                   /* (created by root: it is the user's) */
+    say("atlas: new file %s (%ld)\n", name, e);
     rescan();
     if (e) { strlcpy(toast, e == -EEXIST ? "A file with that name exists." : "Cannot create it here.", sizeof toast); settle(); return; }
     open_file(path);
@@ -1496,179 +1122,169 @@ static void new_file(const char *proj, const char *name)
 
 static void ask_sia(const char *q)                       /* the assistant's window, then the question */
 {
-    if (!sia_on || strcmp(sia_proj, cur)) { sia_on = 1; strlcpy(sia_proj, cur, sizeof sia_proj); }
-    proj_t *p = here();
-    if (std_ui) put_main(W_SIA);
-    else if (p->main != W_SIA && p->beside != W_SIA) { if (p->main >= 0) put_beside(W_SIA); else put_main(W_SIA); }
-    focus = W_SIA; lens_on = 0;
+    sia_on = 1;
+    show_win(W_SIA);
     say("atlas: assistant open\n");
     if (q && *q) panel_ask(q);
     settle();
 }
 
+static int good_name(const char *s)                      /* letters, digits, ". _ -" and spaces */
+{
+    if (!*s || *s == '.' || *s == ' ') return 0;
+    for (; *s; s++) if (!((*s | 32) >= 'a' && (*s | 32) <= 'z') && !(*s >= '0' && *s <= '9') && !strchr("._- ", *s)) return 0;
+    return 1;
+}
 static void prompt_done(void)
 {
     pr.on = 0;
     char *b = pr.buf;
     while (*b && b[strlen(b) - 1] == ' ') b[strlen(b) - 1] = 0;
-    if (!good_name(b) || !strcmp(b, INBOX)) { say("atlas: prompt: bad name\n"); strlcpy(toast, "Use letters, digits, . _ - and spaces.", sizeof toast); settle(); return; }
-    if (pr.act == P_NEWFILE) { new_file(pr.proj, b); return; }
-    if (proj_find(b) >= 0) { say("atlas: project %s already exists\n", b); strlcpy(toast, "That project exists.", sizeof toast); settle(); return; }
-    if (pr.act == P_RENAME) { rename_or_delete(pr.proj, b); return; }
-    empty_set(b, 0);                                     /* P_NEWPROJ */
-    say("atlas: new project %s\n", b);
-    rescan();
-    open_project(b);
+    if (!good_name(b)) { say("atlas: prompt: bad name\n"); strlcpy(toast, "Use letters, digits, . _ - and spaces.", sizeof toast); settle(); return; }
+    new_file(b);
 }
 
 /* ---- Menus. */
-static void menu_new(const char *title, const char *path, const char *proj, int win)
-{
-    mn.n = 0;
-    strlcpy(mn.title, title, sizeof mn.title);
-    strlcpy(mn.path, path ? path : "", sizeof mn.path);
-    strlcpy(mn.proj, proj ? proj : "", sizeof mn.proj);
-    mn.win = win;
-}
-static void menu_add(const char *l, int act, const char *arg)
+static void menu_new(const char *title, int win) { mn.n = 0; mn.hover = -1; mn.win = win; strlcpy(mn.title, title, sizeof mn.title); }
+static void menu_add(const char *l, int act, const char *arg, int ic)
 {
     if (mn.n == MAXMENT) return;
     strlcpy(mn.e[mn.n].label, l, sizeof mn.e[0].label);
     strlcpy(mn.e[mn.n].arg, arg ? arg : "", sizeof mn.e[0].arg);
-    mn.e[mn.n++].act = act;
+    mn.e[mn.n].act = act; mn.e[mn.n++].icon = ic;
 }
 static void menu_show(int x, int y)
 {
-    mn.on = 1;
-    mn.x = x + MENW > SW - 10 ? SW - 10 - MENW : x;
-    mn.y = y + 62 + mn.n * MENH > SH - 10 ? SH - 10 - 62 - mn.n * MENH : y;
+    int w = 300;
+    for (int i = 0; i < mn.n; i++) { int lw = tw(strlen(mn.e[i].label), 2) + 80; if (lw > w) w = lw; }
+    mn.on = 1; mn.w = w;
+    mn.x = x + w > SW - 10 ? SW - 10 - w : x;
+    mn.y = y + menu_h() > SH - 10 ? SH - 10 - menu_h() : y;
     say("atlas: menu %s: %d entries\n", mn.title, mn.n);
-    for (int i = 0; i < mn.n; i++) say("atlas: menu entry %d %s at %d %d\n", i, mn.e[i].label, mn.x + MENW / 2, mn.y + 52 + i * MENH + MENH / 2);
+    for (int i = 0, ey = mn.y + 8; i < mn.n; i++) {
+        if (mn.e[i].act == A_SEP) { ey += MENSEP; continue; }
+        say("atlas: menu entry %d %s at %d %d\n", i, mn.e[i].label, mn.x + mn.w / 2, ey + MENH / 2);
+        ey += MENH;
+    }
     redraw();
 }
-static void menu_projects(int act, const char *except)
-{
-    for (int i = 0; i < nproj; i++) if (strcmp(projs[i].name, except)) menu_add(projs[i].name, act, projs[i].name);
-    menu_add("Cancel", A_CANCEL, 0);
-}
 
-static void card_menu(int k, int x, int y)
+static void menu_starters(void)                          /* what every start menu begins with */
 {
-    rail_menu = 0;
-    if (cards[k].kind == C_ADD) {
-        menu_new("Add to this project", 0, cur, -1);
-        menu_add("New file", A_NEWFILE, 0);
-        menu_add("New terminal", A_NEWTERM, 0);
-        menu_add("Open app", A_SUB_APPS, 0);
-        menu_add("Ask sia", A_ASK, 0);
-        menu_add("Cancel", A_CANCEL, 0);
-    } else if (cards[k].kind == C_WINDOW) {
-        char t[48];
-        win_title(cards[k].i, t, sizeof t);
-        menu_new(t, 0, cur, cards[k].i);
-        menu_add("Open", A_OPEN, 0);
-        menu_add("Open beside", A_BESIDE, 0);
-        menu_add("Move to project", A_SUB_MOVE, 0);
-        menu_add("Close", A_CLOSEWIN, 0);
-        menu_add("Cancel", A_CANCEL, 0);
-    } else {
-        item_t *it = &items[cards[k].i];
-        menu_new(it->name, it->path, it->proj, -1);
-        menu_add(it->app ? "Start" : "Open", A_OPEN, 0);
-        menu_add(it->app ? "Start beside" : "Open beside", A_BESIDE, 0);
-        menu_add("Move to project", A_SUB_MOVE, 0);
-        if (strcmp(it->proj, INBOX)) menu_add("Move to the Inbox", A_INBOX, 0);
-        menu_add("Cancel", A_CANCEL, 0);
+    menu_add("Terminal", A_TERM, 0, I_TERM);
+    menu_add("sia", A_SIA, 0, I_SIA);
+    menu_add("Files", A_FILES, 0, I_FOLDER);
+    menu_add("Text editor", A_EDITOR, 0, I_FILE);
+    menu_add("Pins", A_PINS, 0, I_PINS);
+    menu_add("Settings", A_SETTINGS, 0, I_SETTINGS);
+}
+static void main_menu(void)                              /* the Deskbar's: start, the apps, the windows, leave */
+{
+    menu_new("SIEOS", -2);
+    menu_starters();
+    int sep = 0;
+    for (int i = 0; i < napps; i++) {
+        if (apps[i].kind != K_TERMINAL || !strcmp(base_name(apps[i].path), "shell.app")) continue;
+        if (!sep++) menu_add("", A_SEP, 0, -1);
+        menu_add(apps[i].name, A_RUNAPP, apps[i].path, I_APP);
     }
+    sep = 0;
+    for (int w = 0; w < NWIN; w++) {
+        if (!win_used(w)) continue;
+        if (!sep++) menu_add("", A_SEP, 0, -1);
+        char t[48], a[4];
+        win_title(w, t, sizeof t);
+        if (wm_minimized(w)) strlcpy(t + strlen(t), " (hidden)", sizeof t - strlen(t));
+        a[num(a, w)] = 0;
+        menu_add(t, A_WINDOW, a, win_icon(w));
+    }
+    menu_add("", A_SEP, 0, -1);
+    menu_add("Log out", A_LOGOUT, 0, -1);
+    menu_show(DBX + DBW - 340, M + DB_MENU + 2);
+}
+static void desk_menu(int x, int y)
+{
+    menu_new("Desk", -1);
+    menu_starters();
+    menu_add("", A_SEP, 0, -1);
+    menu_add("Log out", A_LOGOUT, 0, -1);
+    menu_show(x, y);
+}
+static void app_menu(int k, int x, int y)               /* a Deskbar app: new one, its windows */
+{
+    char t[48] = "New ";
+    menu_new(dbapps[k].name, -1);
+    strlcpy(t + 4, dbapps[k].name, sizeof t - 4);
+    menu_add(dbapps[k].act == A_TERM ? t : "Open", dbapps[k].act, 0, dbapps[k].icon);
+    for (int w = 0; w < NWIN; w++) {
+        if (!win_used(w) || win_icon(w) != dbapps[k].icon) continue;
+        char a[4];
+        win_title(w, t, sizeof t);
+        if (wm_minimized(w)) strlcpy(t + strlen(t), " (hidden)", sizeof t - strlen(t));
+        a[num(a, w)] = 0;
+        menu_add(t, A_WINDOW, a, dbapps[k].icon);
+    }
+    menu_show(x - 320, y);
+}
+static void window_menu(int w, int x, int y)
+{
+    char t[48];
+    win_title(w, t, sizeof t);
+    menu_new(t, w);
+    menu_add("Minimize", A_MIN, 0, -1);
+    menu_add("Zoom", A_ZOOM, 0, -1);
+    menu_add("", A_SEP, 0, -1);
+    for (int k = 0; k < WM_NWS; k++) {
+        if (k == wm_ws_of(w)) continue;
+        char l[32] = "Send to workspace ", a[2] = { (char)('0' + k), 0 };
+        l[18] = '1' + k; l[19] = 0;
+        menu_add(l, A_SENDWS, a, -1);
+    }
+    menu_add("", A_SEP, 0, -1);
+    menu_add("Close", A_CLOSE, 0, -1);
     menu_show(x, y);
 }
 
-static void proj_menu(int i, int x, int y)
+static void db_start(int act)                            /* start (or bring back) one of the Deskbar's apps */
 {
-    rail_menu = 1;
-    if (i < 0 || i == nproj - 1) {                       /* the rail's empty part, or the Inbox */
-        menu_new("Projects", 0, 0, -1);
-        menu_add("New project", A_NEWPROJ, 0);
-        menu_add("Cancel", A_CANCEL, 0);
-    } else {
-        char t[48];
-        strlcpy(t + strlcpy(t, "Project ", sizeof t), projs[i].name, sizeof t - 8);
-        menu_new(t, 0, projs[i].name, -1);
-        menu_add("Rename", A_RENAME, 0);
-        menu_add("Delete the project", A_DELETE, 0);
-        menu_add("New project", A_NEWPROJ, 0);
-        menu_add("Cancel", A_CANCEL, 0);
+    switch (act) {
+    case A_TERM: new_term(); return;
+    case A_SIA: ask_sia(0); return;
+    case A_FILES: open_files(); return;
+    case A_EDITOR: if (edit_active()) { show_win(W_EDIT); settle(); } else prompt_open("New file: its name?", 0); return;
+    case A_SETTINGS: open_settings(); return;
+    case A_PINS: if (!pins_on) { pins_open(); pins_on = 1; } show_win(W_PINS); settle(); return;
     }
-    menu_show(x, y);
 }
-
-static void apps_menu(void)
+static void db_click(int k)                              /* running: its window in front (minimized: back); else start it */
 {
-    char proj[32];
-    strlcpy(proj, mn.proj, sizeof proj);
-    menu_new("Open app", 0, proj, -1);
-    for (int i = 0; i < napps; i++) menu_add(apps[i].name, A_RUNAPP, apps[i].path);
-    menu_add("Cancel", A_CANCEL, 0);
-    menu_show(mn.x, mn.y);
+    int act = dbapps[k].act;
+    if (!db_running(k)) { db_start(act); return; }
+    int w = act == A_TERM ? (last_term >= 0 && terms[last_term].used ? last_term : -1) :
+            act == A_SIA ? W_SIA : act == A_FILES ? W_FILES : act == A_EDITOR ? W_EDIT : act == A_PINS ? W_PINS : W_SET;
+    for (int t = 0; w < 0 && t < MAXTERM; t++) if (terms[t].used) w = t;
+    show_win(w);
+    settle();
 }
 
 static void menu_do(int k)
 {
     int act = mn.e[k].act, w = mn.win;
-    char arg[160], path[160], proj[32];
+    char arg[160];
     strlcpy(arg, mn.e[k].arg, sizeof arg);
-    strlcpy(path, mn.path, sizeof path);
-    strlcpy(proj, mn.proj, sizeof proj);
     mn.on = 0;
     switch (act) {
-    case A_CANCEL: redraw(); return;
-    case A_OPEN: case A_BESIDE: {
-        int b = act == A_BESIDE;
-        if (w >= 0) { if (b) put_beside(w); else put_main(w); settle(); return; }
-        int i = item_find(path);
-        if (i >= 0 && items[i].app) app_start(path, b); else open_file_beside(path, b);
-        return;
+    case A_SEP: redraw(); return;
+    case A_TERM: case A_SIA: case A_FILES: case A_EDITOR: case A_SETTINGS: case A_PINS: db_start(act); return;
+    case A_RUNAPP: app_start(arg); return;
+    case A_WINDOW: { int v = 0; for (const char *p = arg; *p; p++) v = v * 10 + *p - '0'; show_win(v); settle(); return; }
+    case A_LOGOUT: logout(); redraw(); return;
+    case A_MIN: min_win(w); settle(); return;
+    case A_ZOOM: wm_toggle_max(w); settle(); return;
+    case A_SENDWS: wm_send(w, arg[0] - '0'); if (focus == w) focus = wm_top(); settle(); return;
+    case A_CLOSE: close_win(w); return;
     }
-    case A_SUB_MOVE:
-        menu_new("Move to:", path, proj, w);
-        menu_projects(A_MOVE, cur);
-        menu_show(mn.x, mn.y);
-        return;
-    case A_MOVE: case A_INBOX: {
-        const char *to = act == A_INBOX ? INBOX : arg;
-        if (w >= 0) {                                    /* a window: to that project (this session) */
-            if (w < MAXTERM) strlcpy(terms[w].proj, to, 32);
-            else if (w == W_EDIT) strlcpy(edit_proj, to, sizeof edit_proj);
-            else strlcpy(sia_proj, to, sizeof sia_proj);
-            say("atlas: window moved to %s\n", to);
-            tidy(); settle();
-            return;
-        }
-        int i = item_find(path);
-        if (i >= 0) move_item(i, to);
-        rescan(); settle();
-        return;
-    }
-    case A_CLOSEWIN: close_win(w); return;
-    case A_NEWFILE: prompt_open(P_NEWFILE, "New file: its name?", proj[0] ? proj : cur, 0); return;
-    case A_NEWTERM: new_term(0); return;
-    case A_SUB_APPS: strlcpy(mn.proj, proj, sizeof mn.proj); apps_menu(); return;
-    case A_RUNAPP: pin_app(arg); return;
-    case A_ASK: ask_sia(0); return;
-    case A_RENAME: prompt_open(P_RENAME, "Rename the project to:", proj, proj); return;
-    case A_DELETE: {
-        char t[48];
-        strlcpy(t + strlcpy(t, "Delete ", sizeof t), proj, sizeof t - 7);
-        strlcpy(t + strlen(t), "? (files stay)", sizeof t - strlen(t));
-        menu_new(t, 0, proj, -1);
-        menu_add("Delete the project", A_DELETE_YES, 0);
-        menu_add("Cancel", A_CANCEL, 0);
-        menu_show(mn.x, mn.y);
-        return;
-    }
-    case A_DELETE_YES: rename_or_delete(proj, 0); return;
-    case A_NEWPROJ: prompt_open(P_NEWPROJ, "Name of the new project:", 0, 0); return;
-    }
+    redraw();
 }
 
 /* ---- The clipboard: a selection in a terminal is copied at once; Ctrl+V
@@ -1693,10 +1309,11 @@ static void copy_sel(void)
 static void paste(void)
 {
     if (!clip_n) return;
-    if (lens_on) { for (int i = 0; i < clip_n && strlen(query) + 1 < sizeof query; i++) { size_t n = strlen(query); if (clip[i] >= 32) { query[n] = clip[i]; query[n + 1] = 0; } } search(); redraw(); return; }
+    if (strip_on || focus < 0) { for (int i = 0; i < clip_n && strlen(query) + 1 < sizeof query; i++) { size_t n = strlen(query); if (clip[i] >= 32) { query[n] = clip[i]; query[n + 1] = 0; } } strip_on = 1; search(); redraw(); return; }
     if (focus == W_SIA) { for (int i = 0; i < clip_n; i++) panel_key((uint8_t)clip[i]); redraw(); return; }
     if (focus == W_EDIT) { for (int i = 0; i < clip_n; i++) edit_key((uint8_t)clip[i]); redraw(); return; }
-    if (focus < 0 || focus >= MAXTERM) return;
+    if (focus == W_SET) { for (int i = 0; i < clip_n; i++) if (clip[i] >= 32) settings_key((uint8_t)clip[i]); redraw(); return; }
+    if (focus >= MAXTERM) return;
     term_t *t = &terms[focus];
     for (int i = 0; i < clip_n; i++) tty_input(&t->tty, clip[i]);
     say("atlas: pasted %d bytes\n", clip_n);
@@ -1709,20 +1326,22 @@ static void open_result(int i)
     int k = res[i].kind, a = res[i].i;
     char q[48];
     strlcpy(q, query[0] == '?' ? query + 1 : query, sizeof q);
-    query[0] = 0; nres = nfound = 0; lens_on = 0;
-    if (k == R_FILE) { open_file(items[a].path); return; }
-    if (k == R_APP) { strlcpy(cur, items[a].proj, sizeof cur); app_start(items[a].path, 0); return; }
-    if (k == R_SYSAPP) { app_start(apps[a].path, 0); return; }
+    query[0] = 0; nres = nfound = 0; strip_on = 0;
+    if (k == R_FILE) { atlas_open_file(items[a].path); return; }
+    if (k == R_APP) { app_start(items[a].path); return; }
+    if (k == R_SYSAPP) { app_start(apps[a].path); return; }
     char *s = q;
     while (*s == ' ') s++;
-    say("atlas: ask from the lens\n");
+    say("atlas: ask from the strip\n");
     ask_sia(s);
 }
 
 static void focus_win(int w)
 {
-    focus = w; lens_on = 0;
-    if (std_ui) { wm_show(w); say("atlas: window %d in front\n", w); }   /* (Standard: to the front) */
+    if (w < 0 || !win_used(w)) return;
+    if (focus != w || wm_top() != w) { wm_show(w); say("atlas: window %d in front\n", w); }
+    focus = w; strip_on = 0;
+    if (w < MAXTERM) last_term = w;
 }
 
 static void click(int x, int y)
@@ -1733,7 +1352,7 @@ static void click(int x, int y)
         return;
     }
     if (mn.on && (i < 0 || hit[i].kind != H_MENU)) { mn.on = 0; redraw(); return; }
-    if (i < 0) { if (lens_on) { lens_on = 0; redraw(); } return; }
+    if (i < 0) return;
     int a = hit[i].arg, k = hit[i].kind;
     toast[0] = 0;
     if (k >= H_PANEL && k <= H_PMODE) focus_win(W_SIA);   /* the assistant's window (its buttons */
@@ -1741,59 +1360,37 @@ static void click(int x, int y)
     switch (k) {
     case H_FIELD: if (first_start) setup_click(k, a); else gfield = a;
                   redraw(); return;
-    case H_GMODE: g_std = a; gfield = 2; say("atlas: login desktop %s\n", a ? "Standard" : "Focused"); redraw(); return;
-    case H_WBAR: {                                       /* a click on a title: in front; twice: maximize */
+    case H_SETUP: setup_click(k, a); redraw(); return;
+    case H_LOGIN: login(); redraw(); return;
+    case H_STRIP: strip_on = 1; search(); redraw(); return;
+    case H_RES:   open_result(a); return;
+    case H_MENU:  menu_do(a); return;
+    case H_DBMENU: main_menu(); return;
+    case H_DBAPP: db_click(a); return;
+    case H_DBWS:  wm_switch(a); focus = wm_top(); strip_on = 0; settle(); return;
+    case H_WTAB: {                                       /* in front; twice: minimized (as BeOS did) */
         static uint64_t last_t;
         static int last_w = -1;
         uint64_t t = sys_clock();
         focus_win(a);
-        if (a == last_w && t - last_t < 450000000) { wm_toggle_max(a); last_w = -1; }
-        else { last_w = a; last_t = t; }
+        if (a == last_w && t - last_t < 450000000) { last_w = -1; min_win(a); settle(); return; }
+        last_w = a; last_t = t;
         redraw();
         return;
     }
-    case H_WEDGE: focus_win(a / 16); redraw(); return;
     case H_WMBTN: {
         int w = a / 4, b = a % 4;
-        if (b == 0) to_shelf(w);
-        else if (b == 1) { focus_win(w); wm_toggle_max(w); }
-        else { close_win(w); return; }
-        settle();
+        if (b == 1) { focus_win(w); wm_toggle_max(w); settle(); }
+        else close_win(w);
         return;
     }
-    case H_SETUP: setup_click(k, a); redraw(); return;
-    case H_LOGIN: login(); redraw(); return;
-    case H_LENS:  lens_on = 1; search(); redraw(); return;
-    case H_RES:   open_result(a); return;
-    case H_PROJ:  if (a >= 0 && a < nproj) open_project(projs[a].name); return;
-    case H_CARD:
-        if (cards[a].kind == C_ADD) { card_menu(a, x, std_ui ? y - 340 : y - 300); return; }
-        if (cards[a].kind == C_WINDOW) {
-            int w = cards[a].i;
-            if (std_ui && w == focus && !wm_minimized(w)) to_shelf(w);   /* (Standard: the focused one's chip minimizes it) */
-            else put_main(w);
-            settle();
-            return;
-        }
-        if (items[cards[a].i].app) { app_start(items[cards[a].i].path, 0); return; }
-        open_file(items[cards[a].i].path);
-        return;
-    case H_WBTN: {
-        int w = a / 4, b = a % 4;
-        proj_t *p = here();
-        if (b == WB_SWAP) { int t = p->main; p->main = p->beside; p->beside = t; say_stage(); }
-        else if (b == WB_SHELF) to_shelf(w);
-        else { close_win(w); return; }
-        settle();
-        return;
-    }
+    case H_WEDGE: focus_win(a / 16); redraw(); return;
     case H_WIN:   focus_win(a); sel.on = 0; redraw(); return;
-    case H_ED:    focus_win(W_EDIT); edit_click(x, y); redraw(); return;
-    case H_MENU:  menu_do(a); return;
-    case H_BTN:
-        if (a == 1) prompt_open(P_NEWPROJ, "Name of the new project:", 0, 0);
-        else if (a == 2) { logout(); redraw(); }
-        return;
+    case H_ED:    focus_win(W_EDIT); edit_click(a, x, y); if (!edit_active()) close_win(W_EDIT); else settle(); return;
+    case H_SET:   focus_win(W_SET); settings_click(k, a); redraw(); return;
+    case H_FILE:  focus_win(W_FILES); files_click(k, a); settle(); return;
+    case H_PINS:  focus_win(W_PINS); pins_click(k, a); redraw(); return;
+    case H_DESK:  if (strip_on) { strip_on = 0; redraw(); } return;
     }
 }
 
@@ -1801,16 +1398,9 @@ static void key(int c)
 {
     if (mode == GREETER) {
         if (first_start) { setup_key(c); redraw(); return; }
-        if (gfield == 2) {                               /* the desktop switch */
-            if (c == ' ' || c == KEY_LEFT || c == KEY_RIGHT) g_std = !g_std;
-            else if (c == '\t') gfield = 0;
-            else if (c == '\n') login();
-            redraw();
-            return;
-        }
         char *f = gfield ? gpw : gname;
         size_t n = strlen(f), max = gfield ? sizeof gpw : sizeof gname;
-        if (c == '\t') gfield = (gfield + 1) % 3;
+        if (c == '\t') gfield = !gfield;
         else if (c == '\n') { if (!gfield) gfield = 1; else login(); }
         else if (c == '\b') { if (n) f[n - 1] = 0; }
         else if (c >= 32 && c < 127 && n + 1 < max) { f[n] = c; f[n + 1] = 0; }
@@ -1825,42 +1415,25 @@ static void key(int c)
         else if (c >= 32 && c < 127 && n + 1 < sizeof pr.buf) { pr.buf[n] = c; pr.buf[n + 1] = 0; redraw_box(SW / 2 - 330, SH / 2 - 120, SW / 2 + 330, SH / 2 + 110); }
         return;
     }
-    proj_t *p = here();
     /* shortcuts, wherever the keys go */
-    if (c == 0 || c == 6) { lens_on = 1; mn.on = 0; search(); say("atlas: lens\n"); redraw(); return; }   /* Ctrl+Space, Ctrl+F */
-    if (c == 20) { new_term(0); return; }                                                                 /* Ctrl+T */
+    if (c == 0 || c == 6) { strip_on = 1; mn.on = 0; search(); say("atlas: strip\n"); redraw(); return; }   /* Ctrl+Space, Ctrl+F */
+    if (c == 20) { new_term(); return; }                                                                  /* Ctrl+T */
     if (c == 22) { paste(); return; }                                                                     /* Ctrl+V */
-    if (c >= KEY_C1 && c < KEY_C1 + 9) { int k = c - KEY_C1; if (k < nproj) open_project(projs[k].name); return; }   /* Ctrl+1..9 */
-    if (c == 23) { if (focus >= 0) { if (std_ui) close_win(focus); else { to_shelf(focus); settle(); } } return; }   /* Ctrl+W (Standard: close) */
-    if (c == 28 && std_ui) { if (focus >= 0) { wm_snap(focus, 1); say("atlas: window %d snapped\n", focus); } return; }   /* Ctrl+\ (Standard: the right half) */
-    if (c == KEY_CTAB && std_ui) {                       /* Standard: the next window of this project, in front */
+    if (c >= KEY_C1 && c < KEY_C1 + WM_NWS) { wm_switch(c - KEY_C1); focus = wm_top(); strip_on = 0; settle(); return; }   /* Ctrl+1..4 */
+    if (c == 23 && focus != W_EDIT) { close_win(focus); return; }                                         /* Ctrl+W (the editor: its tab) */                                                            /* Ctrl+W */
+    if (c == KEY_CTAB) {                                 /* the next window of this workspace, in front */
         for (int k = 1; k <= NWIN; k++) {
             int w = (focus + k + NWIN) % NWIN;
-            if (wm_state(w) == 2) { put_main(w); break; }
-        }
-        settle();
-        return;
-    }
-    if (c == 28) {                                                                                         /* Ctrl+\ */
-        if (p->beside >= 0) to_shelf(p->beside);
-        else { shelf_list(); for (int k = 0; k < ncards; k++) if (cards[k].kind == C_WINDOW) { put_beside(cards[k].i); break; } }
-        settle();
-        return;
-    }
-    if (c == KEY_CTAB) {                                 /* the next window of this project, in the middle */
-        int start = p->main < 0 ? -1 : p->main;
-        for (int k = 1; k <= NWIN; k++) {
-            int w = (start + k + NWIN) % NWIN;
-            if (win_used(w) && !strcmp(win_proj(w), p->name) && w != p->beside) { put_main(w); break; }
+            if (win_used(w) && !wm_minimized(w) && wm_ws_of(w) == wm_workspace()) { focus_win(w); break; }
         }
         settle();
         return;
     }
     if (mn.on && c == 27) { mn.on = 0; redraw(); return; }
-    if (lens_on || focus < 0) {                          /* the Lens */
+    if (strip_on || focus < 0) {                         /* the sia strip */
         size_t n = strlen(query);
-        if (c == 27) { query[0] = 0; nres = nfound = 0; lens_on = 0; redraw(); return; }
-        lens_on = 1;
+        if (c == 27) { query[0] = 0; nres = nfound = 0; strip_on = 0; redraw(); return; }
+        strip_on = 1;
         if (c == '\n') { if (nres) open_result(0); return; }
         if (c == '\t') { for (int i = 0; i < nres; i++) if (res[i].kind == R_ASK) { open_result(i); return; } return; }
         if (c == '\b') { if (n) query[n - 1] = 0; }
@@ -1870,12 +1443,11 @@ static void key(int c)
         redraw();
         return;
     }
-    if (focus == W_EDIT) { edit_key(c); if (!edit_active()) { tidy(); say_stage(); } settle(); return; }
-    if (focus == W_SIA) {
-        if (!panel_key(c) && c == 27) focus = -1;
-        redraw();
-        return;
-    }
+    if (focus == W_EDIT) { edit_key(c); if (!edit_active()) { wm_gone(W_EDIT); focus = wm_top(); } settle(); return; }
+    if (focus == W_SIA) { if (!panel_key(c) && c == 27) focus = -1; redraw(); return; }
+    if (focus == W_SET) { if (settings_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
+    if (focus == W_FILES) { if (files_key(c)) settle(); return; }
+    if (focus == W_PINS) { if (pins_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
     term_t *t = &terms[focus];                           /* the focused terminal */
     int x0, x1, y0, y1;
     if (!win_box(focus, &x0, &y0, &x1, &y1)) x0 = x1 = y0 = y1 = 0;
@@ -1883,7 +1455,7 @@ static void key(int c)
         int b = t->back + (c == KEY_PGUP ? t->rows / 2 : -t->rows / 2);
         t->back = b < 0 ? 0 : b > hist_max(t) ? hist_max(t) : b;
         say("atlas: terminal %d back %d\n", t->chan, t->back);
-        redraw_box(x0, y0, x1, y1);
+        redraw_box(x0, y0 - TAB_H, x1, y1);
         return;
     }
     if (c < 0x100) {
@@ -1899,52 +1471,11 @@ static void cell_at(int ti, int x, int y, uint64_t *l, int *c)
     term_t *t = &terms[ti];
     int x0, x1, y0, y1;
     if (!win_box(ti, &x0, &y0, &x1, &y1)) x0 = y0 = 0;
-    int r = (y - y0 - TBAR - 8) / KH, k = (x - x0 - 14) / KW;
+    int r = (y - (y0 + WM_BODY_DY) - TBAR - 8) / KH, k = (x - x0 - 14) / KW;
     r = r < 0 ? 0 : r >= t->rows ? t->rows - 1 : r;
     k = k < 0 ? 0 : k >= t->cols ? t->cols - 1 : k;
     *l = t->top - t->back + r;
     *c = k;
-}
-
-/* A card let go: on the stage (left half: main, right half: beside), on a
- * project of the rail (it moves there), or anywhere else (nothing). */
-static void drop(void)
-{
-    int k = drag_arg, x = ptr_x, y = ptr_y;
-    if (std_ui && x >= RX1 && x < SX1 && y >= SY0 && y < DY0 && cards[k].kind != C_ADD) {   /* Standard: onto the desk: open it */
-        say("atlas: card dropped on the desk\n");
-        if (cards[k].kind == C_WINDOW) { put_main(cards[k].i); settle(); return; }
-        item_t *it = &items[cards[k].i];
-        if (it->app) app_start(it->path, 0); else open_file_beside(it->path, 0);
-        return;
-    }
-    if (!std_ui && x >= SX0 && x < SX1 && y >= SY0 && y < SY1 && cards[k].kind != C_ADD) {
-        int beside = x >= (SX0 + SX1) / 2;
-        say("atlas: card dropped on the stage (%s)\n", beside ? "beside" : "main");
-        if (cards[k].kind == C_WINDOW) { if (beside) put_beside(cards[k].i); else put_main(cards[k].i); settle(); return; }
-        item_t *it = &items[cards[k].i];
-        if (it->app) app_start(it->path, beside); else open_file_beside(it->path, beside);
-        return;
-    }
-    int i = nhit;                                        /* (the dragged card itself is on top: look under it) */
-    while (--i >= 0 && !(hit[i].kind == H_PROJ && hit[i].arg >= 0 && x >= hit[i].x0 && x < hit[i].x1 && y >= hit[i].y0 && y < hit[i].y1));
-    if (i >= 0 && cards[k].kind != C_ADD) {
-        const char *to = projs[hit[i].arg].name;
-        if (cards[k].kind == C_WINDOW) {
-            int w = cards[k].i;
-            if (w < MAXTERM) strlcpy(terms[w].proj, to, 32);
-            else if (w == W_EDIT) strlcpy(edit_proj, to, sizeof edit_proj);
-            else strlcpy(sia_proj, to, sizeof sia_proj);
-            say("atlas: window moved to %s\n", to);
-        } else {
-            move_item(cards[k].i, to);
-            rescan();
-        }
-        settle();
-        return;
-    }
-    say("atlas: card dropped nowhere\n");
-    redraw();
 }
 
 static void press(int x, int y)
@@ -1954,24 +1485,39 @@ static void press(int x, int y)
     int i = hit_at(x, y);
     if (mode != SESSION || i < 0 || mn.on || pr.on) return;
     int x0, y0, x1, y1;
-    if (std_ui && (hit[i].kind == H_WBAR || hit[i].kind == H_WEDGE) && wm_grab(hit[i].kind, hit[i].arg, x, y)) drag = D_WIN;
-    else if (hit[i].kind == H_CARD && cards[hit[i].arg].kind != C_ADD) { drag = D_CARD; drag_arg = hit[i].arg; }
-    else if (hit[i].kind == H_WIN && hit[i].arg < MAXTERM && win_box(hit[i].arg, &x0, &y0, &x1, &y1) && y > y0 + TBAR) { drag = D_SEL; drag_arg = hit[i].arg; }
+    if ((hit[i].kind == H_WTAB || hit[i].kind == H_WEDGE) && wm_grab(hit[i].kind, hit[i].arg, x, y)) drag = D_WIN;
+    else if (hit[i].kind == H_WIN && hit[i].arg < MAXTERM && win_box(hit[i].arg, &x0, &y0, &x1, &y1) && y > y0 + WM_STRIP) { drag = D_SEL; drag_arg = hit[i].arg; }
+}
+
+/* The menu's entry under the pointer (lit), or -1. */
+static int menu_hover(int x, int y)
+{
+    if (!mn.on || x < mn.x || x >= mn.x + mn.w) return -1;
+    for (int i = 0, ey = mn.y + 8; i < mn.n; i++) {
+        int h = mn.e[i].act == A_SEP ? MENSEP : MENH;
+        if (y >= ey && y < ey + h) return mn.e[i].act == A_SEP ? -1 : i;
+        ey += h;
+    }
+    return -1;
 }
 
 static void mouse(const con_event_t *e)
 {
     int x = (int)((int64_t)e->x * SW >> 16), y = (int)((int64_t)e->y * SH >> 16);
     int b = e->buttons, was = buttons, ox = ptr_x, oy = ptr_y;
+    if (m_swap) b = (b & ~3) | (b & 1) << 1 | (b & 2) >> 1;   /* left-handed: the buttons swap */
     ptr_x = x; ptr_y = y;
     buttons = b;
     if (e->code && mode == SESSION) {                    /* the wheel */
-        int16_t w = (int16_t)e->code;
+        int16_t w = m_rev ? -(int16_t)e->code : (int16_t)e->code;
         int i = hit_at(x, y);
-        if (std_ui ? y >= DY0 && x >= SX0 : y >= SHY && x >= SX0) { shelf_off -= w; redraw(); return; }   /* the shelf, the dock */
-        if (i >= 0 && (hit[i].kind == H_WIN || hit[i].kind == H_ED || hit[i].kind == H_PANEL)) {
-            int a = hit[i].kind == H_ED ? W_EDIT : hit[i].kind == H_PANEL ? W_SIA : hit[i].arg;
-            if (a == W_EDIT) edit_wheel(w);
+        if (i >= 0 && (hit[i].kind == H_WIN || hit[i].kind == H_ED || hit[i].kind == H_PANEL || hit[i].kind == H_SET || hit[i].kind == H_FILE || hit[i].kind == H_PINS)) {
+            int a = hit[i].kind == H_ED ? W_EDIT : hit[i].kind == H_PANEL ? W_SIA : hit[i].kind == H_SET ? W_SET :
+                    hit[i].kind == H_FILE ? W_FILES : hit[i].kind == H_PINS ? W_PINS : hit[i].arg;
+            if (a == W_EDIT) edit_wheel(hit[i].arg, w);
+            else if (a == W_SET) settings_wheel(w);
+            else if (a == W_FILES) files_wheel(w);
+            else if (a == W_PINS) pins_wheel(w);
             else if (a == W_SIA) panel_wheel(w);
             else if (a < MAXTERM) {
                 term_t *t = &terms[a];
@@ -1986,7 +1532,7 @@ static void mouse(const con_event_t *e)
     if ((b & MB_LEFT) && !(was & MB_LEFT)) press(x, y);
     if ((b & MB_LEFT) && mode == SESSION && drag != D_NONE &&
         (drag_on || (x - press_x) * (x - press_x) + (y - press_y) * (y - press_y) > 64)) {
-        if (drag == D_WIN) {                             /* Standard: a window moving or resizing */
+        if (drag == D_WIN) {                             /* a window moving or resizing */
             if (!drag_on) { focus_win(wm_grabbed()); drag_on = 1; redraw(); }
             wm_motion(x, y);
             dl_pointer(x, y);
@@ -1994,12 +1540,12 @@ static void mouse(const con_event_t *e)
             present(x, y, x + 12, y + 19);
             return;
         }
-        if (!drag_on && drag == D_SEL) {                 /* the selection starts where the button went down */
+        if (!drag_on) {                                  /* the selection starts where the button went down */
             cell_at(drag_arg, press_x, press_y, &sel.al, &sel.ac);
             sel.t = drag_arg; sel.on = 1;
         }
         drag_on = 1;
-        if (drag == D_SEL) cell_at(drag_arg, x, y, &sel.bl, &sel.bc);
+        cell_at(drag_arg, x, y, &sel.bl, &sel.bc);
         redraw();
         return;
     }
@@ -2008,7 +1554,6 @@ static void mouse(const con_event_t *e)
         drag = D_NONE; drag_on = 0;
         if (d == D_WIN) { if (on) { wm_drop(); return; } wm_ungrab(); }
         if (!on) click(x, y);
-        else if (d == D_CARD) { drag = D_CARD; drop(); drag = D_NONE; }
         else if (d == D_SEL) { if (sel.al != sel.bl || sel.ac != sel.bc) copy_sel(); else sel.on = 0; redraw(); }
         return;
     }
@@ -2017,15 +1562,21 @@ static void mouse(const con_event_t *e)
         int i = hit_at(x, y), k = i < 0 ? 0 : hit[i].kind;
         if (k == H_MENU) return;
         mn.on = 0;
-        if (k == H_CARD) { card_menu(hit[i].arg, x, y - 200); return; }
-        if (k == H_PROJ) { proj_menu(hit[i].arg, x < RX1 ? RX1 - 40 : x, y); return; }
+        if (k == H_WTAB) { focus_win(hit[i].arg); window_menu(hit[i].arg, x, y); return; }
+        if (k == H_DBAPP) { app_menu(hit[i].arg, x, y); return; }
+        if (k == H_DBMENU) { main_menu(); return; }
+        if (k == H_DESK && hit[i].arg == 0) { desk_menu(x, y); return; }
         redraw();
         return;
     }
-    if (std_ui && mode == SESSION) {                    /* Standard: the rail unrolls under the pointer */
-        int e = wm_rail_open(), in = x >= M && x < RX1 && y >= SY0 && y < SH - M && (e > 0 || y < SY0 + RAIL_TOP || y >= SH - M - RAIL_BOT);
-        int was = ox >= M && ox < RX1 && oy >= SY0 && oy < SH - M && (e > 0 || oy < SY0 + RAIL_TOP || oy >= SH - M - RAIL_BOT);
-        if (in != was) { if (!in && !mn.on) rail_menu = 0; redraw_box(M, SY0, RX1, SH - M); }   /* (build starts the roll) */
+    if (mode == SESSION) {                               /* the pointer over a menu or the Deskbar: what it lights */
+        int h = menu_hover(x, y), in = x >= DBX && x < DBX + DBW && y >= M && y < M + db_h();
+        int was_in = ox >= DBX && ox < DBX + DBW && oy >= M && oy < M + db_h();
+        if (h != mn.hover) { mn.hover = h; redraw_box(mn.x, mn.y, mn.x + mn.w, mn.y + menu_h()); }
+        if (in || was_in) {
+            int r = (y - M - DB_MENU - DB_TRAY) / DB_ROW, orr = (oy - M - DB_MENU - DB_TRAY) / DB_ROW;
+            if (in != was_in || r != orr || (y < M + DB_MENU) != (oy < M + DB_MENU)) redraw_box(DBX, M, DBX + DBW, M + db_h());
+        }
     }
     dl_pointer(x, y);                                   /* only the pointer moved: */
     present(ox, oy, ox + 12, oy + 19);                  /* where it was, where it is */
@@ -2057,16 +1608,27 @@ static void no_desktop(void)                             /* tell auth: the termi
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    screen_t scr;
-    if (screen_init(&scr)) {                             /* no screen: the terminal does the first start */
+    size_t dn = 0;                                      /* the size chosen in Settings (if the screen takes any) */
+    char *dc = file_get("/etc/display.conf", &dn);
+    if (dc) {
+        int w = 0, h = 0;
+        const char *p = dc;
+        while (p && !same_n(p, "size=", 5)) { p = strchr(p, '\n'); if (p) p++; }
+        if (p) { for (p += 5; *p >= '0' && *p <= '9'; p++) w = w * 10 + *p - '0'; if (*p == 'x') for (p++; *p >= '0' && *p <= '9'; p++) h = h * 10 + *p - '0'; }
+        if (w >= 1024 && w <= 3840 && h >= 600 && h <= 2400) { PW = w; PH = h; }
+        free(dc);
+    }
+    if (screen_init(&scr) && (PW != 1920 || PH != 1080)) { PW = 1920; PH = 1080; }   /* (that size failed: the default) */
+    if (!scr.fb && screen_init(&scr)) {                  /* no screen: the terminal does the first start */
         say("atlas: no screen found: no desktop\n");
         no_desktop();
         return 0;
     }
     draw_init(&scr);
+    draw_look(LOOK_PHOSPHOR);                           /* (the user's own at login) */
     geometry();
     ptr_x = SW / 2; ptr_y = SH / 2;
-    say("atlas: screen: %s, %d x %d\n", scr.name, SW, SH);
+    say("atlas: screen: %s, %d x %d\n", scr.name, PW, PH);
     long con = 0;
     msg_t hi = { .w = { CON_HASINPUT } };
     rtc_read();
@@ -2083,11 +1645,14 @@ int main(int argc, char **argv)
         no_desktop();
     } else greeter_check();
     redraw();
-    say("atlas: greeter (%dx%d, full frame %lu us)\n", SW, SH, (unsigned long)frame_us);
+    say("atlas: greeter (%dx%d, full frame %lu us)\n", PW, PH, (unsigned long)frame_us);
     thread_start(input_thread, 0, 16384);
     thread_start(clock_thread, 0, 4096);
     panel_init(port);
+    settings_init(port);
+    pins_init(port);
     wm_init(port);
+    mouse_apply();
 
     mk_info_t in;
     sys_info(&in);
@@ -2102,7 +1667,7 @@ int main(int argc, char **argv)
             while ((pid = sys_wait(-1, &st, WAIT_NOHANG)) > 0)
                 for (int t = 0; t < MAXTERM; t++)
                     if (terms[t].used && terms[t].pid == pid) { close_term(&terms[t]); closed = 1; }
-            if (closed && mode == SESSION) { rescan(); say_stage(); settle(); }
+            if (closed && mode == SESSION) { rescan(); settle(); }
             continue;
         }
         if (m.pid == self && m.w[0] == ATLAS_INPUT) {    /* (our own threads only: nobody */
@@ -2124,14 +1689,25 @@ int main(int argc, char **argv)
             panel_event(&m, buf);
             continue;
         }
-        if (m.pid == self && m.w[0] == ATLAS_ANIM) {     /* Standard: the next frame of what moves */
+        if (m.pid == self && m.w[0] == ATLAS_REVERT) {   /* a new screen size, not kept in time */
             reply_val(from, 0);
-            if (mode == SESSION && std_ui) wm_tick();
+            settings_revert();
             continue;
         }
-        if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the clock's corner */
+        if (m.pid == self && m.w[0] == ATLAS_PINS) {     /* the Pins window: the levels, the step */
             reply_val(from, 0);
-            if (mode == SESSION) redraw_box(SW - 600, 10, SW, 70);
+            int a0, b0, c0, d0;
+            if (mode == SESSION && pins_on && pins_tick() && win_box(W_PINS, &a0, &b0, &c0, &d0)) redraw_box(a0, b0 + TBAR - 40, c0, d0);
+            continue;
+        }
+        if (m.pid == self && m.w[0] == ATLAS_ANIM) {     /* the next frame of the tabs that move */
+            reply_val(from, 0);
+            if (mode == SESSION) wm_tick();
+            continue;
+        }
+        if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the Deskbar's tray */
+            reply_val(from, 0);
+            if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
             continue;
         }
         /* a terminal's shell: CON_WRITE / CON_READ / CON_ECHO, its window in w[3] */
@@ -2143,12 +1719,12 @@ int main(int argc, char **argv)
             term_write(t, buf, m.rlen);
             reply_val(from, m.rlen);
             int x0, y0, x1, y1;
-            if (mode == SESSION && win_box(t - terms, &x0, &y0, &x1, &y1) && !strcmp(t->proj, cur)) redraw_box(x0, y0, x1, y1);
+            if (mode == SESSION && win_box(t - terms, &x0, &y0, &x1, &y1)) redraw_box(x0, y0, x1, y1);
             break;
         }
         case CON_READ:                                   /* the shell wants the next line: */
             if (t->tty.lines != t->seen && mode == SESSION) {   /* it ran a command: files may */
-                t->seen = t->tty.lines;                  /* have changed (new projects...): look again */
+                t->seen = t->tty.lines;                  /* have changed: look again */
                 rescan();
                 settle();
             }
@@ -2165,15 +1741,13 @@ int main(int argc, char **argv)
     }
 }
 
-/* ---- For the assistant: the user's files and their projects. */
+/* ---- For the assistant: the user's files. */
 int atlas_files(char *out, size_t cap)
 {
     size_t n = 0;
-    for (int i = 0; i < nitems && n + strlen(items[i].path) + 48 < cap; i++) {
+    for (int i = 0; i < nitems && n + strlen(items[i].path) + 2 < cap; i++) {
         n += strlcpy(out + n, items[i].path, cap - n);
-        n += strlcpy(out + n, " (project ", cap - n);
-        n += strlcpy(out + n, items[i].proj, cap - n);
-        n += strlcpy(out + n, ")\n", cap - n);
+        n += strlcpy(out + n, "\n", cap - n);
     }
     out[n] = 0;
     return n;

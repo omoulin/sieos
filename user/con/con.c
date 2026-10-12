@@ -83,6 +83,8 @@ static const char keys[2][58] = {
       'Z','X','C','V','B','N','M','<','>','?', 0,'*', 0,' ' },
 };
 static int mx = 32768, my = 32768, mb;       /* the pointer: position (0..65535), buttons */
+static int kx = 34, ky = 61;                 /* a mouse count, in those units: about a pixel on 1920 x 1080
+                                                (CON_MOUSE: the speed and the screen's size) */
 
 static void keyboard(uint8_t sc)
 {
@@ -214,7 +216,7 @@ static void mouse_byte(uint8_t b)
     if (n < 3) return;
     n = 0;
     int dx = pk[1] - ((pk[0] & 0x10) << 4), dy = pk[2] - ((pk[0] & 0x20) << 3);
-    mx += dx * 34; my -= dy * 60;            /* ~1 pixel per count on a 1920x1080 screen */
+    mx += dx * kx; my -= dy * ky;            /* ~1 pixel per count at normal speed */
     mx = mx < 0 ? 0 : mx > 65535 ? 65535 : mx;
     my = my < 0 ? 0 : my > 65535 ? 65535 : my;
     mb = pk[0] & 7;
@@ -442,7 +444,7 @@ static void inject(const con_inject_t *v, int n)
     for (int i = 0; i < n; i++, v++) {
         if (v->kind == INJ_KEY) { keyboard(v->sc); continue; }
         if (v->kind == INJ_REL) {
-            int x = mx + v->dx * 34, y = my + v->dy * 61;
+            int x = mx + v->dx * kx, y = my + v->dy * ky;
             mx = x < 0 ? 0 : x > 65535 ? 65535 : x;
             my = y < 0 ? 0 : y > 65535 ? 65535 : y;
         } else if (v->kind == INJ_ABS) { mx = v->x; my = v->y; }
@@ -490,6 +492,16 @@ int main(int argc, char **argv)
             flush_events();
             answer = 0;
             break;
+        case CON_MOUSE: {
+            long sp = m.w[1], w = m.w[2], h = m.w[3];
+            if (m.uid) { answer = -EPERM; break; }
+            if (sp < 25 || sp > 400 || w < 320 || h < 200) { answer = -EINVAL; break; }
+            kx = (int)(65535 * sp / (100 * w)); ky = (int)(65535 * sp / (100 * h));
+            if (kx < 1) kx = 1;
+            if (ky < 1) ky = 1;
+            answer = 0;
+            break;
+        }
         case CON_INPUT:
             if (m.uid) { answer = -EPERM; break; }
             if (owner_tok && owner != m.pid) reply_val(owner_tok, -EBUSY);   /* a new desktop takes over */

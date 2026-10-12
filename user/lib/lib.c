@@ -42,6 +42,9 @@ void __start(char *args)
         if (!m) sys_exit(-ENOMEM);
         tls_set(m);
     }
+    char *dir = args;                       /* our parent's current folder, after a \001 (spawn_file) */
+    while (*dir && *dir != '\001') dir++;
+    if (*dir) { *dir++ = 0; fs_chdir(dir); }
     char *argv[16];
     int argc = 0;
     while (*args && argc < 15) {            /* split at spaces, in place */

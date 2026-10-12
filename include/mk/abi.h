@@ -80,7 +80,13 @@ enum {
                           the two accesses together, so drivers scanning the bus at the
                           same time never mix their index and data. address = bus << 16 |
                           device << 11 | function << 8 | register. -ENOSYS: not x86-64     */
+    SYS_LOG,           /* (buf, size, uint64_t *pos) -> bytes: the console's log, what a
+                          serial wire shows (the kernel's messages, and the console
+                          server's output, which goes through SYS_DEBUG), from byte *pos
+                          since boot (moved up to the oldest kept: the last LOG_KEEP
+                          bytes); *pos is advanced; 0: nothing new                       */
 };
+#define LOG_KEEP 32768
 /* SYS_SCREEN's answer. pitch: pixels per row; format: 0 = bytes R,G,B,x in
  * memory, 1 = bytes B,G,R,x (0x00RRGGBB words). */
 typedef struct { uint64_t pa, size; uint32_t width, height, pitch, format; } mk_screen_t;

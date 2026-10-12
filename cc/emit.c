@@ -1564,6 +1564,7 @@ static void emit_one(Obj *g, Buf *out)
 {
     lower_function(g);
     if (opt_optimize) optimize();
+    if (opt_optimize && target == T_AARCH64 && !opt_general_regs_only) vec_promote();   /* NEON vectors into registers */
     regalloc();
     if (target == T_AARCH64) {
         emit_function_a64(out);

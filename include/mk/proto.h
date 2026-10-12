@@ -20,6 +20,9 @@ enum {
                        0 if not (a Raspberry Pi without a USB keyboard) */
     CON_INJECT,     /* (root: the USB server) input from a USB keyboard or mouse:
                        sbuf = con_inject_t[]; none: "a keyboard or pointer is here" -> 0 */
+    CON_MOUSE,      /* (root: the desktop) how far a mouse's move goes: w[1] = speed in %
+                       (25..400, 100: about a pixel per count), w[2], w[3] = the screen's
+                       width and height in pixels -> 0 */
 };
 /* What CON_INJECT carries. INJ_KEY: sc is one byte of a set-1 scancode
  * (0xE0 then the key for the extended ones, +0x80 when released), as a PS/2
@@ -128,6 +131,8 @@ enum {
     AUTH_PASSWD,    /* "name\0old\0new": one's own (with the old one), or root: anyone's -> 0 */
     AUTH_USERADD,   /* "name\0full name\0password" (root)       -> the new uid */
     AUTH_USERDEL,   /* "name" (root; the home folder is kept)   -> 0 */
+    AUTH_CHECK,     /* "name\0password" (root: the desktop, before a system setting is
+                       changed): is it that user's password? -> 0, or -EACCES (after 1 s) */
 };
 #define AUTH_NOPW 1
 #define AUTH_WAIT 2                     /* AUTH_STATE: wait until the first start is decided */
@@ -142,12 +147,15 @@ enum {
     INIT_LIST = 1,  /* an array of svc_info_t comes in rbuf                  -> how many */
     INIT_RESTART,   /* "name" (root): stop it if running, start it now       -> 0 */
     INIT_STOP,      /* "name" (root): stop it, do not restart it             -> 0 */
-    INIT_ADD,       /* "name\0path\0arguments" (root), w[1] = policy: supervise a
-                       program from the disk                                 -> 0 */
+    INIT_ADD,       /* "name\0path\0arguments[\0port[\0watched port]]" (root), w[1] =
+                       policy: supervise a program from the disk; port: started on
+                       demand; watched port: pinged (SVC_PING), ended if stuck -> 0 */
     INIT_TICK,      /* (init's own timer thread)                             -> ns to wait */
     INIT_IDLE,      /* "name" (root), w[1] = seconds without use before an on-demand
                        service stops (0: never)                              -> 0 */
     INIT_ANSWER,    /* (init's own timer thread: a server's SVC_MAYSTOP answer) -> 0 */
+    INIT_PING,      /* (init's own watcher thread) w[1] = the service, w[2] = 1: a ping
+                       is going out to it, 0: it answered                    -> 0 */
 };
 enum { SVC_ALWAYS, SVC_ON_FAILURE, SVC_NEVER };                 /* restart policies */
 /* Any server started on demand answers this question from init (pid 1)
@@ -156,6 +164,10 @@ enum { SVC_ALWAYS, SVC_ON_FAILURE, SVC_NEVER };                 /* restart polic
  * state; it ends (status 0) right after answering. > 0: ask again after
  * that many ns. (A number no protocol above uses.) */
 #define SVC_MAYSTOP 0x7e01
+/* init's "are you there?" to a core server (any answer will do: a server
+ * answers a request it does not know with -ENOSYS at once). One that does
+ * not answer for 30 s is stuck: init ends it, and starts it again. */
+#define SVC_PING 0x7e02
 enum { SVC_RUNNING, SVC_WAITING, SVC_GIVEN_UP, SVC_STOPPED,     /* states; WAITING: restart */
        SVC_IDLE };                     /* pending (backoff, or a session still open); IDLE: an
                                           on-demand service not running: it starts when needed */
@@ -271,3 +283,31 @@ typedef struct {
                                                   1970, read when the driver started ... */
     int64_t rtc_ns;                            /* ... at this time (ns since boot) */
 } nic_info_t;
+
+/* The GPIO server, port "gpio" (/bin/gpiod; the library: user/lib/gpio.h).
+ * Pins are numbered as the chip does (a Raspberry Pi's BCM numbers, 0..27 on
+ * the 40-pin header). On a machine without GPIO (x86-64, QEMU) the server
+ * simulates the pins: outputs read back what they were set to, inputs read
+ * their pull. A pin a device uses (the serial console, I2C, SPI: an
+ * alternate function) is refused. Reply: w[0] = result (>= 0) or -error. */
+#define GPIO_PINS 28
+#define GPIO_MAXSTEP 4096                     /* steps in a pattern */
+enum {
+    GPIO_INFO = 1,  /* -> number of pins; reply w[1] = 1: real pins, 0: simulated;
+                       rbuf <- the board's name                               */
+    GPIO_MODE,      /* w[1] = pin, w[2] = GPIO_IN / GPIO_OUT, w[3] = GPIO_PULL_... -> 0 */
+    GPIO_WRITE,     /* w[1] = pin, w[2] = 0 / 1 (an output)                   -> 0 */
+    GPIO_READ,      /* w[1] = pin                                             -> 0 / 1 */
+    GPIO_STATE,     /* rbuf <- gpio_pin_t[GPIO_PINS]; -> the levels, a bit per pin */
+    GPIO_PLAY,      /* sbuf = gpio_pattern_t then its steps (uint32_t each: the levels
+                       of the pins in `mask`); played by the server, from step 0,
+                       one step each step_us, again and again if loop      -> 0 */
+    GPIO_STOP,      /* the pattern stops (the pins stay as they are)           -> 0 */
+    GPIO_PLAYING,   /* -> the step being played, or -1: none; reply w[1] = rounds done */
+    GPIO_RECORD,    /* rbuf <- uint32_t[steps]: every pin's level, sampled at each step of
+                       the pattern as it played (the inputs' recording)  -> steps sampled */
+};
+enum { GPIO_IN, GPIO_OUT, GPIO_BUSY };        /* a pin's mode (BUSY: a device's) */
+enum { GPIO_PULL_NONE, GPIO_PULL_DOWN, GPIO_PULL_UP };
+typedef struct { uint8_t mode, pull, level, pad; } gpio_pin_t;
+typedef struct { uint32_t mask, steps, step_us, loop; } gpio_pattern_t;

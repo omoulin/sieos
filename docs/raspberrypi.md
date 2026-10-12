@@ -88,9 +88,15 @@ The image holds two partitions:
 Without `FIRMWARE=`, the image is made anyway and lists the missing files:
 copy them onto the card's first partition by hand after writing it.
 
-The assistant's model is not on the card by default (1 GB): add
-`SDMODEL=1` (and a big enough `SDDISK`, e.g. `SDDISK=4G`) to copy
-`models/$(MODEL)` into `/models` on the card's SieFS partition.
+The assistant's model is not on the card by default: add `SDMODEL=1` to
+copy `models/$(PIMODEL)` into `/models` on the card's SieFS partition.
+A Pi's card carries **SmolLM2-360M** (8-bit, 386 MB), not the PC's 1.7B
+model (1 GB): the Pi 4 reads memory at 4-5 GB/s, so the 1.7B model would
+write 2-4 tokens a second, the 360M one 6-9 (the 135M one is faster but
+answers poorly; estimates in [llm.md](llm.md)). sia takes the first model
+in `/models` when the PC's default is not there; `PIMODEL=` picks another
+file of `models/`, and *Settings* can point sia at an online model
+instead ([desktop.md](desktop.md#settings)).
 
 ### 3. Write it to the card
 
@@ -161,6 +167,41 @@ later works at once. Without any at boot, the first start (root's
 password, your user) is offered on the serial console, and the screen
 takes it over as soon as a keyboard or mouse is plugged in. `poweroff`
 (as root) stops the board.
+
+## The console on a GFX HAT, without a serial cable
+
+With a [Pimoroni GFX HAT](https://shop.pimoroni.com/products/gfx-hat) on
+the Pi 4's header, its 128 x 64 screen shows the console's log: what the
+serial wire would show (the kernel's messages, the servers', the text
+console's prompts and output), 8 lines of 21 characters, long lines
+wrapped. It follows the log as it grows; the six touch buttons go back
+in it:
+
+| Button | |
+|---|---|
+| up / down | a line back / forward (held: repeats, faster after 2 s) |
+| minus / plus | a page back / forward |
+| back | the newest lines again |
+| select | the contrast, on the last row: minus / plus (or down / up) change it, back or 4 s untouched keeps it (`/etc/gfxhat.conf`); select again turns the backlight off / on |
+
+These screens differ from one to the next: set wrong, the text reads only
+when looked at from the side. Set it once with select, minus and plus.
+
+Scrolled back, a bar on the right says where, and new lines do not move
+what is shown. The backlight is phosphor green, like the desktop; a
+touched button lights. The last 32 KiB of the log are kept (about 1000
+screen lines), from the very start of the boot.
+
+`/bin/gfxhat` does it: init starts it once the disk is up (the lines from
+before are in the log too). It drives the HAT itself: the screen (an
+ST7567) on SPI0, the backlight (SN3218) and the buttons (CAP1166) on
+I2C1, setting the header's pins for them. Without a HAT (or on a machine
+that is not a Pi) it ends at once and is not started again: `svc` shows
+it stopped. The serial console keeps working alongside it. The text part
+is tested on the development machine (`make gfxhat-test`); the HAT itself
+only on a real board: if the picture is upside down or mirrored, or the
+backlight is not green, say so (the screen's orientation and the LEDs'
+colour order follow Pimoroni's own library).
 
 ## Reading the boot steps without a serial cable
 

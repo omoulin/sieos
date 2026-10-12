@@ -110,6 +110,7 @@ extern int nmodules;
 
 /* kprintf.c */
 void kprintf(const char *fmt, ...);
+long log_read(char *to, size_t size, uint64_t *pos);   /* SYS_LOG (kprintf.c) */
 __attribute__((noreturn)) void panic(const char *fmt, ...);
 /* main.c: the processors (filled by cpu_init and smp_start), the kernel lock */
 extern cpu_t *cpus[MAXCPU];

@@ -6,15 +6,15 @@
  * the real sia already runs, it says so and ends.
  *
  * Answers: a question with "slowly" in it gets a long answer (to test
- * Stop); any other gets a short one with two actions, a file to open and a
- * project to go to.
+ * Stop); any other gets a short one with two actions, a file to open and
+ * the files with an attribute to list.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
 
 #define NSESS 8
-static const char *shortans = "Here is your note, and the demo project.\n[fly:note.txt]\n[project:demo]\n";
+static const char *shortans = "Here is your note, and your notes.\n[fly:note.txt]\n[island:topic=notes]\n";
 static struct { int used, stopped; const char *ans; int pos; } sess[NSESS];
 
 static int has(const char *s, size_t n, const char *w)

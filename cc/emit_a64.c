@@ -31,6 +31,10 @@ static const char *W(int p) { char *s = tmp(); snprintf(s, 96, "w%d", p); return
 static const char *G(int p, int w) { return w == 8 ? X(p) : W(p); }          /* a general register, by width */
 static const char *V(int p, int w) { char *s = tmp(); snprintf(s, 96, "%c%d", w == 4 ? 's' : w == 16 ? 'q' : 'd', p - A64_V0); return s; }
 
+/* Register-form vector code (O_VREG) reuses the memory form's templates, whose
+ * v0 (result), v1 and v2 (operands) are then these registers. */
+static int vmap[3], vmap_on, vregform;
+
 static void out(const char *f, ...)
 {
     char line[512];
@@ -38,6 +42,22 @@ static void out(const char *f, ...)
     va_start(ap, f);
     int n = vsnprintf(line, sizeof line, f, ap);
     va_end(ap);
+    if (vmap_on) {                                /* "v0." "v1." "v2." -> the mapped registers */
+        char t[512];
+        int k = 0;
+        for (int j = 0; j < n && k < (int)sizeof t - 8; j++) {
+            char p = j ? line[j - 1] : ' ';
+            int word = (p >= 'a' && p <= 'z') || (p >= 'A' && p <= 'Z') || (p >= '0' && p <= '9') || p == '_';
+            if (line[j] == 'v' && !word && line[j + 1] >= '0' && line[j + 1] <= '2' && line[j + 2] == '.') {
+                k += snprintf(t + k, sizeof t - k, "v%d", vmap[line[j + 1] - '0']);
+                j++;
+                continue;
+            }
+            t[k++] = line[j];
+        }
+        memcpy(line, t, k);
+        n = k;
+    }
     buf_c(o, '\t');
     buf_add(o, line, n);
     buf_c(o, '\n');
@@ -816,14 +836,26 @@ int a64_vec_ok(int op, int kind, int es)
     return 0;
 }
 
-static void vld(int v, int base, int off, int n) { out("ldr %c%d, [x%d, #%d]", n == 16 ? 'q' : 'd', v, base, off); }
-static void vst(int v, int base, int off, int n) { out("str %c%d, [x%d, #%d]", n == 16 ? 'q' : 'd', v, base, off); }
+static void vld(int v, int base, int off, int n) { if (!vregform) out("ldr %c%d, [x%d, #%d]", n == 16 ? 'q' : 'd', v, base, off); }
+static void vst(int v, int base, int off, int n) { if (!vregform) out("str %c%d, [x%d, #%d]", n == 16 ? 'q' : 'd', v, base, off); }
+
+/* A vector virtual register (C_VEC): its v register (a number, 0-31), or
+ * scratch one loaded from its spill slot; and after a result, the spill. */
+static char vq(int v) { return F->vr[v].w == 16 ? 'q' : 'd'; }
+static int vsrc(int v, int scratch)
+{
+    if (isreg(v)) return ph(v) - A64_V0;
+    out("ldr %c%d, %s", vq(v), scratch, spill(v));
+    return scratch;
+}
+static int vdst(int v, int scratch) { return isreg(v) ? ph(v) - A64_V0 : scratch; }
+static void vdone(int v, int r) { if (!isreg(v)) out("str %c%d, %s", vq(v), r, spill(v)); }
 
 /* the sum of all elements of a, into a scalar register (VOP_ADDV) */
 static void vec_addv(Ins *i, int pa)
 {
     int es = i->sz, n = i->w, kind = i->sgn;
-    vld(1, pa, 0, n);
+    if (pa >= 0) vld(1, pa, 0, n);                /* (pa < 0: a is in v1 already) */
     if (kind == 2) {                                  /* floating: pairwise adds down to one */
         if (es == 4 && n == 16) { out("faddp v0.4s, v1.4s, v1.4s"); out("faddp s0, v0.2s"); }
         else if (es == 4) out("faddp s0, v1.2s");
@@ -844,9 +876,34 @@ static void vec_addv(Ins *i, int pa)
     def_done(i->dst, d, es == 8 ? 8 : 4);
 }
 
+static void vec_body(Ins *i, int pa, int pb, int pd);
 static void vec(Ins *i)
 {
-    int op = i->cc, es = i->sz, kind = i->sgn, n = i->w, f = kind == 2, u = kind == 1;
+    int op = i->cc, es = i->sz, n = i->w;
+    if (i->op == O_VREG) {                            /* registers (vecreg.c): the same code, mapped */
+        if (op == VOP_SPLAT) {
+            int d = vdst(i->dst, 0), h = n < 16 ? n : 16;
+            if (isflt(i->a)) out("dup v%d.%s, v%d.%c[0]", d, arr(es, h), use_reg(i->a, VS0, es) - A64_V0, elc(es));
+            else { int r = use_reg(i->a, S0, es == 8 ? 8 : 4); out("dup v%d.%s, %s", d, arr(es, h), es == 8 ? X(r) : W(r)); }
+            vdone(i->dst, d);
+            return;
+        }
+        if (op == VOP_ADDV) {
+            int a = vsrc(i->a, 1);
+            if (a != 1) out("orr v1.16b, v%d.16b, v%d.16b", a, a);
+            vec_addv(i, -1);
+            return;
+        }
+        vmap[1] = vsrc(i->a, 1);
+        vmap[2] = i->b ? vsrc(i->b, 2) : 2;
+        vmap[0] = vdst(i->dst, 0);
+        if (!isreg(i->dst) && vop_acc(op)) out("ldr %c0, %s", vq(i->dst), spill(i->dst));
+        vmap_on = vregform = 1;
+        vec_body(i, -1, i->b ? 0 : -1, -1);
+        vmap_on = vregform = 0;
+        vdone(i->dst, 0);
+        return;
+    }
     if (op == VOP_SPLAT) {                            /* a scalar (a: its register) in every element */
         int pd = use_reg(i->m.base, S2, 8), h = n < 16 ? n : 16;
         if (isflt(i->a)) out("dup v0.%s, v%d.%c[0]", arr(es, h), use_reg(i->a, VS0, es) - A64_V0, elc(es));
@@ -857,6 +914,14 @@ static void vec(Ins *i)
     int pa = use_reg(i->a, S0, 8), pb = i->b ? use_reg(i->b, S1, 8) : -1;
     if (op == VOP_ADDV) { vec_addv(i, pa); return; }
     int pd = use_reg(i->m.base, S2, 8);
+    vec_body(i, pa, pb, pd);
+}
+
+/* The operation: a in v1, b in v2 (loaded from pa, pb unless in registers),
+ * the result in v0 (stored to pd); 32-byte vectors in two halves. */
+static void vec_body(Ins *i, int pa, int pb, int pd)
+{
+    int op = i->cc, es = i->sz, kind = i->sgn, n = i->w, f = kind == 2, u = kind == 1;
     char s = u ? 'u' : 's';
     for (int off = 0; off < n; off += 16) {
         int h = n < 16 ? n : 16, rn = h;          /* bytes per instruction; rn: of the result */
@@ -949,6 +1014,9 @@ static void vec(Ins *i)
         case VOP_FCVTL: out("fcvtl v0.4s, v1.4h"); rn = 16; break;
         case VOP_FCVTL2: out("fcvtl2 v0.4s, v1.8h"); break;
         case VOP_FCVTN: out("fcvtn v0.4h, v1.4s"); rn = 8; break;
+        case VOP_GETLO: out("orr v0.8b, v1.8b, v1.8b"); rn = 8; break;
+        case VOP_GETHI: out("dup v0.2d, v1.d[1]"); rn = 8; break;
+        case VOP_COMBINE: out("zip1 v0.2d, v1.2d, v2.2d"); rn = 16; break;
         default: die("a vector operation without an AArch64 instruction (%d)", op);
         }
         vst(0, pd, off, rn);
@@ -1104,7 +1172,16 @@ static void ins(Ins *i)
         else { int a = use_reg(i->a, VS0, w), d = def_reg(i->dst, S0); out("fmov %s, %s", G(d, w), V(a, w)); def_done(i->dst, d, w); }
         return;
     }
-    case O_VEC: vec(i); return;
+    case O_VEC: case O_VREG: vec(i); return;
+    case O_VMOV: {
+        int a = vsrc(i->a, 1), d = vdst(i->dst, a);
+        if (a != d) out("orr v%d.16b, v%d.16b, v%d.16b", d, a, a);
+        vdone(i->dst, d);
+        return;
+    }
+    case O_VZERO: { int d = vdst(i->dst, 0); out("movi v%d.16b, #0", d); vdone(i->dst, d); return; }
+    case O_VLD: { int d = vdst(i->dst, 0); const char *m = amode(&i->m, i->w); out("ldr %c%d, %s", i->w == 16 ? 'q' : 'd', d, m); vdone(i->dst, d); return; }
+    case O_VST: { int a = vsrc(i->a, 1); const char *m = amode(&i->m, i->w); out("str %c%d, %s", i->w == 16 ? 'q' : 'd', a, m); return; }
     case O_I128: case O_I128SH: case O_I128CMP: case O_I128EXT: i128(i); return;
     case O_ENTRY: entry(i); return;
     case O_UNREACH: out("brk #1000"); return;
@@ -1143,6 +1220,7 @@ void emit_function_a64(Buf *dst)
     int uses_frame = 0;
     for (int s = 1; s <= F->nslots; s++) {
         Slot *sl = &F->slots[s];
+        if (!sl->size) { sl->off = 0; continue; }       /* (a vector now in a register: vecreg.c) */
         size = align_to(size + sl->size, sl->align);
         sl->off = -size;
         uses_frame = 1;

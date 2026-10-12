@@ -118,13 +118,37 @@ static const char *conf_get(const char *conf, const char *key, char *buf, size_t
     return 0;
 }
 
+/* No model set, or not on the disk: the first .gguf file in /models (a
+ * Raspberry Pi's card carries a smaller model than a PC's disk). -> 0 */
+static int any_model(char *path, size_t cap)
+{
+    long h = fs_open("/models", FS_RDONLY | FS_DIRECTORY, 0);
+    if (h < 0) return -ENOENT;
+    static char buf[4096];
+    char name[256];
+    uint64_t cs = 0, ino;
+    long n;
+    int type, found = 0;
+    while (!found && (n = fs_readdir(h, &cs, buf, sizeof buf)) > 0)
+        for (const char *p = buf; !found && fs_dirent(&p, buf + n, &ino, &type, name); ) {
+            size_t l = strlen(name);
+            if (type == 8 && l > 5 && !strcmp(name + l - 5, ".gguf")) {
+                strlcpy(path + strlcpy(path, "/models/", cap), name, cap - 8);
+                found = 1;
+            }
+        }
+    fs_close(h);
+    return found ? 0 : -ENOENT;
+}
+
 static int l_init(sia_backend_t *b, const char *conf)
 {
     (void)b;
     char path[FS_PATH], v[32];
     if (!conf_get(conf, "model", path, sizeof path)) strlcpy(path, "/models/smollm2-1.7b-instruct-q4_k_m.gguf", sizeof path);
     siefs_stat_t st;
-    if (fs_stat(path, &st, 0) < 0 || (model_fd = fs_open(path, FS_RDONLY, 0)) < 0) return -ENOENT;
+    if (fs_stat(path, &st, 0) < 0 && (any_model(path, sizeof path) || fs_stat(path, &st, 0) < 0)) return -ENOENT;
+    if ((model_fd = fs_open(path, FS_RDONLY, 0)) < 0) return -ENOENT;
     mk_info_t in;
     sys_info(&in);
     P.n = in.ncpus < MAXW ? in.ncpus : MAXW;
@@ -207,6 +231,11 @@ static int l_next(sia_backend_t *b, void *s, char *buf, int cap)
             llm_stats_t st;
             llm_stats(s, &st);
             if (st.gen_ns) L.speed = (uint32_t)(st.gen_tokens * 100000000000ULL / st.gen_ns);
+            sia_log("siad: answer: prompt %d tokens in %lu ms (%lu tok/s), %d tokens written in %lu ms (%lu.%lu tok/s)\n",
+                    st.prompt_tokens, (unsigned long)(st.prompt_ns / 1000000),
+                    st.prompt_ns ? (unsigned long)(st.prompt_tokens * 1000000000ULL / st.prompt_ns) : 0UL,
+                    st.gen_tokens, (unsigned long)(st.gen_ns / 1000000),
+                    (unsigned long)(L.speed / 100), (unsigned long)(L.speed / 10 % 10));
             return 0;
         }
         if (r > 0) return r;             /* (0: a piece of a character, nothing to show yet) */

@@ -13,9 +13,11 @@
  *   Raspberry Pi 5  the frame buffer the firmware set up and describes in the
  *                   device tree ("simple-framebuffer"), at the size it chose.
  *
- * Atlas draws a SW x SH picture: 1920 x 1080 except on a UEFI firmware's
- * screen (its own size); a bigger screen shows it centred, a smaller one
- * is not used. The clock: the CMOS clock (x86), the PL031 (QEMU
+ * Atlas draws a PW x PH picture: the size chosen in Settings
+ * (/etc/display.conf, 1920 x 1080 by default) where the screen can take any
+ * size (QEMU's VGA and ramfb, the Pi 4's firmware, which scales it to the
+ * monitor); else the firmware's size (UEFI), or 1920 x 1080 centred in a
+ * bigger fixed frame buffer (the Pi 5); a smaller one is not used. The clock: the CMOS clock (x86), the PL031 (QEMU
  * virt); the Pis have none (uptime, until the network gives the time).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -35,19 +37,19 @@ int screen_init(screen_t *s)
      * any size from 1024 x 600; above 3840 x 2400 it uses the top-left part). */
     mk_screen_t g;
     if (!sys_screen(&g) && g.width >= 1024 && g.height >= 600 && g.pitch >= g.width) {
-        SW = g.width < 3840 ? g.width : 3840;
-        SH = g.height < 2400 ? g.height : 2400;
-        *s = (screen_t){ map_phys(g.pa, ((uint64_t)g.pitch * g.height * 4) | MAP_WC), g.pitch, g.format == 0, "firmware screen (UEFI)" };
+        PW = g.width < 3840 ? g.width : 3840;
+        PH = g.height < 2400 ? g.height : 2400;
+        *s = (screen_t){ map_phys(g.pa, ((uint64_t)g.pitch * g.height * 4) | MAP_WC), g.pitch, g.format == 0, 0, "firmware screen (UEFI)" };
         return (long)s->fb > 0 ? 0 : -1;
     }
     for (int d = 0; d < 32; d++) {
         if (pci(d, 0) != 0x11111234) continue;
         uint64_t bar = pci(d, 0x10) & ~0xFUL;
         dispi(4, 0);                                     /* off while changing */
-        dispi(1, SW); dispi(2, SH); dispi(3, 32);        /* width, height, bits per pixel */
-        dispi(6, SW); dispi(7, SH); dispi(8, 0); dispi(9, 0);   /* virtual size, offset */
+        dispi(1, PW); dispi(2, PH); dispi(3, 32);        /* width, height, bits per pixel */
+        dispi(6, PW); dispi(7, PH); dispi(8, 0); dispi(9, 0);   /* virtual size, offset */
         dispi(4, 0x41);                                  /* on, linear video memory */
-        *s = (screen_t){ map_phys(bar, (uint64_t)SW * SH * 4), SW, 0, "standard VGA" };
+        *s = (screen_t){ map_phys(bar, (uint64_t)PW * PH * 4), PW, 0, 1, "standard VGA" };
         return (long)s->fb > 0 ? 0 : -1;
     }
     return -1;
@@ -77,10 +79,10 @@ static char *dt;                                         /* the device tree (a c
 
 /* A picture of at least 1920 x 1080 at fb (pitch pixels per row): ours is
  * centred in it. */
-static int use(screen_t *s, uint32_t *fb, int w, int h, int pitch, int swap, const char *name)
+static int use(screen_t *s, uint32_t *fb, int w, int h, int pitch, int swap, int resizable, const char *name)
 {
-    if ((long)fb <= 0 || w < SW || h < SH) return -1;
-    *s = (screen_t){ fb + (h - SH) / 2 * pitch + (w - SW) / 2, pitch, swap, name };
+    if ((long)fb <= 0 || w < PW || h < PH) return -1;
+    *s = (screen_t){ fb + (h - PH) / 2 * pitch + (w - PW) / 2, pitch, swap, resizable, name };
     return 0;
 }
 
@@ -107,14 +109,17 @@ static int ramfb(screen_t *s)
         if (!strcmp((char *)e + 8, "etc/ramfb")) item = e[4] << 8 | e[5];
     }
     if (!item) return -1;                                /* (QEMU without "-device ramfb") */
-    uint32_t *fb = dma_alloc((uint64_t)SW * SH * 4, &fbpa);
+    static uint32_t *fb;                                 /* (kept for the next size if it fits) */
+    static uint64_t fbcap, fbpa0;
+    if (!fb || (uint64_t)PW * PH * 4 > fbcap) { fb = dma_alloc((uint64_t)PW * PH * 4, &fbpa0); fbcap = (uint64_t)PW * PH * 4; }
+    fbpa = fbpa0;
     struct { uint32_t control, length; uint64_t address; uint64_t addr; uint32_t fourcc, flags, w, h, stride; }
         __attribute__((packed)) *d = dma_alloc(4096, &pa);
     if ((long)fb <= 0 || (long)d <= 0) return -1;
     d->addr = be64(fbpa);
     d->fourcc = be32(0x34325258);                        /* "XR24": 32 bits, x r g b (ours: 0x00RRGGBB) */
     d->flags = 0;
-    d->w = be32(SW); d->h = be32(SH); d->stride = be32(SW * 4);
+    d->w = be32(PW); d->h = be32(PH); d->stride = be32(PW * 4);
     d->control = be32(item << 16 | 0x08 | 0x10);         /* select this item, write */
     d->length = be32(28);
     d->address = be64(pa + 16);                          /* (the configuration follows the request) */
@@ -122,7 +127,7 @@ static int ramfb(screen_t *s)
     *(volatile uint32_t *)(fc + 16) = be32((uint32_t)(pa >> 32));
     *(volatile uint32_t *)(fc + 20) = be32((uint32_t)pa);   /* (this half starts it) */
     for (int k = 0; k < 100000 && be32(*(volatile uint32_t *)&d->control) & ~1u; k++) { dma_sync(d, 4); sys_yield(); }
-    return use(s, fb, SW, SH, SW, 0, "QEMU ramfb");
+    return use(s, fb, PW, PH, PW, 0, 1, "QEMU ramfb");
 }
 
 /* ---- The Pi 4: ask the firmware for a frame buffer (mailbox tags: size,
@@ -131,9 +136,12 @@ static int ramfb(screen_t *s)
 static int pi_mailbox(screen_t *s)
 {
     if (fdt_find(dt, -1, "brcm,bcm2835-mbox") < 0) return -1;
+    static int had;
+    if (had) { uint32_t r[] = { 7 * 4, 0, 0x48001, 0, 0, 0, 0 }; mbox_call(r, 7); }   /* a new size: the old buffer goes back */
+    had = 1;
     uint32_t m[] = { 0, 0,
-        0x48003, 8, 0, SW, SH,          /* physical size */
-        0x48004, 8, 0, SW, SH,          /* virtual size */
+        0x48003, 8, 0, PW, PH,          /* physical size */
+        0x48004, 8, 0, PW, PH,          /* virtual size */
         0x48005, 4, 0, 32,              /* depth */
         0x48006, 4, 0, 0,               /* pixel order: BGR in memory, i.e. our 0x00RRGGBB words */
         0x40001, 8, 0, 4096, 0,         /* allocate: alignment -> address, size */
@@ -143,9 +151,9 @@ static int pi_mailbox(screen_t *s)
     m[0] = n * 4;
     /* (answers: the virtual size in words 10-11, the buffer's address and
      * size in 23-24, the pitch in 28) */
-    if (mbox_call(m, n) || !m[23] || m[28] < SW * 4) return -1;
+    if (mbox_call(m, n) || !m[23] || m[28] < PW * 4) return -1;
     uint64_t pa = m[23] & 0x3FFFFFFF, size = m[24];
-    return use(s, map_phys(pa, size | MAP_WC), m[10], m[11], m[28] / 4, 0, "Raspberry Pi firmware");
+    return use(s, map_phys(pa, size | MAP_WC), m[10], m[11], m[28] / 4, 0, 1, "Raspberry Pi firmware");
 }
 
 /* ---- The Pi 5 (and any firmware that does it): the frame buffer it set up. */
@@ -159,13 +167,14 @@ static int simplefb(screen_t *s)
     if (!w || !h || !st || !fmt) return -1;
     int swap = !strcmp(fmt, "a8b8g8r8") || !strcmp(fmt, "x8b8g8r8");
     if (!swap && strcmp(fmt, "a8r8g8b8") && strcmp(fmt, "x8r8g8b8")) return -1;   /* 32-bit formats only */
-    return use(s, map_phys(a, len | MAP_WC), fdt_be32(w), fdt_be32(h), fdt_be32(st) / 4, swap, "firmware frame buffer");
+    PW = 1920; PH = 1080;                                /* (a fixed size: not the one chosen) */
+    return use(s, map_phys(a, len | MAP_WC), fdt_be32(w), fdt_be32(h), fdt_be32(st) / 4, swap, 0, "firmware frame buffer");
 }
 
 int screen_init(screen_t *s)
 {
-    long size = sys_fdt(0, 0);
-    if (size <= 0 || !(dt = malloc(size)) || sys_fdt(dt, size) != size) return -1;
+    long size = dt ? 1 : sys_fdt(0, 0);                 /* (the device tree: read once) */
+    if (!dt && (size <= 0 || !(dt = malloc(size)) || sys_fdt(dt, size) != size)) { free(dt); dt = 0; return -1; }
     return simplefb(s) && pi_mailbox(s) && ramfb(s) ? -1 : 0;
 }
 

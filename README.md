@@ -2,7 +2,7 @@
 
 A small, fast microkernel operating system written from scratch in C, for
 **x86-64** and **AArch64** (QEMU, Raspberry Pi 4 and 5). It has its own file
-system (SieFS), its own C compiler (sicc), a calm desktop (Stage), its
+system (SieFS), its own C compiler (sicc), a desktop laid out as BeOS's was, its
 own network stack with TLS 1.3, and an AI assistant (sia) that runs a
 language model on the machine or talks to an OpenAI-compatible service.
 GPL-3.0. All the code is new.
@@ -136,12 +136,11 @@ tour, file by file, with the crash and on-demand mechanisms:
 - **Users** ([docs/accounts.md](docs/accounts.md)): Argon2id passwords,
   groups, permissions enforced by the file server with the identity the
   kernel stamps on every message; `passwd`, `su`, `useradd`, `userdel`.
-- **Stage, the desktop** ([docs/desktop.md](docs/desktop.md)): one project
-  at a time (a rail of projects, the Inbox for files with none), at most two
-  windows on the stage (terminals as you, an editor, the assistant), the
-  project's other things as cards on a shelf, and the Lens (Ctrl+Space) to
-  find a file, start an app or ask sia. One process, no redraw when nothing
-  happens.
+- **The desktop** ([docs/desktop.md](docs/desktop.md)): laid out as
+  BeOS's was, in SIEOS's colours: windows with title tabs (terminals as
+  you, an editor, Files, the assistant, Settings), the Deskbar (menu, apps,
+  clock), 4 workspaces, and the sia strip (Ctrl+Space) to find a file,
+  start an app or ask sia. One process, no redraw when nothing happens.
 - **Network** ([docs/net.md](docs/net.md)): TCP/IP, DHCP, DNS, HTTP, TLS 1.3
   with certificate checking; `fetch URL`.
 - **sia, the assistant** ([docs/sia.md](docs/sia.md)): below.
@@ -194,7 +193,7 @@ about 15 times faster than gcc. Details: [docs/cc.md](docs/cc.md).
 | `make clean` / `distclean` | remove the build (keeping your disk) / everything |
 | `make test` | first start, logins, permissions, files, disk check, second boot, crash recovery |
 | `make crash-test` | only the crash recovery: servers killed while they work |
-| `make gui-test` | the desktop through QEMU's monitor: first start, projects (and the islands' migration), stage, shelf, Lens, apps, editor, assistant (a stand-in) |
+| `make gui-test` | the desktop through QEMU's monitor: first start, windows (move, resize, zoom, minimize, workspaces), Files, editor, the sia strip, apps, assistant (a stand-in), Settings |
 | `make gui-test-real` | the same with the real assistant and the 1.7B model |
 | `make kernel-test` | floating point and vector state, thread-local variables, quotas |
 | `make demand-test` | servers started on demand, stopped when idle, calls racing a stop |

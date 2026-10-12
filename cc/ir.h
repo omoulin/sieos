@@ -11,7 +11,9 @@
  * Integer values live in 64-bit registers. Operations work on 32 or 64 bits
  * (w = 4 or 8): char and short values are kept extended to 32 bits, which
  * matches C's integer promotions. Floating-point values (w = 4 float,
- * 8 double) live in xmm registers.
+ * 8 double) live in xmm registers. On AArch64, NEON vectors that never need
+ * an address are promoted to vector registers (C_VEC, w = 8 or 16) after
+ * the optimizer (vecreg.c): O_VREG and the moves below.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -19,7 +21,7 @@
 #define SICC_IR_H
 #include "sicc.h"
 
-enum { C_INT, C_FLT };                  /* register classes */
+enum { C_INT, C_FLT, C_VEC };           /* register classes (C_VEC: AArch64 NEON, in the v registers) */
 
 /* Physical registers: 0-15 the general ones (in the hardware's numbering),
  * 16-31 xmm0-xmm15. */
@@ -103,6 +105,13 @@ enum {
     O_ROL,                      /* dst = a rotated left by imm bits (w) */
     O_FSQRT,                    /* dst = square root of float a (w) */
     O_TLSADDR,                  /* dst = the address of thread-local m.sym (imm 1: defined elsewhere, through the GOT) */
+    /* AArch64 vectors in registers (C_VEC; w: 8 or 16 bytes), from vecreg.c */
+    O_VREG,                     /* dst = a op b: O_VEC's fields, registers instead of addresses; an "acc"
+                                   operation also reads dst; VOP_ADDV: dst a scalar; VOP_SPLAT: a a scalar */
+    O_VMOV,                     /* dst = a */
+    O_VLD,                      /* dst = w bytes at m */
+    O_VST,                      /* w bytes at m = a */
+    O_VZERO,                    /* dst = 0 */
     O_NOP,
 };
 
@@ -244,6 +253,8 @@ void regalloc(void);                    /* ra.c */
 int ins_uses(Ins *i, int *u);
 int ins_defs(Ins *i, int *d);
 void optimize(void);                    /* opt.c */
+void vec_promote(void);                 /* vecreg.c: AArch64, vectors into registers */
+int vop_acc(int op);                    /* does this vector operation read its result's old value? */
 void emit_function(Buf *out);           /* emit.c */
 void emit_function_a64(Buf *out);       /* emit_a64.c */
 int a64_fn_id(void);

@@ -562,6 +562,8 @@ static int list_tokens(const conv_t *c)  /* (an estimate: 4 bytes a token) */
     return (int)(n / 4);
 }
 
+static int keep_loaded;                   /* the local model stays loaded while unused */
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -578,6 +580,13 @@ int main(int argc, char **argv)
     if (compact_at < 10 || compact_at > 95) compact_at = 60;
     if (keep_turns < 2) keep_turns = 2;
     mem_setup((int)conf_num("max_convs", 32), (int)conf_num("max_log_kb", 256));
+    /* A local model loaded is kept while unused if the machine has room for
+     * it (6 GiB or more, e.g. an 8 GB Pi 4): loading it again from an SD
+     * card takes tens of seconds. keep_loaded=0/1 in /etc/sia.conf decides. */
+    mk_info_t mi;
+    sys_info(&mi);
+    keep_loaded = B == &sia_local && ready && conf_num("keep_loaded", mi.pages_total >= (6ULL << 30) / 4096) == 1;
+    if (keep_loaded) sia_log("siad: the model stays loaded while unused (keep_loaded)\n");
     if (ready) {
         sia_info_t in = { 0 };
         B->info(B, in.model, sizeof in.model, &in.mem, &in.ctx, &in.tok_s_x100);
@@ -670,7 +679,7 @@ int main(int argc, char **argv)
         case SVC_MAYSTOP: {               /* started on demand: unused for a while, we end and
                                              the model's memory goes back (conversations are
                                              on the disk: a client resumes them) */
-            int busy = 0;
+            int busy = keep_loaded;       /* (keep_loaded: never unused) */
             asked--;                      /* (init's question is not a use) */
             for (int i = 0; i < MAXSESS; i++) busy |= sess[i].pending | sess[i].answering | sess[i].compact_due;
             if ((r = maystop_answer(&m, asked, &seen, busy)) == 0) {

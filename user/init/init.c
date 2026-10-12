@@ -41,8 +41,14 @@
  * whose parent ended: if login crashes, its open session becomes init's
  * child, and the next login prompt waits until that session ends.
  *
- * No wake-ups when nothing happens: the timer thread sleeps until the next
- * restart or idle question is due, or for good.
+ * Stuck servers: a server that does not end but stops answering (a loop
+ * that never ends, a deadlock) is as gone as a crashed one. A watcher thread
+ * pings the core servers every 10 s (SVC_PING: any answer will do); one that
+ * has not answered after 30 s is ended, and so started again like any that
+ * failed. (Not sia: an answer may keep it computing for a minute.)
+ *
+ * Few wake-ups when nothing happens: the timer thread sleeps until the next
+ * restart or idle question is due, or for good; the watcher wakes every 10 s.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -66,22 +72,34 @@ typedef struct {
     uint64_t quota;                     /* its memory limit in bytes (0: none; SPAWN_QUOTA) */
     int64_t check_at;                   /* on demand: when to ask "may you stop?" */
     int asking, stopping;               /* the question is out / the server said yes */
+    const char *watch;                  /* a core server: its port, pinged (see "Stuck servers") */
+    char watchbuf[16];                  /* (svc add -w: the port's name) */
+    int64_t ping_t0;                    /* a ping out since then (0: none) ... */
+    int ping_pid;                       /* ... to this process */
 } svc_t;
+#define WATCH_EVERY 10000000000L        /* 10 s between pings */
+#define WATCH_NS    30000000000L        /* no answer for 30 s: stuck */
 
 /* .i: name, state, pid, restarts, last status, policy, driver, started, and
  * for a service started on demand: the port that starts it, its idle time. */
 static svc_t svc[MAXSVC] = {
-    { .i = { "con",   0, 0, 0, 0, SVC_ALWAYS, 1 }, "con",        "con" },
+    { .i = { "con",   0, 0, 0, 0, SVC_ALWAYS, 1 }, "con",        "con", .watch = "console" },
     /* USB (keys, keyboards, mice): before vblk, which may find SIEOS's disk on a
      * USB key; with no USB controller it ends with 0 and is not started again */
-    { .i = { "usb",   0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "usb",        "usb" },
-    { .i = { "vblk",  0, 0, 0, 0, SVC_ALWAYS, 1 }, "vblk",       "vblk" },
-    { .i = { "fs",    0, 0, 0, 0, SVC_ALWAYS, 0 }, "fs",         "fs" },
+    { .i = { "usb",   0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "usb",        "usb", .watch = "usb" },
+    { .i = { "vblk",  0, 0, 0, 0, SVC_ALWAYS, 1 }, "vblk",       "vblk", .watch = "disk" },
+    { .i = { "fs",    0, 0, 0, 0, SVC_ALWAYS, 0 }, "fs",         "fs", .watch = "fs" },
     /* accounts: a login or a passwd now and then; 1 ms to start */
-    { .i = { "auth",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "auth", 5 * MIN }, "/bin/auth", "auth" },
+    { .i = { "auth",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "auth", 5 * MIN }, "/bin/auth", "auth", .watch = "auth" },
     { .i = { "login", 0, 0, 0, 0, SVC_ALWAYS, 0 }, "/bin/login", "login", .console = 1 },
     /* the desktop (screen: a driver); with no display card it ends with 0: not restarted */
-    { .i = { "atlas", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/atlas", "atlas" },
+    { .i = { "atlas", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/atlas", "atlas", .watch = "atlas" },
+    /* the console's log on a Pimoroni GFX HAT (a Pi's screen and buttons, a driver);
+     * with no HAT (or no Pi) it ends with 0 at once and is not started again */
+    { .i = { "gfxhat", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/gfxhat", "gfxhat" },
+    /* the pins (a Pi's GPIO; simulated elsewhere): started by its first user, then
+     * kept (a pattern may be playing) */
+    { .i = { "gpio",  0, 0, 0, 0, SVC_ALWAYS, 1, 0, "gpio", 0 }, "/bin/gpiod", "gpiod" },
     /* the network: kept a while, since starting means a new DHCP exchange;
      * the card's driver stops after netd (it is busy while netd runs) */
     { .i = { "vnet",  0, 0, 0, 0, SVC_ALWAYS, 1, 0, "nic0", 10 * MIN }, "/bin/vnet", "vnet" },
@@ -226,6 +244,16 @@ static int64_t due(void)
     for (int i = 0; i < nsvc; i++) {
         svc_t *s = &svc[i];
         int64_t left;
+        if (s->i.state == SVC_RUNNING && s->ping_t0 && s->ping_pid == s->i.pid) {
+            int64_t p = s->ping_t0 + WATCH_NS - now;  /* a ping out: stuck once its time is up */
+            if (p <= 0) {
+                say("init: %s (pid %d) does not answer for %ld s: stuck, ended\n", s->i.name, s->i.pid, WATCH_NS / 1000000000L);
+                s->ping_t0 = 0;
+                sys_kill(s->i.pid);              /* (its end comes as NOTE_CHILD: started again) */
+                continue;
+            }
+            if (!next || p < next) next = p;
+        }
         if (s->i.state == SVC_RUNNING && s->i.idle_ns && !s->asking && !s->stopping)
             left = s->check_at - now > 0 ? s->check_at - now : 1;
         else if (s->i.state == SVC_WAITING) {
@@ -270,6 +298,28 @@ static void ticker(void *arg)
     }
 }
 
+/* The watcher: every 10 s, each running core server is pinged; init's main
+ * thread hears when a ping goes out and when it comes back (INIT_PING), and
+ * its timer ends a server whose ping stays out too long. This thread may wait
+ * for a stuck server: the main thread never does. */
+static void watcher(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        sys_sleep(WATCH_EVERY);
+        for (int i = 0; i < nsvc; i++) {
+            if (!svc[i].watch) continue;
+            msg_t go = { .w = { INIT_PING, (uint64_t)i, 1 } };
+            if (ipc_call(port, &go) < 0 || (long)go.w[0] < 0) continue;   /* (not running) */
+            long p = port_find(svc[i].watch);
+            msg_t q = { .w = { SVC_PING } };
+            if (p > 0) ipc_call(p, &q);                 /* (any answer; an error: it ended) */
+            msg_t back = { .w = { INIT_PING, (uint64_t)i, 0 } };
+            ipc_call(port, &back);
+        }
+    }
+}
+
 /* A request on port "init": fills the reply a; returns -EBUSY to leave it unanswered. */
 static long serve(msg_t *m, msg_t *a, long from, char *req)
 {
@@ -302,7 +352,10 @@ static long serve(msg_t *m, msg_t *a, long from, char *req)
     case INIT_ADD: {                    /* "name\0path\0args[\0port]", w[2] = idle seconds */
         if (m->uid) return -EPERM;
         char *path = req + strlen(req) + 1, *args = path + strlen(path) + 1, *dp = args + strlen(args) + 1;
+        char *wp = "";                  /* the watched port, after the on-demand one */
         if (dp >= req + m->rlen) dp = "";
+        else if (dp + strlen(dp) + 1 < req + m->rlen) wp = dp + strlen(dp) + 1;
+        if (strlen(wp) > 15) wp = "";
         if (nsvc == MAXSVC) return -ENOMEM;
         if (!*req || strlen(req) > 15 || find(req) || path[0] != '/' || m->w[1] > SVC_NEVER || strlen(dp) > 15 ||
             (long)m->w[2] < 0)
@@ -312,6 +365,7 @@ static long serve(msg_t *m, msg_t *a, long from, char *req)
         strlcpy(s->i.name, req, sizeof s->i.name);
         strlcpy(s->src, path, sizeof s->src);
         strlcpy(s->args, *args ? args : req, sizeof s->args);
+        if (*wp) { strlcpy(s->watchbuf, wp, sizeof s->watchbuf); s->watch = s->watchbuf; }
         if (*dp) {                      /* on demand: started when its port is looked up */
             strlcpy(s->i.port, dp, sizeof s->i.port);
             s->i.idle_ns = m->w[2] * 1000000000UL;
@@ -336,6 +390,14 @@ static long serve(msg_t *m, msg_t *a, long from, char *req)
         tick_from = from;               /* answered when something becomes pending */
         return -EBUSY;
     }
+    case INIT_PING:
+        if (m->pid != self || m->w[1] >= (uint64_t)nsvc) return -EPERM;
+        s = &svc[m->w[1]];
+        if (!m->w[2]) { s->ping_t0 = 0; return 0; }
+        if (s->i.state != SVC_RUNNING) return -ESRCH;
+        s->ping_t0 = sys_clock();
+        s->ping_pid = s->i.pid;
+        return 0;
     case INIT_ANSWER: {
         if (m->pid != self || m->w[1] >= (uint64_t)nsvc) return -EPERM;
         s = &svc[m->w[1]];
@@ -377,6 +439,7 @@ int main(int argc, char **argv)
         else start(s);
     }
     ticker_tid = thread_start(ticker, 0, 4096);
+    thread_start(watcher, 0, 4096);
 
     static char req[256];
     for (;;) {

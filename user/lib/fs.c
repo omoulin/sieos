@@ -305,6 +305,15 @@ long spawn_file(const char *path, const char *args, int uid, int gid, const mk_s
     if (!elf) { fs_close(h); return -ENOMEM; }
     r = fs_read(h, 0, elf, st.size);
     fs_close(h);
+    /* the program starts in our current folder: after its arguments, past
+     * " \001" (__start takes it away; the kernel names a process up to the
+     * first space), if it fits the kernel's 256 bytes */
+    char full[256];
+    size_t na = strlen(args), nc = strlen(cwd);
+    if (strcmp(cwd, "/") && na + 2 + nc + 1 <= sizeof full) {
+        memcpy(full, args, na); full[na] = ' '; full[na + 1] = '\001'; memcpy(full + na + 2, cwd, nc + 1);
+        args = full;
+    }
     if (r == (long)st.size) r = sys_spawn(elf, st.size, args, uid, gid, o);
     else if (r >= 0) r = -EIO;
     free(elf);                                       /* the kernel has its own copy */

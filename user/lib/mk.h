@@ -119,6 +119,8 @@ static inline void     mmio_w32(volatile void *a, uint32_t v) { *(volatile uint3
 /* SYS_FDT: the firmware's device tree (arm64; -ENOSYS where there is none),
  * where drivers find their devices (lib/fdt.c reads it). */
 static inline long sys_fdt(void *buf, size_t size)      { return SYS(SYS_FDT, buf, size); }
+/* SYS_LOG: the console's log from byte *pos since boot (advanced). */
+static inline long sys_log(void *buf, size_t size, uint64_t *pos) { return syscall4(SYS_LOG, (uint64_t)buf, size, (uint64_t)pos, 0); }
 /* SYS_SCREEN: the frame buffer a UEFI loader left (-ENOSYS: none). */
 static inline long sys_screen(mk_screen_t *s)            { return SYS(SYS_SCREEN, s, 0); }
 /* SYS_PCI (x86-64, drivers): a PCI configuration dword at bus << 16 | dev << 11 | fn << 8 | reg. */

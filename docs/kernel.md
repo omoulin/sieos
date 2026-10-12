@@ -210,6 +210,16 @@ Every arrow is a message; the kernel copies the data once per arrow:
 - **Memory quotas:** a process may be limited in pages (heap, DMA,
   program); init gives the assistant 4.5 GiB.
 
+## The console's log
+
+Everything the kernel prints goes to the serial port (`arch_putc`) and
+into a ring of the last 32 KiB (`kprintf.c`). The console server prints
+through the kernel too (`SYS_DEBUG`), so the ring holds what a serial
+wire would show. Any program may read it with `SYS_LOG` (buffer, size,
+position): it gets the bytes from that position since boot (moved up to
+the oldest still kept) and the position after them. `/bin/gfxhat` shows it
+on a Raspberry Pi's GFX HAT (docs/raspberrypi.md); `ktest log` checks it.
+
 ## Choices made for speed and size
 
 - **Fast system calls** (`SYSCALL`/`SYSRET`, `svc`), no message buffering

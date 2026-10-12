@@ -12,7 +12,7 @@
 #error "arm_neon.h: AArch64 only"
 #endif
 
-enum { __NOP_ADD, __NOP_SUB, __NOP_MUL, __NOP_DIV, __NOP_AND, __NOP_OR, __NOP_XOR, __NOP_SHL, __NOP_SHR, __NOP_NEG, __NOP_NOT, __NOP_EQ, __NOP_NE, __NOP_LT, __NOP_LE, __NOP_GT, __NOP_GE, __NOP_SHLI, __NOP_SHRI, __NOP_SARI, __NOP_MIN, __NOP_MAX, __NOP_SQRT, __NOP_ANDNOT, __NOP_UNPCKLO, __NOP_UNPCKHI, __NOP_CVTI2F, __NOP_CVTF2I, __NOP_MADD, __NOP_MADDUBS, __NOP_AVG, __NOP_ADDS, __NOP_SUBS, __NOP_PACKS, __NOP_PACKUS, __NOP_MULHI, __NOP_MULUDQ, __NOP_SAD, __NOP_SHUFB, __NOP_MOVEMASK, __NOP_SPLAT, __NOP_SHUF, __NOP_CVTF2IR, __NOP_SLLDQ, __NOP_SRLDQ, __NOP_PSHUFD, __NOP_ABS, __NOP_MOD, __NOP_FMA, __NOP_FMS, __NOP_MLA, __NOP_MLS, __NOP_DOT, __NOP_DOTL, __NOP_MULL, __NOP_MULL2, __NOP_MLAL, __NOP_MLAL2, __NOP_PADDL, __NOP_PADAL, __NOP_ADDP, __NOP_ADDV, __NOP_MOVL, __NOP_MOVL2, __NOP_XTN, __NOP_QXTN, __NOP_QXTUN, __NOP_UZP1, __NOP_UZP2, __NOP_TRN1, __NOP_TRN2, __NOP_EXT, __NOP_DUPL, __NOP_TBL, __NOP_CNT, __NOP_BSL, __NOP_FCVTL, __NOP_FCVTL2, __NOP_FCVTN };
+enum { __NOP_ADD, __NOP_SUB, __NOP_MUL, __NOP_DIV, __NOP_AND, __NOP_OR, __NOP_XOR, __NOP_SHL, __NOP_SHR, __NOP_NEG, __NOP_NOT, __NOP_EQ, __NOP_NE, __NOP_LT, __NOP_LE, __NOP_GT, __NOP_GE, __NOP_SHLI, __NOP_SHRI, __NOP_SARI, __NOP_MIN, __NOP_MAX, __NOP_SQRT, __NOP_ANDNOT, __NOP_UNPCKLO, __NOP_UNPCKHI, __NOP_CVTI2F, __NOP_CVTF2I, __NOP_MADD, __NOP_MADDUBS, __NOP_AVG, __NOP_ADDS, __NOP_SUBS, __NOP_PACKS, __NOP_PACKUS, __NOP_MULHI, __NOP_MULUDQ, __NOP_SAD, __NOP_SHUFB, __NOP_MOVEMASK, __NOP_SPLAT, __NOP_SHUF, __NOP_CVTF2IR, __NOP_SLLDQ, __NOP_SRLDQ, __NOP_PSHUFD, __NOP_ABS, __NOP_MOD, __NOP_FMA, __NOP_FMS, __NOP_MLA, __NOP_MLS, __NOP_DOT, __NOP_DOTL, __NOP_MULL, __NOP_MULL2, __NOP_MLAL, __NOP_MLAL2, __NOP_PADDL, __NOP_PADAL, __NOP_ADDP, __NOP_ADDV, __NOP_MOVL, __NOP_MOVL2, __NOP_XTN, __NOP_QXTN, __NOP_QXTUN, __NOP_UZP1, __NOP_UZP2, __NOP_TRN1, __NOP_TRN2, __NOP_EXT, __NOP_DUPL, __NOP_TBL, __NOP_CNT, __NOP_BSL, __NOP_FCVTL, __NOP_FCVTL2, __NOP_FCVTN, __NOP_GETLO, __NOP_GETHI, __NOP_COMBINE };
 void *memcpy(void *, const void *, __SIZE_TYPE__);  /* (small and constant: inlined) */
 #define __SI static __inline__ __attribute__((always_inline))
 #define __N(op, T, a, b, c, i) __builtin_neon(__NOP_##op, (T *)0, a, b, c, i)
@@ -143,9 +143,9 @@ __SI int16x8_t vmlal_s8(int16x8_t acc, int8x8_t a, int8x8_t b) { return __N(MLAL
 __SI int16x8_t vmlal_high_s8(int16x8_t acc, int8x16_t a, int8x16_t b) { return __N(MLAL2, int16x8_t, a, b, acc, 0); }
 __SI int16x8_t vmovl_s8(int8x8_t a) { return __N(MOVL, int16x8_t, a, 0, 0, 0); }
 __SI int16x8_t vmovl_high_s8(int8x16_t a) { return __N(MOVL2, int16x8_t, a, 0, 0, 0); }
-__SI int8x8_t vget_low_s8(int8x16_t a) { int8x8_t r; memcpy(&r, &a, 8); return r; }
-__SI int8x8_t vget_high_s8(int8x16_t a) { int8x8_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI int8x16_t vcombine_s8(int8x8_t lo, int8x8_t hi) { int8x16_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI int8x8_t vget_low_s8(int8x16_t a) { return __N(GETLO, int8x8_t, a, 0, 0, 0); }
+__SI int8x8_t vget_high_s8(int8x16_t a) { return __N(GETHI, int8x8_t, a, 0, 0, 0); }
+__SI int8x16_t vcombine_s8(int8x8_t lo, int8x8_t hi) { return __N(COMBINE, int8x16_t, lo, hi, 0, 0); }
 
 /* uint8x8_t */
 __SI uint8x8_t vld1_u8(const unsigned char *p) { uint8x8_t r; memcpy(&r, p, 8); return r; }
@@ -245,9 +245,9 @@ __SI uint16x8_t vmlal_u8(uint16x8_t acc, uint8x8_t a, uint8x8_t b) { return __N(
 __SI uint16x8_t vmlal_high_u8(uint16x8_t acc, uint8x16_t a, uint8x16_t b) { return __N(MLAL2, uint16x8_t, a, b, acc, 0); }
 __SI uint16x8_t vmovl_u8(uint8x8_t a) { return __N(MOVL, uint16x8_t, a, 0, 0, 0); }
 __SI uint16x8_t vmovl_high_u8(uint8x16_t a) { return __N(MOVL2, uint16x8_t, a, 0, 0, 0); }
-__SI uint8x8_t vget_low_u8(uint8x16_t a) { uint8x8_t r; memcpy(&r, &a, 8); return r; }
-__SI uint8x8_t vget_high_u8(uint8x16_t a) { uint8x8_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI uint8x16_t vcombine_u8(uint8x8_t lo, uint8x8_t hi) { uint8x16_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI uint8x8_t vget_low_u8(uint8x16_t a) { return __N(GETLO, uint8x8_t, a, 0, 0, 0); }
+__SI uint8x8_t vget_high_u8(uint8x16_t a) { return __N(GETHI, uint8x8_t, a, 0, 0, 0); }
+__SI uint8x16_t vcombine_u8(uint8x8_t lo, uint8x8_t hi) { return __N(COMBINE, uint8x16_t, lo, hi, 0, 0); }
 
 /* int16x4_t */
 __SI int16x4_t vld1_s16(const short *p) { int16x4_t r; memcpy(&r, p, 8); return r; }
@@ -352,9 +352,9 @@ __SI int32x4_t vmovl_high_s16(int16x8_t a) { return __N(MOVL2, int32x4_t, a, 0, 
 __SI int8x8_t vmovn_s16(int16x8_t a) { return __N(XTN, int8x8_t, a, 0, 0, 0); }
 __SI int8x8_t vqmovn_s16(int16x8_t a) { return __N(QXTN, int8x8_t, a, 0, 0, 0); }
 __SI uint8x8_t vqmovun_s16(int16x8_t a) { return __N(QXTUN, uint8x8_t, a, 0, 0, 0); }
-__SI int16x4_t vget_low_s16(int16x8_t a) { int16x4_t r; memcpy(&r, &a, 8); return r; }
-__SI int16x4_t vget_high_s16(int16x8_t a) { int16x4_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI int16x8_t vcombine_s16(int16x4_t lo, int16x4_t hi) { int16x8_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI int16x4_t vget_low_s16(int16x8_t a) { return __N(GETLO, int16x4_t, a, 0, 0, 0); }
+__SI int16x4_t vget_high_s16(int16x8_t a) { return __N(GETHI, int16x4_t, a, 0, 0, 0); }
+__SI int16x8_t vcombine_s16(int16x4_t lo, int16x4_t hi) { return __N(COMBINE, int16x8_t, lo, hi, 0, 0); }
 
 /* uint16x4_t */
 __SI uint16x4_t vld1_u16(const unsigned short *p) { uint16x4_t r; memcpy(&r, p, 8); return r; }
@@ -454,9 +454,9 @@ __SI uint32x4_t vmovl_u16(uint16x4_t a) { return __N(MOVL, uint32x4_t, a, 0, 0, 
 __SI uint32x4_t vmovl_high_u16(uint16x8_t a) { return __N(MOVL2, uint32x4_t, a, 0, 0, 0); }
 __SI uint8x8_t vmovn_u16(uint16x8_t a) { return __N(XTN, uint8x8_t, a, 0, 0, 0); }
 __SI uint8x8_t vqmovn_u16(uint16x8_t a) { return __N(QXTN, uint8x8_t, a, 0, 0, 0); }
-__SI uint16x4_t vget_low_u16(uint16x8_t a) { uint16x4_t r; memcpy(&r, &a, 8); return r; }
-__SI uint16x4_t vget_high_u16(uint16x8_t a) { uint16x4_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI uint16x8_t vcombine_u16(uint16x4_t lo, uint16x4_t hi) { uint16x8_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI uint16x4_t vget_low_u16(uint16x8_t a) { return __N(GETLO, uint16x4_t, a, 0, 0, 0); }
+__SI uint16x4_t vget_high_u16(uint16x8_t a) { return __N(GETHI, uint16x4_t, a, 0, 0, 0); }
+__SI uint16x8_t vcombine_u16(uint16x4_t lo, uint16x4_t hi) { return __N(COMBINE, uint16x8_t, lo, hi, 0, 0); }
 
 /* int32x2_t */
 __SI int32x2_t vld1_s32(const int *p) { int32x2_t r; memcpy(&r, p, 8); return r; }
@@ -561,9 +561,9 @@ __SI int64x2_t vmovl_high_s32(int32x4_t a) { return __N(MOVL2, int64x2_t, a, 0, 
 __SI int16x4_t vmovn_s32(int32x4_t a) { return __N(XTN, int16x4_t, a, 0, 0, 0); }
 __SI int16x4_t vqmovn_s32(int32x4_t a) { return __N(QXTN, int16x4_t, a, 0, 0, 0); }
 __SI uint16x4_t vqmovun_s32(int32x4_t a) { return __N(QXTUN, uint16x4_t, a, 0, 0, 0); }
-__SI int32x2_t vget_low_s32(int32x4_t a) { int32x2_t r; memcpy(&r, &a, 8); return r; }
-__SI int32x2_t vget_high_s32(int32x4_t a) { int32x2_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI int32x4_t vcombine_s32(int32x2_t lo, int32x2_t hi) { int32x4_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI int32x2_t vget_low_s32(int32x4_t a) { return __N(GETLO, int32x2_t, a, 0, 0, 0); }
+__SI int32x2_t vget_high_s32(int32x4_t a) { return __N(GETHI, int32x2_t, a, 0, 0, 0); }
+__SI int32x4_t vcombine_s32(int32x2_t lo, int32x2_t hi) { return __N(COMBINE, int32x4_t, lo, hi, 0, 0); }
 
 /* uint32x2_t */
 __SI uint32x2_t vld1_u32(const unsigned *p) { uint32x2_t r; memcpy(&r, p, 8); return r; }
@@ -663,9 +663,9 @@ __SI uint64x2_t vmovl_u32(uint32x2_t a) { return __N(MOVL, uint64x2_t, a, 0, 0, 
 __SI uint64x2_t vmovl_high_u32(uint32x4_t a) { return __N(MOVL2, uint64x2_t, a, 0, 0, 0); }
 __SI uint16x4_t vmovn_u32(uint32x4_t a) { return __N(XTN, uint16x4_t, a, 0, 0, 0); }
 __SI uint16x4_t vqmovn_u32(uint32x4_t a) { return __N(QXTN, uint16x4_t, a, 0, 0, 0); }
-__SI uint32x2_t vget_low_u32(uint32x4_t a) { uint32x2_t r; memcpy(&r, &a, 8); return r; }
-__SI uint32x2_t vget_high_u32(uint32x4_t a) { uint32x2_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI uint32x4_t vcombine_u32(uint32x2_t lo, uint32x2_t hi) { uint32x4_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI uint32x2_t vget_low_u32(uint32x4_t a) { return __N(GETLO, uint32x2_t, a, 0, 0, 0); }
+__SI uint32x2_t vget_high_u32(uint32x4_t a) { return __N(GETHI, uint32x2_t, a, 0, 0, 0); }
+__SI uint32x4_t vcombine_u32(uint32x2_t lo, uint32x2_t hi) { return __N(COMBINE, uint32x4_t, lo, hi, 0, 0); }
 
 /* int64x1_t */
 __SI int64x1_t vld1_s64(const long *p) { int64x1_t r; memcpy(&r, p, 8); return r; }
@@ -749,9 +749,9 @@ __SI int64x2_t vabsq_s64(int64x2_t a) { return __V(ABS, a, a); }
 __SI int32x2_t vmovn_s64(int64x2_t a) { return __N(XTN, int32x2_t, a, 0, 0, 0); }
 __SI int32x2_t vqmovn_s64(int64x2_t a) { return __N(QXTN, int32x2_t, a, 0, 0, 0); }
 __SI uint32x2_t vqmovun_s64(int64x2_t a) { return __N(QXTUN, uint32x2_t, a, 0, 0, 0); }
-__SI int64x1_t vget_low_s64(int64x2_t a) { int64x1_t r; memcpy(&r, &a, 8); return r; }
-__SI int64x1_t vget_high_s64(int64x2_t a) { int64x1_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI int64x2_t vcombine_s64(int64x1_t lo, int64x1_t hi) { int64x2_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI int64x1_t vget_low_s64(int64x2_t a) { return __N(GETLO, int64x1_t, a, 0, 0, 0); }
+__SI int64x1_t vget_high_s64(int64x2_t a) { return __N(GETHI, int64x1_t, a, 0, 0, 0); }
+__SI int64x2_t vcombine_s64(int64x1_t lo, int64x1_t hi) { return __N(COMBINE, int64x2_t, lo, hi, 0, 0); }
 
 /* uint64x1_t */
 __SI uint64x1_t vld1_u64(const unsigned long *p) { uint64x1_t r; memcpy(&r, p, 8); return r; }
@@ -830,9 +830,9 @@ __SI uint64x2_t vqsubq_u64(uint64x2_t a, uint64x2_t b) { return __V(SUBS, a, b);
 
 __SI uint32x2_t vmovn_u64(uint64x2_t a) { return __N(XTN, uint32x2_t, a, 0, 0, 0); }
 __SI uint32x2_t vqmovn_u64(uint64x2_t a) { return __N(QXTN, uint32x2_t, a, 0, 0, 0); }
-__SI uint64x1_t vget_low_u64(uint64x2_t a) { uint64x1_t r; memcpy(&r, &a, 8); return r; }
-__SI uint64x1_t vget_high_u64(uint64x2_t a) { uint64x1_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI uint64x2_t vcombine_u64(uint64x1_t lo, uint64x1_t hi) { uint64x2_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI uint64x1_t vget_low_u64(uint64x2_t a) { return __N(GETLO, uint64x1_t, a, 0, 0, 0); }
+__SI uint64x1_t vget_high_u64(uint64x2_t a) { return __N(GETHI, uint64x1_t, a, 0, 0, 0); }
+__SI uint64x2_t vcombine_u64(uint64x1_t lo, uint64x1_t hi) { return __N(COMBINE, uint64x2_t, lo, hi, 0, 0); }
 
 /* float32x2_t */
 __SI float32x2_t vld1_f32(const float *p) { float32x2_t r; memcpy(&r, p, 8); return r; }
@@ -922,9 +922,9 @@ __SI int32x4_t vcvtq_s32_f32(float32x4_t a) { return __N(CVTF2I, int32x4_t, a, 0
 __SI uint32x4_t vcvtq_u32_f32(float32x4_t a) { return __N(CVTF2I, uint32x4_t, a, 0, 0, 1); }
 __SI int32x4_t vcvtnq_s32_f32(float32x4_t a) { return __N(CVTF2IR, int32x4_t, a, 0, 0, 0); }
 
-__SI float32x2_t vget_low_f32(float32x4_t a) { float32x2_t r; memcpy(&r, &a, 8); return r; }
-__SI float32x2_t vget_high_f32(float32x4_t a) { float32x2_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI float32x4_t vcombine_f32(float32x2_t lo, float32x2_t hi) { float32x4_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI float32x2_t vget_low_f32(float32x4_t a) { return __N(GETLO, float32x2_t, a, 0, 0, 0); }
+__SI float32x2_t vget_high_f32(float32x4_t a) { return __N(GETHI, float32x2_t, a, 0, 0, 0); }
+__SI float32x4_t vcombine_f32(float32x2_t lo, float32x2_t hi) { return __N(COMBINE, float32x4_t, lo, hi, 0, 0); }
 
 /* float64x1_t */
 __SI float64x1_t vld1_f64(const double *p) { float64x1_t r; memcpy(&r, p, 8); return r; }
@@ -1013,9 +1013,9 @@ __SI int64x2_t vcvtq_s64_f64(float64x2_t a) { return __N(CVTF2I, int64x2_t, a, 0
 __SI uint64x2_t vcvtq_u64_f64(float64x2_t a) { return __N(CVTF2I, uint64x2_t, a, 0, 0, 1); }
 __SI int64x2_t vcvtnq_s64_f64(float64x2_t a) { return __N(CVTF2IR, int64x2_t, a, 0, 0, 0); }
 
-__SI float64x1_t vget_low_f64(float64x2_t a) { float64x1_t r; memcpy(&r, &a, 8); return r; }
-__SI float64x1_t vget_high_f64(float64x2_t a) { float64x1_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
-__SI float64x2_t vcombine_f64(float64x1_t lo, float64x1_t hi) { float64x2_t r; memcpy(&r, &lo, 8); memcpy((char *)&r + 8, &hi, 8); return r; }
+__SI float64x1_t vget_low_f64(float64x2_t a) { return __N(GETLO, float64x1_t, a, 0, 0, 0); }
+__SI float64x1_t vget_high_f64(float64x2_t a) { return __N(GETHI, float64x1_t, a, 0, 0, 0); }
+__SI float64x2_t vcombine_f64(float64x1_t lo, float64x1_t hi) { return __N(COMBINE, float64x2_t, lo, hi, 0, 0); }
 
 /* tables, half precision, reinterpretation */
 __SI uint8x16_t vqtbl1q_u8(uint8x16_t t, uint8x16_t i) { return __N(TBL, uint8x16_t, t, i, 0, 0); }
@@ -1028,8 +1028,8 @@ __SI float16x4_t vcvt_f16_f32(float32x4_t a) { return __N(FCVTN, float16x4_t, a,
 __SI float16x4_t vld1_f16(const void *p) { float16x4_t r; memcpy(&r, p, 8); return r; }
 __SI float16x8_t vld1q_f16(const void *p) { float16x8_t r; memcpy(&r, p, 16); return r; }
 __SI void vst1_f16(void *p, float16x4_t a) { memcpy(p, &a, 8); }
-__SI float16x4_t vget_low_f16(float16x8_t a) { float16x4_t r; memcpy(&r, &a, 8); return r; }
-__SI float16x4_t vget_high_f16(float16x8_t a) { float16x4_t r; memcpy(&r, (char *)&a + 8, 8); return r; }
+__SI float16x4_t vget_low_f16(float16x8_t a) { return __N(GETLO, float16x4_t, a, 0, 0, 0); }
+__SI float16x4_t vget_high_f16(float16x8_t a) { return __N(GETHI, float16x4_t, a, 0, 0, 0); }
 #define vreinterpret_s8_u8(x) ((int8x8_t)(x))
 #define vreinterpret_s8_s16(x) ((int8x8_t)(x))
 #define vreinterpret_s8_u16(x) ((int8x8_t)(x))

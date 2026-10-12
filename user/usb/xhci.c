@@ -167,27 +167,38 @@ static void event(uint64_t ptr, uint32_t st, uint32_t ctl)
 }
 
 /* Read the event ring up to where the controller has written, then tell it
- * how far we read (ERDP; bit 3 clears "busy"). One reader at a time. */
+ * how far we read (ERDP; bit 3 clears "busy"). One reader at a time; a
+ * caller that finds another one reading says so first (ev_again), and that
+ * one reads again before it leaves: an event written just after it looked
+ * is never left behind (the controller would then raise no new interrupt,
+ * and the keyboard and mouse would stop). */
+static volatile int ev_again;
 static int events(void)
 {
-    if (__atomic_exchange_n(&evlock, 1, __ATOMIC_ACQUIRE)) return 0;
     int any = 0;
     for (;;) {
-        trb_t *e = &ev[ev_i];
-        dsync(e, 16);
-        uint32_t ctl = __atomic_load_n(&e->ctl, __ATOMIC_ACQUIRE);
-        if ((int)(ctl & 1) != ev_cyc) break;
-        event(e->p0 | (uint64_t)e->p1 << 32, e->st, ctl);
-        if (++ev_i == NEV) { ev_i = 0; ev_cyc ^= 1; }
-        any = 1;
+        __atomic_store_n(&ev_again, 1, __ATOMIC_SEQ_CST);
+        if (__atomic_exchange_n(&evlock, 1, __ATOMIC_ACQUIRE)) return any;   /* (the reader will look again) */
+        __atomic_store_n(&ev_again, 0, __ATOMIC_SEQ_CST);
+        int got = 0;
+        for (;;) {
+            trb_t *e = &ev[ev_i];
+            dsync(e, 16);
+            uint32_t ctl = __atomic_load_n(&e->ctl, __ATOMIC_ACQUIRE);
+            if ((int)(ctl & 1) != ev_cyc) break;
+            event(e->p0 | (uint64_t)e->p1 << 32, e->st, ctl);
+            if (++ev_i == NEV) { ev_i = 0; ev_cyc ^= 1; }
+            got = 1;
+        }
+        if (got) {
+            uint64_t p = ev_bus + 16UL * ev_i;
+            R32(rt, 0x38) = (uint32_t)p | 8;
+            R32(rt, 0x3C) = (uint32_t)(p >> 32);
+        }
+        any |= got;
+        unlock(&evlock);
+        if (!__atomic_load_n(&ev_again, __ATOMIC_SEQ_CST)) return any;
     }
-    if (any) {
-        uint64_t p = ev_bus + 16UL * ev_i;
-        R32(rt, 0x38) = (uint32_t)p | 8;
-        R32(rt, 0x3C) = (uint32_t)(p >> 32);
-    }
-    unlock(&evlock);
-    return any;
 }
 
 static void poll_thread(void *a)
@@ -201,6 +212,26 @@ static void start_polling(const char *why)
     hc_polling = 1;
     log_line("usb: %s: reading the controller's events by polling\n", why);
     thread_start(poll_thread, 0, 8192);
+}
+
+/* With interrupts: a look at the event ring 5 times a second. Events found
+ * there were not announced (an interrupt lost on the way, as the Pi's SD
+ * controller showed): handled at once, and after a few, polling instead. */
+static void watch_thread(void *a)
+{
+    (void)a;
+    int found = 0;
+    while (!hc_polling) {
+        sys_sleep(200000000);
+        if (!irqs_seen) continue;
+        trb_t *e = &ev[ev_i];
+        dsync(e, 16);
+        if ((int)(__atomic_load_n(&e->ctl, __ATOMIC_ACQUIRE) & 1) != ev_cyc) continue;
+        sys_sleep(20000000);                       /* (an interrupt on its way: give it time) */
+        if (!events()) continue;
+        if (!found++) log_line("usb: events the controller did not announce: read by the watch\n");
+        if (found >= 3) start_polling("interrupts are being lost");
+    }
 }
 
 static void irq_thread(void *a)
@@ -403,7 +434,7 @@ int xhci_start(const hc_info_t *h)
     if (hcirq >= 0) {
         irq_port = port_create(0);
         if (irq_bind(hcirq, irq_port)) hcirq = -1;
-        else thread_start(irq_thread, 0, 8192);
+        else { thread_start(irq_thread, 0, 8192); thread_start(watch_thread, 0, 4096); }
     }
     if (hcirq < 0) start_polling("no interrupt line known");
     R32(op, 0) = 1 | 4;                           /* run, with interrupts */

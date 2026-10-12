@@ -17,7 +17,9 @@
  * code generator uses them as scratch registers, for division, shifts,
  * calls. AArch64: x14-x17 and v30-v31 are its scratch registers; x18
  * (platform), x29 (frame) and x30 (link) are never allocated; v0-v7 (the
- * argument registers) neither, for simpler calls.
+ * argument registers) neither, for simpler calls. AArch64 vectors (C_VEC)
+ * share the v registers with floats; one that lives across a call avoids
+ * v8-v15 too (a callee keeps only their low 64 bits).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -62,6 +64,11 @@ int ins_uses(Ins *i, int *u)
     case O_LDBIN: case O_LDNEG: case O_LDCMP: case O_LDCVT: case O_I128: case O_I128CMP: case O_I128EXT: case O_VEC:
         U(i->a); U(i->b); U(i->m.base); break;
     case O_I128SH: U(i->a); if (!i->bimm) U(i->b); U(i->m.base); break;
+    case O_VREG: U(i->a); U(i->b); if (vop_acc(i->cc)) U(i->dst); break;
+    case O_VMOV: U(i->a); break;
+    case O_VLD: U(i->m.base); U(i->m.index); break;
+    case O_VST: U(i->a); U(i->m.base); U(i->m.index); break;
+    case O_VZERO: break;
     default: U(i->a); if (!i->bimm) U(i->b); break;
     }
 #undef U
@@ -72,7 +79,7 @@ int ins_defs(Ins *i, int *d)
 {
     int n = 0;
     switch (i->op) {
-    case O_STORE: case O_BR: case O_JMP: case O_RET: case O_SWITCH: case O_COPY: case O_ZERO:
+    case O_STORE: case O_BR: case O_JMP: case O_RET: case O_SWITCH: case O_COPY: case O_ZERO: case O_VST:
     case O_FENCE: case O_UNREACH: case O_NOP: case O_SPRESTORE:
         break;
     case O_CALL: for (int k = 0; k < i->call->nret; k++) d[n++] = i->call->ret[k]; break;
@@ -236,6 +243,7 @@ void regalloc(void)
         nact = keep;
         VReg *vr = &F->vr[it->v];
         int r = -1;
+        if (vr->cls == C_VEC && (it->cross & 0xFFFFULL << 48)) it->cross |= 0xFFULL << 40;   /* (across a call: not v8-v15) */
         /* coalescing: defined from a register that dies right here: take its place (no move) */
         Ins *di = first[it->v];
         int src = 0;
@@ -247,6 +255,7 @@ void regalloc(void)
             if (!di->bimm || di->op != O_MOV) src = di->a;
             break;
         case O_LEA: if (!di->m.index) src = di->m.base; break;
+        case O_VMOV: src = di->a; break;
         }
         if (src && src != it->v && iv[src].end == di->pos && F->vr[src].cls == vr->cls && F->vr[src].phys >= 0 && !F->vr[src].fixed) {
             int p = F->vr[src].phys;
@@ -286,7 +295,7 @@ void regalloc(void)
     }
     for (int v = 1; v < nv; v++) {
         VReg *vr = &F->vr[v];
-        if (vr->phys < 0 && iv[v].end >= 0) vr->slot = new_slot(8, 8);
+        if (vr->phys < 0 && iv[v].end >= 0) vr->slot = vr->cls == C_VEC ? new_slot(16, 16) : new_slot(8, 8);
         vr->start = iv[v].start;
         vr->end = iv[v].end;
     }

@@ -3,7 +3,7 @@
 # by sicc with a small test C library (a64/), and run under QEMU's user-mode
 # emulator. The reference is the host compiler's program, built with
 # SIEOS's AArch64 types (long double = double, char unsigned) and the same
-# printf (a64/fmt.c), so both outputs must be identical.
+# printf (cc/libc/fmt.c), so both outputs must be identical.
 # Usage: run_a64.sh SICC QEMU [sicc options...]
 # Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 SICC=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); QEMU=$2; shift 2; OPTS="$*"; D=$(cd "$(dirname "$0")" && pwd); OUT=${OUT:-/tmp/sicc-a64-tests}
@@ -11,8 +11,8 @@ A="$SICC --target=aarch64"; RT="$OUT/rt"; mkdir -p "$RT"; pass=0; fail=0
 REF="-w -O1 -fno-builtin -mlong-double-64 -funsigned-char"
 # the test C library, built by sicc (always -O2: only the tests vary)
 $A -c -o "$RT/crt0.o" "$D/a64/crt0.S" && $A -O2 -c -o "$RT/libc.o" "$D/a64/libc.c" &&
-    $A -O2 -c -o "$RT/fmt.o" "$D/a64/fmt.c" && $A -O2 -c -o "$RT/rt.o" "$D/../../cc/rt/rt.c" &&
-    gcc -O2 -fno-builtin -mlong-double-64 -c -o "$RT/fmt_host.o" "$D/a64/fmt.c" && gcc -O2 -c -o "$RT/host.o" "$D/a64/host.c" || exit 1
+    $A -O2 -c -o "$RT/fmt.o" "$D/../../cc/libc/fmt.c" && $A -O2 -c -o "$RT/rt.o" "$D/../../cc/rt/rt.c" &&
+    gcc -O2 -fno-builtin -mlong-double-64 -c -o "$RT/fmt_host.o" "$D/../../cc/libc/fmt.c" && gcc -O2 -c -o "$RT/host.o" "$D/a64/host.c" || exit 1
 LIB="$RT/libc.o $RT/fmt.o $RT/rt.o"
 link() { out=$1; shift; $A -nostdlib -T "$D/a64/prog.ld" -o "$out" "$RT/crt0.o" "$@" $LIB && chmod +x "$out"; }
 check() {   # name, reference program, AArch64 program

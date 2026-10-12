@@ -18,9 +18,9 @@ class Target:
         a = [sicc, "--target=aarch64"]
         for cmd in (a + ["-c", "-o", f"{rt}/crt0.o", f"{HERE}/crt0.S"],
                     a + ["-O2", "-c", "-o", f"{rt}/libc.o", f"{HERE}/libc.c"],
-                    a + ["-O2", "-c", "-o", f"{rt}/fmt.o", f"{HERE}/fmt.c"],
+                    a + ["-O2", "-c", "-o", f"{rt}/fmt.o", f"{HERE}/../../../cc/libc/fmt.c"],
                     a + ["-O2", "-c", "-o", f"{rt}/rt.o", f"{HERE}/../../../cc/rt/rt.c"],
-                    ["gcc", "-O2", "-fno-builtin", "-mlong-double-64", "-c", "-o", f"{rt}/fmt_host.o", f"{HERE}/fmt.c"],
+                    ["gcc", "-O2", "-fno-builtin", "-mlong-double-64", "-c", "-o", f"{rt}/fmt_host.o", f"{HERE}/../../../cc/libc/fmt.c"],
                     ["gcc", "-O2", "-c", "-o", f"{rt}/host.o", f"{HERE}/host.c"]):
             subprocess.run(cmd, check=True)
         self.rt = rt

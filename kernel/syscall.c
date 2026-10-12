@@ -83,6 +83,20 @@ static long map_phys(uint64_t pa, uint64_t size)
     return va + pa % PAGE;
 }
 
+/* SYS_LOG: the console's log (anyone may read it: it is what the serial
+ * wire shows). */
+static long sys_log(uint64_t ubuf, uint64_t size, uint64_t upos)
+{
+    static char buf[1024];                   /* (under the kernel lock: one caller at a time) */
+    uint64_t pos;
+    long r;
+    if ((r = vm_copy(0, &pos, cur->proc->as, (void *)upos, sizeof pos))) return r;
+    long n = log_read(buf, size < sizeof buf ? size : sizeof buf, &pos);
+    if (n && (r = vm_copy(cur->proc->as, (void *)ubuf, 0, buf, n))) return r;
+    if ((r = vm_copy(cur->proc->as, (void *)upos, 0, &pos, sizeof pos))) return r;
+    return n;
+}
+
 /* SYS_DMA_ALLOC: memory a device reads or writes by itself ("DMA"): it
  * must be physically contiguous, and the driver needs its physical address
  * to give to the device. It is the process's own memory, freed with it. */
@@ -287,6 +301,7 @@ void syscall(regs_t *r)
     case SYS_FDT:           ret = arch_fdt(a, b); break;
     case SYS_SCREEN:        ret = arch_screen(a); break;
     case SYS_PCI:           ret = pci_cfg(a, b, c); break;
+    case SYS_LOG:           ret = sys_log(a, b, c); break;
     default:                ret = -ENOSYS;
     }
     SC_RET(r) = ret;

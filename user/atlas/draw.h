@@ -7,16 +7,20 @@
 #pragma once
 #include <stdint.h>
 
-extern int SW, SH;                  /* the screen, 32 bits per pixel: 1920 x 1080, or the size the
+extern int PW, PH;                  /* the screen, 32 bits per pixel: 1920 x 1080, or the size the
                                        firmware's screen has (UEFI; screen.c sets them) */
+extern int SW, SH;                  /* the picture atlas lays out and draws in: PW x PH / the zoom */
 #define CW 6                        /* a character cell of the font, in pixels at scale 1 */
 #define CH 11
 
 /* The screen (screen.c): where the SW x SH picture goes, the pitch
  * (pixels from one row to the next) and the colour order (swap: the
  * screen wants 0x00BBGGRR, Atlas draws 0x00RRGGBB). */
-typedef struct { uint32_t *fb; int pitch, swap; const char *name; } screen_t;
-int  screen_init(screen_t *s);      /* 0: ready */
+typedef struct { uint32_t *fb; int pitch, swap, resizable; const char *name; } screen_t;
+int  screen_init(screen_t *s);      /* 0: ready, at SW x SH if the screen can take any size
+                                       (resizable: QEMU's VGA and ramfb, the Pi 4's firmware);
+                                       a firmware's fixed screen sets SW x SH itself. Called
+                                       again with a new SW x SH: the screen changes size. */
 long rtc_seconds(void);             /* the time of day in seconds (UTC), or -1: no clock */
 
 void draw_init(const screen_t *s);
@@ -30,6 +34,18 @@ void dl_frame(int x0, int y0, int x1, int y1, int r, int t, uint32_t c);   /* ou
 void dl_text(int x, int y, const char *s, int n, int scale, uint32_t c,
              int cx0, int cy0, int cx1, int cy1);                         /* clipped to the box */
 int  text_w(int n, int scale);      /* width in pixels of n characters */
+/* A pixel image: h rows of w characters, each a colour (cols[i] for keys[i];
+ * '.' and ' ' leave what is under it), every pixel scale x scale. The rows
+ * are not copied: they must stay (static data). */
+void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *keys, const uint32_t *cols, int scale);
 void dl_pointer(int x, int y);      /* where the mouse pointer is drawn (on top of everything) */
-void present(int x0, int y0, int x1, int y1);   /* draw this region of the picture on the screen */
+void present(int x0, int y0, int x1, int y1);   /* draw this region of the picture on the screen (picture coordinates) */
+/* The look (draw.c): how the picture's colours reach the screen. */
+enum { LOOK_PHOSPHOR, LOOK_AMBER, LOOK_GLASS, NLOOK };
+void draw_look(int look);
+int  draw_look_get(void);
+/* The zoom, 16.16: screen pixels per picture pixel (65536: 1:1). Then
+ * redraw everything (SW and SH change). */
+void draw_zoom(int z);
+int  draw_zoom_get(void);
 int  dl_count(void);                /* items in the display list (for the statistics) */

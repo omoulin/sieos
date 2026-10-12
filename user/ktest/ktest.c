@@ -204,6 +204,40 @@ static int test_ipc(void)
     return bad;
 }
 
+/* SYS_LOG: a line printed is in the log; reading moves the position; the
+ * oldest kept is at most LOG_KEEP bytes back. */
+static int test_log(void)
+{
+    static char buf[1024], tail[64];
+    char mark[48];
+    int fails = 0, found = 0, tl = 0;
+    uint64_t t = (uint64_t)sys_clock(), start = 0, pos = 0;
+    int n = 0;
+    memcpy(mark, "ktest log mark ", 15);
+    for (int i = 0; i < 12; i++) mark[15 + i] = (char)('a' + (t >> (4 * i)) % 26);
+    mark[27] = '\n'; mark[28] = 0;
+    sys_debug(mark, 28);
+    long r = sys_log(buf, 1, &start);                 /* from 0: moved up to the oldest kept */
+    if (r != 1) { printf("ktest log: a first byte: %ld\n", r); fails++; }
+    pos = start - 1;
+    for (;;) {
+        long k = sys_log(buf, sizeof buf, &pos);
+        if (k < 0) { printf("ktest log: error %ld\n", k); fails++; break; }
+        if (!k) break;
+        for (long i = 0; i < k; i++) {              /* (the mark may straddle two reads) */
+            if (tl == sizeof tail) { memmove(tail, tail + 1, --tl); }
+            tail[tl++] = buf[i];
+            if (tl >= 28 && !memcmp(tail + tl - 28, mark, 28)) found = 1;
+        }
+        n += (int)k;
+    }
+    if (!found) { printf("ktest log: the mark is not in the log (%d bytes read)\n", n); fails++; }
+    if (n > LOG_KEEP) { printf("ktest log: %d bytes, more than LOG_KEEP\n", n); fails++; }
+    uint64_t again = pos;
+    if (sys_log(buf, sizeof buf, &again) != 0 || again != pos) { printf("ktest log: something after the end\n"); fails++; }
+    return fails;
+}
+
 int main(int argc, char **argv)
 {
     const char *what = argc > 1 ? argv[1] : "";
@@ -218,7 +252,8 @@ int main(int argc, char **argv)
     else if (!strcmp(what, "tls")) fails = test_tls(n);
     else if (!strcmp(what, "quota")) fails = test_quota();
     else if (!strcmp(what, "ipc")) fails = test_ipc();
-    else { printf("usage: ktest fpu|avx|tls|quota|ipc [threads]\n"); return 2; }
+    else if (!strcmp(what, "log")) fails = test_log();
+    else { printf("usage: ktest fpu|avx|tls|quota|ipc|log [threads]\n"); return 2; }
     printf("ktest %s: %s\n", what, fails ? "FAIL" : "ok");
     return fails != 0;
 }

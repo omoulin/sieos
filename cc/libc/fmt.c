@@ -1,8 +1,9 @@
 /*
- * fmt.c - printf-family formatting and strtod/strtol, for the AArch64 test
- * programs (a test-only C library, see libc.c). The same file, built by the
- * host compiler, replaces the host's printf in the reference programs, so
- * both sides format the same way.
+ * fmt.c - printf-family formatting and strtod/strtol: for sicc's own C
+ * library on SIEOS (sieos.c, built with FMT_NO_STDOUT: SIEOS's library has
+ * printf), and for the AArch64 test programs (tests/cc/a64/libc.c). The same
+ * file, built by the host compiler, replaces the host's printf in the
+ * reference programs, so both sides format the same way.
  *
  * Floating-point conversions are exact, with big integers: a double is
  * m * 2^e; its decimal digits are those of m * 5^-e (e < 0) or m * 2^e,
@@ -287,6 +288,7 @@ int snprintf(char *buf, size_t cap, const char *f, ...) { va_list ap; va_start(a
 int vsprintf(char *buf, const char *f, va_list ap) { return vsnprintf(buf, (size_t)-1 / 2, f, ap); }
 int sprintf(char *buf, const char *f, ...) { va_list ap; va_start(ap, f); int n = vsnprintf(buf, (size_t)-1 / 2, f, ap); va_end(ap); return n; }
 
+#ifndef FMT_NO_STDOUT
 typedef struct { int fd; char b[4096]; long n; } OBuf;      /* standard output, buffered until a line ends */
 static OBuf out1 = { 1, { 0 }, 0 };
 void fmt_flush(void) { if (out1.n) fmt_write(1, out1.b, out1.n); out1.n = 0; }
@@ -296,6 +298,7 @@ int vprintf(const char *f, va_list ap) { Sink s = { oput, &out1, 0 }; long n = v
 int printf(const char *f, ...) { va_list ap; va_start(ap, f); int n = vprintf(f, ap); va_end(ap); return n; }
 int putchar(int c) { oput(&out1, (char)c); fmt_flush(); return (unsigned char)c; }
 int puts(const char *str) { while (*str) oput(&out1, *str++); oput(&out1, '\n'); fmt_flush(); return 1; }
+#endif
 
 /* the core, for other streams (libc.c) */
 long fmt_vformat(void (*p)(void *, char), void *ctx, const char *f, va_list ap) { Sink s = { p, ctx, 0 }; return vformat_sink(&s, f, ap); }
