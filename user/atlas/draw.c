@@ -22,8 +22,9 @@
  * Looks (draw_look): the picture is drawn in the desktop's own colours,
  * then each pixel goes to the screen through the look:
  *   Phosphor    a green monitor: every colour becomes its brightness in
- *               phosphor green; every third row is darker (scanlines);
- *               text glows (a dim halo on each side of its strokes)
+ *               phosphor green; every third row is darker (scanlines),
+ *               less so the brighter it is (bloom: bright fills stay
+ *               solid); text glows (a dim halo on each side of its strokes)
  *   Amber 1984  the same in amber, with square corners, a grid of dots
  *               and lighter scanlines (every fourth row)
  *   Glass       the colours as drawn
@@ -36,7 +37,14 @@
 #include "draw.h"
 
 extern const uint8_t font[95][9];   /* font.c (tools/mkfont.py) */
-extern const uint8_t font15[95][16][9];   /* font15.c (tools/mkfont15.py): the native one at 1.5 */
+extern const uint8_t font15[95][16][9];   /* font15.c (tools/mkfont15.py): the native one at 1.5, */
+extern const uint8_t font18[95][20][11];  /* font18.c: titles, at 11/6 */
+extern const uint8_t font13[95][15][8];   /* font13.c: small text, at 8/6 */
+/* The native fonts: text at exactly this scale on the screen (16.16) is
+ * drawn from them pixel for pixel. */
+static const struct { int scale, w, h; const uint8_t *px; } natives[] = {
+    { 3 << 15, 9, 16, &font15[0][0][0] }, { 120150, 11, 20, &font18[0][0][0] }, { 87382, 8, 15, &font13[0][0][0] },
+};
 
 #define STRIP 16
 #define MAXP  4096                  /* display list entries (more are dropped) */
@@ -75,7 +83,8 @@ void draw_look(int k)
     for (int s = 0; s < 2; s++)
         for (int l = 0; l < 256; l++) {
             int v = l * 5 / 4 > 255 ? 255 : l * 5 / 4;        /* (a little brighter: dim things stay legible) */
-            if (s) v = k == LOOK_PHOSPHOR ? v * 5 / 8 : v * 3 / 4;
+            if (s) v = k == LOOK_PHOSPHOR ? v * (140 + 116 * v / 255) / 256   /* bloom: the brighter, the less a */
+                                          : v * (180 + 76 * v / 255) / 256;   /* scanline darkens (a CRT's beam spot) */
             uint32_t t = tint[k == LOOK_AMBER];
             lut[s][l] = ((t >> 16 & 255) * v / 255) << 16 | ((t >> 8 & 255) * v / 255) << 8 | (t & 255) * v / 255;
         }
@@ -248,16 +257,20 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
     case P_TEXT: {                   /* each screen pixel: how much of it the font's pixels cover */
         int s = p->scale, cl = p->x0 > lo ? p->x0 : lo, cr = p->x1 < hi ? p->x1 : hi;
         int glow = look == LOOK_PHOSPHOR || look == LOOK_AMBER;
-        if (s == 3 << 15) {          /* 1.5: the native 9 x 16 font, pixel for pixel (100%) */
+        int nf = 0;
+        while (nf < (int)(sizeof natives / sizeof *natives) && natives[nf].scale != s) nf++;
+        if (nf < (int)(sizeof natives / sizeof *natives)) {   /* a native font, pixel for pixel (100%) */
+            int fw = natives[nf].w, fh = natives[nf].h;
+            const uint8_t *fp = natives[nf].px;
             for (int y = ya; y < yb; y++) {
                 int row = y - p->cy0;
-                if (row < 0 || row >= 16) continue;
+                if (row < 0 || row >= fh) continue;
                 uint32_t *d = strip + (y - sy) * PW;
                 for (int x = cl; x < cr; x++) {
-                    int k = (x - p->cx0) / 9, col = (x - p->cx0) % 9;
+                    int k = (x - p->cx0) / fw, col = (x - p->cx0) % fw;
                     if (k >= p->len) break;
                     unsigned ch = (uint8_t)arena[p->text + k];
-                    int a = font15[ch >= 32 && ch < 127 ? ch - 32 : '?' - 32][row][col];
+                    int a = fp[((ch >= 32 && ch < 127 ? ch - 32 : '?' - 32) * fh + row) * fw + col];
                     if (!a) continue;
                     a += a >> 7;                                 /* (0..255 -> 0..256) */
                     if (glow && a >= 200) {

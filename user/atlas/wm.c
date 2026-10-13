@@ -2,10 +2,10 @@
  * wm.c - The desktop's windows (docs/desktop.md): the BeOS way of doing
  * it, in SIEOS's colours.
  *
- *   ┌─────────────────┐
- *   │ x  Terminal 2 □ │  the tab: as wide as its title, on the window's
- *   ├─────────────────┴──────────┐  top left; x closes, □ zooms (the whole
- *   │ (title when sunk)   80 x 25 │  desk, again: back); drag it to move,
+ *   ┌─────────────────────┐
+ *   │ ▣ Terminal 2   □  x │  the tab: as wide as its title, on the window's
+ *   ├─────────────────────┴──────┐  top left: the app's icon, the title; □ zooms
+ *   │ (title when sunk)   80 x 25 │  (the whole desk, again: back), x closes; drag it to move,
  *   │   the window (dark glass)  │  double-click it to minimize, right-click
  *   │                        ⟋⟋⟋ │  for the window's menu. The grip (or an
  *   └────────────────────────────┘  edge) resizes.
@@ -29,6 +29,8 @@
 #define MINW 360                         /* the smallest window */
 #define MINH 200
 #define BOX 20                           /* the tab's close and zoom boxes */
+#define TAB_L 44                         /* the tab: its icon, before the title */
+#define TAB_R (16 + BOX + 8 + BOX + 12)  /* ... zoom and close, after it */
 
 typedef struct {
     int known, ws, min, max;             /* placed once; its workspace; minimized; zoomed */
@@ -81,11 +83,11 @@ static void kick(void) { if (!ticking) { ticking = 1; if (anim_tid > 0) sys_wake
 void wm_init(long atlas_port) { port = atlas_port; anim_tid = thread_start(anim_thread, 0, 4096); }
 
 /* ---- Boxes. */
-static int tab_w(int w)                  /* the tab: its title, between the two boxes */
+static int tab_w(int w)                  /* the tab: its icon, its title, the two boxes */
 {
     char t[64];
     wm_title(w, t, sizeof t);
-    int n = 44 + tw(strlen(t), 2) + 44, room = ww[w].x1 - ww[w].x0;
+    int n = TAB_L + tw(strlen(t), 2) + TAB_R, room = ww[w].x1 - ww[w].x0;
     return n < room ? n : room;
 }
 static int tab_x(int w) { return ww[w].x0 < 0 ? 0 : ww[w].x0; }   /* (past the left side: it slides) */
@@ -147,9 +149,11 @@ static void place(int w)
     int aw = AX1 - AX0, ah = AY1 - AY0, top = wm_top();
     int ww_ = aw * 56 / 100, hh = ah * 70 / 100;
     if (w == WM_SIA) { v->x1 = AX1; v->x0 = v->x1 - aw * 42 / 100; v->y0 = AY0; v->y1 = v->y0 + ah * 86 / 100; }
-    else if (w == WM_EDIT || w == WM_PINS) { v->x0 = AX0 + 20; v->y0 = AY0; v->x1 = v->x0 + aw * 76 / 100; v->y1 = v->y0 + ah * 88 / 100; }
-    else if (w == WM_SET) { v->x0 = AX0 + 60; v->x1 = v->x0 + aw * 64 / 100; v->y0 = AY0; v->y1 = AY1; }   /* (Settings: all its rows) */
+    else if (w == WM_EDIT) { v->x0 = AX0 + 20; v->y0 = AY0; v->x1 = v->x0 + aw * 76 / 100; v->y1 = v->y0 + ah * 88 / 100; }
+    else if (w == WM_PINS) { v->x0 = AX0 + 20; v->y0 = AY0; v->x1 = v->x0 + aw * 76 / 100; v->y1 = v->y0 + ah * 60 / 100; }   /* (its tracks, room for more) */
+    else if (w == WM_SET) { v->x0 = AX0 + 60; v->x1 = v->x0 + aw * 54 / 100; v->y0 = AY0; v->y1 = AY1; }   /* (Settings: all its rows) */
     else {
+        if (w == WM_FILES) { ww_ = aw * 40 / 100; hh = ah * 56 / 100; }   /* (a list: narrower, shorter) */
         v->x0 = AX0 + 30; v->y0 = AY0 + 10;
         if (top >= 0 && ww[top].x0 + 48 + ww_ <= AX1 && ww[top].y0 + 48 + hh <= AY1) { v->x0 = ww[top].x0 + 48; v->y0 = ww[top].y0 + 48; }
         v->x1 = v->x0 + ww_; v->y1 = v->y0 + hh;
@@ -265,11 +269,10 @@ void wm_drop(void)
 /* ---- Drawing. */
 static void box(int x, int y, int zoom, uint32_t c, int kind, int arg, int live)
 {
-    dl_frame(x, y, x + BOX, y + BOX, 4, 2, c);
-    if (zoom) dl_frame(x + 6, y + 6, x + BOX - 6, y + BOX - 6, 0, 2, c);
-    else for (int k = 0; k <= 8; k += 2) {               /* (close: an x) */
-        dl_rect(x + 5 + k, y + 5 + k, x + 7 + k, y + 7 + k, 0, c);
-        dl_rect(x + 13 - k, y + 5 + k, x + 15 - k, y + 7 + k, 0, c);
+    if (zoom) dl_frame(x + 3, y + 3, x + BOX - 3, y + BOX - 3, 2, 2, c);   /* (zoom: a square) */
+    else for (int k = 0; k <= 11; k++) {                 /* (close: a plain x, no box; solid strokes at any zoom) */
+        dl_rect(x + 3 + k, y + 3 + k, x + 6 + k, y + 6 + k, 0, c);
+        dl_rect(x + 14 - k, y + 3 + k, x + 17 - k, y + 6 + k, 0, c);
     }
     if (live) hitbox(x - 4, y - 4, x + BOX + 4, y + BOX + 4, kind, arg);
 }
@@ -286,15 +289,17 @@ static void draw_one(int w, int f, int keys)
         int ty = y0 - r;
         dl_rect(tx, ty, tx + t, y0 + 12, 10, C_ACC);
         if (up) hitbox(tx, ty, tx + t, y0, H_WTAB, w);    /* (before its boxes: they win) */
-        dl_text(tx + 40, ty + 6, title, n, S(2), C_BG, tx + 38, ty, tx + t - 40, y0);
-        dl_text(tx + 41, ty + 6, title, n, S(2), C_BG, tx + 38, ty, tx + t - 40, y0);   /* (bold) */
-        box(tx + 10, ty + 7, 0, C_BG, H_WMBTN, w * 4 + 2, up);
-        if (t >= 44 + 40) box(tx + t - 10 - BOX, ty + 7, 1, C_BG, H_WMBTN, w * 4 + 1, up);
+        int cx = tx + t - 12 - BOX, zx = cx - 8 - BOX;   /* (close at the end, zoom before it) */
+        icon_ink(wm_icon(w), tx + 14, ty + 5, 2);
+        dl_text(tx + TAB_L, ty + 6, title, n, S(2), C_BG, tx + TAB_L - 2, ty, zx - 12, y0);
+        dl_text(tx + TAB_L + 1, ty + 6, title, n, S(2), C_BG, tx + TAB_L - 2, ty, zx - 12, y0);   /* (bold) */
+        box(cx, ty + 7, 0, C_BG, H_WMBTN, w * 4 + 2, up);
+        if (zx >= tx + TAB_L) box(zx, ty + 7, 1, C_BG, H_WMBTN, w * 4 + 1, up);
     }
     if (atlas_debug) {                                   /* (where they are once risen) */
-        say("atlas: dbg wtab %s at %d %d\n", title, tx + t / 2, y0 - TAB_H / 2);
-        say("atlas: dbg wclose %d at %d %d\n", w, tx + 10 + BOX / 2, y0 - TAB_H + 7 + BOX / 2);
-        say("atlas: dbg wzoom %d at %d %d\n", w, tx + t - 10 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
+        say("atlas: dbg wtab %s at %d %d\n", title, tx + TAB_L + tw(n, 2) / 2, y0 - TAB_H / 2);
+        say("atlas: dbg wclose %d at %d %d\n", w, tx + t - 12 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
+        say("atlas: dbg wzoom %d at %d %d\n", w, tx + t - 12 - BOX - 8 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
     }
     /* the window: its glass, its frame, the strip at its top */
     dl_rect(x0, y0, x1, y1, 12, C_GLASS);
@@ -308,7 +313,7 @@ static void draw_one(int w, int f, int keys)
         char info[64];
         wm_info(w, info, sizeof info);
         int k = strlen(info);
-        if (k) dl_text(x1 - 22 - tw(k, 2), y0 + 6, info, k, S(2), C_DIM, x0 + 20, y0, x1 - 20, y0 + WM_STRIP);
+        if (k) dl_text(x1 - 22 - text_w(k, SS), y0 + 8, info, k, SS, C_DIM, x0 + 20, y0, x1 - 20, y0 + WM_STRIP);
     }
     dl_rect(x0 + 1, y0 + WM_STRIP - 1, x1 - 1, y0 + WM_STRIP, 0, C_LINE);
     wm_body(w, x0, y0 + WM_BODY_DY, x1, y1, keys);

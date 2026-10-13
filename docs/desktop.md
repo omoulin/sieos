@@ -14,9 +14,9 @@ a shelf.)
 ```
  ┌─ sia │ Ask sia, open a file, run an app...      network ─┐ ┌─ (cube) SIEOS    v ─┐ the menu
  └──────────────────────────────────────────────────────────┘ │ sia: idle    11:38   │ tray
- ┌──────────────────┐                                          │ Terminal           > │ apps (running:
- │ x  Terminal 1  □ │  the tab: close, title, zoom             │ sia                  │ bold, with >)
- ├──────────────────┴─────────────┐                            │ Files                │
+ ┌──────────────────────┐                                      │ Terminal           > │ apps (running:
+ │ ▣ Terminal 1   □  x  │  the tab: icon, title, zoom, close   │ sia                  │ bold, with >)
+ ├──────────────────────┴─────────┐                            │ Files                │
  │                                │                            │ Text editor          │
  │  a window (dark glass)         │                            │ Settings             │
  │                            ⟋⟋⟋ │  the grip: resize          │ [1] [2] [3] [4]      │ workspaces
@@ -25,7 +25,9 @@ a shelf.)
 
 ## Windows
 
-- **The tab** sits on the window's top left, as wide as its title. The
+- **The tab** sits on the window's top left, as wide as its title: the
+  app's icon (its outline), the title in bold, then zoom (a square) and
+  close (a plain x) together at the right end. The
   focused window's tab **rises** out of its frame in the accent colour
   (220 ms, a slight overshoot); when another window takes the focus, it
   **sinks** back in (170 ms) and the title stays, dim, in the strip at
@@ -33,12 +35,15 @@ a shelf.)
   With the tab up, the strip's right side says more (a terminal's size,
   whether a file is saved, the folder in Files). A thread ticks every
   16 ms only while a tab moves; nothing redraws at rest. **x** closes,
-  **□** zooms (the whole desk; again: back). Drag the tab to move the
+  **□** zooms (the whole desk; again: back). The strip's right side is in
+  the small size. Drag the tab to move the
   window; **double-click** it to minimize; right-click it for the window's
   menu: *Minimize*, *Zoom*, *Send to workspace N*, *Close*.
 - **Resize** with the grip (bottom right) or any edge; the smallest is
   360 x 200. New windows go down and to the right of the front one, so
-  every tab stays in view; sia opens on the right.
+  every tab stays in view; sia opens on the right. Each kind opens at a
+  size for what it shows: Files narrower and shorter than a terminal,
+  Pins about 60% of the desk's height, Settings about half its width.
 - **Past the screen's edges:** a window may be moved (or resized) past
   the bottom, the right or the left side; only its tab must stay wholly
   on the screen. Past the left side the tab slides along to stay in view.
@@ -166,6 +171,11 @@ The looks are made where the picture reaches the screen (`draw.c`): the
 desktop draws in its own colours, and each pixel goes out as its
 brightness in the look's colour (a 256-entry table; a darker table for
 the scanline rows, every third row in Phosphor, every fourth in Amber).
+The scanlines **bloom**, as a CRT's beam spot grows with its intensity:
+the brighter a pixel, the less its scanline row darkens it (Phosphor:
+black loses 45%, full brightness almost nothing; Amber: 30% to nothing),
+so lines show on the dark desk and in dim text, while filled buttons and
+the focused tab stay solid and readable.
 Text glows: a dim halo beside each stroke. Amber also squares the
 corners and draws the grid as dots. Nothing else in the desktop knows
 about looks, so icons, terminals and new windows follow by themselves.
@@ -177,9 +187,13 @@ of the screen's size divided by the zoom (at 100%, 0.75 screen pixels per
 picture pixel: 2560 x 1440 on a 1920 x 1080 screen; at 200%, 1280 x 720),
 and every item is scaled as it is added: boxes, corners, lines (never
 thinner than a pixel), text and icons. So it is drawn sharp, not
-stretched, and the rest of the desktop does not know. Text at 100% uses
-a **native 9 x 16 font** (`font15.c`, rendered once from DejaVu Sans Mono
-by `tools/mkfont15.py`), drawn pixel for pixel; at other sizes the 6 x 11
+stretched, and the rest of the desktop does not know. Text comes in
+**three sizes** (`atlas.h`): titles (`ST`: Settings' sections, the
+Deskbar's clock), the body (`S(2)`) and small text (`SS`: the strip's
+right side, sizes in Files, the editor's Explorer heading and path). At
+100% each is a **native font** rendered once from DejaVu Sans Mono by
+`tools/mkfont15.py` and drawn pixel for pixel: 11 x 20 (`font18.c`),
+9 x 16 (`font15.c`) and 8 x 15 (`font13.c`); at other sizes the 6 x 11
 pixel font is scaled, each screen pixel taking the share of the font's
 pixels it covers (smooth edges, even strokes). The pointer is never
 zoomed: when it moves, its old and new places are redrawn at its own
@@ -234,9 +248,9 @@ between processes.
 | `atlas.c` | the session: terminals, the Deskbar, the sia strip, menus, input, login |
 | `wm.c` | the windows: tabs, boxes, moving and resizing, the stacking order, workspaces |
 | `files.c`, `edit.c`, `panel.c`, `settings.c` | the windows' insides: Files, the editor, sia, Settings |
-| `icons.c` | the icons (12 x 12 pixel maps) and the SIEOS cube (16 x 16) |
+| `icons.c` | the icons (12 x 12 pixel maps; their outline alone on a tab) and the SIEOS cube (16 x 16) |
 | `setup.c` | the first start on the screen (the accounts) |
-| `draw.c`, `font.c`, `screen.c` | drawing (and the looks), the font, the screen |
+| `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `screen.c` | drawing (and the looks), the fonts, the screen |
 
 - **The screen** (`screen.c`): x86, QEMU's standard VGA card or the UEFI
   firmware's screen (GOP); AArch64, QEMU's ramfb on `virt`, the

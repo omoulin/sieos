@@ -265,7 +265,7 @@ def look(rgb, kind=0, scan=False):
     r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
     v = min(255, ((r * 77 + g * 150 + b * 29) >> 8) * 5 // 4)
     if scan:
-        v = v * 5 // 8 if kind == 0 else v * 3 // 4
+        v = v * (140 + 116 * v // 255) // 256 if kind == 0 else v * (180 + 76 * v // 255) // 256   # (bloom)
     t = (0x46, 0xff, 0x7a) if kind == 0 else (0xff, 0xb0, 0x38)
     return "".join(f"{c * v // 255:02x}" for c in t)
 

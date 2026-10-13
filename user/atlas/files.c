@@ -111,7 +111,7 @@ void files_draw(int x0, int y0, int x1, int y1, int focused)
         char sz[24], *p = sz;
         if (e->dir) strlcpy(sz, "folder", sizeof sz);
         else { uint64_t s = e->size; p += num(p, s >= 1024 ? (long)(s / 1024) : (long)s); strlcpy(p, s >= 1024 ? " KB" : " B", 6); }
-        label(x1 - 24 - tw(strlen(sz), 2), y + 6, sz, 2, C_DIM);
+        dl_text(x1 - 24 - text_w(strlen(sz), SS), y + 8, sz, strlen(sz), SS, C_DIM, 0, 0, SW, SH);
         hitbox(x0 + 6, y, x1 - 6, y + ROW - 2, H_FILE, i);
         if (atlas_debug) say("atlas: dbg file %s at %d %d\n", e->name, x0 + 120, y + ROW / 2);
     }

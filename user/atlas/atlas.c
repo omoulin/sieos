@@ -57,7 +57,7 @@
 #define W_FILES (MAXTERM + 3)
 #define W_PINS (MAXTERM + 4)
 #define NWIN (MAXTERM + 5)
-_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS, "wm.c knows the window ids");
+_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES, "wm.c knows the window ids");
 #define TBAR 48                     /* the insides of a window start this far below their top */
 
 typedef struct { char name[48], path[160]; int app; } item_t;
@@ -328,6 +328,7 @@ static void win_title(int w, char *t, size_t cap)
     if (w < MAXTERM && terms[w].back) { size_t n = strlen(t); n += strlcpy(t + n, " [history -", 16); t[n + num(t + n, terms[w].back)] = 0; strlcpy(t + strlen(t), "]", 2); }
 }
 static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : I_FOLDER; }
+int wm_icon(int w) { return win_icon(w); }
 
 /* wm.c asks: is it there, its title, draw its inside. */
 static void draw_term_body(int ti, int x0, int y0, int x1, int y1, int f);
@@ -570,7 +571,7 @@ static void draw_deskbar(void)
     panel_status(st, sizeof st);
     clock_text(ck);
     dl_text(x0 + 16, ty + 9, st, strlen(st), S(2), C_DIM, 0, 0, x1 - 90, SH);
-    label(x1 - 16 - tw(5, 2), ty + 9, ck, 2, C_TXT);
+    dl_text(x1 - 16 - text_w(5, ST), ty + 6, ck, 5, ST, C_TXT, 0, 0, SW, SH);   /* (title size) */
     int ry = ty + DB_TRAY;                               /* the apps */
     dl_rect(x0 + 10, ry, x1 - 10, ry + 1, 0, C_LINE);
     for (int k = 0; k < NDB; k++) {

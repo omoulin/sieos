@@ -30,6 +30,11 @@
 #define K 2                           /* text scale of the desktop: 12 x 22 pixels a character */
 #define KW (CW * K)
 #define KH (CH * K)
+/* The type scale, for dl_text (16.16): titles, the body (S(K)), small text
+ * (hints, sizes, paths). At 100% each lands on a native font (draw.c):
+ * 11 x 20, 9 x 16 and 8 x 15 screen pixels a character. */
+#define ST 160200
+#define SS 116510
 
 void redraw(void);
 void redraw_box(int x0, int y0, int x1, int y1);
@@ -135,6 +140,7 @@ void files_wheel(int w);
 /* ---- Icons (icons.c): 12 x 12 pixel maps; the SIEOS cube, 16 x 16. */
 enum { I_TERM, I_SIA, I_FOLDER, I_FILE, I_SETTINGS, I_APP, I_WINDOW, I_PINS, I_N };
 void icon(int kind, int x, int y, int scale);
+void icon_ink(int kind, int x, int y, int scale);     /* its outline only, in C_BG (on the accent: a tab) */
 void logo(int x, int y, int scale);
 
 /* ---- The windows (wm.c): a title tab as wide as the title (close, zoom),
@@ -144,6 +150,7 @@ void logo(int x, int y, int scale);
 #define WM_EDIT 8                                     /* (atlas's W_EDIT: opens bigger) */
 #define WM_SIA 9
 #define WM_SET 10
+#define WM_FILES 11                                   /* (atlas's W_FILES: a list, opens smaller) */
 #define WM_PINS 12                                    /* (atlas's W_PINS: opens bigger) */
 #define WM_NWS 4                                      /* workspaces */
 #define TAB_H 34                                      /* a window's tab */
@@ -174,5 +181,6 @@ void wm_draw(int focus, int keys);
 /* (atlas.c) */
 int  wm_state(int w);                                 /* 1 if window w exists */
 void wm_title(int w, char *t, size_t cap);
+int  wm_icon(int w);                                  /* its app's icon (I_...), on its tab */
 void wm_info(int w, char *t, size_t cap);             /* the strip's right side ("terminal 80 x 25") */
 void wm_body(int w, int x0, int y0, int x1, int y1, int keys);

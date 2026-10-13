@@ -458,7 +458,7 @@ static void tree_draw(int x0, int y0, int x1, int y1)
     dl_rect(x0, y0, x1, y1, 0, C_BG);
     dl_rect(x1, y0, x1 + 1, y1, 0, C_LINE);
     hitbox(x0, y0, x1, y1, H_ED, E_TREEBG);
-    label(x0 + 14, y0 + 10, "EXPLORER", 2, C_DIM);
+    dl_text(x0 + 14, y0 + 12, "EXPLORER", 8, SS, C_DIM, 0, 0, SW, SH);
     int hy = y0 + TABH;                                  /* the root: ".." and its name */
     const char *rn = root[1] ? base_name(root) : "/";
     char t[64], *p = t + strlcpy(t, ".. ", sizeof t);
@@ -545,7 +545,7 @@ void edit_draw(int x0, int y0, int x1, int y1, int focused)
             else *o++ = *p;
         }
         *o = 0;
-        dl_text(RX0 + 16, cy + 6, t, strlen(t), S(2) * 4 / 5, C_DIM, RX0, cy, X1 - 10, cy + CRUMB);
+        dl_text(RX0 + 16, cy + 6, t, strlen(t), SS, C_DIM, RX0, cy, X1 - 10, cy + CRUMB);
     }
     TY0 = cy + CRUMB; TY1 = sy;
     int gut = 6 * KW, tx = RX0 + gut + 8;

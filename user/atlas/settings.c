@@ -206,8 +206,11 @@ static int fits(int h) { return cy >= Y0 + TOP + 6 && cy + h <= Y1 - 6; }
 static void heading(const char *s)
 {
     cy += 14;
-    if (fits(30)) label(lx, cy, s, 2, C_ACC);
-    cy += 40;
+    if (fits(34)) {                                       /* (a title: bigger, bold) */
+        dl_text(lx, cy, s, strlen(s), ST, C_ACC, 0, 0, SW, SH);
+        dl_text(lx + 1, cy, s, strlen(s), ST, C_ACC, 0, 0, SW, SH);
+    }
+    cy += 44;
 }
 static void row_label(const char *s)
 {
