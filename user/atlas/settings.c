@@ -217,16 +217,42 @@ static void row_label(const char *s)
     if (cx == lx) { if (fits(30)) label(lx, cy, s, 2, C_DIM); cy += 34; }
     else if (fits(42)) label(lx, cy + 10, s, 2, C_DIM);
 }
+/* One choice: its options joined in a segmented control (round at its
+ * two ends, a line between options), wrapped onto more rows if narrow. */
+#define MAXCH 12
+static void segment(const char *const *s, int a, int b, int on, int base, const int *xs, const int *ws)
+{
+    int x0 = xs[a], x1 = xs[b] + ws[b], y = cy;
+    dl_rect(x0, y, x1, y + 42, 21, C_GLASS);
+    for (int i = a; i <= b; i++) {
+        int x = xs[i], w = ws[i];
+        if (i == on) {                                   /* the chosen one: filled, round where the control is */
+            if (a == b) dl_rect(x, y, x + w, y + 42, 21, C_ACC);
+            else if (i == a) { dl_rect(x, y, x + w, y + 42, 21, C_ACC); dl_rect(x + 21, y, x + w, y + 42, 0, C_ACC); }
+            else if (i == b) { dl_rect(x, y, x + w, y + 42, 21, C_ACC); dl_rect(x, y, x + w - 21, y + 42, 0, C_ACC); }
+            else dl_rect(x, y, x + w, y + 42, 0, C_ACC);
+        } else if (i > a && i - 1 != on) dl_rect(x, y + 9, x + 1, y + 33, 0, C_LINE);   /* (between two options) */
+        dl_text(x + 14, y + 10, s[i], strlen(s[i]), S(2), i == on ? C_BG : C_TXT, 0, 0, SW, SH);
+        hitbox(x, y, x + w, y + 42, H_SET, base + i);
+        if (atlas_debug) say("atlas: dbg set %d at %d %d\n", base + i, x + w / 2, y + 21);
+    }
+    dl_frame(x0, y, x1, y + 42, 21, 1, C_LINE);
+}
 static void choices(const char *name, const char *const *s, int n, int on, int base)
 {
     row_label(name);
-    int x = cx;
-    for (int i = 0; i < n; i++) {
-        int w = tw(strlen(s[i]), 2) + 28;
-        if (x > cx && x + w > X1 - 24) { x = cx; cy += ROW; }
-        if (fits(42)) pill(x, cy, s[i], i == on, H_SET, base + i);
-        if (fits(42) && atlas_debug) say("atlas: dbg set %d at %d %d\n", base + i, x + w / 2, cy + 21);
-        x += w + 10;
+    int xs[MAXCH], ws[MAXCH], rows[MAXCH], x = cx, r = 0;
+    if (n > MAXCH) n = MAXCH;
+    for (int i = 0; i < n; i++) {                        /* where each option goes */
+        ws[i] = tw(strlen(s[i]), 2) + 28;
+        if (x > cx && x + ws[i] > X1 - 24) { x = cx; r++; }
+        xs[i] = x; rows[i] = r;
+        x += ws[i];
+    }
+    for (int a = 0, b; a < n; a = b + 1) {               /* each row of them: one control */
+        for (b = a; b + 1 < n && rows[b + 1] == rows[a]; b++) ;
+        if (fits(42)) segment(s, a, b, on, base, xs, ws);
+        if (b + 1 < n) cy += ROW;
     }
     cy += ROW;
 }

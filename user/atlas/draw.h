@@ -28,6 +28,7 @@ void dl_reset(void);                /* start a new picture */
 void dl_grid(int ox, int oy, int step, uint32_t bg, uint32_t line);
 void dl_rect(int x0, int y0, int x1, int y1, int r, uint32_t c);           /* filled, corner radius r */
 void dl_frame(int x0, int y0, int x1, int y1, int r, int t, uint32_t c);   /* outline, t pixels thick */
+void dl_shade(int x0, int y0, int x1, int y1, int r, int k);               /* darken what is under it: k 1 to 3/4, 2 to 1/2 */
 /* Text. Its size is a 16.16 fixed-point scale (S(2): twice the font's
  * 6 x 11 pixels), any value, so text grows smoothly with the zoom. */
 #define S(n) ((n) << 16)

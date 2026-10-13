@@ -204,6 +204,27 @@ int wm_box(int w, int *x0, int *y0, int *x1, int *y1)
     *x0 = ww[w].x0; *y0 = ww[w].y0; *x1 = ww[w].x1; *y1 = ww[w].y1;
     return 1;
 }
+/* Workspace ws's windows as small frames in a cell of the Deskbar, back
+ * to front; the front one (on the current workspace) brighter. */
+void wm_minimap(int ws, int x0, int y0, int x1, int y1, uint32_t c, uint32_t front)
+{
+    int aw = AX1 - AX0, ah = AY1 - AY0, top = ws == cws ? wm_top() : -1;
+    if (aw <= 0 || ah <= 0) return;
+    for (int i = 0; i < nz; i++) {
+        int w = z[i];
+        wwin_t *v = &ww[w];
+        if (!v->known || v->min || v->ws != ws || !wm_state(w)) continue;
+        int a = x0 + (int)((int64_t)(v->x0 - AX0) * (x1 - x0) / aw), b = y0 + (int)((int64_t)(v->y0 - AY0) * (y1 - y0) / ah);
+        int c_ = x0 + (int)((int64_t)(v->x1 - AX0) * (x1 - x0) / aw), d = y0 + (int)((int64_t)(v->y1 - AY0) * (y1 - y0) / ah);
+        if (a < x0) a = x0;
+        if (c_ > x1) c_ = x1;
+        if (d > y1) d = y1;
+        if (c_ - a < 4 || d - b < 3) continue;
+        dl_rect(a, b, c_, d, 0, C_BG);                   /* (a front window hides those behind it) */
+        dl_frame(a, b, c_, d, 0, 2, w == top ? front : c);
+    }
+}
+
 int wm_top(void)                         /* the front window of this workspace, or -1 */
 {
     for (int i = nz - 1; i >= 0; i--) if (shown(z[i])) return z[i];
@@ -301,6 +322,10 @@ static void draw_one(int w, int f, int keys)
         say("atlas: dbg wclose %d at %d %d\n", w, tx + t - 12 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
         say("atlas: dbg wzoom %d at %d %d\n", w, tx + t - 12 - BOX - 8 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
     }
+    /* its shadow: two hard steps down and to the right (a printed look, no blur) */
+    dl_shade(x0 + 8, y0 + 8, x1 + 8, y1 + 8, 12, 1);
+    dl_shade(x0 + 4, y0 + 4, x1 + 4, y1 + 4, 12, 1);
+    dl_frame(x0 - 3, y0 - 3, x1 + 3, y1 + 3, 15, 3, C_BG);   /* (a dark gap around it: overlapping windows stay apart) */
     /* the window: its glass, its frame, the strip at its top */
     dl_rect(x0, y0, x1, y1, 12, C_GLASS);
     dl_frame(x0, y0, x1, y1, 12, f ? 2 : 1, f ? C_ACC : C_LINE);
@@ -317,6 +342,7 @@ static void draw_one(int w, int f, int keys)
     }
     dl_rect(x0 + 1, y0 + WM_STRIP - 1, x1 - 1, y0 + WM_STRIP, 0, C_LINE);
     wm_body(w, x0, y0 + WM_BODY_DY, x1, y1, keys);
+    if (!f) dl_shade(x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2, 10, 1);   /* (behind: its insides dimmed, the focused one stands out) */
     /* the grip: three short diagonals in the bottom-right corner */
     for (int i = 0; i < 3; i++)
         for (int k = 0; k <= 4 + 5 * i; k += 2)

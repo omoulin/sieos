@@ -570,7 +570,11 @@ static void draw_deskbar(void)
     char st[48], ck[8];
     panel_status(st, sizeof st);
     clock_text(ck);
-    dl_text(x0 + 16, ty + 9, st, strlen(st), S(2), C_DIM, 0, 0, x1 - 90, SH);
+    {                                                    /* sia's state: a dot (lit when sia runs), then the words */
+        int idle = !strcmp(st, "sia: idle");
+        dl_rect(x0 + 18, ty + 15, x0 + 28, ty + 25, 5, idle ? C_LINE : C_ACC);
+        dl_text(x0 + 38, ty + 9, st, strlen(st), S(2), idle ? C_DIM : C_TXT, 0, 0, x1 - 100, SH);
+    }
     dl_text(x1 - 16 - text_w(5, ST), ty + 6, ck, 5, ST, C_TXT, 0, 0, SW, SH);   /* (title size) */
     int ry = ty + DB_TRAY;                               /* the apps */
     dl_rect(x0 + 10, ry, x1 - 10, ry + 1, 0, C_LINE);
@@ -578,9 +582,15 @@ static void draw_deskbar(void)
         int y = ry + 4 + k * DB_ROW, run = db_running(k);
         if (ptr_x >= x0 && ptr_x < x1 && ptr_y >= y && ptr_y < y + DB_ROW) dl_rect(x0 + 6, y, x1 - 6, y + DB_ROW - 2, 8, C_BAR);
         icon(dbapps[k].icon, x0 + 14, y + 7, 2);
-        if (run) {
-            bold(x0 + 50, y + 8, dbapps[k].name, C_TXT, x1 - 30);
-            for (int c = 0; c < 5; c++) dl_rect(x1 - 26 + c, y + 11 + c, x1 - 25 + c, y + 29 - c, 0, C_ACC);   /* > */
+        if (run) {                                       /* running: bold, a lit dot (and how many terminals) */
+            bold(x0 + 50, y + 8, dbapps[k].name, C_TXT, x1 - 50);
+            dl_rect(x1 - 30, y + 14, x1 - 18, y + 26, 6, C_ACC);
+            if (dbapps[k].act == A_TERM) {
+                int nt = 0;
+                for (int t = 0; t < MAXTERM; t++) nt += terms[t].used;
+                char c[4];
+                if (nt > 1) { c[num(c, nt)] = 0; dl_text(x1 - 38 - text_w(strlen(c), SS), y + 11, c, strlen(c), SS, C_DIM, 0, 0, SW, SH); }
+            }
         } else label(x0 + 50, y + 8, dbapps[k].name, 2, C_DIM);
         hitbox(x0 + 6, y, x1 - 6, y + DB_ROW - 2, H_DBAPP, k);
         if (atlas_debug) say("atlas: dbg dbapp %s at %d %d\n", dbapps[k].name, x0 + 120, y + DB_ROW / 2);
@@ -590,9 +600,10 @@ static void draw_deskbar(void)
     for (int k = 0; k < WM_NWS; k++) {
         int cx = x0 + 10 + k * (cw + 8), on = k == wm_workspace();
         char d[2] = { (char)('1' + k), 0 };
-        dl_rect(cx, wy + 6, cx + cw, wy + 40, 8, on ? C_ACC : C_BG);
-        dl_frame(cx, wy + 6, cx + cw, wy + 40, 8, 1, on ? C_ACC : C_LINE);
-        label(cx + cw / 2 - KW / 2, wy + 12, d, 2, on ? C_BG : C_DIM);
+        dl_rect(cx, wy + 6, cx + cw, wy + 40, 6, C_BG);   /* a cell: its windows, small (the current one outlined) */
+        wm_minimap(k, cx + 22, wy + 11, cx + cw - 5, wy + 35, on ? C_DIM : C_LINE, C_TXT);
+        dl_frame(cx, wy + 6, cx + cw, wy + 40, 6, on ? 2 : 1, on ? C_ACC : C_LINE);
+        dl_text(cx + 6, wy + 9, d, 1, SS, on ? C_ACC : C_DIM, 0, 0, SW, SH);
         hitbox(cx, wy + 6, cx + cw, wy + 40, H_DBWS, k);
         if (atlas_debug) say("atlas: dbg ws %d at %d %d\n", k + 1, cx + cw / 2, wy + 23);
     }
@@ -1552,7 +1563,7 @@ static void mouse(const con_event_t *e)
     if (!(b & MB_LEFT) && (was & MB_LEFT)) {
         int d = drag, on = drag_on;
         drag = D_NONE; drag_on = 0;
-        if (d == D_WIN) { if (on) { wm_drop(); return; } wm_ungrab(); }
+        if (d == D_WIN) { if (on) { wm_drop(); redraw_box(DBX, M, DBX + DBW, M + db_h()); return; } wm_ungrab(); }   /* (the Deskbar's map of it too) */
         if (!on) click(x, y);
         else if (d == D_SEL) { if (sel.al != sel.bl || sel.ac != sel.bc) copy_sel(); else sel.on = 0; redraw(); }
         return;

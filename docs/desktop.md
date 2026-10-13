@@ -39,6 +39,10 @@ a shelf.)
   the small size. Drag the tab to move the
   window; **double-click** it to minimize; right-click it for the window's
   menu: *Minimize*, *Zoom*, *Send to workspace N*, *Close*.
+- **Depth:** each window has a hard shadow down and to the right (two
+  steps, a printed look rather than a blur) and a thin dark gap around its
+  frame, so overlapping windows stay apart; the insides of every window
+  but the focused one are dimmed to three quarters.
 - **Resize** with the grip (bottom right) or any edge; the smallest is
   360 x 200. New windows go down and to the right of the front one, so
   every tab stays in view; sia opens on the right. Each kind opens at a
@@ -113,12 +117,15 @@ What a window can be:
 - **The menu** (the SIEOS cube): Terminal, sia, Files, Text editor,
   Settings; the apps of `/etc/apps`; every open window (minimized ones
   "(hidden)"); *Log out*.
-- **The tray:** sia's state (idle, local, online) and the clock.
+- **The tray:** sia's state (idle, local, online) after a dot, lit while
+  sia runs, and the clock in the title size.
 - **The apps:** Terminal, sia, Files, Text editor, Pins, Settings. A running
-  one is in bold with a **>**: a click brings its window back in front
-  (the terminal used last, for Terminal); otherwise a click starts it.
-  Right-click: *New ...* and its windows.
-- **The workspaces**, 1 to 4: the current one in the accent colour.
+  one is in bold with a lit dot (Terminal: and how many, from 2): a click
+  brings its window back in front (the terminal used last, for Terminal);
+  otherwise a click starts it. Right-click: *New ...* and its windows.
+- **The workspaces**, 1 to 4, each a small map of its windows (where they
+  are on the desk, the front one brighter): the current one outlined in
+  the accent colour.
 
 Right-click the desk itself for a menu to start things, and *Log out*.
 
@@ -153,7 +160,9 @@ right-clicks and the keys above.
 ## Settings
 
 *Settings* (the Deskbar, its menu, or the strip: "settings") is a window
-of the desktop, on every machine:
+of the desktop, on every machine. Its sections have titles in the title
+size; each choice is a segmented control, its options joined (the chosen
+one filled), wrapped onto more rows when the window is narrow:
 
 | Section | What | Kept in |
 |---|---|---|
@@ -258,7 +267,8 @@ between processes.
   The layout is computed from the screen's size; below 1600 pixels wide
   the Deskbar is narrower.
 - **Drawing** (`draw.c`): a display list (rectangles with round corners,
-  outlines, text, small pixel images for the icons) turned into pixels 16
+  outlines, text, small pixel images for the icons, and shades that darken
+  what is under them, for shadows) turned into pixels 16
   rows at a time in a 120 KiB strip, each finished strip copied to video
   memory. No second full-screen image, and only the region that changed
   is redrawn: the pointer's two small squares, a terminal's window, a

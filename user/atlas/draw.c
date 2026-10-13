@@ -50,7 +50,7 @@ static const struct { int scale, w, h; const uint8_t *px; } natives[] = {
 #define MAXP  4096                  /* display list entries (more are dropped) */
 #define ARENA (32 << 10)            /* the display list's text */
 
-enum { P_GRID, P_RECT, P_FRAME, P_TEXT, P_PIXMAP };
+enum { P_GRID, P_RECT, P_FRAME, P_TEXT, P_PIXMAP, P_SHADE };
 typedef struct {
     uint8_t type;
     uint16_t r, t, len;
@@ -148,6 +148,13 @@ void dl_rect(int x0, int y0, int x1, int y1, int r, uint32_t c)
     if (p) p->r = sz(r);
 }
 
+void dl_shade(int x0, int y0, int x1, int y1, int r, int k)
+{
+    box(&x0, &y0, &x1, &y1);
+    prim_t *p = add(P_SHADE, x0, y0, x1, y1, 0);
+    if (p) { p->r = sz(r); p->t = k; }
+}
+
 void dl_frame(int x0, int y0, int x1, int y1, int r, int t, uint32_t c)
 {
     box(&x0, &y0, &x1, &y1);
@@ -238,6 +245,14 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
         }
         break;
     }
+    case P_SHADE:                    /* darken what is already there: 3/4 (k 1) or 1/2 (k 2) */
+        for (int y = ya; y < yb; y++) {
+            int i = inset(y, p->y0, p->y1, round_r(p->r)), a = p->x0 + i > lo ? p->x0 + i : lo, b = p->x1 - i < hi ? p->x1 - i : hi;
+            uint32_t *d = strip + (y - sy) * PW;
+            if (p->t >= 2) for (int x = a; x < b; x++) d[x] = d[x] >> 1 & 0x7f7f7f;
+            else for (int x = a; x < b; x++) d[x] -= d[x] >> 2 & 0x3f3f3f;
+        }
+        break;
     case P_PIXMAP:                   /* each screen pixel: its map character's colour */
         for (int y = ya; y < yb; y++) {
             int ry = (int)(((int64_t)(y - p->y0) << 16) / p->scale);

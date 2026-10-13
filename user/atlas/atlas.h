@@ -172,6 +172,7 @@ int  wm_workspace(void);                              /* 0..3 */
 int  wm_ws_of(int w);
 void wm_switch(int ws);
 void wm_send(int w, int ws);
+void wm_minimap(int ws, int x0, int y0, int x1, int y1, uint32_t c, uint32_t front);   /* its windows, small, in that box */
 int  wm_grab(int kind, int arg, int x, int y);        /* a press on a tab or an edge: 1 if it starts a move */
 void wm_motion(int x, int y);
 void wm_drop(void);
