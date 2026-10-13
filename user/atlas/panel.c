@@ -371,21 +371,37 @@ void panel_wheel(int w)
 #define MAXROW 400
 static struct { short m, start, len, act; } row[MAXROW];
 
+/* An action of an answer: an outlined chip, its icon, its words. -> its right edge */
+static int chip(int x, int y, int ic, const char *s, int kind, int arg)
+{
+    int w = 44 + tw(strlen(s), 2) + 16;
+    dl_rect(x, y, x + w, y + 42, 21, C_GLASS);
+    dl_frame(x, y, x + w, y + 42, 21, 1, C_ACC);
+    icon(ic, x + 14, y + 9, 2);
+    dl_text(x + 44, y + 10, s, strlen(s), S(2), C_TXT, 0, 0, SW, SH);
+    hitbox(x, y, x + w, y + 42, kind, arg);
+    return x + w;
+}
+
 void panel_draw(int x0, int y0, int x1, int y1, int focused)
 {
     rx0 = x0; ry0 = y0; rx1 = x1; ry1 = y1;
     hitbox(x0, y0 + 48, x1, y1, H_PANEL, 0);
     pill(x1 - 24 - tw(3, 2) - 28, y0 + 58, "New", 0, H_PMODE, 0);
-    char st[96];
+    char st[96], sp[48] = "";                            /* the model (after a dot: lit when it runs), its speed small */
     if (!ready) strlcpy(st, busy ? "starting sia..." : "sia starts when you ask", sizeof st);
-    else if (!info.ready || !info.model[0]) strlcpy(st, busy ? "no model loaded yet | answering..." : "no model loaded yet", sizeof st);
+    else if (!info.ready || !info.model[0]) strlcpy(st, "no model loaded yet", sizeof st);
     else {
-        char *p = st + strlcpy(st, info.model, 40);
-        p += strlcpy(p, " | ", 4);
+        strlcpy(st, info.model, 40);
+        char *p = sp;
         p += num(p, info.tok_s_x100 / 100); *p++ = '.'; p += num(p, info.tok_s_x100 / 10 % 10);
-        strlcpy(p, busy ? " tok/s | answering..." : " tok/s", 24);
+        strlcpy(p, " tok/s", 8);
     }
-    dl_text(x0 + 24, y0 + 68, st, strlen(st), S(2), C_DIM, x0, y0, x1 - 120, y1);
+    if (busy) strlcpy(sp + strlen(sp), sp[0] ? " | answering..." : "answering...", sizeof sp - strlen(sp));
+    int on = ready && info.ready;
+    dl_rect(x0 + 26, y0 + 75, x0 + 36, y0 + 85, 5, on ? C_ACC : C_LINE);
+    dl_text(x0 + 46, y0 + 68, st, strlen(st), S(2), on ? C_TXT : C_DIM, x0, y0, x1 - 120, y1);
+    if (sp[0]) dl_text(x0 + 46 + tw(strlen(st) + 2, 2), y0 + 70, sp, strlen(sp), SS, C_DIM, x0, y0, x1 - 120, y1);
     int ty0 = y0 + 112, ty1 = y1 - 96, chars = (x1 - x0 - 48) / tw(1, 2);
     if (!nmsg) {                                         /* nothing yet: what to ask */
         label(x0 + 24, ty0 + 6, "Ask about your files.", 2, C_TXT);
@@ -395,7 +411,7 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
     for (int i = 0; i < nmsg && nr < MAXROW - 4; i++) {
         pmsg_t *m = &msgs[i];
         const char *t = m->text;
-        int p = 0, w = m->who == WHO_YOU ? chars - 2 : chars;
+        int p = 0, w = m->who == WHO_YOU ? chars - 6 : m->who == WHO_SIA ? chars - 2 : chars;   /* (the band's "you", the gutter) */
         if (!m->len && m->who == WHO_SIA) row[nr++] = (typeof(row[0])){ i, 0, 0, 0 };
         while (p < m->len && nr < MAXROW - 4) {
             int e = p, br = -1;
@@ -420,15 +436,22 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
             if (m->act[a].fly == 3) continue;            /* (already remembered) */
             strlcpy(b, m->act[a].fly == 2 ? "Remember: " : m->act[a].fly ? "Open " : strchr(arg, '=') ? "Files with " : "Project ", sizeof b);
             strlcpy(b + strlen(b), m->act[a].fly == 1 ? base_name(arg) : arg, sizeof b - strlen(b));
-            int e = pill(x0 + 24, y + 2, b, 1, H_PACT, row[r].m * NACT + a);
-            if (m->id > logged || atlas_debug) say("atlas: sia: button %d at %d %d\n", a, (x0 + 24 + e) / 2, y + 23);   /* (for the tests) */
+            int e = chip(x0 + 38, y + 2, m->act[a].fly == 2 ? I_SIA : m->act[a].fly == 1 ? I_FILE : I_FOLDER, b, H_PACT, row[r].m * NACT + a);
+            dl_rect(x0 + 24, y - 4, x0 + 26, y + LH * 2 - 4, 0, C_LINE);   /* (sia's gutter goes on beside it) */
+            if (m->id > logged || atlas_debug) say("atlas: sia: button %d at %d %d\n", a, (x0 + 38 + e) / 2, y + 23);   /* (for the tests) */
             continue;
         }
         if (row[r].act) continue;
         uint32_t c = m->who == WHO_YOU ? C_ACC : m->who == WHO_SIA ? C_TXT : m->who == WHO_ERR ? C_ERR : C_DIM;
         int x = x0 + 24;
-        if (m->who == WHO_YOU && row[r].start == 0) { label(x, y, ">", 2, C_ACC); }
-        if (m->who == WHO_YOU) x += tw(2, 2);
+        if (m->who == WHO_YOU) {                         /* your question: on a band, "you" at its right */
+            dl_rect(x0 + 16, y - 4, x1 - 20, y + LH - 4, 0, C_BAR);
+            if (row[r].start == 0) dl_text(x1 - 34 - text_w(3, SS), y + 2, "you", 3, SS, C_DIM, 0, 0, SW, SH);
+            x += 8;
+        } else if (m->who == WHO_SIA) {                  /* sia's answer: a line in the gutter */
+            dl_rect(x, y - 4, x + 2, y + LH - 4, 0, C_LINE);
+            x += 14;
+        }
         if (row[r].len) dl_text(x, y, m->text + row[r].start, row[r].len, S(2), c, x0, ty0, x1 - 20, ty1);
         if (busy && row[r].m == nmsg - 1 && r == nr - 1)   /* still coming: a cursor */
             dl_rect(x + tw(row[r].len, 2) + 4, y + 2, x + tw(row[r].len, 2) + 14, y + 22, 0, C_ACC);

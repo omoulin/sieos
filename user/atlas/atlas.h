@@ -158,7 +158,7 @@ void logo(int x, int y, int scale);
 #define WM_BODY_DY (WM_STRIP - 48)                    /* wm_body's y0 from the window's top (insides: TBAR + 8 below it) */
 #define ATLAS_ANIM 103                                /* message: the tabs' animation thread -> atlas */
 void wm_init(long atlas_port);                        /* starts the animation's thread */
-void wm_tick(void);                                   /* ATLAS_ANIM: the next frame */
+int  wm_tick(void);                                   /* ATLAS_ANIM: the next frame -> 1 if a window has just opened (draw all) */
 void wm_reset(void);                                  /* logout: no windows */
 void wm_area(int x0, int y0, int x1, int y1);         /* where windows may go */
 void wm_show(int w);                                  /* on the screen, in front (a new one is placed) */

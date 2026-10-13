@@ -690,6 +690,26 @@ static void draw_prompt(void)
     pill(okx - 20 - (tw(6, 2) + 28), y1 - 66, "Cancel", 0, H_PR, 0);
 }
 
+/* An empty workspace: the time, large and dim, at the desk's bottom right,
+ * and what to press under it. */
+#define RC_K 10                                          /* (the clock's text scale) */
+static const char rest_hint[] = "Ctrl+T a terminal   Ctrl+Space find or ask   the Deskbar: everything";
+static void rest_box(int *x0, int *y0, int *x1, int *y1)
+{
+    int hw = text_w(sizeof rest_hint - 1, SS), cw = tw(5, RC_K);
+    *x1 = SW - 72; *y1 = SH - 56;
+    *x0 = *x1 - (hw > cw ? hw : cw); *y0 = *y1 - CH * RC_K - 44;
+}
+static void draw_rest(void)
+{
+    int x0, y0, x1, y1;
+    char ck[8];
+    rest_box(&x0, &y0, &x1, &y1);
+    clock_text(ck);
+    label(x1 - tw(5, RC_K), y0, ck, RC_K, C_LINE);
+    dl_text(x1 - text_w(sizeof rest_hint - 1, SS), y1 - 22, rest_hint, sizeof rest_hint - 1, SS, C_DIM, 0, 0, SW, SH);
+}
+
 static void build(void)
 {
     dl_reset();
@@ -698,10 +718,7 @@ static void build(void)
     if (mode == GREETER) { draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
     hitbox(0, 0, SW, SH, H_DESK, 0);                     /* (the desk itself: its menu) */
     tidy();
-    if (wm_top() < 0) {
-        static const char *t[2] = { "No windows on this workspace.", "Ctrl+T: a terminal. The Deskbar (top right): everything else." };
-        for (int i = 0; i < 2; i++) label((M + STX1) / 2 - tw(strlen(t[i]), 2) / 2, SH / 2 - 20 + i * 36, t[i], 2, i ? C_DIM : C_TXT);
-    }
+    if (wm_top() < 0) draw_rest();
     wm_draw(focus, strip_on ? -1 : focus);
     draw_deskbar();
     draw_strip();
@@ -1712,12 +1729,13 @@ int main(int argc, char **argv)
         }
         if (m.pid == self && m.w[0] == ATLAS_ANIM) {     /* the next frame of the tabs that move */
             reply_val(from, 0);
-            if (mode == SESSION) wm_tick();
+            if (mode == SESSION && wm_tick()) settle();   /* (a window has opened: all of it, its places logged) */
             continue;
         }
         if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the Deskbar's tray */
             reply_val(from, 0);
             if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
+            if (mode == SESSION && wm_top() < 0) { int x0, y0, x1, y1; rest_box(&x0, &y0, &x1, &y1); redraw_box(x0, y0, x1, y1); }   /* (the resting clock) */
             continue;
         }
         /* a terminal's shell: CON_WRITE / CON_READ / CON_ECHO, its window in w[3] */

@@ -14,7 +14,9 @@
  * overshoot), in the accent colour; the others' sink back into it (170 ms),
  * leaving their title in the strip at the window's top. The tab is drawn
  * before the window's glass, so only what rose above the frame shows. A
- * thread ticks every 16 ms only while a tab moves.
+ * thread ticks every 16 ms only while a tab moves, or while a new window
+ * opens: a bright line at its middle that widens, then opens to its full
+ * height (160 ms, a CRT powering on; not under Glass, nor at 300% and up).
  *
  * A window may go past the screen's bottom and sides; its tab never leaves
  * the screen (past the left side, the tab slides to stay on it). Each
@@ -27,6 +29,7 @@
 #include "atlas.h"
 
 #define MINW 360                         /* the smallest window */
+#define OPEN_MS 160                      /* a new window's opening */
 #define MINH 200
 #define BOX 20                           /* the tab's close and zoom boxes */
 #define TAB_L 44                         /* the tab: its icon, before the title */
@@ -39,6 +42,7 @@ typedef struct {
     int r_from, r_to;                    /* the tab: rising (to TAB_H) or sinking (to 0) ... */
     uint64_t r_t0;                       /* ... since then (0: at rest) */
     int was;                             /* moved at the last tick: one more redraw */
+    uint64_t o_t0;                       /* opening since then (0: open) */
 } wwin_t;
 static wwin_t ww[WM_MAX];
 static int z[WM_MAX], nz;                /* the stacking order, back to front */
@@ -161,6 +165,7 @@ static void place(int w)
     v->known = 1; v->min = v->max = 0; v->ws = cws;
     v->r_from = v->r_to = 0; v->r_t0 = 0;
     clamp(w);
+    if (draw_look_get() != LOOK_GLASS && draw_zoom_get() < 147456) { v->o_t0 = sys_clock(); kick(); }   /* (it opens) */
 }
 
 /* ---- What atlas asks for. */
@@ -302,11 +307,12 @@ static void draw_one(int w, int f, int keys)
 {
     wwin_t *v = &ww[w];
     int x0 = v->x0, y0 = v->y0, x1 = v->x1, y1 = v->y1, t = tab_w(w), tx = tab_x(w), r = rise(v);
+    int op = v->o_t0 ? prog(v->o_t0, OPEN_MS) : 1024;
     char title[64];
     wm_title(w, title, sizeof title);
     int n = strlen(title), up = r >= TAB_H / 2;          /* (half out: it is the tab; else the strip) */
     /* the tab, before the glass: only what rose above the frame shows */
-    if (r > 0) {
+    if (r > 0 && op >= 1024) {
         int ty = y0 - r;
         dl_rect(tx, ty, tx + t, y0 + 12, 10, C_ACC);
         if (up) hitbox(tx, ty, tx + t, y0, H_WTAB, w);    /* (before its boxes: they win) */
@@ -321,6 +327,16 @@ static void draw_one(int w, int f, int keys)
         say("atlas: dbg wtab %s at %d %d\n", title, tx + TAB_L + tw(n, 2) / 2, y0 - TAB_H / 2);
         say("atlas: dbg wclose %d at %d %d\n", w, tx + t - 12 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
         say("atlas: dbg wzoom %d at %d %d\n", w, tx + t - 12 - BOX - 8 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
+    }
+    if (op < 1024) {                                     /* opening: a line that widens, then opens to full height */
+        int cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, a = op < 360 ? op * 1024 / 360 : 1024, b = op < 360 ? 0 : (op - 360) * 1024 / 664;
+        a = 1024 - ((1024 - a) * (1024 - a) >> 10); b = 1024 - ((1024 - b) * (1024 - b) >> 10);   /* (eased out) */
+        int hw = (x1 - x0) / 2 * a / 1024 + 2, hh = (y1 - y0) / 2 * b / 1024 + 2;
+        if (b) { dl_rect(cx - hw, cy - hh, cx + hw, cy + hh, 6, C_GLASS); dl_frame(cx - hw, cy - hh, cx + hw, cy + hh, 6, 2, C_ACC); }
+        dl_rect(cx - hw, cy - 2, cx + hw, cy + 2, 0, C_TXT);   /* (the beam) */
+        hitbox(x0, y0, x1, y1, H_WIN, w);
+        if (atlas_debug) say("atlas: dbg window %d at %d %d %d %d\n", w, x0, y0, x1, y1);
+        return;
     }
     /* its shadow: two hard steps down and to the right (a printed look, no blur) */
     dl_shade(x0 + 8, y0 + 8, x1 + 8, y1 + 8, 12, 1);
@@ -388,11 +404,18 @@ void wm_draw(int focus, int keys)
 
 /* ATLAS_ANIM: the next frame of the tabs that move (only around their
  * strip); the ticks stop when all rest. */
-void wm_tick(void)
+int wm_tick(void)
 {
-    int any = 0;
+    int any = 0, opened = 0;
     for (int w = 0; w < WM_MAX; w++) {
         wwin_t *v = &ww[w];
+        if (v->known && v->o_t0) {                       /* opening: the whole window, each frame */
+            int done = prog(v->o_t0, OPEN_MS) >= 1024;
+            if (done) { v->o_t0 = 0; opened = 1; }       /* (open: the caller draws it all, once) */
+            else if (shown(w)) damage(v);
+            any |= !done || v->r_t0;
+            continue;
+        }
         if (!v->known || (!v->r_t0 && !v->was)) continue;
         int moving = v->r_t0 != 0;
         if (shown(w)) redraw_box(tab_x(w) - 4, v->y0 - TAB_H - 12, v->x1 + 4, v->y0 + WM_STRIP + 2);
@@ -401,4 +424,5 @@ void wm_tick(void)
         any |= moving;
     }
     if (!any) ticking = 0;
+    return opened;
 }

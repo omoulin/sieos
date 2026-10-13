@@ -39,6 +39,10 @@ a shelf.)
   the small size. Drag the tab to move the
   window; **double-click** it to minimize; right-click it for the window's
   menu: *Minimize*, *Zoom*, *Send to workspace N*, *Close*.
+- **Opening:** a new window powers on like a CRT: a bright line at its
+  middle that widens, then opens to its full height (160 ms, on the tabs'
+  animation thread; not under Glass, nor at 300% and up, where a whole
+  window each frame costs too much on a Pi).
 - **Depth:** each window has a hard shadow down and to the right (two
   steps, a printed look rather than a blur) and a thin dark gap around its
   frame, so overlapping windows stay apart; the insides of every window
@@ -82,18 +86,24 @@ What a window can be:
   Backspace, Del, Enter, Tab; Ctrl+S saves; Ctrl+W or Esc closes the tab;
   F5 / F6 the tab before / after; Ctrl+B hides or shows the tree. The
   last tab closed closes the window.
-- **Files** (`files.c`). A folder's contents, one row each (icon, name,
-  size), folders first; it starts in your home folder. Double-click (or
-  Enter): a folder opens in place, a file in the editor, a launcher
-  (`.app`) starts. *Up* (or Backspace) goes to the parent folder. Only
-  what you may read is shown.
+- **Files** (`files.c`). A folder's contents under a header (*Name*,
+  *Kind*, *Size*), one row each (icon, name, what it is by its name: C
+  source, text, app..., size), folders first and in bold, every other row
+  tinted; it starts in your home folder. Double-click (or Enter): a folder
+  opens in place, a file in the editor, a launcher (`.app`) starts. *Up*
+  (or Backspace) goes to the parent folder; the path beside it is a link
+  a part at a time (`/ > home > alice`: a click on `home` goes there). An
+  empty folder says so in the middle. Only what you may read is shown.
 - **The assistant** (`panel.c`). A conversation with `sia`, shown as it is
-  written. A thread of atlas does all the talking (`SIA_OPEN`, `SIA_ASK`,
+  written: your questions on a lighter band marked *you*, sia's answers
+  beside a line in the gutter, the model at the top after a dot (lit when
+  it runs) with its speed in the small size. A thread of atlas does all the talking (`SIA_OPEN`, `SIA_ASK`,
   then `SIA_NEXT` piece after piece), so the desktop never waits. sia
   starts when you ask. *New* forgets the conversation, *Ask* (or Enter)
   asks, *Stop* (or Esc) ends an answer. When sia offers to remember
   something, a *Remember: ...* button keeps it (sia's memory). Answers may
-  carry actions, each on a line of its own, shown as buttons:
+  carry actions, each on a line of its own, shown as outlined buttons
+  with an icon (a file, a folder, sia for *Remember*):
   - `[fly:PATH]`: open that file (a path's end, like `note.txt`, is
     enough);
   - `[island:KEY=VALUE]`: list the files with that attribute under the
@@ -103,7 +113,9 @@ What a window can be:
   and lists your files.
 - **Pins** (`pins.c`): the Raspberry Pi's GPIO pins as the tracks of a
   sequencer: outputs play their patterns, inputs record their level at
-  each step (simulated pins elsewhere). See [gpio.md](gpio.md).
+  each step (simulated pins elsewhere). Every step is numbered (the
+  beats, 1, 5, 9..., brighter) and the playhead lights its column. See
+  [gpio.md](gpio.md).
 - **Settings** (`settings.c`): below.
 
 ![Files](screens/files.png)
@@ -128,6 +140,9 @@ What a window can be:
   the accent colour.
 
 Right-click the desk itself for a menu to start things, and *Log out*.
+A workspace with no window shows the time, large and dim, at the desk's
+bottom right, and the keys to start with under it (redrawn each minute
+with the Deskbar's clock).
 
 ## The sia strip
 
@@ -185,7 +200,9 @@ the brighter a pixel, the less its scanline row darkens it (Phosphor:
 black loses 45%, full brightness almost nothing; Amber: 30% to nothing),
 so lines show on the dark desk and in dim text, while filled buttons and
 the focused tab stay solid and readable.
-Text glows: a dim halo beside each stroke. Amber also squares the
+Text glows: a dim halo beside each stroke. The desk itself darkens
+towards its corners, as a curved tube does (a vignette on the grid's
+pixels only: windows are untouched). Amber also squares the
 corners and draws the grid as dots. Nothing else in the desktop knows
 about looks, so icons, terminals and new windows follow by themselves.
 Phosphor costs about 30% more per full frame than Glass (5.5 ms instead
@@ -323,7 +340,7 @@ and back, minimized by a double-click on its tab and brought back by the
 Deskbar, sent to workspace 2 from its tab's menu, closed by its close box;
 history, copy and paste (the pasted command runs); Files (a double-click
 opens a file in the editor, which saves it; a second file from the
-editor's tree in a second tab, tabs shown and closed; Up); the sia strip (a file, an
+editor's tree in a second tab, tabs shown and closed; Up; the path's / part); the sia strip (a file, an
 app, Esc, a question to the stand-in sia; the answer's buttons; Stop);
 Settings: pointer speed and left-handed buttons (kept in `~/.mouse`), the
 looks (Amber 1984, Glass, Phosphor again: checked on the screen's pixels,

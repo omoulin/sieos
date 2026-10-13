@@ -1,9 +1,10 @@
 /*
  * files.c - The Files window (docs/desktop.md): a folder's contents, one
- * row each (icon, name, size), folders first. Double-click (or Enter): a
- * folder opens in place, a file in the editor, a launcher (.app) starts.
- * Up (or Backspace) goes to the parent. It starts in the home folder; it
- * shows only what the logged-in user may read.
+ * row each (icon, name, kind, size) under a header, folders first, every
+ * other row tinted. Double-click (or Enter): a folder opens in place, a
+ * file in the editor, a launcher (.app) starts. Up (or Backspace) goes to
+ * the parent; a click on a part of the path goes there. It starts in the
+ * home folder; it shows only what the logged-in user may read.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -11,6 +12,9 @@
 
 #define TOP 48                           /* the insides start this far below their top */
 #define ROW 34
+#define HEAD 30                          /* the columns' header */
+#define KINDW 130                        /* the kind column, then the size's */
+#define SIZEW 110
 #define MAXF 256
 typedef struct { char name[64]; int dir; uint64_t size; } fent_t;
 static fent_t ent[MAXF];
@@ -82,8 +86,34 @@ static void activate(int i)
     else atlas_open_file(path);
 }
 
+/* What a file is, by its name. */
+static const char *kind_of(const fent_t *e)
+{
+    if (e->dir) return "folder";
+    const char *x = 0;
+    for (const char *p = e->name; *p; p++) if (*p == '.') x = p + 1;
+    if (!x) return "file";
+    static const struct { const char *ext, *kind; } k[] = {
+        { "app", "app" }, { "c", "C source" }, { "h", "C header" }, { "py", "Python" }, { "sh", "shell" },
+        { "txt", "text" }, { "md", "Markdown" }, { "conf", "settings" }, { "json", "JSON" }, { "gguf", "model" },
+    };
+    for (size_t i = 0; i < sizeof k / sizeof *k; i++) if (!strcmp(x, k[i].ext)) return k[i].kind;
+    return "file";
+}
+
+/* The path, a part at a time: a click on part k goes to that folder. */
+#define CRUMB (-10)                      /* hit box args: CRUMB - 1 - k (k -1: the top folder) */
+static void go_part(int k)
+{
+    int n = 0;
+    for (char *p = cwd + 1; *p; p++)
+        if (*p == '/' && ++n > k) { *p = 0; break; }
+    if (k < 0) cwd[1] = 0;
+    load();
+}
+
 static int X0, Y0, X1, Y1;
-static int rows(void) { return (Y1 - (Y0 + TOP + 58) - 8) / ROW; }
+static int rows(void) { return (Y1 - (Y0 + TOP + 54 + HEAD) - 8) / ROW; }
 
 void files_draw(int x0, int y0, int x1, int y1, int focused)
 {
@@ -93,23 +123,51 @@ void files_draw(int x0, int y0, int x1, int y1, int focused)
     int ty = y0 + TOP;                                   /* the bar: Up, the folder */
     int ux = pill(x0 + 14, ty, "Up", 0, H_FILE, -2);
     if (atlas_debug) say("atlas: dbg fileup at %d %d\n", x0 + 40, ty + 21);
-    dl_text(ux + 16, ty + 10, cwd, strlen(cwd), S(2), C_DIM, ux, ty, x1 - 16, ty + 42);
-    int ly = ty + 54;
-    dl_rect(x0 + 2, ly, x1 - 2, y1 - 2, 0, C_TERM);
+    {                                                    /* the path: each part a link, the last one bold */
+        int x = ux + 16, parts = 0;
+        for (const char *q = cwd; *q; q++) parts += *q == '/' && q[1];   /* ("/home/alice": 2, "/": 0) */
+        const char *p = cwd + 1;
+        for (int k = -1; k < parts && x < x1 - 40; k++) {
+            const char *s = k < 0 ? "/" : p;
+            int l = k < 0 ? 1 : 0;
+            if (k >= 0) { while (s[l] && s[l] != '/') l++; p = s + l + (s[l] == '/'); }
+            int last = k == parts - 1, w = tw(l, 2);
+            dl_text(x, ty + 10, s, l, S(2), last ? C_TXT : C_DIM, x0, ty, x1 - 16, ty + 42);
+            if (last) dl_text(x + 1, ty + 10, s, l, S(2), C_TXT, x0, ty, x1 - 16, ty + 42);
+            else hitbox(x - 4, ty + 4, x + w + 4, ty + 38, H_FILE, CRUMB - 1 - k);
+            if (!last && atlas_debug) say("atlas: dbg crumb %d at %d %d\n", k, x + w / 2, ty + 21);
+            x += w;
+            if (!last) { dl_text(x + 9, ty + 12, ">", 1, SS, C_LINE, x0, ty, x1 - 16, ty + 42); x += 30; }
+        }
+    }
+    int hy = ty + 54, ly = hy + HEAD, kx = x1 - 24 - SIZEW - KINDW;   /* the columns' header */
+    dl_rect(x0 + 2, hy, x1 - 2, y1 - 2, 0, C_TERM);
+    dl_text(x0 + 52, hy + 8, "NAME", 4, SS, C_DIM, 0, 0, SW, SH);
+    dl_text(kx, hy + 8, "KIND", 4, SS, C_DIM, 0, 0, SW, SH);
+    dl_text(x1 - 24 - text_w(4, SS), hy + 8, "SIZE", 4, SS, C_DIM, 0, 0, SW, SH);
+    dl_rect(x0 + 10, ly - 1, x1 - 10, ly, 0, C_LINE);
     int n = rows();
     if (scroll > nent - n) scroll = nent - n;
     if (scroll < 0) scroll = 0;
-    if (!nent) label(x0 + 24, ly + 16, atlas_may(cwd, 0) ? "(empty)" : "(not allowed)", 2, C_DIM);
+    if (!nent) {                                         /* nothing: say why, in the middle */
+        const char *m = atlas_may(cwd, 0) ? "This folder is empty" : "You may not read this folder";
+        label((x0 + x1) / 2 - tw(strlen(m), 2) / 2, (ly + y1) / 2 - KH, m, 2, C_DIM);
+    }
+    int wide = kx > x0 + 52 + tw(12, 2);                 /* (room for the kind column) */
     for (int r = 0; r < n && scroll + r < nent; r++) {
         int i = scroll + r, y = ly + 4 + r * ROW;
         fent_t *e = &ent[i];
         if (i == sel) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_SEL);
+        else if (r & 1) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_GLASS);
         size_t l = strlen(e->name);
         int app = !e->dir && l > 4 && !strcmp(e->name + l - 4, ".app");
         icon(e->dir ? I_FOLDER : app ? I_APP : I_FILE, x0 + 16, y + 4, 2);
-        dl_text(x0 + 52, y + 6, e->name, l, S(2), C_TXT, x0, y, x1 - 150, y + ROW);
+        dl_text(x0 + 52, y + 6, e->name, l, S(2), C_TXT, x0, y, (wide ? kx : x1 - SIZEW) - 16, y + ROW);
+        if (e->dir) dl_text(x0 + 53, y + 6, e->name, l, S(2), C_TXT, x0, y, (wide ? kx : x1 - SIZEW) - 16, y + ROW);   /* (folders bold) */
+        const char *kd = kind_of(e);
+        if (wide) dl_text(kx, y + 8, kd, strlen(kd), SS, C_DIM, 0, 0, x1 - SIZEW - 24, SH);
         char sz[24], *p = sz;
-        if (e->dir) strlcpy(sz, "folder", sizeof sz);
+        if (e->dir) strlcpy(sz, "-", sizeof sz);
         else { uint64_t s = e->size; p += num(p, s >= 1024 ? (long)(s / 1024) : (long)s); strlcpy(p, s >= 1024 ? " KB" : " B", 6); }
         dl_text(x1 - 24 - text_w(strlen(sz), SS), y + 8, sz, strlen(sz), SS, C_DIM, 0, 0, SW, SH);
         hitbox(x0 + 6, y, x1 - 6, y + ROW - 2, H_FILE, i);
@@ -121,6 +179,7 @@ int files_click(int kind, int arg)
 {
     if (kind != H_FILE) return 0;
     if (arg == -2) { up(); return 1; }
+    if (arg <= CRUMB) { go_part(CRUMB - 1 - arg); return 1; }
     if (arg < 0) return 1;
     uint64_t t = sys_clock();
     sel = arg;

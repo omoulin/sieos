@@ -65,11 +65,11 @@ sequencer**, the way music programs lay out theirs:
   off; `clk`, `inv`, `clr` fill it with a clock, its opposite, nothing.
 - **An input's row is its recording**: while the sequence plays, the
   server samples every pin at the end of each step, and the row shows the
-  input's level at each step (high: a hollow block; low: a low bar),
+  input's level at each step (high: a filled block; low: a low bar),
   marked `rec`; it stays after the sequence stops, until the next play.
 - **The transport:** Play / Stop (or Space), Loop, the step's length (1
   ms to 1 s), the number of steps (8 to 64). A change while it plays is
-  sent at once. The playhead shows the step being played.
+  sent at once. The playhead lights the column of the step being played (and its number in the ruler).
 - **The square** on each header is the pin's level now; a click on an
   output's sets it at once.
 - The tracks are kept in `~/.pins`. On a machine without GPIO it runs on

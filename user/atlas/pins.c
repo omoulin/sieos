@@ -225,14 +225,18 @@ void pins_draw(int x0, int y0, int x1, int y1, int focused)
     if (gx1 - gx0 < nsteps * 8) gx0 = x0 + 14 + 60;      /* (narrow: the headers shrink) */
     int cw = (gx1 - gx0) / nsteps;
     if (cw < 6) cw = 6;
-    for (int s = 0; s < nsteps; s += 4) {
+    int all = cw >= text_w(2, SS) + 8;                   /* (room: every step numbered, the beats brighter) */
+    for (int s = 0; s < nsteps; s += all ? 1 : 4) {
         char nb[8]; nb[num(nb, s + 1)] = 0;
-        label(gx0 + s * cw + 4, ry + 4, nb, 2, C_DIM);
+        int beat = s % 4 == 0, on = playing && s == at;
+        dl_text(gx0 + s * cw + 4, ry + 8, nb, strlen(nb), SS, on ? C_ACC : beat ? C_TXT : C_LINE, 0, 0, SW, SH);
     }
     int rows = (Y1 - 8 - (ry + RULER)) / ROWH;
     if (scroll > ntrk - rows) scroll = ntrk - rows;
     if (scroll < 0) scroll = 0;
-    int gy0 = ry + RULER;
+    int gy0 = ry + RULER, head = playing && at >= 0 && at < nsteps;
+    if (head)                                            /* the playhead: its column lit, under the cells */
+        dl_rect(gx0 + at * cw, ry + 2, gx0 + (at + 1) * cw, gy0 + (ntrk - scroll < rows ? ntrk - scroll : rows) * ROWH, 3, C_SEL);
     for (int r = 0; r < rows && scroll + r < ntrk; r++) {
         int ti = scroll + r, y = gy0 + r * ROWH, base = 100 + ti * 10;
         track_t *k = &trk[ti];
@@ -259,7 +263,8 @@ void pins_draw(int x0, int y0, int x1, int y1, int focused)
             hitbox(bx - 4, y + 6, bx + 28, y + 44, H_PINS, base + 3);
             dbg(base + 3, bx + 12, y + 25);
             bx += 36;
-            if (k->mode == GPIO_OUT) {
+            if (k->mode == GPIO_OUT) {                   /* the pattern's tools, after a line */
+                dl_rect(bx - 6, y + 12, bx - 5, y + ROWH - 12, 0, C_LINE);
                 bx = button(bx, y + 4, "clk", 0, base + 4) + 4;
                 bx = button(bx, y + 4, "inv", 0, base + 5) + 4;
                 bx = button(bx, y + 4, "clr", 0, base + 6) + 4;
@@ -274,7 +279,8 @@ void pins_draw(int x0, int y0, int x1, int y1, int focused)
         if (k->mode == GPIO_OUT) {
             for (int s = 0; s < nsteps; s++) {
                 int cx = gx0 + s * cw;
-                dl_rect(cx + 3, y + 8, cx + cw - 3, y + ROWH - 8, 3, k->on[s] ? C_ACC : C_BAR);
+                int now = head && s == at;               /* (under the playhead: brighter) */
+                dl_rect(cx + 3, y + 8, cx + cw - 3, y + ROWH - 8, 3, k->on[s] ? (now ? C_TXT : C_ACC) : now ? C_LINE : C_BAR);
                 hitbox(cx, y + 2, cx + cw, y + ROWH - 2, H_PINS, 1000 + ti * 100 + s);
             }
             if (atlas_debug) for (int s = 0; s < nsteps; s += nsteps / 4) dbg(1000 + ti * 100 + s, gx0 + s * cw + cw / 2, y + ROWH / 2);
@@ -283,15 +289,13 @@ void pins_draw(int x0, int y0, int x1, int y1, int focused)
                 int cx = gx0 + s * cw;
                 if (s >= nrec) { dl_rect(cx + cw / 2 - 1, y + ROWH / 2 - 1, cx + cw / 2 + 1, y + ROWH / 2 + 1, 0, C_LINE); continue; }
                 int v = rec[s] >> k->pin & 1;
-                if (v) dl_frame(cx + 3, y + 8, cx + cw - 3, y + ROWH - 8, 3, 2, C_TERMFG);   /* (recorded: hollow) */
+                if (v) dl_rect(cx + 3, y + 8, cx + cw - 3, y + ROWH - 8, 3, C_DIM);   /* (recorded high: filled, as an output's, dimmer) */
                 else dl_rect(cx + 3, y + ROWH - 12, cx + cw - 3, y + ROWH - 8, 2, C_DIM);
             }
             if (playing && gx0 - (x0 + 14) >= HEADW - 10) label(gx0 - 80, y + 14, "rec", 2, C_ERR);
         }
         if (busy) label(gx0 + 10, y + 14, "used by a device", 2, C_ERR);
     }
-    if (playing && at >= 0 && at < nsteps)               /* the playhead */
-        dl_frame(gx0 + at * cw, ry + 2, gx0 + (at + 1) * cw, gy0 + (ntrk - scroll < rows ? ntrk - scroll : rows) * ROWH, 2, 2, C_TXT);
     if (!ntrk) label(x0 + 24, gy0 + 16, "No track: + Track adds one.", 2, C_DIM);
 }
 

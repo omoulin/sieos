@@ -421,6 +421,8 @@ while "closed" not in got:
     got = wait("atlas: terminal ")
 if int(got.split()[0]) != c2:
     fail(f"closed the wrong terminal: {got}")
+time.sleep(0.4)
+shot("07b-empty-workspace")                        # (workspace 2, empty: the resting clock)
 click(*latest("ws", "1"))
 wait("atlas: workspace 1")
 keys("ctrl", "tab")
@@ -506,7 +508,10 @@ click(*latest("dbapp", "Files"))                   # (in front again: its places
 time.sleep(0.4)
 click(*latest("fileup"))
 wait("atlas: files /home: ")
-print(f"ok: Files listed the home folder; note.txt opened by a double-click, edited, saved ({got.strip()}); demo.c from the tree in a second tab; tabs shown and closed; Up")
+time.sleep(0.4)
+click(*latest("crumb", "-1"))                      # the path's first part: the top folder
+wait("atlas: files /: ")
+print(f"ok: Files listed the home folder; note.txt opened by a double-click, edited, saved ({got.strip()}); demo.c from the tree in a second tab; tabs shown and closed; Up; the path's / part")
 
 # ---- Pins: the GPIO pins as sequencer tracks (simulated pins under QEMU)
 click(*latest("dbapp", "Pins"))

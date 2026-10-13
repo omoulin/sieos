@@ -74,6 +74,15 @@ static int np, arena_n, ptr_x = -100, ptr_y = -100;
 static char arena[ARENA];
 static int look = -1;               /* LOOK_..., -1: none set yet (draw_look) */
 static uint32_t lut[2][256];        /* the look's colour of each brightness: a row, a scanline row */
+#define VMAX 4096
+static uint16_t vrow[VMAX], vcol[VMAX];   /* the desk's vignette: 256 in the middle, less towards the edges */
+static void vignette(uint16_t *v, int n)  /* (a curved tube's darker corners) */
+{
+    for (int i = 0; i < n && i < VMAX; i++) {
+        int t = (int)((int64_t)(2 * i - n < 0 ? n - 2 * i : 2 * i - n) * 256 / n);   /* 0 in the middle, 256 at an edge */
+        v[i] = t <= 150 ? 256 : 256 - (t - 150) * 60 / 106;
+    }
+}
 
 void draw_look(int k)
 {
@@ -109,6 +118,7 @@ void draw_init(const screen_t *s)
     fb = s->fb; pitch = s->pitch; swap = s->swap;
     free(strip);                    /* (again after a change of size) */
     strip = malloc((size_t)PW * STRIP * 4);
+    vignette(vrow, PH); vignette(vcol, PW);
     draw_zoom(Z);                   /* (the picture's size, for this screen) */
 }
 void dl_reset(void) { np = 0; arena_n = 0; }
@@ -227,6 +237,14 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
             uint32_t *d = strip + (y - sy) * PW;
             for (int x = lo + ((p->cx0 - lo) % p->r + p->r) % p->r; x < hi; x += p->r) d[x] = p->c2;
         }
+        if (look == LOOK_PHOSPHOR || look == LOOK_AMBER)  /* the vignette: the desk darker towards its corners */
+            for (int y = ya; y < yb; y++) {
+                uint32_t vr = vrow[y < VMAX ? y : VMAX - 1], *d = strip + (y - sy) * PW;
+                for (int x = lo; x < hi; x++) {
+                    uint32_t f = vr * vcol[x] >> 8, c = d[x];
+                    if (f < 256) d[x] = ((c >> 16 & 255) * f >> 8) << 16 | ((c >> 8 & 255) * f >> 8) << 8 | (c & 255) * f >> 8;
+                }
+            }
         break;
     case P_RECT:
         for (int y = ya; y < yb; y++) {
