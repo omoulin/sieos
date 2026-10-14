@@ -84,10 +84,21 @@ static void vignette(uint16_t *v, int n)  /* (a curved tube's darker corners) */
     }
 }
 
+static const uint32_t pal_dark[NPAL] = {           /* (the order of PAL_...) */
+    0x0a0f1c, 0x141a28, 0x2a3245, 0x4be3c1, 0xe6ecf5, 0x8fa0b8, 0x262e40, 0x070b14, 0x9fe8c8, 0xff9b8a,
+    0x1d5a52, 0x111829, 0x0a0f1c, 0x0a0f1c, 0x0a0f1c, 0x0a0f1c, 0x4be3c1 };
+static const uint32_t pal_beos[NPAL] = {           /* BeOS R5: the blue desk, grey panels, the yellow tab */
+    0x336698, 0xdedede, 0x8a8a8a, 0xffcb00, 0x000000, 0x505050, 0xc4c4c4, 0xffffff, 0x000000, 0xc81e1e,
+    0xa8c4e8, 0x336698, 0x000000, 0xd8d8d8, 0xffffff, 0x505050, 0x1c4f8c };
+uint32_t pal[NPAL] = {
+    0x0a0f1c, 0x141a28, 0x2a3245, 0x4be3c1, 0xe6ecf5, 0x8fa0b8, 0x262e40, 0x070b14, 0x9fe8c8, 0xff9b8a,
+    0x1d5a52, 0x111829, 0x0a0f1c, 0x0a0f1c, 0x0a0f1c, 0x0a0f1c, 0x4be3c1 };
+
 void draw_look(int k)
 {
     static const uint32_t tint[2] = { 0x46ff7a, 0xffb038 };   /* phosphor, amber: at full brightness */
     look = k;
+    memcpy(pal, k == LOOK_BEOS ? pal_beos : pal_dark, sizeof pal);
     if (k != LOOK_PHOSPHOR && k != LOOK_AMBER) return;
     for (int s = 0; s < 2; s++)
         for (int l = 0; l < 256; l++) {
@@ -100,7 +111,7 @@ void draw_look(int k)
 }
 int draw_look_get(void) { return look; }
 static int scanline(int y) { return look == LOOK_PHOSPHOR ? y % 3 == 2 : y % 4 == 3; }
-static int round_r(int r) { return look == LOOK_AMBER ? 0 : r; }   /* (amber: square corners) */
+static int round_r(int r) { return look == LOOK_AMBER ? 0 : look == LOOK_BEOS ? (r > 3 ? 3 : r) : r; }   /* (amber: square corners; BeOS: almost) */
 static uint32_t avg(uint32_t a, uint32_t b) { return ((a & 0xfefefe) >> 1) + ((b & 0xfefefe) >> 1); }
 static uint32_t halo(uint32_t a, uint32_t c) { return avg(a, avg(a, c)); }   /* a quarter of c over a: text's glow */
 

@@ -12,18 +12,25 @@
 #include "mk.h"
 #include "draw.h"
 
-/* Colours: deep navy, "glass" panels a little lighter, one accent. */
-#define C_BG     0x0a0f1c
-#define C_GLASS  0x141a28             /* a panel, a window, a card */
-#define C_LINE   0x2a3245             /* their edge */
-#define C_ACC    0x4be3c1             /* focus, the current workspace, buttons that matter */
-#define C_TXT    0xe6ecf5
-#define C_DIM    0x8fa0b8
-#define C_BAR    0x262e40             /* the chosen row, separators */
-#define C_TERM   0x070b14
-#define C_TERMFG 0x9fe8c8
-#define C_ERR    0xff9b8a
-#define C_SEL    0x1d5a52             /* selected text's background */
+/* Colours: the look's palette (draw.c): deep navy, "glass" panels a little
+ * lighter, one accent; BeOS: its blue desk, grey panels, the yellow tab. */
+#define C_BG     pal[PAL_BG]          /* the desk */
+#define C_GLASS  pal[PAL_GLASS]       /* a panel, a window, a card */
+#define C_LINE   pal[PAL_LINE]        /* their edge */
+#define C_ACC    pal[PAL_ACC]         /* focus, the current workspace, buttons that matter */
+#define C_TXT    pal[PAL_TXT]
+#define C_DIM    pal[PAL_DIM]
+#define C_BAR    pal[PAL_BAR]         /* the chosen row, separators */
+#define C_TERM   pal[PAL_TERM]        /* a terminal's ground, lists, text */
+#define C_TERMFG pal[PAL_TERMFG]
+#define C_ERR    pal[PAL_ERR]
+#define C_SEL    pal[PAL_SEL]         /* selected text's background */
+#define C_GRID   pal[PAL_GRID]        /* the desk's grid lines */
+#define C_INK    pal[PAL_INK]         /* text on the accent (a tab, a chosen button) */
+#define C_PANEL  pal[PAL_PANEL]       /* the ground of Settings, the editor's tree and tabs */
+#define C_FIELD  pal[PAL_FIELD]       /* where you type */
+#define C_GAP    pal[PAL_GAP]         /* the thin gap around a window */
+#define C_ACCT   pal[PAL_ACCT]        /* the accent as text (titles, your words): readable on panels */
 #define C_CARD   C_GLASS              /* (the names setup.c and panel.c use) */
 #define C_ISLB   C_LINE
 
@@ -84,6 +91,10 @@ const char *panel_last(int k);                        /* the k-th line from the 
 
 /* ---- The editor (edit.c): a window: the tree of files, the open files as tabs. */
 int  edit_open(const char *path);                     /* in a tab (or its tab shown): 0 or -error */
+int  edit_new(void);                                  /* an empty "untitled" tab (or that one shown): 0 or -error */
+void edit_save_as(const char *path);                  /* the untitled tab's file (made, empty): saved there */
+const char *edit_name(void);                          /* the tab shown's name ("untitled" before its first save) */
+const char *edit_dir(void);                           /* the tree's folder: where an untitled file is saved */
 int  edit_active(void);                               /* a file is open */
 const char *edit_path(void);                          /* the file shown */
 int  edit_dirty(void);                                /* ... has changes */
@@ -94,6 +105,7 @@ void edit_wheel(int arg, int w);
 void edit_close(void);                                /* every tab, no question */
 int  edit_close_window(void);                         /* the window's close: 0 if changes held it (asked) */
 const char *atlas_home(void);                         /* the logged-in user's home folder ("" before) */
+void atlas_save_as(void);                             /* the untitled tab: ask for a name (then edit_save_as) */
 
 /* ---- Pins (pins.c): the GPIO pins as the tracks of a sequencer (docs/gpio.md). */
 #define ATLAS_PINS 105                                /* message: its ticker -> atlas, ten times a second */

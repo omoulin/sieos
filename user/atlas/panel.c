@@ -442,7 +442,7 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
             continue;
         }
         if (row[r].act) continue;
-        uint32_t c = m->who == WHO_YOU ? C_ACC : m->who == WHO_SIA ? C_TXT : m->who == WHO_ERR ? C_ERR : C_DIM;
+        uint32_t c = m->who == WHO_YOU ? C_ACCT : m->who == WHO_SIA ? C_TXT : m->who == WHO_ERR ? C_ERR : C_DIM;
         int x = x0 + 24;
         if (m->who == WHO_YOU) {                         /* your question: on a band, "you" at its right */
             dl_rect(x0 + 16, y - 4, x1 - 20, y + LH - 4, 0, C_BAR);
@@ -459,7 +459,7 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
 
     for (int i = 0; i < nmsg; i++) if (msgs[i].nact && msgs[i].id > logged) logged = msgs[i].id;
     int iy0 = y1 - 72, iy1 = y1 - 22, ix1 = x1 - 24 - (busy ? tw(4, 2) : tw(3, 2)) - 40;
-    dl_rect(x0 + 20, iy0, ix1, iy1, 12, C_BG);
+    dl_rect(x0 + 20, iy0, ix1, iy1, 12, C_FIELD);
     dl_frame(x0 + 20, iy0, ix1, iy1, 12, focused ? 2 : 1, focused ? C_ACC : C_ISLB);
     hitbox(x0 + 20, iy0, ix1, iy1, H_PIN, 0);
     int n = strlen(input), fit = (ix1 - x0 - 60) / tw(1, 2), s = n > fit ? n - fit : 0;

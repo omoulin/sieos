@@ -225,7 +225,7 @@ void wm_minimap(int ws, int x0, int y0, int x1, int y1, uint32_t c, uint32_t fro
         if (c_ > x1) c_ = x1;
         if (d > y1) d = y1;
         if (c_ - a < 4 || d - b < 3) continue;
-        dl_rect(a, b, c_, d, 0, C_BG);                   /* (a front window hides those behind it) */
+        dl_rect(a, b, c_, d, 0, C_PANEL);                /* (a front window hides those behind it) */
         dl_frame(a, b, c_, d, 0, 2, w == top ? front : c);
     }
 }
@@ -318,10 +318,10 @@ static void draw_one(int w, int f, int keys)
         if (up) hitbox(tx, ty, tx + t, y0, H_WTAB, w);    /* (before its boxes: they win) */
         int cx = tx + t - 12 - BOX, zx = cx - 8 - BOX;   /* (close at the end, zoom before it) */
         icon_ink(wm_icon(w), tx + 14, ty + 5, 2);
-        dl_text(tx + TAB_L, ty + 6, title, n, S(2), C_BG, tx + TAB_L - 2, ty, zx - 12, y0);
-        dl_text(tx + TAB_L + 1, ty + 6, title, n, S(2), C_BG, tx + TAB_L - 2, ty, zx - 12, y0);   /* (bold) */
-        box(cx, ty + 7, 0, C_BG, H_WMBTN, w * 4 + 2, up);
-        if (zx >= tx + TAB_L) box(zx, ty + 7, 1, C_BG, H_WMBTN, w * 4 + 1, up);
+        dl_text(tx + TAB_L, ty + 6, title, n, S(2), C_INK, tx + TAB_L - 2, ty, zx - 12, y0);
+        dl_text(tx + TAB_L + 1, ty + 6, title, n, S(2), C_INK, tx + TAB_L - 2, ty, zx - 12, y0);   /* (bold) */
+        box(cx, ty + 7, 0, C_INK, H_WMBTN, w * 4 + 2, up);
+        if (zx >= tx + TAB_L) box(zx, ty + 7, 1, C_INK, H_WMBTN, w * 4 + 1, up);
     }
     if (atlas_debug) {                                   /* (where they are once risen) */
         say("atlas: dbg wtab %s at %d %d\n", title, tx + TAB_L + tw(n, 2) / 2, y0 - TAB_H / 2);
@@ -341,7 +341,7 @@ static void draw_one(int w, int f, int keys)
     /* its shadow: two hard steps down and to the right (a printed look, no blur) */
     dl_shade(x0 + 8, y0 + 8, x1 + 8, y1 + 8, 12, 1);
     dl_shade(x0 + 4, y0 + 4, x1 + 4, y1 + 4, 12, 1);
-    dl_frame(x0 - 3, y0 - 3, x1 + 3, y1 + 3, 15, 3, C_BG);   /* (a dark gap around it: overlapping windows stay apart) */
+    dl_frame(x0 - 3, y0 - 3, x1 + 3, y1 + 3, 15, 3, C_GAP);   /* (a dark gap around it: overlapping windows stay apart) */
     /* the window: its glass, its frame, the strip at its top */
     dl_rect(x0, y0, x1, y1, 12, C_GLASS);
     dl_frame(x0, y0, x1, y1, 12, f ? 2 : 1, f ? C_ACC : C_LINE);

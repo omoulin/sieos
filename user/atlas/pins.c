@@ -218,7 +218,7 @@ void pins_draw(int x0, int y0, int x1, int y1, int focused)
     x = button(x, ty, "+ Track", 0, 7) + 24;
     p = t + strlcpy(t, board, sizeof t);
     if (playing && at >= 0) { p += strlcpy(p, ": step ", 8); p[num(p, at + 1)] = 0; }
-    if (x + tw(strlen(t), 2) < x1 - 20) label(x1 - 20 - tw(strlen(t), 2), ty + 10, t, 2, playing ? C_ACC : C_DIM);
+    if (x + tw(strlen(t), 2) < x1 - 20) label(x1 - 20 - tw(strlen(t), 2), ty + 10, t, 2, playing ? C_ACCT : C_DIM);
 
     /* the grid: a ruler, then a row a track */
     int gx0 = x0 + 14 + HEADW, gx1 = x1 - 16, ry = Y0 + BAR;
@@ -229,7 +229,7 @@ void pins_draw(int x0, int y0, int x1, int y1, int focused)
     for (int s = 0; s < nsteps; s += all ? 1 : 4) {
         char nb[8]; nb[num(nb, s + 1)] = 0;
         int beat = s % 4 == 0, on = playing && s == at;
-        dl_text(gx0 + s * cw + 4, ry + 8, nb, strlen(nb), SS, on ? C_ACC : beat ? C_TXT : C_LINE, 0, 0, SW, SH);
+        dl_text(gx0 + s * cw + 4, ry + 8, nb, strlen(nb), SS, on ? C_ACCT : beat ? C_TXT : C_LINE, 0, 0, SW, SH);
     }
     int rows = (Y1 - 8 - (ry + RULER)) / ROWH;
     if (scroll > ntrk - rows) scroll = ntrk - rows;

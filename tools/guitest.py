@@ -513,6 +513,22 @@ click(*latest("crumb", "-1"))                      # the path's first part: the 
 wait("atlas: files /: ")
 print(f"ok: Files listed the home folder; note.txt opened by a double-click, edited, saved ({got.strip()}); demo.c from the tree in a second tab; tabs shown and closed; Up; the path's / part")
 
+# ---- the editor on its own: an untitled tab, a name asked only when saved
+click(*latest("dbapp", "Text editor"))
+wait("atlas: editing untitled")
+time.sleep(0.5)
+type_text("written before it had a name")
+keys("ctrl", "s")
+wait("atlas: prompt Save in /home/alice as:")
+type_text("later.txt\n")
+wait("atlas: save as later.txt (0)")
+wait("atlas: saved later.txt 28 bytes")
+send("cat /home/alice/later.txt")
+expect("written before it had a name")
+keys("ctrl", "w")                                  # (saved: closes at once, and the window with it)
+wait("atlas: editor closed later.txt")
+print("ok: the editor alone: an untitled tab in the home folder; Ctrl+S asked for a name, saved later.txt (28 bytes)")
+
 # ---- Pins: the GPIO pins as sequencer tracks (simulated pins under QEMU)
 click(*latest("dbapp", "Pins"))
 got = wait("atlas: pins open: ")
@@ -628,6 +644,13 @@ img = shot("28-look-glass")
 if not has_colour(img, RAW["ACC"], at_least=50) or not has_colour(img, RAW["GLASS"], at_least=2000):
     fail("Glass is not on the screen")
 settle_log()
+click(*latest("set", "103"))                       # ... BeOS: its own colours ...
+wait("atlas: look 3")
+time.sleep(0.4)
+img = shot("28b-look-beos")
+if not has_colour(img, "336698", at_least=2000) or not has_colour(img, "ffcb00", at_least=50) or has_colour(img, RAW["GLASS"], at_least=50):
+    fail("BeOS (its blue desk, its yellow tab) is not on the screen")
+settle_log()
 click(*latest("set", "100"))                       # ... and Phosphor again
 wait("atlas: look 0")
 send("cat /home/alice/.look")
@@ -636,7 +659,7 @@ time.sleep(0.4)
 img = shot("29-look-phosphor")
 if not has_colour(img, ACC, at_least=50) or not has_colour(img, look(RAW["NAVY"], 0, True), at_least=2000):
     fail("Phosphor (and its scanlines) is not on the screen")
-print("ok: Settings: the look: Amber 1984, Glass, then Phosphor again, kept in ~/.look")
+print("ok: Settings: the look: Amber 1984, Glass, BeOS, then Phosphor again, kept in ~/.look")
 
 settle_log()
 click(*latest("set", "115"))                       # everything at 200% ...

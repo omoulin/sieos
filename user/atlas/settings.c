@@ -7,7 +7,7 @@
  *              its size. A new size shows at once and goes back by itself
  *              after 15 s unless kept (a monitor that cannot show it is
  *              never a dead end). Kept in /etc/display.conf.
- *   Look       Phosphor (a green monitor), Amber 1984 or Glass (draw.c),
+ *   Look       Phosphor (a green monitor), Amber 1984, Glass or BeOS (draw.c),
  *              and the size of everything, 50% to 400% (draw.c's zoom):
  *              the user's own (~/.look), applied at login.
  *   Mouse      the pointer's speed, left- or right-handed buttons, the
@@ -207,8 +207,8 @@ static void heading(const char *s)
 {
     cy += 14;
     if (fits(34)) {                                       /* (a title: bigger, bold) */
-        dl_text(lx, cy, s, strlen(s), ST, C_ACC, 0, 0, SW, SH);
-        dl_text(lx + 1, cy, s, strlen(s), ST, C_ACC, 0, 0, SW, SH);
+        dl_text(lx, cy, s, strlen(s), ST, C_ACCT, 0, 0, SW, SH);
+        dl_text(lx + 1, cy, s, strlen(s), ST, C_ACCT, 0, 0, SW, SH);
     }
     cy += 44;
 }
@@ -232,7 +232,7 @@ static void segment(const char *const *s, int a, int b, int on, int base, const 
             else if (i == b) { dl_rect(x, y, x + w, y + 42, 21, C_ACC); dl_rect(x, y, x + w - 21, y + 42, 0, C_ACC); }
             else dl_rect(x, y, x + w, y + 42, 0, C_ACC);
         } else if (i > a && i - 1 != on) dl_rect(x, y + 9, x + 1, y + 33, 0, C_LINE);   /* (between two options) */
-        dl_text(x + 14, y + 10, s[i], strlen(s[i]), S(2), i == on ? C_BG : C_TXT, 0, 0, SW, SH);
+        dl_text(x + 14, y + 10, s[i], strlen(s[i]), S(2), i == on ? C_INK : C_TXT, 0, 0, SW, SH);
         hitbox(x, y, x + w, y + 42, H_SET, base + i);
         if (atlas_debug) say("atlas: dbg set %d at %d %d\n", base + i, x + w / 2, y + 21);
     }
@@ -261,7 +261,7 @@ static void text_field(const char *name, int f, int secret, const char *empty)
     row_label(name);
     if (fits(44)) {
         int on = field == f, n = strlen(fields[f]);
-        dl_rect(cx, cy, X1 - 24, cy + 44, 10, C_BG);
+        dl_rect(cx, cy, X1 - 24, cy + 44, 10, C_FIELD);
         dl_frame(cx, cy, X1 - 24, cy + 44, 10, on ? 2 : 1, on ? C_ACC : C_LINE);
         char st[64];
         int k = n < (int)sizeof st - 1 ? n : (int)sizeof st - 1, chars = (X1 - 24 - cx - 32) / KW;
@@ -281,7 +281,7 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
 {
     (void)focused;
     X0 = x0; Y0 = y0; X1 = x1; Y1 = y1;
-    dl_rect(x0 + 2, y0 + TOP, x1 - 2, y1 - 2, 0, C_BG);
+    dl_rect(x0 + 2, y0 + TOP, x1 - 2, y1 - 2, 0, C_PANEL);
     hitbox(x0, y0 + TOP, x1, y1, H_SET, S_BODY);
     lx = x0 + 24; cx = x1 - x0 >= 760 ? x0 + 250 : lx;
     cy = y0 + TOP + 4 - scroll;
@@ -320,7 +320,7 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
     }
 
     heading("LOOK");
-    static const char *looks[NLOOK] = { "Phosphor", "Amber 1984", "Glass" };
+    static const char *looks[NLOOK] = { "Phosphor", "Amber 1984", "Glass", "BeOS" };
     choices("Desktop", looks, NLOOK, atlas_look_get(), S_LOOK);
     static const char *zn[NZOOM] = { "50%", "75%", "100%", "125%", "150%", "200%", "300%", "400%" };
     int zk = -1;
@@ -348,7 +348,7 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
     if (fits(42)) {
         int ax = pill(cx, cy, "Apply", 1, H_SET, S_APPLY);
         if (atlas_debug) say("atlas: dbg set %d at %d %d\n", S_APPLY, cx + 40, cy + 21);
-        if (msg[0]) dl_text(ax + 20, cy + 10, msg, strlen(msg), S(2), msg_err ? C_ERR : C_ACC, ax, cy, X1 - 20, cy + 42);
+        if (msg[0]) dl_text(ax + 20, cy + 10, msg, strlen(msg), S(2), msg_err ? C_ERR : C_ACCT, ax, cy, X1 - 20, cy + 42);
     }
     cy += ROW;
     panel_status(t, sizeof t);

@@ -13,6 +13,11 @@
  *   │ hello.c  Ln 3, Col 2  C  changed          Ctrl+S save  Ctrl+W close│
  *   └──────────────────────────────────────────────────────────────────┘
  *
+ * Started on its own (the Deskbar, the menu, an editor app), it opens an
+ * empty "untitled" tab, the tree at the home folder; Ctrl+S on it asks
+ * for a name (atlas.c's name box) and saves it in the tree's folder. A
+ * file opened while that tab is still empty and unchanged takes its place.
+ *
  * The tree: a click opens or closes a folder ([+] / [-]), opens a file in
  * a tab (or shows its tab); ".." shows the folder above. It starts at the
  * home folder and opens the folders down to a file opened from elsewhere.
@@ -65,6 +70,8 @@ static int X0, Y0, X1, Y1, TX1, RX0, TY0, TY1, cols, rows;   /* where things wer
 int edit_active(void) { return ntab > 0; }
 int edit_dirty(void) { return ntab > 0 && tabs[act].dirty; }
 const char *edit_path(void) { return ntab ? tabs[act].path : ""; }
+const char *edit_name(void) { return ntab ? tabs[act].name : ""; }
+const char *edit_dir(void) { return root; }
 
 static tab_t *T(void) { return &tabs[act]; }
 static int bol(const tab_t *e, int p) { while (p > 0 && e->b[p - 1] != '\n') p--; return p; }
@@ -184,10 +191,35 @@ int edit_close_window(void)                            /* the window's ×: 0 if 
     return 1;
 }
 
+static void set_root(void)                             /* the tree: at the home folder (or /) */
+{
+    if (!root[0]) { strlcpy(root, atlas_home(), sizeof root); if (!root[0]) strlcpy(root, "/", sizeof root); }
+}
+
+/* A new, empty tab with no file yet ("untitled"; Ctrl+S asks for a name). */
+int edit_new(void)
+{
+    for (int i = 0; i < ntab; i++) if (!tabs[i].path[0] && !tabs[i].len) { act = i; return 0; }   /* (one already: shown) */
+    if (ntab == NTAB) { set_msg("too many tabs: close one", 1); return -EBUSY; }
+    tab_t *e = &tabs[ntab];
+    memset(e, 0, sizeof *e);
+    e->cap = 4096;
+    if (!(e->b = malloc(e->cap + 1))) return -ENOMEM;
+    strlcpy(e->name, "untitled", sizeof e->name);
+    act = ntab++;
+    set_msg("", 0);
+    set_root();
+    if (!nnode) build();
+    say("atlas: editing untitled\n");
+    return 0;
+}
+
 int edit_open(const char *path)
 {
     for (int i = 0; i < ntab; i++) if (!strcmp(tabs[i].path, path)) { act = i; return 0; }   /* (open: shown) */
     if (!atlas_may(path, 0)) { say("atlas: %s: not allowed\n", path); return -EACCES; }
+    for (int i = 0; i < ntab; i++)                      /* (an empty untitled tab: the file takes its place) */
+        if (!tabs[i].path[0] && !tabs[i].len) { close_tab(i); break; }
     if (ntab == NTAB) {                                 /* full: the oldest unchanged one goes */
         int k = -1;
         for (int i = 0; i < ntab && k < 0; i++) if (!tabs[i].dirty) k = i;
@@ -209,7 +241,7 @@ int edit_open(const char *path)
     strlcpy(e->name, base_name(path), sizeof e->name);
     act = ntab++;
     set_msg(e->ro ? "read only: not yours to change, binary, or over 64 KiB" : "", 0);
-    if (!root[0]) { strlcpy(root, atlas_home(), sizeof root); if (!root[0]) strlcpy(root, "/", sizeof root); }
+    set_root();
     reveal(path);
     if (!nnode) build();
     say("atlas: editing %s (%d bytes)\n", e->name, e->len);
@@ -220,6 +252,7 @@ static void save(void)
 {
     tab_t *e = T();
     if (e->ro) return;
+    if (!e->path[0]) { atlas_save_as(); return; }       /* untitled: a name first (then edit_save_as) */
     long h = fs_open(e->path, FS_WRONLY | FS_TRUNC, 0), w = 0;
     for (int off = 0; h >= 0 && off < e->len && w >= 0; off += w)
         w = fs_write(h, off, e->b + off, e->len - off < FS_MAX ? e->len - off : FS_MAX);
@@ -236,6 +269,17 @@ static void save(void)
     strlcpy(p + num(p, e->len), " bytes", 8);
     set_msg(t, 0);
     say("atlas: saved %s %d bytes\n", e->name, e->len);
+}
+
+/* The name chosen for the untitled tab: atlas.c has made the (empty) file. */
+void edit_save_as(const char *path)
+{
+    if (!ntab) return;
+    tab_t *e = T();
+    strlcpy(e->path, path, sizeof e->path);
+    strlcpy(e->name, base_name(path), sizeof e->name);
+    reveal(path);
+    save();
 }
 
 static void insert(char c)
@@ -360,7 +404,7 @@ void edit_click(int arg, int x, int y)
 
 /* ---- Colours: what each character of a line is. */
 enum { K_TXT, K_KEY, K_STR, K_NUM, K_COM, K_PRE };
-static const uint32_t kcol[] = { C_TXT, C_ACC, C_TERMFG, C_TERMFG, C_DIM, C_ACC };
+#define KCOL { C_TXT, C_ACCT, C_TERMFG, C_TERMFG, C_DIM, C_ACCT }   /* (the look's colours: taken when drawn) */
 enum { L_PLAIN, L_C, L_HASH, L_MD };
 static int lang_of(const char *name)
 {
@@ -455,7 +499,7 @@ static int comment_at(const tab_t *e, int upto, int lang)   /* inside a C commen
 /* ---- Drawing. */
 static void tree_draw(int x0, int y0, int x1, int y1)
 {
-    dl_rect(x0, y0, x1, y1, 0, C_BG);
+    dl_rect(x0, y0, x1, y1, 0, C_PANEL);
     dl_rect(x1, y0, x1 + 1, y1, 0, C_LINE);
     hitbox(x0, y0, x1, y1, H_ED, E_TREEBG);
     dl_text(x0 + 14, y0 + 12, "EXPLORER", 8, SS, C_DIM, 0, 0, SW, SH);
@@ -478,7 +522,7 @@ static void tree_draw(int x0, int y0, int x1, int y1)
             dl_rect(x0 + 22 + d * 24, y, x0 + 23 + d * 24, y + TROW, 0, C_BAR);
         int tx = ix;
         if (node[i].dir) {
-            label(ix, y + 4, node[i].open ? "[-]" : "[+]", 2, C_ACC);
+            label(ix, y + 4, node[i].open ? "[-]" : "[+]", 2, C_ACCT);
             tx = ix + 3 * KW + 6;
         } else {
             icon(I_FILE, ix + 6, y + 5, 2);
@@ -492,7 +536,7 @@ static void tree_draw(int x0, int y0, int x1, int y1)
 
 static void tabs_draw(int x0, int y0, int x1)
 {
-    dl_rect(x0, y0, x1, y0 + TABH, 0, C_BG);
+    dl_rect(x0, y0, x1, y0 + TABH, 0, C_PANEL);
     dl_rect(x0, y0 + TABH - 1, x1, y0 + TABH, 0, C_LINE);
     int w[NTAB], total = 0, first = 0;
     for (int i = 0; i < ntab; i++) { w[i] = tw(strlen(tabs[i].name), 2) + 64; total += w[i]; }
@@ -539,7 +583,7 @@ void edit_draw(int x0, int y0, int x1, int y1, int focused)
     dl_rect(RX0, cy, X1, cy + CRUMB, 0, C_TERM);
     {
         char t[200], *o = t;
-        const char *p = e->path[0] == '/' ? e->path + 1 : e->path;
+        const char *p = !e->path[0] ? "untitled: Ctrl+S saves it, with a name" : e->path[0] == '/' ? e->path + 1 : e->path;
         for (; *p && o < t + sizeof t - 4; p++) {
             if (*p == '/') { memcpy(o, " > ", 3); o += 3; }
             else *o++ = *p;
@@ -554,8 +598,9 @@ void edit_draw(int x0, int y0, int x1, int y1, int focused)
     if (rows < 1) rows = 1;
     in_view();
     dl_rect(RX0, TY0, X1, TY1, 0, C_TERM);
-    dl_rect(RX0, TY0, RX0 + gut, TY1, 0, C_BG);         /* the gutter */
+    dl_rect(RX0, TY0, RX0 + gut, TY1, 0, C_PANEL);         /* the gutter */
     dl_rect(RX0 + gut, TY0, RX0 + gut + 1, TY1, 0, C_LINE);
+    const uint32_t kcol[] = KCOL;
     int lang = lang_of(e->name), com = comment_at(e, line_pos(e, e->top), lang);
     int p = line_pos(e, e->top), cl = line_of(e, e->cur);
     static uint8_t k[512];
@@ -579,7 +624,7 @@ void edit_draw(int x0, int y0, int x1, int y1, int focused)
             int c = e->cur - p - e->left;
             if (c >= 0 && c < cols) {
                 dl_rect(tx + c * KW, ty, tx + (c + 1) * KW, ty + KH, 0, C_ACC);
-                if (e->cur < end) dl_text(tx + c * KW, ty + 1, e->b + e->cur, 1, S(K), C_BG, RX0, TY0, X1, TY1);
+                if (e->cur < end) dl_text(tx + c * KW, ty + 1, e->b + e->cur, 1, S(K), C_INK, RX0, TY0, X1, TY1);
             }
         }
         if (end >= e->len) break;
@@ -601,10 +646,10 @@ void edit_draw(int x0, int y0, int x1, int y1, int focused)
     o += strlcpy(o, ", Col ", 8); o += num(o, e->cur - bol(e, e->cur) + 1);
     static const char *ln[] = { "Text", "C", "Shell", "Markdown" };
     o += strlcpy(o, "   ", 4); o += strlcpy(o, lang == L_HASH ? "Shell / Python" : ln[lang], 20);
-    o += strlcpy(o, "   ", 4); o += strlcpy(o, e->ro ? "read only" : e->dirty ? "changed" : "saved", 12);
+    o += strlcpy(o, "   ", 4); o += strlcpy(o, e->ro ? "read only" : !e->path[0] ? "new" : e->dirty ? "changed" : "saved", 12);
     if (msg[0]) { o += strlcpy(o, "   ", 4); strlcpy(o, msg, sizeof t - (size_t)(o - t)); }
-    dl_text(X0 + 8, sy + 5, t, strlen(t), S(2), C_BG, X0, sy, X1 - 10, Y1);
+    dl_text(X0 + 8, sy + 5, t, strlen(t), S(2), C_INK, X0, sy, X1 - 10, Y1);
     const char *keys = "Ctrl+S save  Ctrl+W close  F5/F6 tabs  Ctrl+B tree ";
     int kl = strlen(keys), kx = X1 - 10 - tw(kl, 2);
-    if (kx > X0 + 8 + tw(strlen(t), 2) + 30) dl_text(kx, sy + 5, keys, kl, S(2), C_BG, X0, sy, X1, Y1);
+    if (kx > X0 + 8 + tw(strlen(t), 2) + 30) dl_text(kx, sy + 5, keys, kl, S(2), C_INK, X0, sy, X1, Y1);
 }

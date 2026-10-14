@@ -153,7 +153,7 @@ void setup_draw(void)
                                      "Step 3 of 3 - ready" };
     dl_rect(x0, y0, x1, y1, 24, C_CARD);
     dl_frame(x0, y0, x1, y1, 24, 2, C_ISLB);
-    label(x0 + 60, y0 + 46, "Welcome to SIEOS", 5, C_ACC);
+    label(x0 + 60, y0 + 46, "Welcome to SIEOS", 5, C_ACCT);
     label(x0 + 60, y0 + 126, step == 1 && cur > 0 ? "Step 2 of 3 - another account" : titles[step], 2, C_TXT);
     for (int i = 0; i < 3; i++)                           /* where we are: three dots */
         dl_rect(x1 - 150 + i * 34, y0 + 132, x1 - 130 + i * 34, y0 + 152, 10, i <= step ? C_ACC : C_ISLB);
@@ -165,7 +165,7 @@ void setup_draw(void)
     for (int i = 0; i < n; i++) {
         int fy = y0 + 220 + i * 76;
         label(x0 + 60, fy + 12, f[i].label, 2, C_DIM);
-        dl_rect(x0 + 270, fy, x1 - 60, fy + 50, 10, C_BG);
+        dl_rect(x0 + 270, fy, x1 - 60, fy + 50, 10, C_FIELD);
         dl_frame(x0 + 270, fy, x1 - 60, fy + 50, 10, fld == i ? 2 : 1, fld == i ? C_ACC : C_ISLB);
         char dots[64];
         int len = strlen(f[i].buf);

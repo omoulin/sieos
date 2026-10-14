@@ -123,7 +123,7 @@ static struct {
     struct { char label[48], arg[160]; int act, icon; } e[MAXMENT];
 } mn;
 
-/* A name typed in a small box (a new file's). */
+/* A name typed in a small box (the editor's untitled file, saved). */
 static struct { int on; char title[48], buf[32]; } pr;
 
 /* What a held left button does once the pointer moves. */
@@ -320,7 +320,7 @@ static int win_used(int w)
 static void win_title(int w, char *t, size_t cap)
 {
     if (w < MAXTERM) { size_t n = strlcpy(t, "Terminal ", cap); t[n + num(t + n, terms[w].chan)] = 0; }
-    else if (w == W_EDIT) { strlcpy(t, base_name(edit_path()), cap); if (edit_dirty()) strlcpy(t + strlen(t), " *", cap - strlen(t)); }
+    else if (w == W_EDIT) { strlcpy(t, edit_name(), cap); if (edit_dirty()) strlcpy(t + strlen(t), " *", cap - strlen(t)); }
     else if (w == W_SIA) strlcpy(t, "sia", cap);
     else if (w == W_SET) strlcpy(t, "Settings", cap);
     else if (w == W_PINS) strlcpy(t, "Pins", cap);
@@ -341,7 +341,7 @@ void wm_info(int w, char *t, size_t cap)                 /* the strip's right si
         char *p = t + strlcpy(t, terms[w].back ? "history -" : "", cap);
         if (terms[w].back) { p[num(p, terms[w].back)] = 0; return; }
         p += num(p, terms[w].cols); p += strlcpy(p, " x ", 4); p[num(p, terms[w].rows)] = 0;
-    } else if (w == W_EDIT) strlcpy(t, edit_dirty() ? "not saved" : "saved", cap);
+    } else if (w == W_EDIT) strlcpy(t, !edit_path()[0] ? "new file" : edit_dirty() ? "not saved" : "saved", cap);
     else if (w == W_FILES) strlcpy(t, files_dir(), cap);
     else if (w == W_PINS) strlcpy(t, "GPIO", cap);
 }
@@ -399,7 +399,7 @@ int pill(int x, int y, const char *s, int on, int kind, int arg)
     int w = tw(strlen(s), 2) + 28;
     dl_rect(x, y, x + w, y + 42, 21, on ? C_ACC : C_GLASS);
     dl_frame(x, y, x + w, y + 42, 21, 1, on ? C_ACC : C_LINE);
-    dl_text(x + 14, y + 10, s, strlen(s), S(2), on ? C_BG : C_TXT, 0, 0, SW, SH);
+    dl_text(x + 14, y + 10, s, strlen(s), S(2), on ? C_INK : C_TXT, 0, 0, SW, SH);
     if (kind) hitbox(x, y, x + w, y + 42, kind, arg);
     return x + w;
 }
@@ -469,18 +469,18 @@ static void draw_greeter(void)
     static const char wt[] = "Welcome to SIEOS";     /* the card is a window: its tab first */
     int t = 44 + tw(sizeof wt - 1, 2) + 24;
     dl_rect(x0, y0 - TAB_H, x0 + t, y0 + 12, 10, C_ACC);
-    bold(x0 + 22, y0 - TAB_H + 6, wt, C_BG, SW);
+    bold(x0 + 22, y0 - TAB_H + 6, wt, C_INK, SW);
     dl_rect(x0, y0, x1, y1, 16, C_GLASS);
     dl_frame(x0, y0, x1, y1, 16, 2, C_ACC);
     dl_rect(x0 + 2, y0, x0 + t - 2, y0 + 2, 0, C_ACC);
     logo(x0 + 50, y0 + 40, 5);
-    label(x0 + 150, y0 + 46, "SIEOS", 6, C_ACC);
+    label(x0 + 150, y0 + 46, "SIEOS", 6, C_ACCT);
     label(x0 + 152, y0 + 120, "your windows, your files, sia", 2, C_DIM);
     const char *names[2] = { "Name", "Password" };
     for (int f = 0; f < 2; f++) {
         int fy = y0 + 190 + f * 90;
         label(x0 + 60, fy + 12, names[f], 2, C_DIM);
-        dl_rect(x0 + 230, fy, x1 - 60, fy + 50, 10, C_BG);
+        dl_rect(x0 + 230, fy, x1 - 60, fy + 50, 10, C_FIELD);
         dl_frame(x0 + 230, fy, x1 - 60, fy + 50, 10, gfield == f ? 2 : 1, gfield == f ? C_ACC : C_LINE);
         char st[64];
         int n = strlen(gpw) < sizeof st - 1 ? strlen(gpw) : sizeof st - 1;
@@ -600,10 +600,10 @@ static void draw_deskbar(void)
     for (int k = 0; k < WM_NWS; k++) {
         int cx = x0 + 10 + k * (cw + 8), on = k == wm_workspace();
         char d[2] = { (char)('1' + k), 0 };
-        dl_rect(cx, wy + 6, cx + cw, wy + 40, 6, C_BG);   /* a cell: its windows, small (the current one outlined) */
+        dl_rect(cx, wy + 6, cx + cw, wy + 40, 6, C_PANEL);   /* a cell: its windows, small (the current one outlined) */
         wm_minimap(k, cx + 22, wy + 11, cx + cw - 5, wy + 35, on ? C_DIM : C_LINE, C_TXT);
         dl_frame(cx, wy + 6, cx + cw, wy + 40, 6, on ? 2 : 1, on ? C_ACC : C_LINE);
-        dl_text(cx + 6, wy + 9, d, 1, SS, on ? C_ACC : C_DIM, 0, 0, SW, SH);
+        dl_text(cx + 6, wy + 9, d, 1, SS, on ? C_ACCT : C_DIM, 0, 0, SW, SH);
         hitbox(cx, wy + 6, cx + cw, wy + 40, H_DBWS, k);
         if (atlas_debug) say("atlas: dbg ws %d at %d %d\n", k + 1, cx + cw / 2, wy + 23);
     }
@@ -617,7 +617,7 @@ static void draw_strip(void)
     dl_frame(x0, y0, x1, y1, 24, strip_on ? 2 : 1, strip_on ? C_ACC : C_LINE);
     hitbox(x0, y0, x1, y1, H_STRIP, 0);
     if (atlas_debug) say("atlas: dbg strip at %d %d\n", (x0 + x1) / 2, (y0 + y1) / 2);
-    bold(x0 + 24, y0 + 13, "sia", C_ACC, x1);
+    bold(x0 + 24, y0 + 13, "sia", C_ACCT, x1);
     int qx = x0 + 24 + tw(3, 2) + 24;
     dl_rect(qx - 12, y0 + 10, qx - 11, y1 - 10, 0, C_LINE);
     const char *net = port_find("net") > 0 ? "network" : "network: off";
@@ -626,7 +626,7 @@ static void draw_strip(void)
     if (query[0]) dl_text(qx, y0 + 13, query, strlen(query), S(2), C_TXT, x0, y0, nx - 20, y1);
     else label(qx, y0 + 13, strip_on ? "a file, an app, or a question" : "Ask sia, open a file, run an app...  Ctrl+Space", 2, C_DIM);
     if (strip_on) { int cw = tw(strlen(query), 2); dl_rect(qx + 2 + cw, y0 + 11, qx + 12 + cw, y0 + 35, 0, C_ACC); }
-    if (toast[0]) dl_text(x0 + 24, y1 + 6, toast, strlen(toast), S(2), C_ACC, 0, 0, x1, SH);
+    if (toast[0]) dl_text(x0 + 24, y1 + 6, toast, strlen(toast), S(2), C_ACCT, 0, 0, x1, SH);
     if (!strip_on || (!nres && !nfound)) return;
     int rx1 = x0 + 900 < x1 ? x0 + 900 : x1, y = y1 + 6, last = 0, h = 16;
     for (int i = 0; i < nres; i++) h += 46 + (res[i].kind != last ? 32 : 0), last = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
@@ -680,7 +680,7 @@ static void draw_prompt(void)
     dl_rect(x0, y0, x1, y1, 18, C_GLASS);
     dl_frame(x0, y0, x1, y1, 18, 2, C_ACC);
     label(x0 + 30, y0 + 26, pr.title, 2, C_TXT);
-    dl_rect(x0 + 30, y0 + 74, x1 - 30, y0 + 124, 10, C_BG);
+    dl_rect(x0 + 30, y0 + 74, x1 - 30, y0 + 124, 10, C_FIELD);
     dl_frame(x0 + 30, y0 + 74, x1 - 30, y0 + 124, 10, 2, C_ACC);
     label(x0 + 48, y0 + 88, pr.buf, 2, C_TXT);
     int cw = tw(strlen(pr.buf), 2);
@@ -714,7 +714,7 @@ static void build(void)
 {
     dl_reset();
     nhit = 0;
-    dl_grid(0, 0, 40, C_BG, 0x111829);
+    dl_grid(0, 0, 40, C_BG, C_GRID);
     if (mode == GREETER) { draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
     hitbox(0, 0, SW, SH, H_DESK, 0);                     /* (the desk itself: its menu) */
     tidy();
@@ -1093,6 +1093,12 @@ static void open_settings(void)
     show_win(W_SET);
     settle();
 }
+static void open_editor(void)                            /* the editor on its own: an empty, untitled tab */
+{
+    if (edit_new() < 0) { settle(); return; }
+    show_win(W_EDIT);
+    settle();
+}
 static void open_files(void)
 {
     if (!files_on) { files_open(home); files_on = 1; }
@@ -1113,7 +1119,7 @@ static void app_start(const char *path)
     app_field(f, "args", args, sizeof args);
     app_field(f, "kind", kind, sizeof kind);
     free(f);
-    if (!strcmp(kind, "editor")) { prompt_open("New file: its name?", 0); return; }
+    if (!strcmp(kind, "editor")) { open_editor(); return; }
     if (!strcmp(kind, "settings")) { open_settings(); return; }
     if (rn[0] != '/') { say("atlas: app %s: no program\n", nm); settle(); return; }
     long t = open_term(0);
@@ -1129,24 +1135,37 @@ static void app_start(const char *path)
 }
 int atlas_run_app(const char *path) { app_start(path); return 0; }
 
-static void new_file(const char *name)
+/* The editor's untitled tab: saved under this name, in the folder its
+ * tree shows (the home folder unless moved). */
+static void save_as(const char *name)
 {
     char path[160];
-    size_t k = strlcpy(path, home, sizeof path);
-    path[k++] = '/';
+    const char *dir = edit_dir()[0] ? edit_dir() : home;
+    size_t k = strlcpy(path, dir, sizeof path);
+    if (k && path[k - 1] != '/') path[k++] = '/';
     strlcpy(path + k, name, sizeof path - k);
     siefs_stat_t st;
-    long e = !atlas_may(home, 1) ? -EACCES : !fs_stat(path, &st, 1) ? -EEXIST : 0;
+    long e = !atlas_may(dir, 1) ? -EACCES : !fs_stat(path, &st, 1) ? -EEXIST : 0;
     if (!e) {
         long h = fs_open(path, FS_WRONLY | FS_CREAT | FS_EXCL, 0644);
         e = h < 0 ? h : 0;
         if (h >= 0) fs_close(h);
     }
     if (!e) fs_chown(path, uid, ugid);                   /* (created by root: it is the user's) */
-    say("atlas: new file %s (%ld)\n", name, e);
+    say("atlas: save as %s (%ld)\n", name, e);
+    if (e) { strlcpy(toast, e == -EEXIST ? "A file with that name exists." : "Cannot save it in this folder.", sizeof toast); settle(); return; }
+    edit_save_as(path);
     rescan();
-    if (e) { strlcpy(toast, e == -EEXIST ? "A file with that name exists." : "Cannot create it here.", sizeof toast); settle(); return; }
-    open_file(path);
+    settle();
+}
+void atlas_save_as(void)
+{
+    const char *d = edit_dir()[0] ? edit_dir() : home;
+    char t[48];
+    size_t n = strlcpy(t, "Save in ", sizeof t);
+    if (strlen(d) + n + 6 < sizeof t) { n += strlcpy(t + n, d, sizeof t - n); strlcpy(t + n, " as:", sizeof t - n); }
+    else strlcpy(t, "Save as: its name?", sizeof t);
+    prompt_open(t, 0);
 }
 
 static void ask_sia(const char *q)                       /* the assistant's window, then the question */
@@ -1170,7 +1189,7 @@ static void prompt_done(void)
     char *b = pr.buf;
     while (*b && b[strlen(b) - 1] == ' ') b[strlen(b) - 1] = 0;
     if (!good_name(b)) { say("atlas: prompt: bad name\n"); strlcpy(toast, "Use letters, digits, . _ - and spaces.", sizeof toast); settle(); return; }
-    new_file(b);
+    save_as(b);
 }
 
 /* ---- Menus. */
@@ -1280,7 +1299,7 @@ static void db_start(int act)                            /* start (or bring back
     case A_TERM: new_term(); return;
     case A_SIA: ask_sia(0); return;
     case A_FILES: open_files(); return;
-    case A_EDITOR: if (edit_active()) { show_win(W_EDIT); settle(); } else prompt_open("New file: its name?", 0); return;
+    case A_EDITOR: if (edit_active()) { show_win(W_EDIT); settle(); } else open_editor(); return;
     case A_SETTINGS: open_settings(); return;
     case A_PINS: if (!pins_on) { pins_open(); pins_on = 1; } show_win(W_PINS); settle(); return;
     }

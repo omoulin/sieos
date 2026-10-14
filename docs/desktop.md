@@ -71,7 +71,12 @@ What a window can be:
   terminal takes the size of its window, up to 132 x 60 characters, with
   500 lines of history (66 KiB per terminal, given back when it closes).
   Drag across the text to select it: it is copied at once.
-- **The editor**, laid out like a code editor. On the left, the
+- **The editor**, laid out like a code editor. Started on its own (the
+  Deskbar, the menu, an editor app), it opens on an empty **untitled**
+  tab, the tree at your home folder: nothing is asked until you save.
+  Ctrl+S on it asks for a name and saves it in the folder the tree shows
+  (yours, unless you moved up); a file opened while that tab is still
+  empty takes its place. On the left, the
   **Explorer**: the tree of your files, from your home folder (`..` shows
   the folder above); a click opens or closes a folder (`[+]` / `[-]`) or
   opens a file. On the right, the open files as **tabs** (up to 10): a
@@ -182,7 +187,7 @@ one filled), wrapped onto more rows when the window is narrow:
 | Section | What | Kept in |
 |---|---|---|
 | Screen | the size: 1280 x 720, 1366 x 768, 1600 x 900, 1920 x 1080, 2560 x 1440 where the screen can take any (QEMU's VGA and ramfb, the Pi 4, whose firmware scales the picture to the monitor). It changes at once and **goes back by itself after 15 s** unless you press *Keep*, so a monitor that cannot show it is never a dead end. A firmware's fixed screen (UEFI, the Pi 5) shows its size. | `/etc/display.conf` (the login screen too) |
-| Look | **Phosphor** (the default: a green monitor, with scanlines and glowing text), **Amber 1984** (amber, square corners, a grid of dots) or **Glass** (the desktop's own colours); the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% | `~/.look`, applied at your login (the login screen: Phosphor, 100%) |
+| Look | **Phosphor** (the default: a green monitor, with scanlines and glowing text), **Amber 1984** (amber, square corners, a grid of dots), **Glass** (the desktop's own colours) or **BeOS** (BeOS R5's colours: the blue desk, grey windows and panels, the yellow tab, black text, white fields and lists); the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% | `~/.look`, applied at your login (the login screen: Phosphor, 100%) |
 | Mouse | pointer speed (Slow, Normal, Fast, Faster), right- or left-handed buttons, the wheel normal or reversed | `~/.mouse`, applied at your login |
 | Assistant | sia's model: the one on this computer, or **online**, any service with an OpenAI-compatible API (server URL, model name, API key). A system setting: root's password is asked unless root is logged in. | `/etc/sia.conf`, the key in `/etc/sia.key` (root only) |
 
@@ -205,6 +210,13 @@ towards its corners, as a curved tube does (a vignette on the grid's
 pixels only: windows are untouched). Amber also squares the
 corners and draws the grid as dots. Nothing else in the desktop knows
 about looks, so icons, terminals and new windows follow by themselves.
+
+BeOS changes the colours themselves rather than how they reach the
+screen: the desktop draws in a **palette** (`pal[]` in `draw.c`; the
+`C_...` names in `atlas.h` are its entries, by role: the desk, a panel,
+an edge, the accent, text, text on the accent, the accent as text, where
+you type...). Phosphor, Amber and Glass share the dark palette; BeOS has
+its own (and corners of at most 3 pixels), shown as drawn, like Glass.
 Phosphor costs about 30% more per full frame than Glass (5.5 ms instead
 of 4.2 ms at 1920 x 1080 under QEMU on x86-64).
 
@@ -247,7 +259,7 @@ kind=terminal
 | `name` | what the strip and the menus show |
 | `run` | the program (absolute path) |
 | `args` | its arguments (one line) |
-| `kind` | `terminal`: runs in a new terminal; `editor`: asks for a file name and opens the editor; `settings`: opens Settings |
+| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings |
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
   Settings, Services, Hello, Fetch a web page, Disk benchmark. Yours are

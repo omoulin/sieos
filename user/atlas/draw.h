@@ -43,7 +43,12 @@ void dl_pointer(int x, int y);      /* where the mouse pointer is drawn (on top 
 void present(int x0, int y0, int x1, int y1);   /* draw this region of the picture on the screen (picture coordinates) */
 void present_pointer(int ox, int oy, int x, int y);   /* the pointer moved from (ox, oy): both places */
 /* The look (draw.c): how the picture's colours reach the screen. */
-enum { LOOK_PHOSPHOR, LOOK_AMBER, LOOK_GLASS, NLOOK };
+enum { LOOK_PHOSPHOR, LOOK_AMBER, LOOK_GLASS, LOOK_BEOS, NLOOK };
+/* The colours the desktop draws in (atlas.h's C_...): BeOS has its own,
+ * every other look the desktop's dark ones. */
+enum { PAL_BG, PAL_GLASS, PAL_LINE, PAL_ACC, PAL_TXT, PAL_DIM, PAL_BAR, PAL_TERM, PAL_TERMFG, PAL_ERR,
+       PAL_SEL, PAL_GRID, PAL_INK, PAL_PANEL, PAL_FIELD, PAL_GAP, PAL_ACCT, NPAL };
+extern uint32_t pal[NPAL];
 void draw_look(int look);
 int  draw_look_get(void);
 /* The zoom, 16.16: screen pixels per picture pixel (65536: 1:1). Then
