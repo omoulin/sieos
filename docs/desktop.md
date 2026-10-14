@@ -74,9 +74,11 @@ What a window can be:
 - **The editor**, laid out like a code editor. Started on its own (the
   Deskbar, the menu, an editor app), it opens on an empty **untitled**
   tab, the tree at your home folder: nothing is asked until you save.
-  Ctrl+S on it asks for a name and saves it in the folder the tree shows
-  (yours, unless you moved up); a file opened while that tab is still
-  empty takes its place. On the left, the
+  Ctrl+S on it asks for a name and saves it in the folder last clicked in
+  the tree, shown in bold (at first the tree's top, your home folder; a
+  click on `..` makes the folder above it the one); a file opened while
+  that tab is still empty takes its place. The tree is read again each
+  time the editor opens this way, so new folders show. On the left, the
   **Explorer**: the tree of your files, from your home folder (`..` shows
   the folder above); a click opens or closes a folder (`[+]` / `[-]`) or
   opens a file. On the right, the open files as **tabs** (up to 10): a

@@ -513,21 +513,29 @@ click(*latest("crumb", "-1"))                      # the path's first part: the 
 wait("atlas: files /: ")
 print(f"ok: Files listed the home folder; note.txt opened by a double-click, edited, saved ({got.strip()}); demo.c from the tree in a second tab; tabs shown and closed; Up; the path's / part")
 
-# ---- the editor on its own: an untitled tab, a name asked only when saved
+# ---- the editor on its own: an untitled tab, a name asked only when saved,
+# in the folder last clicked in its tree
+send("mkdir /home/alice/docs")                     # (as root: then given to alice)
+time.sleep(0.3)
+send("chown 1000 /home/alice/docs")
+time.sleep(0.5)
 click(*latest("dbapp", "Text editor"))
 wait("atlas: editing untitled")
 time.sleep(0.5)
 type_text("written before it had a name")
+click(*latest("etree", "docs"))
+wait("atlas: editor folder /home/alice/docs")
+time.sleep(0.3)
 keys("ctrl", "s")
-wait("atlas: prompt Save in /home/alice as:")
+wait("atlas: prompt Save in /home/alice/docs as:")
 type_text("later.txt\n")
 wait("atlas: save as later.txt (0)")
 wait("atlas: saved later.txt 28 bytes")
-send("cat /home/alice/later.txt")
+send("cat /home/alice/docs/later.txt")
 expect("written before it had a name")
 keys("ctrl", "w")                                  # (saved: closes at once, and the window with it)
 wait("atlas: editor closed later.txt")
-print("ok: the editor alone: an untitled tab in the home folder; Ctrl+S asked for a name, saved later.txt (28 bytes)")
+print("ok: the editor alone: an untitled tab; the docs folder clicked; Ctrl+S asked for a name, saved docs/later.txt (28 bytes)")
 
 # ---- Pins: the GPIO pins as sequencer tracks (simulated pins under QEMU)
 click(*latest("dbapp", "Pins"))

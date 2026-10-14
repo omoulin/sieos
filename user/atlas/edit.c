@@ -15,8 +15,9 @@
  *
  * Started on its own (the Deskbar, the menu, an editor app), it opens an
  * empty "untitled" tab, the tree at the home folder; Ctrl+S on it asks
- * for a name (atlas.c's name box) and saves it in the tree's folder. A
- * file opened while that tab is still empty and unchanged takes its place.
+ * for a name (atlas.c's name box) and saves it in the folder last clicked
+ * in the tree (in bold; at first the tree's top). A file opened while that
+ * tab is still empty and unchanged takes its place.
  *
  * The tree: a click opens or closes a folder ([+] / [-]), opens a file in
  * a tab (or shows its tab); ".." shows the folder above. It starts at the
@@ -63,6 +64,7 @@ static int msg_err;
 static struct { char name[48]; char path[160]; int depth, dir, open; } node[MAXN];
 static int nnode, tscroll, hide_tree;
 static char root[160], expd[MAXEXP][160];
+static char sdir[160];                   /* the folder last clicked: where an untitled file is saved ("": the root) */
 static int nexp;
 
 static int X0, Y0, X1, Y1, TX1, RX0, TY0, TY1, cols, rows;   /* where things were drawn */
@@ -71,7 +73,7 @@ int edit_active(void) { return ntab > 0; }
 int edit_dirty(void) { return ntab > 0 && tabs[act].dirty; }
 const char *edit_path(void) { return ntab ? tabs[act].path : ""; }
 const char *edit_name(void) { return ntab ? tabs[act].name : ""; }
-const char *edit_dir(void) { return root; }
+const char *edit_dir(void) { return sdir[0] ? sdir : root; }
 
 static tab_t *T(void) { return &tabs[act]; }
 static int bol(const tab_t *e, int p) { while (p > 0 && e->b[p - 1] != '\n') p--; return p; }
@@ -177,7 +179,7 @@ static void close_tab(int i)
     if (act > i || act >= ntab) act = act > 0 ? act - 1 : 0;
     msg[0] = 0;
 }
-void edit_close(void) { while (ntab) close_tab(ntab - 1); nexp = 0; root[0] = 0; nnode = 0; }
+void edit_close(void) { while (ntab) close_tab(ntab - 1); nexp = 0; root[0] = 0; sdir[0] = 0; nnode = 0; }
 int edit_close_window(void)                            /* the window's ×: 0 if a changed file held it */
 {
     for (int i = 0; i < ntab; i++)
@@ -209,7 +211,7 @@ int edit_new(void)
     act = ntab++;
     set_msg("", 0);
     set_root();
-    if (!nnode) build();
+    build();                                            /* (read again: folders made since show) */
     say("atlas: editing untitled\n");
     return 0;
 }
@@ -385,13 +387,13 @@ void edit_click(int arg, int x, int y)
     if (arg >= E_TREE && arg < E_TREE + MAXN) {
         int i = arg - E_TREE;
         if (i >= nnode) return;
-        if (node[i].dir) toggle(node[i].path);
+        if (node[i].dir) { strlcpy(sdir, node[i].path, sizeof sdir); toggle(sdir); say("atlas: editor folder %s\n", sdir); }
         else { char p[160]; strlcpy(p, node[i].path, sizeof p); edit_open(p); }
         return;
     }
     if (arg >= E_TAB && arg < E_TAB + NTAB) { if (arg - E_TAB < ntab) act = arg - E_TAB; return; }
     if (arg >= E_TABX && arg < E_TABX + NTAB) { ask_close(arg - E_TABX); return; }
-    if (arg == E_UP) { root_up(); return; }
+    if (arg == E_UP) { root_up(); strlcpy(sdir, root, sizeof sdir); say("atlas: editor folder %s\n", sdir); return; }
     if (arg != E_TEXT || !ntab) return;
     tab_t *e = T();                                     /* the text: the cursor where the click was */
     int r = (y - TY0) / KH, k = (x - (RX0 + 6 * KW + 8)) / KW;
@@ -507,8 +509,9 @@ static void tree_draw(int x0, int y0, int x1, int y1)
     const char *rn = root[1] ? base_name(root) : "/";
     char t[64], *p = t + strlcpy(t, ".. ", sizeof t);
     strlcpy(p, rn, sizeof t - 3);
+    int here = !sdir[0] || !strcmp(sdir, root);          /* (the folder a new file goes to: bold) */
     dl_text(x0 + 14, hy + 4, t, strlen(t), S(2), C_TXT, x0, hy, x1 - 6, hy + TROW);
-    dl_text(x0 + 15, hy + 4, t, strlen(t), S(2), C_TXT, x0, hy, x1 - 6, hy + TROW);
+    if (here) dl_text(x0 + 15, hy + 4, t, strlen(t), S(2), C_TXT, x0, hy, x1 - 6, hy + TROW);
     hitbox(x0, hy, x1, hy + TROW, H_ED, E_UP);
     if (atlas_debug) say("atlas: dbg etreeup at %d %d\n", x0 + 40, hy + TROW / 2);
     int ry = hy + TROW + 4, n = (y1 - ry - 4) / TROW;
@@ -529,6 +532,8 @@ static void tree_draw(int x0, int y0, int x1, int y1)
             tx = ix + 36;
         }
         dl_text(tx, y + 4, node[i].name, strlen(node[i].name), S(2), node[i].dir ? C_TXT : C_DIM, x0, y, x1 - 6, y + TROW);
+        if (node[i].dir && !strcmp(node[i].path, sdir))  /* (the folder a new file goes to: bold) */
+            dl_text(tx + 1, y + 4, node[i].name, strlen(node[i].name), S(2), C_TXT, x0, y, x1 - 6, y + TROW);
         hitbox(x0, y, x1, y + TROW, H_ED, E_TREE + i);
         if (atlas_debug) say("atlas: dbg etree %s at %d %d\n", node[i].name, tx + 20, y + TROW / 2);
     }
