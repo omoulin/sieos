@@ -1,7 +1,8 @@
 /* pins.c - a GPIO program as a user writes one (gpio.h), built on SIEOS by
  * cc and run by tools/gpiotest.py: outputs read back, an input's pull, a
  * device's pin refused, a pattern played by the server (it loops, it
- * stops). On a machine without GPIO the server simulates the pins.
+ * stops), the self-check (every free pin passes, each put back as it was).
+ * On a machine without GPIO the server simulates the pins.
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only */
 #include "mk.h"
 #include "gpio.h"
@@ -31,6 +32,8 @@ int main(void)
     int at = gpio_playing(&rounds);
     printf("playing step %d, %u rounds\n", at, rounds);
     check("it is playing, and looped", at >= 0 && at < 4 && rounds >= 2);
+    uint8_t res[GPIO_PINS];
+    check("no self-check while it plays", gpio_selftest(res) == -EBUSY);
     uint32_t rec[4];
     int nr = gpio_record(rec, 4), all = nr == 4;
     for (int i = 0; i < nr; i++) if (!real && !(rec[i] >> 27 & 1)) all = 0;   /* (27: an input, pulled up) */
@@ -39,6 +42,16 @@ int main(void)
     gpio_state(st);
     check("its pins are outputs", st[17].mode == GPIO_OUT && st[18].mode == GPIO_OUT);
     check("it stops", gpio_stop() == 0 && gpio_playing(0) == -1);
+    gpio_write(17, 1);                                   /* (17: an output at 1; 27: an input, pulled up) */
+    gpio_pin_t before[GPIO_PINS], after[GPIO_PINS];
+    gpio_state(before);
+    int bad = gpio_selftest(res), done = 0, all = 1;
+    for (int p = 0; p < GPIO_PINS; p++) { done += res[p] != 0; if (res[p] && res[p] != GPIO_CHK_ALL) all = 0; }
+    printf("self-check: %d pins, %d failed\n", done, bad);
+    check("the self-check passes (nothing wired)", bad == 0 && all && done >= 20);
+    check("it skipped the console's pins and I2C's", !res[14] && !res[15] && !res[2] && !res[3]);
+    gpio_state(after);
+    check("every pin put back as it was", !memcmp(before, after, sizeof before) && gpio_read(17) == 1);
     printf(fails ? "gpio test: FAIL\n" : "gpio test: ok\n");
     return fails != 0;
 }

@@ -42,6 +42,10 @@ kernel=kernel8.img
 initramfs sieos.mod 0x02000000
 # the debug serial port (the 3-pin "UART" connector), 115200 bit/s: SIEOS's console
 enable_uart=1
+# keep the PCIe link to the RP1 chip as the firmware set it up (by default it
+# is reset before the kernel starts): SIEOS reaches RP1's GPIO, Ethernet and
+# USB through it, and does not bring the link up itself
+pciex4_reset=0
 # the frame buffer the firmware sets up and describes for SIEOS
 framebuffer_width=1920
 framebuffer_height=1080

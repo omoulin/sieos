@@ -34,4 +34,5 @@ int  gpio_play(uint32_t mask, const uint32_t *steps, int n, uint32_t step_us, in
 int  gpio_stop(void);
 int  gpio_playing(uint32_t *rounds);                 /* -> the step being played, or -1 */
 int  gpio_record(uint32_t *levels, int max);          /* the levels at each step as played (bit p: pin p) -> steps */
+int  gpio_selftest(uint8_t res[GPIO_PINS]);          /* nothing wired: checks the free pins (GPIO_CHK_... each) -> pins failed */
 void sleep_ms(long ms);

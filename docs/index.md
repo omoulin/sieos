@@ -10,7 +10,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [kernel.md](kernel.md) | the guided tour: boot, messages, every server, crashes, on-demand servers, CPUs and time |
 | [arch.md](arch.md) | the portable core and its architectures: the interface, x86-64, AArch64 (QEMU `virt`) |
 | [raspberrypi.md](raspberrypi.md) | the Raspberry Pi 4 and 5: card images, serial console, what to check on real boards |
-| [gpio.md](gpio.md) | the Raspberry Pi's pins: the GPIO server, the C library (`gpio.h`), `/bin/gpio`, patterns |
+| [gpio.md](gpio.md) | the Raspberry Pi's pins (Pi 4; Pi 5 through RP1): the GPIO server, the C library (`gpio.h`), `/bin/gpio`, patterns, the self-check |
 | [usb.md](usb.md) | a PC from a USB key: the UEFI loader, the key image, writing it safely, the key as SIEOS's disk |
 | [usb-stack.md](usb-stack.md) | the USB stack: xHCI, hubs, USB disks (SCSI), keyboards and mice, hotplug, the Pi glue still to check |
 | [siefs.md](siefs.md) | SieFS, the file system: disk layout, commits, checksums, attributes, encryption plan |
