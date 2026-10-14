@@ -55,9 +55,10 @@ def copy_sparse(src, dst, offset):
                 end = os.lseek(fd, pos, os.SEEK_HOLE)
             except OSError:                       # (no more data)
                 break
-            f.seek(pos)
-            while pos < end:
-                chunk = f.read(min(1 << 20, end - pos))
+            while pos < end:                      # (pread: lseek above moved the file's position under
+                chunk = os.pread(fd, min(1 << 20, end - pos), pos)   # a buffered read, which then read the wrong place)
+                if not chunk:
+                    break
                 if chunk.strip(b"\0"):
                     dst.seek(offset + pos); dst.write(chunk)
                 pos += len(chunk)

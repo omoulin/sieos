@@ -119,7 +119,11 @@ wait("atlas: first start: accounts needed (setup on the screen)")
 wait("atlas: greeter")
 t_screen = time.time() - t0
 px = shot("usb-01-welcome")
-if px.count(bytes.fromhex("0a0f1c")) < 100000:
+# the desk's navy (0a0f1c) as the welcome screen's Phosphor look shows it on a
+# row that is not a scanline (draw.c's draw_look; guitest.py's look())
+v = min(255, ((0x0a * 77 + 0x0f * 150 + 0x1c * 29) >> 8) * 5 // 4)
+desk = bytes(c * v // 255 for c in (0x46, 0xff, 0x7a))
+if px.count(desk) < 100000:
     fail("the welcome screen does not look right")
 print(f"ok: UEFI boot from the key ({disk}): kernel after {t_kernel:.2f} s, welcome screen after {t_screen:.2f} s ({got})")
 type_text("rootpass1\trootpass1\n"); wait("atlas: setup: step 2")

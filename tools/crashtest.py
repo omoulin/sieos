@@ -75,6 +75,16 @@ def svc():
     text = run("svc")
     return {m[0]: (m[1], int(m[2]), int(m[3])) for m in re.findall(r"\n(\w+)\s+(running|waiting|GIVEN UP|stopped)\s+(\d+)\s+(\d+)", text)}
 
+def svc_pid(name, tries=10):
+    """The pid of a service, asking svc again if its row came out garbled
+    (a log line in the middle of it: see restarted)."""
+    for _ in range(tries):
+        s = svc().get(name)
+        if s:
+            return s[1]
+        time.sleep(0.5)
+    fail(f"svc did not list {name}")
+
 def restarted(name, old, timeout=10):
     """Poll svc until the service runs again with a new pid. (Kernel log
     lines and the console share the serial port, so their characters may
@@ -136,7 +146,7 @@ print("ok: fsloop through 3 restarts: " + m.group(0).decode().strip())
 sync()
 
 # ---- the console, killed while the shell waits for a line
-pid = svc()["con"][1]
+pid = svc_pid("con")
 send(f"kill {pid}")
 time.sleep(SLOW * 0.3)
 restarted("con", pid)
@@ -152,7 +162,7 @@ send("exit"); expect("# ")
 print("ok: auth restarted; this session went on; su alice works")
 
 # ---- login killed with this session open: no new prompt until it ends
-pid = svc()["login"][1]
+pid = svc_pid("login")
 send(f"kill {pid}")
 time.sleep(SLOW * 0.5)
 state = svc()["login"][0]
@@ -173,7 +183,7 @@ print(f"ok: crasher given up after {s[2]} restarts (backoff 10, 20, 40, 80 ms)")
 sync()
 send("svc add -w hangme hanger /bin/crash always hang hangme")
 time.sleep(SLOW * 0.3)
-first = svc()["hanger"][1]
+first = svc_pid("hanger")
 t0 = time.time()
 again = restarted("hanger", first, 60)           # (pinged every 10 s; stuck after 30 s without an answer)
 took = time.time() - t0
@@ -183,7 +193,7 @@ if took < 25:
 print(f"ok: a stuck server (pid {first}) found by init's pings after {took:.0f} s, ended and started again (pid {again})")
 
 # ---- a user may not kill root's processes
-fs_pid = svc()["fs"][1]
+fs_pid = svc_pid("fs")
 send("logout")                          # the session ends: now login comes back
 login("alice", "alicepass1", "$ ", restarted=True)
 sync("$ ")
