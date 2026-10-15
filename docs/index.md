@@ -22,3 +22,4 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [ai-plan.md](ai-plan.md) | the AI plan: the 4 GB budget, CPU / NVIDIA / online backends |
 | [python-plan.md](python-plan.md) | the Python plan: MicroPython first, then the POSIX layer and CPython |
 | [cc.md](cc.md) | sicc, the C compiler: x86-64 and AArch64, optimizer, assembler, linker, tests |
+| [make.md](make.md) | `/bin/make` on SIEOS: what it supports, the demo projects, `sh -c`, tests |

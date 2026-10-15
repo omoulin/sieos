@@ -37,7 +37,7 @@ UCORE   := crt0 lib                     # in every program
 ULIBOBJ := fs acct tty fmt string fdt virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 pubkey net http tls x509   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
-BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio   # programs on the disk, in /bin
+BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make   # programs on the disk, in /bin
 LINKS   := passwd su useradd userdel    # other names of /bin/acct (symbolic links)
 SIEFS_CORE := crc tree space fs         # the SieFS library, linked into the file server
 
@@ -187,8 +187,11 @@ $(FPU_PROGS:%=$(B)/user/%.o): UCFLAGS := $(filter-out -mgeneral-regs-only,$(UCFL
 DISK    ?= 3G
 TESTDISK ?= 64M
 ROOTFS  := $(shell find rootfs -type f)
-$(B)/rootfs.stamp: $(ROOTFS) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB)
-	rm -rf $(B)/rootfs && mkdir -p $(B)/rootfs && cp -R rootfs/. $(B)/rootfs/
+# SIEOS's own programs that SIEOS builds itself (make + cc): their sources
+# in /src/sieos, next to its Makefile (rootfs/src/sieos, docs/make.md)
+SELF_SRC := $(foreach p,hello sh make,user/$(p)/$(p).c)
+$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB)
+	rm -rf $(B)/rootfs && mkdir -p $(B)/rootfs && cp -R rootfs/. $(B)/rootfs/ && cp $(SELF_SRC) $(B)/rootfs/src/sieos/
 	mkdir -p $(B)/rootfs/bin $(B)/rootfs/home $(B)/rootfs/tmp
 	mkdir -p $(B)/rootfs/lib/sicc/include/mk && cp cc/include/*.h user/lib/mk.h user/lib/gpio.h siefs/siefs.h $(B)/rootfs/lib/sicc/include/ && \
 	    cp include/mk/*.h $(B)/rootfs/lib/sicc/include/mk/ && cp $(SICC_LIB) $(B)/rootfs/lib/sicc/
@@ -332,6 +335,13 @@ cc-sieos-test: all
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	for f in tests/cc/sieos/*.c; do $(B)/host/siefs $(B)/test.img put $$f /tmp/t/$$(basename $$f) || exit 1; done
 	python3 tools/cctest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+# make-test: make on SIEOS (/bin/make, docs/make.md) builds /src/hello-make and
+# SIEOS's own hello, sh and make with /bin/cc there (tools/maketest.py)
+make-test: all
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
+	$(B)/host/siefs $(B)/test.img put tests/make/fail.mk /tmp/t/fail.mk
+	python3 tools/maketest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 demand-test: all
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /models && $(B)/host/siefs $(B)/test.img put models/$(SIATEST_MODEL) /models/$(SIATEST_MODEL)
@@ -343,7 +353,7 @@ clean:
 distclean:
 	rm -rf $(B)
 
-.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test gfxhat-test sia-test sia-mem-test demand-test model clean distclean newdisk FORCE
+.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test gfxhat-test sia-test sia-mem-test demand-test make-test model clean distclean newdisk FORCE
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.

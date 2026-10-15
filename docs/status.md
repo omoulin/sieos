@@ -20,7 +20,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sia-test`, `demand-test`, `net-test` (both
+`kernel-test`, `sia-test`, `demand-test`, `net-test`, `make-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -33,7 +33,7 @@ checklist in [raspberrypi.md](raspberrypi.md).
 - The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
   Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
 - The Pis: USB input, Ethernet, faster SD; running on the real boards.
-- A `make` for SIEOS (sicc runs there now: `/bin/cc`), encryption, snapshots.
+- Encryption, snapshots.
 
 ## History
 
@@ -65,3 +65,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
   214 instructions to 15) and runs on SIEOS itself: `/bin/cc`, with SIEOS's
   headers and library in `/lib/sicc` ([cc.md](cc.md)); a program starts in
   its parent's current folder.
+- **2026-10-15.** `/bin/make`: POSIX make with GNU make's common additions
+  (pattern and suffix rules, `:=` `?=` `+=`, functions, `include`, `-n -k
+  -s -B -C -f`), recipes run by `sh -c`; `/src/hello-make` and SIEOS's own
+  hello, sh and make built on SIEOS by make and `/bin/cc` ([make.md](make.md));
+  the shell gets `-c`, `cp`, `touch`, `rm -f`; file times never go back.
