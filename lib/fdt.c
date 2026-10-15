@@ -108,6 +108,16 @@ int fdt_find(const void *f, int after, const char *compat)
     return -1;
 }
 
+int fdt_phandle(const void *f, uint32_t ph)
+{
+    int d = 0, len;
+    for (int n = fdt_next(f, -1, &d); n >= 0; n = fdt_next(f, n, &d)) {
+        const void *p = fdt_prop(f, n, "phandle", &len);
+        if (p && len == 4 && fdt_be32(p) == ph) return n;
+    }
+    return -1;
+}
+
 int fdt_path(const void *f, const char *path)
 {
     int d = 0, n = fdt_next(f, -1, &d), want = 1;          /* n: the root */

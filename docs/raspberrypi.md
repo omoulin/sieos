@@ -19,7 +19,8 @@ real board yet).
 | Disk | SD card: SDHCI driver in the disk server (`user/vblk/sd.c`): ADMA2 DMA (64- or 32-bit descriptors), interrupts, High Speed, UHS-I (SDR50, DDR50, SDR104 with tuning) at 1.8 V when the board allows it; SieFS partition (MBR type `0x5E`) | PIO, interrupts and High Speed tested on `raspi4b`; ADMA2, interrupts and High Speed tested on QEMU's `virt` (a PCI SD controller); UHS-I and the 1.8 V switch: **untested** (QEMU has no regulators): checks 24-29 |
 | Screen | Pi 4: frame buffer from the firmware (mailbox); Pi 5: the firmware's `simple-framebuffer` | Pi 4: tested |
 | Keyboard, mouse | USB: **not supported yet** | the screen shows a notice; log in on the serial console |
-| Network | Pi 4: GENET Ethernet (`user/vnet/genet.c`); Pi 5: RP1's GEM over PCIe (`user/vnet/gem.c`, polled); DHCP again when a cable is plugged in | **written, untested on hardware** (QEMU has neither): checks 16-23 below |
+| Ethernet | Pi 4: GENET (`user/vnet/genet.c`); Pi 5: RP1's GEM over PCIe (`user/vnet/gem.c`, polled); DHCP again when a cable is plugged in | **written, untested on hardware** (QEMU has neither): checks 16-23 below |
+| Wi-Fi | the CYW43455 on SDIO (`user/wifi`, both boards): open and WPA2-PSK, a second network interface; Settings > Network, or `/bin/wifi` | **written, untested on hardware** (QEMU has no SDIO card or chip): checks 33-40 below |
 | GPIO | the 40-pin header's pins through `/bin/gpiod` ([gpio.md](gpio.md)): Pi 4: the BCM2711 GPIO block; Pi 5: RP1's GPIO over PCIe (bank 0: `IO_BANK0`, `SYS_RIO0`, `PADS_BANK0`) | simulated pins tested (`make gpio-test`); both boards: **untested on hardware**: `gpio selftest`, checks 30-32 |
 | Assistant | the local model with NEON kernels; `sdot` on the Pi 5 (the kernel reports it), plain NEON on the Pi 4 | emulated: tested; estimates in [llm.md](llm.md) |
 | Power off, restart | Pi 4: the power manager's watchdog (halt partition); Pi 5: PSCI | Pi 4: tested |
@@ -88,6 +89,15 @@ The image holds two partitions:
 
 Without `FIRMWARE=`, the image is made anyway and lists the missing files:
 copy them onto the card's first partition by hand after writing it.
+
+**The Wi-Fi chip's firmware** (for the CYW43455) is fetched once and copied
+onto the card's SieFS partition, into `/lib/firmware/brcm/`
+(`brcmfmac43455-sdio.bin`, `.clm_blob` and the nvram `.txt`), by `make
+sdcard` itself. It is the Raspberry Pi's, under its own licence, from the
+RPi-Distro `firmware-nonfree` repository at a pinned commit
+([net.md](net.md) lists the exact files and URLs); it is not part of SIEOS.
+If the fetch failed (no network at build time), Ethernet still works but
+Wi-Fi reports the firmware missing; re-run `make sdcard` with a network.
 
 The assistant's model is not on the card by default: add `SDMODEL=1` to
 copy `models/$(PIMODEL)` into `/models` on the card's SieFS partition.
@@ -160,6 +170,7 @@ vblk: SD card disk, ... MiB (SieFS partition)
 usb: Pi 4 PCIe link up (status ...)            (Pi 4: SIEOS starts the PCIe bridge itself)
 usb: xHCI VL805 xHCI (Raspberry Pi 4), ... ports, interrupts
 atlas: screen: Raspberry Pi firmware          (Pi 5: firmware frame buffer)
+wifi: CYW43455 (chip 4345 rev ...), ... KiB RAM  (the Wi-Fi chip; then "ready, MAC ...")
 usb: port ...: ... keyboard/mouse             (one line per keyboard or mouse plugged in)
 ```
 
@@ -325,8 +336,17 @@ http://example.com`): `vnet` and `netd` start on demand.
     (Pi 5: `GEM r... (Raspberry Pi 5, RP1), PHY ... at 1, polled`). The MAC
     should be the one printed on the board's label / by other systems; the
     PHY identifier should be `600d:84a2` (BCM54213PE). `ffff:ffff` or
-    `0000:0000` means MDIO does not reach the PHY (wrong address, or on the
-    Pi 5 RP1's Ethernet clock or the PHY's reset line is off: report it).
+    `0000:0000` means MDIO does not reach the PHY. Just before it, a line
+    says more: `vnet: GENET at fe580000: MAC from the device tree,
+    rgmii-rxid, RGMII control ..., DMA below 4 GiB` (Pi 4), or `vnet: GEM at
+    1f00100000: MAC from the device tree, rgmii-id, design ..., RP1 Ethernet
+    clock ..., our memory at +1000000000` (Pi 5). On the Pi 5, if you see
+    `vnet: RP1's PCIe link is down` or `... does not answer ...`, the
+    firmware reset RP1: check `pciex4_reset=0` is in `config.txt`. `vnet:
+    RP1's Ethernet clock was off ...` and `vnet: PHY reset ...` are normal
+    (SIEOS turning them on). If no PHY answers at the device tree's address,
+    `vnet: ... no PHY answers on MDIO ...` (and it tries every address):
+    report the whole block.
 17. Within a few seconds: `vnet: link up, 1000 Mb/s full duplex` (or 100,
     on a slower switch), then `netd: link up` and
     `netd: 192.168.x.y/24, gateway ..., DNS ...` (the DHCP lease).
@@ -343,10 +363,46 @@ http://example.com`): `vnet` and `netd` start on demand.
     tree; `phy_delays` in `user/vnet/vnet.c`). If frames arrive but are
     garbled only on the Pi (not the switch), report it: the cache handling
     (`dma_sync`) is the first suspect.
-23. Pi 5: whether the firmware leaves RP1's Ethernet clocked and its PHY
-    out of reset (if MDIO reads `ffff:ffff`, it does not; SIEOS does not
-    drive RP1's clocks, nor its GPIO bank 1, where the PHY's reset line
-    is: only bank 0, the header's).
+23. Pi 5: SIEOS now turns RP1's Ethernet clock on and pulses the PHY's
+    reset line itself. If MDIO still reads `ffff:ffff`, report the `vnet:
+    GEM ...` block and the two lines before it: the clock source or the
+    reset GPIO may be wrong. The Pi 5's Ethernet is polled (no MSI-X yet),
+    so latency is a little higher under load.
+
+**Wi-Fi (both boards; untested)**: the firmware files must be on the card
+(`make sdcard` puts them there, see above). Settings > Network, or
+`/bin/wifi`: `wifi scan`, `wifi join "<name>" <passphrase>` (as root; an
+open network: no passphrase), `wifi` for the state, `wifi forget`.
+
+33. At boot, `wifid` starts. It prints the controller and the chip:
+    `wifi: mmcnr@7e300000 at ..., SDIO 4-bit high speed 50000 kHz, card
+    interrupt` then `wifi: CYW43455 (chip 4345 rev ...), ... KiB RAM at
+    198000`. `wifi: no Wi-Fi SDIO controller ...` means the device-tree
+    node was not found; `wifi: the chip did not answer CMD5` means the
+    SDIO card did not come up (pins or WL_ON); report which.
+34. `wifi: firmware loaded (... bytes, nvram ... bytes)` then `wifi:
+    ready, MAC ...`. `wifi: the firmware is missing ...` means the files
+    are not in `/lib/firmware/brcm/` (rebuild the card with a network).
+    `wifi: the chip's HT clock did not come up` means the firmware did not
+    start: report the lines around it.
+35. `wifi scan`: a list of networks with their signal (dBm) and security
+    (open / WPA2). An empty list where you expect networks: report it.
+36. `wifi join "<name>" <passphrase>` (WPA2), then `wifi` shows
+    `state: connected` within a few seconds, and the console shows `wifi:
+    link up`, `netd: using wifi (Wi-Fi)` and a DHCP lease. A wrong
+    passphrase: it stays `joining` then `failed`; report what `wifi` says.
+37. With the cable unplugged, the network goes over Wi-Fi: `ping`, `fetch
+    http://example.com`, `fetch https://example.com` (no clock chip, so the
+    certificate dates are not checked). Plug a cable in: netd switches to it
+    (`netd: using nic0`); unplug it: back to Wi-Fi.
+38. The passphrase is kept in `/etc/wifi.conf` (root only, mode 600); after
+    `poweroff` and a fresh boot, the Pi rejoins the network on its own.
+39. Speed over Wi-Fi: `fetch -o /tmp/x http://<a machine>/<a big file>` and
+    the time. (The SDIO data path is PIO, a word at a time: expect modest
+    throughput; report it so a DMA path can be judged worth writing.)
+40. If a scan or a join hangs, or frames are lost, report the `wifi:` lines:
+    the whole SDIO/BCDC path is untested. The desktop's Settings blocks for
+    the few seconds a scan takes; that is expected.
 
 **SD card speed (both boards)**
 
@@ -453,8 +509,10 @@ The Pis' devices do not see the processors' caches (QEMU's do), so:
 - USB on the Pi 5 (the RP1 chip behind PCIe). On the Pi 4 the PCIe bridge
   and the VL805 USB chip are started by SIEOS (as Linux's pcie-brcmstb
   does): written, untested on a board yet.
-- Wi-Fi, Bluetooth. (Ethernet: written, untested on hardware, see above.)
+- Bluetooth. (Ethernet and Wi-Fi: written, untested on hardware, see above.)
 - RP1's interrupts (MSI-X): the Pi 5's Ethernet is polled.
 - eMMC (Compute Modules): the card identification is the SD one; eMMC's
-  (CMD1, HS200) is not written. The Pi 4's Wi-Fi SDIO.
+  (CMD1, HS200) is not written.
+- Wi-Fi is open and WPA2-PSK only (no WPA3/enterprise/WEP), one network at
+  a time, and its SDIO data path is PIO (no DMA): modest throughput.
 - A real-time clock (the time shown is from boot).

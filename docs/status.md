@@ -32,7 +32,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
   compaction ([sia.md](sia.md)).
 - The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
   Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
-- The Pis: USB input, Ethernet, faster SD; running on the real boards.
+- The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
+  written but untested there, [raspberrypi.md](raspberrypi.md)).
 
 ## History
 

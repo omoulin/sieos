@@ -276,7 +276,7 @@ int main(int argc, char **argv)
         if (from <= 0) r = -EINVAL;                     /* (no interrupts arrive on this port) */
         else if (!ok) r = -EIO;
         else switch (m.w[0]) {
-        case DISK_INFO:  r = nblocks; break;
+        case DISK_INFO:  r = nblocks; break;      /* (w[1] below: which SD controller, for wifid) */
         case DISK_READ:
             if (!n || bytes > DISK_MAX || blk + n > nblocks) r = -EINVAL;
             else if (!(r = io(T_IN, blk, bytes))) out = data;
@@ -288,7 +288,11 @@ int main(int argc, char **argv)
         case DISK_FLUSH: r = has_flush || backend != B_VIRTIO ? io(T_FLUSH, 0, 0) : 0; break;
         default:         r = -ENOSYS;
         }
-        m = (msg_t){ .w = { r }, .sbuf = out, .slen = out ? bytes : 0, .rbuf = data, .rlen = DISK_MAX };
+        uint64_t w1 = 0;
+#if defined(__aarch64__)
+        if (m.w[0] == DISK_INFO && backend == B_SD) w1 = sd_where();
+#endif
+        m = (msg_t){ .w = { r, w1 }, .sbuf = out, .slen = out ? bytes : 0, .rbuf = data, .rlen = DISK_MAX };
         from = from > 0 ? ipc_reply_recv(from, port, &m) : ipc_recv(port, &m);
     }
 }

@@ -481,8 +481,12 @@ static int try_controller(const char *f, int n, int emmc2, uint64_t a, uint64_t 
     return 0;
 }
 
+static uint64_t where;                       /* the controller in use (its physical address) */
+uint64_t sd_where(void) { return where; }
+
 static void report(const char *what, uint64_t a)
 {
+    where = a;
     printf("vblk: %s at %lx: SD card (%s), %d-bit, %s at %u kHz%s, %s, %s; caps %08x %08x\n",
            what, (unsigned long)a, hc ? "high capacity" : "standard capacity", wide ? 4 : 1,
            modes[mode].name, clk_khz, v18 ? " (1.8 V)" : "",

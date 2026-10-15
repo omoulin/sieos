@@ -71,6 +71,7 @@ extern int  clip_n;
 
 /* ---- The login screen (atlas.c) and the first start on the screen (setup.c). */
 long atlas_auth(msg_t *m);                            /* a request to the accounts server */
+long atlas_wifi(msg_t *m);                            /* a request to the Wi-Fi server, -ENOENT if none */
 void greeter_check(void);                             /* first start or not; tell auth */
 void greeter_login(const char *name, const char *pw); /* log in (wipes nothing: the caller does) */
 void setup_draw(void);

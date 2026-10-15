@@ -243,6 +243,32 @@ int nic_fw_mac(uint8_t mac[6])
     return mac[0] | mac[1] | mac[2] ? 0 : -1;
 }
 
+int phy_addr_dt(const void *f, int mac_node, int dflt)
+{
+    int len, n;
+    const void *h = fdt_prop(f, mac_node, "phy-handle", &len);
+    if (!h || len != 4 || (n = fdt_phandle(f, fdt_be32(h))) < 0) return dflt;
+    const void *r = fdt_prop(f, n, "reg", &len);
+    return r && len == 4 && fdt_be32(r) < 32 ? (int)fdt_be32(r) : dflt;
+}
+
+int phy_probe(const mdio_t *m, int *addr, int *id1, int *id2)
+{
+    int want = *addr;
+    for (int a = -1; a < 32; a++) {              /* the expected address first, then all of them */
+        if (a == want) continue;
+        *addr = a < 0 ? want : a;
+        *id1 = m->rd(PHY_ID1); *id2 = m->rd(PHY_ID2);
+        if (*id1 > 0 && *id1 < 0xFFFF) {
+            if (*addr != want) printf("vnet: no PHY at MDIO address %d; one answers at %d\n", want, *addr);
+            return 0;
+        }
+    }
+    *addr = want;
+    *id1 = m->rd(PHY_ID1); *id2 = m->rd(PHY_ID2);
+    return -1;
+}
+
 /* Auto-negotiation: advertise everything, restart it. */
 void phy_start(const mdio_t *m)
 {
@@ -365,6 +391,7 @@ int main(int argc, char **argv)
     char what[96];
     for (size_t i = 0; i < sizeof cards / sizeof cards[0] && !card; i++)
         if (!cards[i]->setup(&info, what, sizeof what)) card = cards[i];
+    info.link = card && card->link ? 0 : -1;      /* (a cable: down until the watcher sees it up) */
     info.rtc = rtc_now();
     info.rtc_ns = sys_clock();
 #if defined(__aarch64__)

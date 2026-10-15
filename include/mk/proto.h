@@ -50,7 +50,8 @@ enum { KEY_UP = 0x101, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_PGUP, KEY_PGDN, KEY_HO
 #define DISK_BS  4096
 #define DISK_MAX (128 << 10)
 enum {
-    DISK_INFO = 1,  /*                                   -> number of 4 KiB blocks */
+    DISK_INFO = 1,  /*                    -> number of 4 KiB blocks; reply w[1] = the SD
+                       controller's physical address when the disk is an SD card (0: not) */
     DISK_READ,      /* w[1] = first block, w[2] = count; data comes in rbuf -> 0  */
     DISK_WRITE,     /* w[1] = first block, w[2] = count; data in sbuf       -> 0  */
     DISK_FLUSH,     /* make every write so far durable                      -> 0  */
@@ -265,10 +266,10 @@ enum {
     NET_RESOLVE,    /* sbuf = host name, w[3] = timeout -> 0; reply w[1] = address */
     NET_PING,       /* w[1] = address, w[3] = timeout             -> round trip in µs */
     NET_INFO,       /* rbuf <- net_info_t                                         -> 0 */
-    NET_FRAMES,     /* (from the network driver) sbuf = frames received, each a 16-bit
-                       length then the frame                                     -> 0 */
+    NET_FRAMES,     /* (from a network driver) w[1] = its interface (NET_IF_...); sbuf =
+                       frames received, each a 16-bit length then the frame                                     -> 0 */
     NET_TICK,       /* (netd's own timer thread)                       -> ns to wait */
-    NET_LINK,       /* (from the network driver) w[1] = 1: the cable's link came up
+    NET_LINK,       /* (from a network driver) w[2] = its interface; w[1] = 1: the link came up
                        (netd asks DHCP again), 0: it went down               -> 0 */
 };
 typedef struct {
@@ -301,7 +302,33 @@ typedef struct {
     int64_t rtc;                               /* the clock chip's time at boot: seconds since
                                                   1970, read when the driver started ... */
     int64_t rtc_ns;                            /* ... at this time (ns since boot) */
+    int32_t link, _pad;                        /* 1 up, 0 down, -1 no link to watch (virtio) */
 } nic_info_t;
+/* netd's interfaces: the cable (vnet, port "nic0") and Wi-Fi (wifid, port
+ * "wifi", which also answers NIC_INFO and NIC_SEND). netd uses one at a
+ * time: the cable when its link is up, else Wi-Fi when it is associated. */
+enum { NET_IF_ETH, NET_IF_WIFI };
+
+/* The Wi-Fi server, port "wifi" (/bin/wifid; the command: /bin/wifi;
+ * docs/net.md). The Raspberry Pis' CYW43455. Reply: w[0] = result or -error. */
+#define WIFI_MAXNET 32
+enum {
+    WIFI_STATUS = 0x40, /* rbuf <- wifi_status_t                                   -> 0 */
+    WIFI_SCAN,      /* look for networks (a few seconds); rbuf <- wifi_net_t[]   -> how many */
+    WIFI_JOIN,      /* (root) sbuf = "ssid\0passphrase" (empty: an open network): saved in
+                       /etc/wifi.conf (root only) and joined; see WIFI_STATUS  -> 0 */
+    WIFI_FORGET,    /* (root) leave the network, forget it                       -> 0 */
+    WIFI_RXWAIT,    /* (wifid's own delivery thread)                              */
+};
+enum { WIFI_OFF, WIFI_IDLE, WIFI_SCANNING, WIFI_JOINING, WIFI_UP, WIFI_FAILED };
+enum { WIFI_OPEN, WIFI_WPA2, WIFI_OTHER };     /* security, as WIFI_SCAN sees it */
+typedef struct {
+    int32_t state, rssi, channel, security;    /* rssi in dBm (when up) */
+    char ssid[33], why[63];                    /* why: the last failure, in words */
+    uint8_t mac[6], bssid[6];
+    char fw[64];                               /* the chip and its firmware */
+} wifi_status_t;
+typedef struct { char ssid[33]; uint8_t bssid[6], channel; int16_t rssi; uint8_t security, _pad[3]; } wifi_net_t;
 
 /* The GPIO server, port "gpio" (/bin/gpiod; the library: user/lib/gpio.h).
  * Pins are numbered as the chip does (a Raspberry Pi's BCM numbers, 0..27 on

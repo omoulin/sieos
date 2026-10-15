@@ -21,6 +21,7 @@ const char *fdt_name(const void *fdt, int node);        /* "virtio_mmio@a000000"
 const void *fdt_prop(const void *fdt, int node, const char *name, int *len);
 int fdt_compatible(const void *fdt, int node, const char *compat);   /* 1 if it is one */
 int fdt_find(const void *fdt, int after, const char *compat);        /* the next such node, or -1 */
+int fdt_phandle(const void *fdt, uint32_t ph);           /* the node whose "phandle" is ph, or -1 */
 int fdt_path(const void *fdt, const char *path);        /* "/chosen", "/psci" (unit address
                                                            optional: "/memory" finds "memory@40000000") */
 /* The #address-cells and #size-cells that apply to node's "reg" (its parent's). */

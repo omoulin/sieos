@@ -26,8 +26,9 @@
 #define TOP 48                           /* the window's title strip */
 #define ROW 54                           /* a row of buttons or a field */
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
-       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110 };
-enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, NF };
+       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110,
+       S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET };
+enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
 
 static const int sizes[][2] = { { 1280, 720 }, { 1366, 768 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 } };
 #define NSIZE (int)(sizeof sizes / sizeof sizes[0])
@@ -43,7 +44,19 @@ static int msg_err;
 static struct { int on, w, h; } back;    /* a new size not kept yet: the old one */
 static volatile unsigned gen;            /* (which countdown is the current one) */
 
+/* The Network section's own state: the chip's status, the last scan. */
+static int wifi_have, wifi_sel = -1, wifi_n;
+static wifi_status_t wstat;
+static wifi_net_t wnets[WIFI_MAXNET];
+
 void settings_init(long atlas_port) { port = atlas_port; }
+
+/* Ask the Wi-Fi server for its status (if one is running). */
+static void wifi_refresh(void)
+{
+    msg_t m = { .w = { WIFI_STATUS }, .rbuf = &wstat, .rlen = sizeof wstat };
+    wifi_have = atlas_wifi(&m) == 0 && m.rlen == sizeof wstat;
+}
 
 static int starts(const char *s, const char *with) { while (*with) if (*s++ != *with++) return 0; return 1; }
 
@@ -77,9 +90,12 @@ void settings_open(void)
     siefs_stat_t st;
     key_set = !fs_stat("/etc/sia.key", &st, 1) && st.size > 0;
     wipe(fields[F_KEY], sizeof fields[0]);
+    wipe(fields[F_WPASS], sizeof fields[0]);
     wipe(fields[F_ROOTPW], sizeof fields[0]);
+    wifi_sel = -1; wifi_n = 0;
+    wifi_refresh();
     field = -1; scroll = 0; msg[0] = 0;
-    say("atlas: settings open\n");
+    say("atlas: settings open (wifi %s)\n", wifi_have ? "present" : "none");
 }
 void settings_close(void)
 {
@@ -198,6 +214,61 @@ static void apply_sia(void)
     strlcpy(msg, remote ? "Saved: sia uses the online model." : "Saved: sia uses the model on this computer.", sizeof msg);
     say("atlas: settings: sia %s\n", remote ? "online" : "local");
     field = -1;
+}
+
+/* Root's password, for a system setting (Join/Forget), the way apply_sia
+ * does: logged in as root, or the password in F_ROOTPW checks out. */
+static int check_root(void)
+{
+    if (atlas_uid() == 0) return 1;
+    if (!fields[F_ROOTPW][0]) { strlcpy(msg, "Root's password is needed to change this.", sizeof msg); msg_err = 1; field = F_ROOTPW; return 0; }
+    char req[160], *p = req;
+    p += strlcpy(p, "root", 8) + 1;
+    p += strlcpy(p, fields[F_ROOTPW], 128) + 1;
+    msg_t m = { .w = { AUTH_CHECK }, .sbuf = req, .slen = p - req };
+    long r = atlas_auth(&m);
+    wipe(req, sizeof req);
+    wipe(fields[F_ROOTPW], sizeof fields[0]);
+    if (r < 0) { strlcpy(msg, "Wrong password for root.", sizeof msg); msg_err = 1; return 0; }
+    return 1;
+}
+
+/* ---- The Network section's actions. */
+static void wifi_scan(void)
+{
+    msg_t m = { .w = { WIFI_SCAN }, .rbuf = wnets, .rlen = sizeof wnets };
+    long r = atlas_wifi(&m);                              /* (blocks a few seconds: the chip scans) */
+    wifi_n = r > 0 ? (int)r : 0; wifi_sel = -1;
+    wifi_refresh();
+    msg_err = r < 0;
+    strlcpy(msg, r < 0 ? "No Wi-Fi on this machine." : "Scan done.", sizeof msg);
+    say("atlas: settings: wifi scan, %d networks\n", wifi_n);
+}
+static void wifi_join(void)
+{
+    if (wifi_sel < 0 || wifi_sel >= wifi_n) { strlcpy(msg, "Pick a network first.", sizeof msg); msg_err = 1; return; }
+    if (!check_root()) return;
+    char req[128];
+    size_t a = strlcpy(req, wnets[wifi_sel].ssid, sizeof req) + 1;
+    if (wnets[wifi_sel].security == WIFI_WPA2) a += strlcpy(req + a, fields[F_WPASS], sizeof req - a) + 1;
+    else req[a++] = 0;
+    msg_t m = { .w = { WIFI_JOIN }, .sbuf = req, .slen = a };
+    long r = atlas_wifi(&m);
+    wipe(req, sizeof req); wipe(fields[F_WPASS], sizeof fields[0]);
+    msg_err = r < 0;
+    strlcpy(msg, r < 0 ? "Could not join that network." : "Joining...", sizeof msg);
+    wifi_refresh();
+    say("atlas: settings: wifi join %s -> %ld\n", wnets[wifi_sel].ssid, r);
+}
+static void wifi_forget(void)
+{
+    if (!check_root()) return;
+    msg_t m = { .w = { WIFI_FORGET } };
+    long r = atlas_wifi(&m);
+    msg_err = r < 0;
+    strlcpy(msg, r < 0 ? "Could not do that." : "Forgotten.", sizeof msg);
+    wifi_refresh();
+    say("atlas: settings: wifi forget -> %ld\n", r);
 }
 
 /* ---- Drawing: rows from the top (scrolled), only those wholly in view. */
@@ -336,6 +407,39 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
     choices("Buttons", hands, 2, sw, S_HAND);
     choices("Wheel", wheels, 2, rv, S_WHEEL);
 
+    heading("NETWORK");
+    if (!wifi_have) {
+        row_label("Wi-Fi");
+        if (fits(42)) label(cx, cy + 10, "No Wi-Fi on this machine.", 2, C_TXT);
+        cy += ROW;
+    } else {
+        static const char *st_name[] = { "off", "idle", "scanning", "joining", "connected", "failed" };
+        char s[96], *p = s;
+        if (wstat.state == WIFI_UP) { p += strlcpy(p, "Connected to ", 14); p += strlcpy(p, wstat.ssid, 33);
+            p += strlcpy(p, " (", 3); p += num(p, wstat.rssi); strlcpy(p, " dBm)", 6); }
+        else { p += strlcpy(p, "Wi-Fi: ", 8); strlcpy(p, wstat.state <= WIFI_FAILED ? st_name[wstat.state] : "?", 12); }
+        row_label("Status");
+        if (fits(42)) label(cx, cy + 10, s, 2, C_TXT);
+        cy += ROW;
+        if (fits(42)) { int x = pill(cx, cy, "Scan", 0, H_SET, S_WSCAN);
+            if (atlas_debug) say("atlas: dbg set %d at %d %d\n", S_WSCAN, x - 40, cy + 21); }
+        cy += ROW;
+        if (wifi_n) {
+            static const char *names[WIFI_MAXNET];
+            for (int i = 0; i < wifi_n; i++) names[i] = wnets[i].ssid[0] ? wnets[i].ssid : "(hidden)";
+            choices("Networks", names, wifi_n, wifi_sel, S_WNET);
+        }
+        if (wifi_sel >= 0 && wifi_sel < wifi_n && wnets[wifi_sel].security == WIFI_WPA2)
+            text_field("Passphrase", F_WPASS, 1, "the network's password");
+        if (fits(42)) {
+            int x = pill(cx, cy, "Join", 1, H_SET, S_WJOIN);
+            x = pill(x + 10, cy, "Forget", 0, H_SET, S_WFORGET);
+            if (atlas_debug) { say("atlas: dbg set %d at %d %d\n", S_WJOIN, cx + 30, cy + 21);
+                say("atlas: dbg set %d at %d %d\n", S_WFORGET, x - 50, cy + 21); }
+        }
+        cy += ROW;
+    }
+
     heading("ASSISTANT");
     static const char *where[2] = { "On this computer", "Online (OpenAI API)" };
     choices("Model", where, 2, remote, S_SIA);
@@ -377,6 +481,10 @@ int settings_click(int kind, int arg)
     else if (arg >= S_ZOOM && arg < S_ZOOM + NZOOM) atlas_zoom(zooms[arg - S_ZOOM]);
     else if (arg >= S_SIA && arg < S_SIA + 2) { remote = arg - S_SIA; msg[0] = 0; }
     else if (arg >= S_FIELD && arg < S_FIELD + NF) field = arg - S_FIELD;
+    else if (arg == S_WSCAN) wifi_scan();
+    else if (arg >= S_WNET && arg < S_WNET + wifi_n) { wifi_sel = arg - S_WNET; wipe(fields[F_WPASS], sizeof fields[0]); msg[0] = 0; }
+    else if (arg == S_WJOIN) wifi_join();
+    else if (arg == S_WFORGET) wifi_forget();
     else if (arg == S_APPLY) apply_sia();
     else if (arg == S_BODY) field = -1;
     return 1;
@@ -395,7 +503,7 @@ int settings_key(int c)
         }
     }
     else if (c == 27) field = -1;
-    else if (c == '\n') apply_sia();
+    else if (c == '\n') { if (field == F_WPASS) wifi_join(); else apply_sia(); }
     else if (c == '\b') { if (n) f[n - 1] = 0; }
     else if (c >= 32 && c < 127 && n + 1 < sizeof fields[0]) { f[n] = c; f[n + 1] = 0; }
     else return 0;

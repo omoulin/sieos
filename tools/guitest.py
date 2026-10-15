@@ -79,8 +79,11 @@ def expect(text, timeout=20):
     return wait(text, "con", timeout)
 
 def send(line):
-    qemu.stdin.write(line.encode() + b"\r")
-    qemu.stdin.flush()
+    data = line.encode() + b"\r"
+    for i in range(0, len(data), 8):                # a few bytes at a time: an emulated UART's
+        qemu.stdin.write(data[i:i + 8])            # FIFO is small, and a busy guest drops
+        qemu.stdin.flush()                          # what overflows it
+        time.sleep(0.01)
 
 # ---- QMP
 for _ in range(100):
@@ -645,7 +648,10 @@ if stub:
 
 # ---- Settings: the mouse, the screen's size, the assistant's model
 click(*latest("dbapp", "Settings"))
-wait("atlas: settings open")
+rest = wait("atlas: settings open")
+if "wifi none" not in rest:
+    fail(f"Settings did not report no Wi-Fi (QEMU has none): {rest!r}")
+print("ok: Settings: Network shows 'No Wi-Fi on this machine.' (none in QEMU)")
 time.sleep(0.5)
 click(*latest("set", "32"))                        # pointer speed: Fast
 wait("atlas: mouse speed 150 swap 0 reverse 0")

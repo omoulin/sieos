@@ -98,7 +98,7 @@ its clients carry on by themselves.
 ```
  programs   sh, fetch, sia, svc, hello, bench ...           (any user)
                │ messages (the kernel copies them, stamped with the sender's identity)
- servers    init  con  vblk  fs  auth  login  atlas  netd  vnet  siad
+ servers    init  con  vblk  fs  auth  login  atlas  netd  vnet  wifid  siad
                │
  kernel     portable core: memory, threads, scheduler, messages, quotas
             + one architecture: x86-64 or AArch64
@@ -230,8 +230,9 @@ directory), `CPU64=cortex-a72|max` (the emulated ARM processor).
 - **Files:** up to 1 s of changes can be lost if the file server crashes
   (`sync` reports it).
 - **Network:** IPv4 only; TLS 1.3 only.
-- **Raspberry Pi:** no USB, Ethernet or Wi-Fi drivers yet; SD card at
-  25 MHz; real boards not yet tried.
+- **Raspberry Pi:** Ethernet and Wi-Fi (the CYW43455, open and WPA2) are
+  written but untested on hardware (QEMU emulates neither); no USB on the
+  Pi 5 yet; real boards not yet tried.
 - **The target laptop** (UEFI, NVMe, NVIDIA): planned
   ([docs/ai-plan.md](docs/ai-plan.md)).
 
