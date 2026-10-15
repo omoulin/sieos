@@ -85,8 +85,14 @@ enum {
                           server's output, which goes through SYS_DEBUG), from byte *pos
                           since boot (moved up to the oldest kept: the last LOG_KEEP
                           bytes); *pos is advanced; 0: nothing new                       */
+    SYS_PLACE,         /* (thread id, PLACE_*) -> 0: where a thread of this process runs on
+                          a processor with P-cores and E-cores. Thread 0: the caller (it
+                          moves at once); -1: the whole process, its later threads too;
+                          another thread: from its next wake-up. No effect where all
+                          cores are alike                                                */
 };
 #define LOG_KEEP 32768
+enum { PLACE_NORMAL, PLACE_BACKGROUND };   /* SYS_PLACE: P-cores first (speed) / E-cores first */
 /* SYS_SCREEN's answer. pitch: pixels per row; format: 0 = bytes R,G,B,x in
  * memory, 1 = bytes B,G,R,x (0x00RRGGBB words). */
 typedef struct { uint64_t pa, size; uint32_t width, height, pitch, format; } mk_screen_t;
@@ -176,6 +182,8 @@ typedef struct {
 #define SPAWN_QUOTA 32               /* a memory limit for the child (pages it uses, DMA
                                         included). Without it, a child gets its parent's
                                         limit; nobody may give a child more than its own */
+#define SPAWN_BACKGROUND 64          /* background work: its threads prefer E-cores (SYS_PLACE);
+                                        without it, a child is background if its parent is */
 
 /* Thread states (and a process's: its most active thread's). */
 enum { TS_FREE, TS_READY, TS_RUN, TS_SEND, TS_RECV, TS_REPLY, TS_LOOKUP, TS_DEAD,
@@ -188,6 +196,8 @@ typedef struct {
     int32_t self_pid, self_uid;
     int32_t nprocs, nthreads, ncpus;
     uint32_t hwcap;                  /* what the processor can do, HWCAP_* below */
+    int32_t ecores;                  /* how many of the CPUs are E-cores (0: all cores alike) */
+    int32_t cpu, cpu_e;              /* the CPU the caller runs on now; 1 if it is an E-core */
 } mk_info_t;
 /* Processor features a program may use (the kernel reads them once at boot;
  * some, like the AArch64 ID registers, are not readable from user mode). */

@@ -10,6 +10,7 @@ Usage: sdbench.py <host tools dir> <card image> <MiB> <qemu command line...>
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import select, subprocess, sys, time
+import qserial                                      # (tools/qserial.py: typing on the console)
 
 tools, image, mib, cmdline = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 out, log = b"", b""
@@ -30,7 +31,7 @@ def expect(text, timeout=600):
     out = out[out.index(text.encode()) + len(text):]
 
 def send(line):
-    qemu.stdin.write(line.encode() + b"\r"); qemu.stdin.flush()
+    qserial.type_line(qemu, line)
 
 expect("first start, and there is no screen")
 for pw in ("rootpass1", "alicepass1"):

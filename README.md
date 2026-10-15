@@ -9,10 +9,11 @@ GPL-3.0. All the code is new.
 
 | | x86-64 (QEMU, KVM) | AArch64 (QEMU `virt`, emulated) |
 |---|---|---|
-| Kernel | 43 KB | 57 KB |
+| Kernel | 56 KB | 86 KB |
 | Boot to the first prompt | 0.08-0.11 s | 0.11 s |
 | RAM in use after boot, logged in | 3.1 MiB | 3.3 MiB |
-| Message round trip (IPC) | 0.43 µs | 4.8 µs (emulated) |
+| Message round trip (IPC) | 0.45 µs | 5.3 µs (emulated) |
+| 40 clients calling one server, per call | 0.44 µs on 1 CPU, 0.51 on 16 | |
 | Desktop session | 3.6-3.9 MiB | 14 MiB (8 MiB is QEMU's screen) |
 | Assistant, SmolLM2-1.7B (4-bit) | 37 tok/s on 4 CPUs, 55 on 8 | NEON; Pi 5 estimate 5-9 tok/s |
 
@@ -125,10 +126,13 @@ tour, file by file, with the crash and on-demand mechanisms:
 ## What is inside
 
 - **Kernel** ([docs/kernel.md](docs/kernel.md), [docs/arch.md](docs/arch.md)):
-  SMP with one kernel lock, tickless time, threads, floating-point and
-  vector state saved only for threads that use it, thread-local storage,
-  memory quotas, processor features reported to programs, interrupts on any
-  CPU (shared lines), pages zeroed on allocation, W^X.
+  SMP with a lock per piece of shared data (a run queue per CPU, the IPC
+  path lock-light), a scheduler that tells P-cores from E-cores (speed
+  first: background work on E-cores), tickless time, threads,
+  floating-point and vector state saved only for threads that use it,
+  thread-local storage, memory quotas, processor features reported to
+  programs, interrupts on any CPU (shared lines), pages zeroed on
+  allocation, W^X.
 - **SieFS** ([docs/siefs.md](docs/siefs.md)): copy-on-write B+tree, two
   superblocks, checksums in every pointer (a crash leaves the old or the
   new state, never a mix), small files inside the tree, attributes with an
@@ -203,7 +207,8 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make crash-test` | only the crash recovery: servers killed while they work |
 | `make gui-test` | the desktop through QEMU's monitor: first start, windows (move, resize, zoom, minimize, workspaces), Files, editor, the sia strip, apps, assistant (a stand-in), Settings |
 | `make gui-test-real` | the same with the real assistant and the 1.7B model |
-| `make kernel-test` | floating point and vector state, thread-local variables, quotas |
+| `make kernel-test` | floating point and vector state, thread-local variables, quotas, P-core/E-core placement (`pcores=N`) |
+| `make ipc-bench` | the IPC round trip and 40 clients calling one server (`SMP=1, 4, 8, 16`) |
 | `make demand-test` | servers started on demand, stopped when idle, calls racing a stop |
 | `make sia-test` | the assistant: answers, two conversations, restart (`CPU64=max` on arm64: `sdot`) |
 | `make sia-mem-test` | the assistant's memory ([docs/sia.md](docs/sia.md)) |
@@ -223,8 +228,10 @@ directory), `CPU64=cortex-a72|max` (the emulated ARM processor).
 
 ## Limits
 
-- **Kernel:** one kernel lock (many clients of one server on many CPUs
-  contend); the scheduler does not tell P-cores from E-cores yet.
+- **Kernel:** a server thread handles one message at a time (40 clients
+  of one server: 0.44 µs per call on 1 CPU, 0.76 on 4, 0.52 on 8, 0.51 on
+  16; with the old single kernel lock: 0.43, 2.4, 3.3, 3.2); P-cores and
+  E-cores tested in QEMU only (`pcores=N`).
 - **Desktop:** text apps only (in terminals); up to 256 files, 23
   projects, 8 terminals and one open file at a time.
 - **Files:** up to 1 s of changes can be lost if the file server crashes

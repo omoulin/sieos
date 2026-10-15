@@ -15,6 +15,7 @@ Usage: crashtest.py <cpus> <host tools dir> <disk image> <qemu command line...>
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import os, re, select, shutil, subprocess, sys, time
+import qserial                                      # (tools/qserial.py: typing on the console)
 SLOW = float(__import__("os").environ.get("SIEOS_SLOW", "1"))   # emulated processors (arm64 on a PC): everything takes longer
 
 cpus, tools, image, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
@@ -49,8 +50,7 @@ def expect(text, timeout=30, must=True):
     return before.decode(errors="replace")
 
 def send(line):
-    qemu.stdin.write(line.encode() + b"\r")
-    qemu.stdin.flush()
+    qserial.type_line(qemu, line)
 
 def sync(prompt="# "):
     """Kernel log lines share the serial port with the console, so their

@@ -52,6 +52,7 @@ static inline uint64_t arch_cycles(void) { uint64_t v; asm volatile("isb; mrs %0
  * 16-31 per CPU (its timers), 32+ shared lines from devices. */
 #define SGI_KICK   1                  /* "there is work, or your timer must change" */
 #define SGI_HALT   2                  /* "stop" (power off, panic) */
+#define SGI_SYNC   3                  /* "answer when you are done with unmapped pages" (smp.c) */
 #define PPI_VTIMER 27                 /* each CPU's virtual timer (the generic timer) */
 #define GIC_SPI0   32                 /* SPI n is interrupt id 32 + n */
 
@@ -166,6 +167,10 @@ static inline void arch_tls_switch(arch_cpu_t *a, uint64_t base)   /* a thread's
 {
     if (base != a->tls_loaded) asm volatile("msr tpidr_el0, %0" : : "r"(a->tls_loaded = base));
 }
-/* TLB invalidations are broadcast to every CPU by the hardware (tlbi ...is):
- * nothing to answer while waiting for the kernel lock. */
-#define arch_lock_wait(c) arch_relax()
+/* Idle polling (task.c): let pending interrupts in for a moment. */
+static inline void arch_irq_window(void) { asm volatile("msr daifclr, #2; isb; msr daifset, #2" : : : "memory"); }
+/* A CPU spinning in the kernel (for a lock, or for a thread to leave its
+ * CPU) still answers shootdowns (smp.c: TLBs are invalidated by the
+ * hardware, but the asker also waits until no CPU copies to or from the
+ * unmapped pages): the CPU it waits for may be waiting for exactly that. */
+#define arch_lock_wait(c) do { if ((c)->tlb_want != (c)->tlb_done) tlb_ack(c); arch_relax(); } while (0)

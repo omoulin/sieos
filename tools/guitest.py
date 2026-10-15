@@ -20,6 +20,7 @@ The test works in a copy of the image. Screenshots (PNG) are kept.
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import os, atexit, json, os, select, shutil, socket, subprocess, sys, time
+import qserial                                      # (tools/qserial.py: typing on the console)
 
 cpus, shots, image, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
 os.makedirs(shots, exist_ok=True)
@@ -79,11 +80,7 @@ def expect(text, timeout=20):
     return wait(text, "con", timeout)
 
 def send(line):
-    data = line.encode() + b"\r"
-    for i in range(0, len(data), 8):                # a few bytes at a time: an emulated UART's
-        qemu.stdin.write(data[i:i + 8])            # FIFO is small, and a busy guest drops
-        qemu.stdin.flush()                          # what overflows it
-        time.sleep(0.01)
+    qserial.type_line(qemu, line)
 
 # ---- QMP
 for _ in range(100):

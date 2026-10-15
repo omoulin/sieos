@@ -10,10 +10,9 @@
  * User programs have their own GS, so coming from user mode we exchange
  * the two with SWAPGS, and exchange them back on the way out.
  *
- * The kernel lock: trap() and syscall() take it; kernel_exit() (task.c)
- * gives it back just before the registers are restored. (trap() returns 0
- * when it did not take it: NMIs and TLB shootdowns.) A task switch
- * happens with the lock held, and the task that resumes releases it.
+ * The way out: kernel_exit() (task.c), just before the registers are
+ * restored (a thread of an ending process ends there; the CPU's timer is
+ * set). trap() returns 0 when it is not needed: NMIs.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -52,7 +51,7 @@ isr_common:
 1:  PUSHALL
     mov  %rsp, %rdi                     /* trap(regs_t *) */
     call trap
-    test %eax, %eax                     /* did trap() take the kernel lock? */
+    test %eax, %eax                     /* leave through kernel_exit? */
     jz   3f
     .global trap_return
 trap_return:                            /* new threads also start here (task.c) */

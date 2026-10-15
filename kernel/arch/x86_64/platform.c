@@ -132,6 +132,7 @@ void kmain(uint32_t magic, uint32_t mbi_pa)
     bi.kernel_start = 0x100000;
     bi.kernel_end = (uint64_t)_kernel_end - KVMA;
     bi.dmap_boot = 4UL << 30;            /* boot.S maps the first 4 GiB */
+    if (mbi->flags & 1 << 2) bi.cmdline = P2V(mbi->cmdline);   /* the boot options (read before memory is used) */
     kernel_main(&bi);
 }
 

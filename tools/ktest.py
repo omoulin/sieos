@@ -4,12 +4,17 @@
           variables (programs built by gcc and by sicc), memory quotas
   sia     the assistant: a question, two sessions at once, sia killed in
           the middle of an answer (init restarts it), speed and memory
-Usage: ktest.py <kernel|sia> <cpus> <disk image> <qemu command line...>
+  bench   the IPC round trip, and 40 clients calling one server at once
+          (the kernel's locking; three runs each)
+  place   P-cores and E-cores: the kernel booted with pcores=N (QEMU's
+          cores are all alike) says so at boot, and places threads by kind
+Usage: ktest.py <kernel|sia|bench|place> <cpus> <disk image> <qemu command line...>
 The image must be a fresh one (first-start setup); the test works in a copy.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import re, select, shutil, subprocess, sys, time
+import qserial                                      # (tools/qserial.py: typing on the console)
 SLOW = float(__import__("os").environ.get("SIEOS_SLOW", "1"))   # emulated processors (arm64 on a PC): everything takes longer
 
 what, cpus, image, cmdline = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4:]
@@ -48,8 +53,7 @@ def expect(text, timeout=30):
     return before.decode(errors="replace")
 
 def send(line):
-    qemu.stdin.write(line.encode() + b"\r")
-    qemu.stdin.flush()
+    qserial.type_line(qemu, line)
 
 def run(cmd, timeout=60):
     """A command at the root prompt; returns its output."""
@@ -90,6 +94,22 @@ if what == "kernel":
         res.append(expect(re.compile(rb"ktest fpu: (ok|FAIL)"), 120)[1].group(1))
     ok("two processes computing at once", res == [b"ok", b"ok"])
     run("", 10)
+
+elif what == "place":
+    m = re.search(rb"mk: \d+ CPUs running: (\d+) P-cores, (\d+) E-cores", seen)
+    ok("the boot line tells P-cores from E-cores", m is not None, m.group(0).decode() if m else "no such line")
+    for prog in ("ktest", "ktest-sicc"):
+        r = run(f"{prog} place", 120)
+        lines = [l.strip() for l in r.splitlines() if l.strip().startswith("ktest place")]
+        for l in lines[:-1]: print("   ", l)
+        ok(f"{prog} place", "ktest place: ok" in r, lines[-1] if lines else r.strip()[-120:])
+
+elif what == "bench":
+    for t in ("ipc", "ipc", "ipc", "ipcmany", "ipcmany", "ipcmany"):
+        r = run(f"ktest {t}", 300)
+        line = next((l.strip() for l in r.splitlines() if l.strip().startswith(f"ktest {t}: ") and "ok" not in l), "")
+        print(line)
+        ok(f"ktest {t}", f"ktest {t}: ok" in r)
 
 elif what == "sia":
     t = time.time()

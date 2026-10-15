@@ -27,6 +27,8 @@
  * the summary of its older turns. When a conversation fills compact_at % of
  * the model's context, the older turns are replaced by a summary the model
  * writes itself (compaction), right after the answer has been delivered.
+ * Nobody waits for it: on a processor with E-cores it runs there, as
+ * background work (SYS_PLACE); answers run on P-cores.
  *
  * Init gives siad a memory limit (4.5 GiB): the kernel refuses it more.
  *
@@ -694,9 +696,11 @@ int main(int argc, char **argv)
         }
         if (end_after) { msg_t a = { .w = { 0 } }; ipc_reply(from, &a); sia_log("siad: new settings, restarting\n"); return 0; }
         m = (msg_t){ .w = { r, w1, w2 }, .sbuf = out, .slen = olen, .rbuf = req, .rlen = SIA_MAX };
-        if (later) {                      /* answer first, then compact */
-            ipc_reply(from, &m);
+        if (later) {                      /* answer first, then compact: background work, */
+            ipc_reply(from, &m);          /* on E-cores if the processor has them (its model's */
+            sys_place(-1, PLACE_BACKGROUND);   /* threads too); answers run on P-cores */
             compact(later);
+            sys_place(-1, PLACE_NORMAL);
             from = 0;
             continue;
         }

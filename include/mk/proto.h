@@ -169,7 +169,8 @@ enum {
     INIT_STOP,      /* "name" (root): stop it, do not restart it             -> 0 */
     INIT_ADD,       /* "name\0path\0arguments[\0port[\0watched port]]" (root), w[1] =
                        policy: supervise a program from the disk; port: started on
-                       demand; watched port: pinged (SVC_PING), ended if stuck -> 0 */
+                       demand; watched port: pinged (SVC_PING), ended if stuck; w[3]
+                       = 1: background work (SPAWN_BACKGROUND)               -> 0 */
     INIT_TICK,      /* (init's own timer thread)                             -> ns to wait */
     INIT_IDLE,      /* "name" (root), w[1] = seconds without use before an on-demand
                        service stops (0: never)                              -> 0 */
@@ -197,7 +198,8 @@ typedef struct {
     uint64_t started_ns;                       /* when it was last started (ns since boot) */
     char port[16];                             /* on demand: the port that starts it ("": at boot) */
     uint64_t idle_ns;                          /* on demand: stops after this long unused (0: never) */
-    int32_t starts, _pad;                      /* how many times it was started */
+    int32_t starts;                            /* how many times it was started */
+    int32_t bg;                                /* background work (svc add -b): E-cores first */
 } svc_info_t;
 
 /* The assistant, port "sia" (/bin/siad; the command: /bin/sia; docs/ai-plan.md). A client opens

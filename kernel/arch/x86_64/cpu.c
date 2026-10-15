@@ -61,6 +61,7 @@ void cpu_init(void)
 
     cpu_t *c = cpu_alloc();
     c->id = 0;
+    c->cur_as = kernel_as;                  /* (arch_mem_init loaded it) */
     cpus[ncpu++] = c;
     cpu_setup(c);
 #ifdef STACKCHECK
@@ -91,10 +92,25 @@ cpu_t *cpu_alloc(void)
     return c;
 }
 
+/* This CPU's kind on a hybrid processor (Intel's since Alder Lake): CPUID
+ * leaf 7 says hybrid (EDX bit 15), then leaf 0x1A gives the core type
+ * (EAX bits 31-24): 0x40 Atom, an E-core; 0x20 Core, a P-core. */
+static int core_kind(void)
+{
+    uint32_t r[4];
+    cpuid(0, r);
+    if (r[0] < 0x1A) return CPU_P;
+    cpuid(7, r);
+    if (!(r[3] >> 15 & 1)) return CPU_P;
+    cpuid(0x1A, r);
+    return r[0] >> 24 == 0x40 ? CPU_E : CPU_P;
+}
+
 /* On every CPU (smp.c calls it on the others): load its GDT, TSS and the
  * IDT, point GS at its cpu_t, and set up SYSCALL. */
 void cpu_setup(cpu_t *c)
 {
+    c->type = core_kind();
     c->a.self = c;
     memcpy(c->a.gdt, gdt_template, sizeof gdt_template);
     uint64_t t = (uint64_t)c->a.tss, lim = sizeof(tss_t) + 65536 / 8 - 1;   /* the TSS and the bitmap */
@@ -148,8 +164,8 @@ void arch_set_tls(cpu_t *c, uint64_t base) { wrmsr(0xC0000100, c->a.fs_loaded = 
 
 /* Every interrupt and exception arrives here (from entry.S). The kernel
  * runs with interrupts off, so this only interrupts user mode or idle()
- * (except NMIs, which arrive anywhere). Returns 1 if it took the kernel
- * lock: entry.S then leaves through kernel_exit, which releases it. */
+ * (except NMIs, which arrive anywhere). Returns 1: entry.S then leaves
+ * through kernel_exit. */
 int trap(regs_t *r)
 {
     cpu_t *c = this_cpu();
@@ -158,13 +174,12 @@ int trap(regs_t *r)
         kprintf("mk: NMI on CPU %d\n", c->id);
         return 0;
     }
-    if (r->vec == VEC_TLB) { tlb_ack(c); lapic_eoi(); return 0; }   /* no lock: see smp.c */
+    if (r->vec == VEC_TLB) { tlb_ack(c); lapic_eoi(); return 1; }   /* (see smp.c; then kernel_exit: proc_stop) */
     uint64_t cr2 = 0;                       /* for a page fault: the faulting address */
     if (r->vec < 32) asm volatile("mov %%cr2, %0" : "=r"(cr2));
-    if (r->vec < 32 && !(r->cs & 3))        /* a bug in the kernel (it may hold the lock: don't take it) */
+    if (r->vec < 32 && !(r->cs & 3))        /* a bug in the kernel */
         panic("exception %lu in the kernel at %lx (error %lx, address %lx)\n", r->vec, r->rip, r->err, cr2);
-    klock();
-    rand_event(r->vec);                     /* the time of every interrupt feeds the random pool */
+    rand_event(r->vec);                  /* the time of every interrupt feeds the random pool */
     if (r->vec == 7 && fpu_first_use(cur)) return 1;   /* #NM: its first floating-point instruction */
     if (r->vec < 32) {                      /* a user program did something wrong: its process dies */
         kprintf("mk: %s (pid %d) killed: exception %lu at %lx (error %lx, address %lx)\n",

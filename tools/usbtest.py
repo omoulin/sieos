@@ -10,6 +10,7 @@ Usage: usbtest.py CPUS HOSTTOOLS IMAGE SHOTS QEMU-COMMAND...
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import atexit, json, os, select, socket, struct, subprocess, sys, tempfile, time
+import qserial                                      # (tools/qserial.py: typing on the console)
 
 cpus, host, image, shots, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 os.makedirs(shots, exist_ok=True)
@@ -78,7 +79,7 @@ def type_text(s):
 
 
 def send(line):
-    qemu.stdin.write(line.encode() + b"\r"); qemu.stdin.flush()
+    qserial.type_line(qemu, line)
 
 
 def shot(name):

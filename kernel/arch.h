@@ -38,6 +38,7 @@ typedef struct {
     uint64_t dmap_boot;                    /* RAM already in the direct map at boot (bytes) */
     struct { uint64_t pa, len; const char *cmdline; } mod[MAXMOD];
     int nmod;                              /* the boot modules: init first */
+    const char *cmdline;                   /* the kernel's boot options (main.c), or 0 */
 } boot_info_t;
 void kernel_main(boot_info_t *bi) __attribute__((noreturn));
 
@@ -49,8 +50,9 @@ void arch_set_kstack(struct cpu *c, uint64_t top, int io);  /* the running threa
                                               io: it may use I/O ports (drivers) */
 void arch_kick(struct cpu *c);             /* wake c (idle) or make it reschedule */
 void halt_others(void);                    /* stop every other CPU (power off, panic) */
-void tlb_shootdown(struct proc *p);        /* after unmapping p's pages: every CPU forgets them */
-void tlb_ack(struct cpu *c);               /* answer a shootdown request */
+void tlb_shootdown(struct proc *p);        /* after unmapping p's pages: every other CPU forgets them
+                                              and is done copying to or from them (vm_copy) */
+void tlb_ack(struct cpu *c);               /* answer a shootdown request (arch_lock_wait too) */
 
 /* ---- Threads (cpu.c, entry.S). */
 void switch_to(uint64_t *save_ksp, uint64_t ksp);   /* save this kernel stack, resume another */

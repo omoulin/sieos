@@ -8,9 +8,9 @@ each file does. The architecture interface (x86-64, AArch64) is in
 
 ## The idea: a microkernel
 
-The kernel (about 1,900 lines of portable core, plus 1,500 per processor
-architecture; 43 KB on x86-64, 57 KB on AArch64) does only what nothing
-else can do:
+The kernel (about 2,700 lines of portable core, plus 1,600-1,900 per
+processor architecture; 56 KB on x86-64, 86 KB on AArch64) does only what
+nothing else can do:
 
 | The kernel does | Programs ("servers") do |
 |---|---|
@@ -58,7 +58,8 @@ The kernel is a portable core (`kernel/*.c`) and one processor's part
    starts the first *boot module*, `init` (the supervisor), starts the
    other CPUs, and from then on only runs processes. The other boot
    modules (`con`, `vblk`, `fs`) stay in memory for init to start and
-   restart. Also the kernel lock.
+   restart. Also the boot options (`pcores=N`), and the list of the
+   kernel's locks with the order in which they may be taken.
 3. **`arch/*/cpu.c`, `entry.S`**: per CPU, the way into the kernel
    (x86: segments, TSS, `SYSCALL`; AArch64: the exception vector table,
    `svc #0`) and `trap()`, which handles every interrupt and exception.
@@ -72,8 +73,9 @@ The kernel is a portable core (`kernel/*.c`) and one processor's part
    tables (the *direct map* of all physical memory, each process's address
    space; AArch64 uses ASIDs so switching needs no TLB flush).
 6. **`kernel/task.c`**: processes and threads (as many as memory allows),
-   the round-robin scheduler shared by all CPUs (a waiting thread costs no
-   CPU time; a CPU with nothing to do sleeps), the tickless timer's
+   the scheduler: a round-robin run queue per CPU (a waiting thread costs
+   no CPU time; an idle CPU takes waiting threads from busy ones, polls a
+   moment, then sleeps), P-cores and E-cores (below), the tickless timer's
    decisions, sleeping, ending and waiting for processes, and loading ELF
    programs (`SYS_SPAWN`).
 7. **`kernel/ipc.c`**: ports, `call` / `recv` / `reply` (and `reply_recv`,
@@ -188,15 +190,76 @@ Every arrow is a message; the kernel copies the data once per arrow:
   generic timer) is set only when something must happen: a time slice
   ending while others wait, or a sleeper's wake-up. 8 idle CPUs went from
   5.6% of a host core with a 100 Hz tick to under 0.1%.
-- **Wake-ups:** a sleeping CPU is woken by an inter-processor interrupt;
-  in IPC the receiver usually gets the sender's CPU at once ("handoff"),
-  so a round trip stays on one CPU: about 0.43 µs on x86 (KVM).
-- **One kernel lock**, as in seL4: a system call is a few hundred
-  instructions, so it is rarely contended; servers run in parallel.
+- **Run queues:** one per CPU. A thread that becomes ready goes to an
+  idle CPU if there is one (its last CPU first), else to the shortest
+  queue; an idle CPU takes threads waiting behind a busy CPU's running
+  thread. A busy CPU is interrupted only if its timer would not end its
+  running thread's slice anyway: a ready thread waits one slice at most.
+- **Wake-ups:** a CPU that becomes idle polls its queue for 50 µs before
+  it sleeps, letting interrupts in: a thread queued for it then needs no
+  inter-processor interrupt (in a virtual machine one costs microseconds).
+  A sleeping CPU is woken by one. In IPC the receiver usually gets the
+  sender's CPU at once ("handoff"), so a round trip stays on one CPU:
+  about 0.45 µs on x86 (KVM).
+- **Locks:** every CPU may be in the kernel at once. Each piece of shared
+  data has its own lock (a ticket spinlock): each bucket of the port table
+  (a port and its queues), each bucket of the thread table, each process,
+  each CPU's run queue, the process table, port names, interrupt lines,
+  the sleepers, the page and small-object allocators, the DMA quarantine,
+  the random pool. None is held while a message is copied. The order in
+  which they may be taken (so that no two CPUs ever wait for each other)
+  is written down in `kernel/main.c`:
+
+  ```
+  proc_lock -> a process -> port names -> interrupt lines -> a port bucket
+    -> a thread bucket -> the sleepers -> a run queue -> DMA quarantine
+    -> small objects -> pages -> random pool, log, serial port
+  ```
+
+  - A round trip takes three uncontended locks (the port's bucket twice,
+    the client's thread bucket once) and no full barrier.
+  - One waker, never two: whoever takes a thread off the queue it waits
+    in (under that queue's lock), or, for a thread waiting for a reply,
+    whoever clears its `server` (under its thread bucket's lock).
+  - A thread just woken may still be on its old CPU's stack for a moment
+    (`on_cpu`): its waker waits until that CPU has left it.
+  - Ending a process: its threads may be going to sleep on other CPUs at
+    that very moment. The killer sets `exiting`, waits until every other
+    CPU has answered a shootdown (answered only from user mode, idle or a
+    spin loop, never half-way into sleeping), then wakes each thread that
+    waits. One of them always sees the other; the cost is on the kill,
+    not on each message.
+  - Freed memory: user pages only after a shootdown that every CPU
+    answers (none can still be copying a message to or from them); a
+    thread's stack once its CPU has switched away from it.
+- **AArch64 ordering:** locks are acquire/release (`ldaxr`/`stlxr`,
+  `ldar`, `stlr`); a value another CPU acts on is published with a
+  release store and read with an acquire load; full barriers (`dmb ish`)
+  where a store must be seen before a later load (claiming an idle CPU,
+  the timer); new page tables are published after `dsb ishst`.
+- **P-cores and E-cores** (Intel's hybrid processors since Alder Lake,
+  ARM's big.LITTLE): each CPU's kind comes from the processor (x86-64:
+  CPUID leaf 7 says hybrid, leaf 0x1A gives each core's type: 0x20 Core,
+  0x40 Atom; AArch64: MIDR_EL1, Cortex-A35/A53/A55/A510/A520 being
+  efficiency cores). Boot says `mk: 8 CPUs running: 2 P-cores, 6 E-cores`.
+  Speed first: normal threads (interactive work, servers, the assistant's
+  model) prefer P-cores, background ones (`SYS_PLACE`; `SPAWN_BACKGROUND`;
+  init's `svc add -b`) E-cores. A thread goes to the other kind only to an
+  idle CPU: normal work overflows to idle E-cores, background work may use
+  an idle P-core. A normal thread waking up when every P-core runs
+  background work takes one (that work moves away); an idle P-core takes
+  over a normal thread running on an E-core, an idle E-core background
+  work running on a P-core. siad compacts conversations (after the answer
+  is delivered) as background work. Where all cores are alike (most PCs,
+  the Pi 4's A72s, the Pi 5's A76s) all are treated as P-cores and nothing
+  changes. QEMU's cores are alike: the boot option `pcores=N` pretends
+  CPUs 0..N-1 are P-cores and the others E-cores; `make kernel-test`
+  boots that way a second time and checks the placement (`ktest place`).
 - **Interrupts:** each line can go to any CPU; it stays masked from the
   moment it fires until its drivers acknowledge it; up to 4 drivers may
   share a line.
-- **TLB:** x86 flushes other CPUs by IPI; AArch64 uses broadcast `tlbi`.
+- **TLB:** x86 flushes the other CPUs by IPI; AArch64 uses broadcast
+  `tlbi`, then also waits for every other CPU's answer (see Locks).
 - **Floating point and vectors** (`arch/*/fpu.c`): the kernel never uses
   them. A thread's first floating-point instruction traps once and gets a
   clean save area; from then on each switch saves and restores it
@@ -231,14 +294,21 @@ on a Raspberry Pi's GFX HAT (docs/raspberrypi.md); `ktest log` checks it.
 
 ## Limits
 
-- **CPUs:** up to 256 (xAPIC, GICv2); tested with 1 to 28 on x86, 4 on
-  AArch64.
+- **CPUs:** up to 256 (xAPIC), 8 (GICv2); tested with 1 to 28 on x86, 4
+  and 8 on AArch64.
 - **Memory:** all of it (tested with 6 GiB on x86).
 - **Processes and threads:** as many as memory allows (sanity cap about a
   million threads).
 - **Drivers** may map device memory only; DMA buffers come from the kernel.
-- **One kernel lock:** many clients hammering one server on many CPUs
-  contend (40 clients: 0.3 µs on 1 CPU, 1.4 µs on 8, 4 µs on 16).
+- **Many clients, one server:** a server thread handles one message at
+  a time, so its clients wait their turn; they no longer wait for each
+  other in the kernel. 40 clients calling one server thread (`make
+  ipc-bench`, x86-64 on KVM): 0.44 µs per call on 1 CPU, 0.76 on 4, 0.52
+  on 8, 0.51 on 16 (with the one kernel lock it was 0.43, 2.4, 3.3 and
+  3.2 µs). A round trip alone: 0.45 µs (0.43 before).
 - **Crashes:** up to 1 s of file changes can be lost if `fs` dies; `sync`
   reports it. If init fails, the system stops.
-- **No P-core/E-core awareness** in the scheduler yet.
+- **P-cores and E-cores:** tested in QEMU only, with `pcores=N` (QEMU
+  cannot show a hybrid processor); not yet on a real hybrid PC. A thread
+  is placed when it wakes; a running one moves only when another CPU
+  asks it to (see above).

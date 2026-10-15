@@ -36,7 +36,9 @@ static blake2b_t pool;
 static uint32_t key[8];
 static uint64_t gen;                 /* one ChaCha20 nonce per request */
 static int bits, seeded;
-static uint64_t acc, nacc, last_reseed;
+static uint64_t last_reseed;
+static spinlock_t rand_lock;         /* everything above */
+static long rand_locked(uint64_t ubuf, uint64_t n);
 
 static void reseed(void)
 {
@@ -83,22 +85,34 @@ void rand_init(void)
             !hw || got == 8 ? "" : " (failed)", distinct, seeded ? "ready" : "waiting for more interrupts");
 }
 
-/* Every interrupt: its time (and kind), folded 32 at a time into the pool,
- * credited 1 bit per 32 (caution: in a virtual machine they are regular). */
+/* Every interrupt: its time (and kind), gathered by each CPU on its own
+ * and folded 32 at a time into the pool, credited 1 bit per 32 (caution:
+ * in a virtual machine they are regular). */
 void rand_event(uint64_t x)
 {
-    acc = (acc << 13 | acc >> 51) ^ x ^ ticks();
-    if (++nacc % 32) return;
-    blake2b_update(&pool, &acc, sizeof acc);
+    cpu_t *c = this_cpu();
+    c->rand_acc = (c->rand_acc << 13 | c->rand_acc >> 51) ^ x ^ ticks();
+    if (++c->rand_n % 32) return;
+    spin_lock(&rand_lock);
+    blake2b_update(&pool, &c->rand_acc, sizeof c->rand_acc);
     if (bits < 4096) bits++;
     if (!seeded && bits >= 256) { reseed(); seeded = 1; }
+    spin_unlock(&rand_lock);
 }
 
 /* SYS_RANDOM: n bytes (at most 4096) to the caller's buffer. */
 long rand_get(uint64_t ubuf, uint64_t n)
 {
-    if (!seeded) return -EAGAIN;
     if (n > 4096) return -EINVAL;
+    spin_lock(&rand_lock);
+    long r = rand_locked(ubuf, n);
+    spin_unlock(&rand_lock);
+    return r;
+}
+
+static long rand_locked(uint64_t ubuf, uint64_t n)
+{
+    if (!seeded) return -EAGAIN;
     if (ticks() - last_reseed > ns_to_ticks(1000000000)) reseed();   /* at most every second */
     uint32_t nonce[3] = { (uint32_t)gen, (uint32_t)(gen >> 32), 0 };
     gen++;

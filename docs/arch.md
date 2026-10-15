@@ -9,7 +9,7 @@ kernel is split in two:
 
 ```
 kernel/                      the portable core: identical on every processor
-  main.c      kernel_main (boot sequence), the kernel lock, cpus[]
+  main.c      kernel_main (boot sequence), boot options, the lock order, cpus[]
   task.c      processes, threads, scheduler, tickless timer decisions, ELF loading
   ipc.c       ports, messages, interrupts as messages
   syscall.c   the system calls (arguments through SC_* from arch_defs.h)
@@ -51,18 +51,18 @@ same C for every processor.
 
 | Need | Provided by the architecture |
 |---|---|
-| Boot | its boot code fills `boot_info_t` (RAM ranges, boot-loader data to free later, reserved ranges, kernel image, already-mapped RAM, boot modules) and calls `kernel_main` |
+| Boot | its boot code fills `boot_info_t` (RAM ranges, boot-loader data to free later, reserved ranges, kernel image, already-mapped RAM, boot modules, the kernel's command line) and calls `kernel_main` |
 | Memory layout | `P2V`/`V2P` (direct map), `USER_TOP`, `STACK_TOP`, `MMIO_BASE`, `PAGE` |
-| Page tables | `vm_new`, `vm_map` (flags `VM_W VM_U VM_NX VM_UC VM_DEV VM_DMA`), `arch_vm_unmap`, `arch_vm_free` (each leaf to the core, which frees or quarantines), `arch_uaddr`, `arch_mem_init` (map all RAM, switch to `kernel_as`), `kmap`, `arch_as_load`, `tlb_shootdown`/`tlb_ack` |
+| Page tables | `vm_new`, `vm_map` (flags `VM_W VM_U VM_NX VM_UC VM_DEV VM_DMA`), `arch_vm_unmap`, `arch_vm_free` (each leaf to the core, which frees or quarantines), `arch_uaddr`, `arch_mem_init` (map all RAM, switch to `kernel_as`), `kmap`, `arch_as_load`, `tlb_shootdown`/`tlb_ack` (every other CPU forgets the pages and is done copying to or from them; also how a process's end reaches every CPU) |
 | Threads | `regs_t` + `SC_NR/SC_ARGn/SC_RET`, `switch_to`, `arch_thread_start`, `arch_set_kstack`, `arch_set_tls`/`arch_tls_switch` |
 | Traps | the architecture's handler decodes the event and calls core functions: `irq_raise`, `core_tick`, `proc_exit` (faults), `syscall`, `fpu_first_use`, `kernel_exit` on the way out |
 | Interrupt controller | `irq_route`, `irq_set_level`, `irq_mask`, `irq_unmask`, `arch_kick` (wake/reschedule another CPU), `halt_others` |
 | Time | `ticks()` (fast counter), `ns_to_ticks`, `now_ns`, `arch_timer_set` (one-shot deadline; `NEVER` = off) |
-| CPUs | `cpu_init` (cpus[0]), `smp_init`, `smp_start`, `this_cpu()`, `arch_cpu_t` first in `cpu_t` |
+| CPUs | `cpu_init` (cpus[0]), `smp_init`, `smp_start`, `this_cpu()`, `arch_cpu_t` first in `cpu_t`; `cpu_setup` sets each CPU's kind (`CPU_P`, `CPU_E`: x86-64 CPUID leaves 7 and 0x1A, AArch64 MIDR_EL1) |
 | Floating point | `fpu_first_use`, `fpu_switch`, `fpu_free` |
 | Platform | `arch_putc` (log), `arch_power`, `arch_hw_random_init`/`arch_hw_random`, `arch_phys_forbidden`, `arch_phys_screen`, `arch_dma_clean`, `arch_fdt`, `arch_screen` (the frame buffer a UEFI loader left, `SYS_SCREEN`; x86-64) |
 | Processor features | `arch_hwcap`: what programs may use, in `SYS_INFO`'s `hwcap` (`HWCAP_AVX2`, `HWCAP_FMA`, `HWCAP_AVXVNNI` on x86-64; `HWCAP_DOTPROD`, `HWCAP_LSE` on AArch64, from `ID_AA64ISAR0_EL1`, which programs cannot read) |
-| Spinning, idle | `arch_relax`, `arch_wait_irq`, `arch_halt_forever`, `arch_lock_wait` |
+| Spinning, idle | `arch_relax`, `arch_wait_irq`, `arch_irq_window` (idle polling), `arch_halt_forever`, `arch_lock_wait` (answers shootdowns while spinning); optionally `smp_mb`/`store_mb` (x86-64: a locked instruction, `xchg`) |
 | Programs | `ELF_MACHINE` (62 on x86-64, 183 on AArch64) |
 
 The split cost nothing measurable: IPC round trip 432/434/479 ns (no FP /
@@ -123,17 +123,20 @@ x86-64: TTBR1 holds the kernel's half (direct map at 0xFFFF800000000000,
 device registers at 0xFFFFFF0000000000, the image at the top), TTBR0 each
 process's. One address space id (0) for everyone: a switch invalidates its
 non-global entries (`tlbi aside1`). Unmapping broadcasts in hardware
-(`tlbi vale1is`), so no inter-processor interrupt is needed. Memory types
-through MAIR: normal write-back, device (nGnRnE) for `VM_UC`. `VM_DEV` and
-`VM_DMA` live in the descriptors' software bits.
+(`tlbi vale1is`); a shootdown then only waits until every other CPU has
+answered a software interrupt (no CPU still copies to or from the pages,
+smp.c). New page tables are published after a `dsb ishst` (other CPUs
+walk them at once). Memory types through MAIR: normal write-back, device
+(nGnRnE) for `VM_UC`. `VM_DEV` and `VM_DMA` live in the descriptors'
+software bits.
 
 **Exceptions.** One vector table; `svc #0` (number x8, arguments x0-x5,
 result x0); faults kill the process with the syndrome and address in the
 log. Interrupts: GICv2 (the Pi 4/5's GIC-400 is one), software interrupts
-1 (kick) and 2 (halt), the virtual timer (PPI 27) as the one-shot tickless
-deadline, devices as shared lines (SPIs) delivered as messages exactly as
-on x86-64 (a driver's `irq_bind` number is the SPI number from the device
-tree). FP/SIMD: lazy, saved per thread on first use (q0-q31, FPCR, FPSR).
+1 (kick), 2 (halt) and 3 (shootdown), the virtual timer (PPI 27) as the
+one-shot tickless deadline, devices as shared lines (SPIs) delivered as
+messages exactly as on x86-64 (a driver's `irq_bind` number is the SPI
+number from the device tree). FP/SIMD: lazy, saved per thread on first use (q0-q31, FPCR, FPSR).
 
 **Other CPUs.** PSCI `CPU_ON` (QEMU, Pi 5), or a spin table (Pi 4
 firmware), as the device tree says.
@@ -154,11 +157,11 @@ so only indicative):
 
 | | arm64 (emulated) | x86-64 (KVM) |
 |---|---|---|
-| kernel.bin | 57,368 bytes | 42,904 bytes |
+| kernel.bin | 86,248 bytes | 56,000 bytes |
 | boot to the first-start prompt | 0.11 s | 0.08-0.12 s |
 | memory used after boot, logged in | 3.3 MiB | |
 | RAM free of 1 GiB after boot | 1022 MiB | |
-| IPC round trip | 4.8 µs (5.5 µs with FP/SIMD) | 433 ns (432 x87/SSE, 479 AVX) |
+| IPC round trip | 5.3 µs (5.6 µs with FP/SIMD); 4.5 µs with the one kernel lock (emulated atomics and barriers are slow) | 450 ns (449 x87/SSE, 494 AVX); 430 ns with the one kernel lock |
 | sia, SmolLM2-135M Q8_0 | 3.6 tok/s plain C, 4.1 NEON (4 threads, emulated: NEON is slow under emulation) | 186 tok/s (AVX2) |
 | desktop session | 14 MiB, 8 MiB of it QEMU's framebuffer picture; a full frame ~10 ms | 3.6-3.9 MiB; 1-4 ms |
 

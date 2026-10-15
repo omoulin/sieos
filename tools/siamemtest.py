@@ -11,6 +11,7 @@ The image must be fresh (first start); the test works in a copy.
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import os, re, select, shutil, subprocess, sys, time
+import qserial                                      # (tools/qserial.py: typing on the console)
 SLOW = float(os.environ.get("SIEOS_SLOW", "1"))   # emulated processors: everything takes longer
 
 cpus, image, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3:]
@@ -44,8 +45,7 @@ def expect(text, timeout=30):
     return before.decode(errors="replace")
 
 def send(line):
-    qemu.stdin.write(line.encode() + b"\r")
-    qemu.stdin.flush()
+    qserial.type_line(qemu, line)
 
 def run(cmd, timeout=60, prompt="# "):
     send(cmd)

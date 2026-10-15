@@ -13,6 +13,7 @@ Usage: usbdevtest.py <cpus> <host tools dir> <disk image> <qemu command...>
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import json, os, re, select, shutil, socket, subprocess, sys, time
+import qserial                                      # (tools/qserial.py: typing on the console)
 
 cpus, host, image, base = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
 SLOW = 1 if "kvm" in " ".join(base) else 8          # emulated processors: give them time
@@ -51,8 +52,7 @@ def expect(text, timeout=20, must=True):
     return before.decode(errors="replace")
 
 def send(line):
-    qemu.stdin.write(line.encode() + b"\r")
-    qemu.stdin.flush()
+    qserial.type_line(qemu, line)
 
 def q(cmd, **args):
     global qmp

@@ -9,6 +9,7 @@ Usage: gpiotest.py <cpus> <disk image> <qemu command line...> (make gpio-test)
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import atexit, os, select, shutil, subprocess, sys, time
+import qserial                                      # (tools/qserial.py: typing on the console)
 SLOW = float(os.environ.get("SIEOS_SLOW", "1"))
 
 cpus, image, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3:]
@@ -35,8 +36,7 @@ def expect(text, timeout=30):
     return before.decode(errors="replace")
 
 def send(line):
-    qemu.stdin.write(line.encode() + b"\r")
-    qemu.stdin.flush()
+    qserial.type_line(qemu, line)
 
 def run(cmd, timeout=60):
     send(cmd)

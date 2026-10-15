@@ -25,6 +25,7 @@ void cpu_init(void)
     cpu_t *c = cpu_alloc();
     if (!c) panic("no memory for the first CPU\n");
     c->id = 0;
+    c->cur_as = kernel_as;                 /* (arch_mem_init loaded it) */
     cpus[ncpu++] = c;
     cpu_setup(c);
 #ifdef STACKCHECK
@@ -34,9 +35,26 @@ void cpu_init(void)
 #endif
 }
 
-/* On every CPU: TPIDR_EL1 = its cpu_t, its MPIDR, the FP/SIMD registers. */
+/* This CPU's kind, from MIDR_EL1 (implementer 0x41: ARM; the part number,
+ * bits 15-4): the efficiency cores of big.LITTLE designs are Cortex-A32,
+ * A34, A35, A53, A55, A510 and A520; the others (A57, A72, A76, A78, X1...)
+ * are performance cores. A machine whose cores are all alike (the Pi 4's
+ * A72s, the Pi 5's A76s) is not hybrid: task.c treats them all as P-cores. */
+static int core_kind(void)
+{
+    uint64_t midr;
+    asm volatile("mrs %0, midr_el1" : "=r"(midr));
+    if ((midr >> 24 & 0xFF) != 0x41) return CPU_P;
+    switch (midr >> 4 & 0xFFF) {
+    case 0xD01: case 0xD02: case 0xD03: case 0xD04: case 0xD05: case 0xD46: case 0xD80: return CPU_E;
+    }
+    return CPU_P;
+}
+
+/* On every CPU: TPIDR_EL1 = its cpu_t, its MPIDR, its kind, the FP/SIMD registers. */
 void cpu_setup(cpu_t *c)
 {
+    c->type = core_kind();
     asm volatile("msr tpidr_el1, %0" : : "r"(c));
     asm volatile("mrs %0, mpidr_el1" : "=r"(c->a.mpidr));
     c->a.mpidr &= 0xFF00FFFFFFUL;          /* the affinity fields only */
@@ -77,7 +95,7 @@ void arch_set_tls(cpu_t *c, uint64_t base)
 
 /* Stop every other CPU (power off, panic): a "halt" interrupt. (GICv2 has
  * no interrupt that gets through masking, unlike x86's NMI: a CPU spinning
- * for the kernel lock never gets it, but it then waits forever anyway.) */
+ * in the kernel never gets it, but its spin then lasts forever anyway.) */
 volatile int halting;
 void halt_others(void)
 {
@@ -91,13 +109,12 @@ void halt_others(void)
  * program ran: the bus refused an access (on a Pi, a driver touching a
  * device that is off or held in reset); it arrives a few instructions
  * late, but a driver's own registers are the likely cause: that process
- * dies too, not the whole system. Returns 1: the lock is held. */
+ * dies too, not the whole system. Returns 1: leave through kernel_exit. */
 int trap_sync(regs_t *r)
 {
     uint64_t esr = sysreg_esr(), far = sysreg_far();
     int ec = esr >> 26 & 0x3F;
     if (ec == EC_SVC) { diag_stage(12); syscall(r); return 1; }   /* step 12: a program runs (once) */
-    klock();
     rand_event(esr ^ ticks());
     if (ec == EC_FP && fpu_first_use(cur)) return 1;   /* the instruction runs again */
     diag_fault(4, esr, r->pc, far);                    /* (on a Pi's screen, before step 12: init itself) */
