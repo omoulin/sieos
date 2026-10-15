@@ -86,7 +86,7 @@ add, copy/convert, argmax/top-k.
 | SIEOS on the laptop: UEFI boot, NVMe (read), USB/touchpad | running there | not yet |
 | IOMMU (VT-d): a device reaches only its own memory | the NVIDIA driver | not yet |
 | Network: virtio (QEMU) done; Realtek driver for the laptop, TCP/IP, DNS, TLS | the online backend | done in QEMU; Realtek not yet |
-| Scheduler aware of P-cores and E-cores | CPU inference speed | not yet |
+| Scheduler aware of P-cores and E-cores | CPU inference speed | done: inference on P-cores, compaction on E-cores ([kernel.md](kernel.md)); tested in QEMU with `pcores=N` |
 
 ## Order
 
