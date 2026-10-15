@@ -60,8 +60,12 @@ static int d_flush(void *ctx)
     return call_named(&disk, "disk", &m, 1) < 0 || (long)m.w[0] < 0 ? -EIO : 0;
 }
 /* Wall-clock time: there is no clock chip driver yet, so the build's date
- * plus the time since boot. */
-static int64_t now(void) { return (int64_t)EPOCH * 1000000000 + sys_clock(); }
+ * plus the time since boot, moved ahead to the newest file time asked
+ * about (a disk made after this build): a file written now is never older
+ * than the files it was made from (make compares those times). */
+static int64_t ahead;
+static int64_t now(void) { return (int64_t)EPOCH * 1000000000 + sys_clock() + ahead; }
+static void seen(int64_t t) { int64_t n = now(); if (t >= n) ahead += t - n + 1; }
 
 /* ---- Commit timing. The commit thread asks FS_TICK; the answer is how
  * long to sleep. With nothing changed, the answer waits until a change
@@ -354,6 +358,7 @@ static long serve(msg_t *m, long from, const void **out, uint64_t *outlen, uint6
         if (m->w[0] == FS_FSTAT) { if (!(h = hnd_get(m->w[1], pid))) return -EBADF; ino = h->ino; }
         else if ((r = walk(s1, !m->w[1], c, &ino, 0, 0))) return r;    /* w[1] = 1: the link itself */
         if ((r = siefs_stat(fs, ino, (siefs_stat_t *)buf))) return r;
+        seen(((siefs_stat_t *)buf)->mtime);
         *out = buf; *outlen = sizeof(siefs_stat_t);
         return 0;
     case FS_READDIR: {
