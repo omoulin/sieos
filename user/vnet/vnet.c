@@ -391,6 +391,7 @@ int main(int argc, char **argv)
     char what[96];
     for (size_t i = 0; i < sizeof cards / sizeof cards[0] && !card; i++)
         if (!cards[i]->setup(&info, what, sizeof what)) card = cards[i];
+    info.link = card && card->link ? 0 : -1;      /* (a cable: down until the watcher sees it up) */
     info.rtc = rtc_now();
     info.rtc_ns = sys_clock();
 #if defined(__aarch64__)

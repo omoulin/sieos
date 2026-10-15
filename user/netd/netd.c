@@ -6,6 +6,11 @@
  *                        ▲                   │
  *                        └────NET_FRAMES─────┘ (frames received, in batches)
  *
+ * Two interfaces, one used at a time: the cable (vnet, "nic0") when its
+ * link is up, else Wi-Fi (wifid, "wifi", the Raspberry Pis) when it is
+ * associated, else the cable anyway (virtio has no link to watch). A change
+ * of interface is a new network: ARP forgotten, DHCP again.
+ *
  * One thread does everything, one message at a time, so no locks: a client
  * request, a batch of received frames, or a tick of the timer thread. Calls
  * that must wait (a connection, data, a DNS answer) keep the client's reply
@@ -63,7 +68,10 @@ static uint16_t csum_fold(uint32_t s)
 static uint8_t mac[6];
 static uint32_t my_ip, my_mask, my_gw, my_dns;
 static int nic_up;
-static long nic, port;
+static long port;
+static const char *const ifname[2] = { "nic0", "wifi" };
+static struct { long port; uint8_t mac[6]; int present, link; } ifs[2];   /* link: 1, 0, -1 none */
+static int cur = -1;                           /* the interface in use (NET_IF_...), -1: none */
 static int64_t rtc_base, rtc_ns;               /* the date, from the driver's clock chip read */
 static net_info_t stats;
 
@@ -75,7 +83,8 @@ static void tx_flush(void)
 {
     if (!txlen) return;
     msg_t m = { .w = { NIC_SEND }, .sbuf = txbuf, .slen = txlen };
-    call_named(&nic, "nic0", &m, 1);
+    if (cur == NET_IF_ETH) call_named(&ifs[0].port, "nic0", &m, 1);
+    else if (cur == NET_IF_WIFI && ipc_call(ifs[1].port, &m) < 0) ifs[1].present = 0;   /* (wifid ended) */
     txlen = 0;
 }
 
@@ -919,14 +928,53 @@ static int64_t hold_until;
  * virtio has no cable). Up: ask DHCP again, the network may be another one,
  * and hold questions about the configuration as at start. Down: nothing to
  * send meanwhile; the address stays until the next answer. */
-static void link_change(int up)
+static void dhcp_again(void)
 {
-    printf("netd: link %s\n", up ? "up" : "down");
-    if (!up || !nic_up) return;
     dhcp_state = D_SELECTING;
     sys_random(&dhcp_xid, 4);
     hold_until = now() + 3 * SEC;
     dhcp_send(1);
+}
+
+/* An interface's address and link (NIC_INFO): 0 if it answers. */
+static int if_probe(int i, long p)
+{
+    nic_info_t ni;
+    msg_t q = { .w = { NIC_INFO }, .rbuf = &ni, .rlen = sizeof ni };
+    if (p <= 0 || ipc_call(p, &q) < 0 || (long)q.w[0] != 0 || q.rlen != sizeof ni) return -1;
+    ifs[i].port = p; ifs[i].present = 1; ifs[i].link = ni.link;
+    memcpy(ifs[i].mac, ni.mac, 6);
+    if (i == NET_IF_ETH || !rtc_base) { rtc_base = ni.rtc; rtc_ns = ni.rtc_ns; }
+    return 0;
+}
+
+/* Use the best interface: the cable if up, else Wi-Fi if up, else the
+ * cable anyway. 1 if it changed (and DHCP started again). */
+static int choose(void)
+{
+    int want = -1;
+    for (int i = 1; i >= 0; i--) if (ifs[i].present && ifs[i].link) want = i;
+    if (want < 0 && ifs[0].present) want = 0;
+    if (want == cur) return 0;
+    cur = want;
+    nic_up = cur >= 0;
+    memset(arp, 0, sizeof arp);
+    my_ip = my_gw = 0;
+    if (!nic_up) { printf("netd: no interface\n"); return 1; }
+    memcpy(mac, ifs[cur].mac, 6);
+    printf("netd: using %s (%s)\n", ifname[cur], cur == NET_IF_ETH ? "the cable" : "Wi-Fi");
+    dhcp_again();
+    return 1;
+}
+
+static void link_change(int i, int up)
+{
+    if (i == NET_IF_WIFI && !ifs[i].present) if_probe(i, port_find("wifi"));
+    if (i < 0 || i > 1 || !ifs[i].present) return;
+    printf("netd: %s link %s\n", i == NET_IF_ETH ? "cable" : "Wi-Fi", up ? "up" : "down");
+    ifs[i].link = up;
+    if (choose() || !up || i != cur) return;
+    dhcp_again();                                /* the same interface back: maybe another network */
 }
 
 /* ---- Timers: retransmissions, timeouts, DHCP, DNS, ARP. Returns the
@@ -1200,20 +1248,10 @@ int main(int argc, char **argv)
     dns_port = 32768 + dns_port % 16384;
     /* The driver: its address and the date. If there is no card, netd still
      * answers (ENETUNREACH), so programs never wait forever. */
-    nic_info_t ni;
-    msg_t q = { .w = { NIC_INFO }, .rbuf = &ni, .rlen = sizeof ni };
-    long np = port_lookup("nic0");
-    if (np > 0 && ipc_call(np, &q) >= 0 && (long)q.w[0] == 0 && q.rlen == sizeof ni) {
-        nic = np;
-        memcpy(mac, ni.mac, 6);
-        rtc_base = ni.rtc; rtc_ns = ni.rtc_ns;
-        nic_up = 1;
-        sys_random(&dhcp_xid, 4);
-        dhcp_state = D_SELECTING;
-        hold_until = now() + 3 * SEC;
-        dhcp_send(1);
-        tx_flush();
-    }
+    if_probe(NET_IF_ETH, port_lookup("nic0"));
+    if_probe(NET_IF_WIFI, port_find("wifi"));    /* (never waited for: only the Pis have it) */
+    choose();
+    tx_flush();
     thread_start(ticker, 0, 8192);
     static uint8_t in[NET_MAX];
     uint64_t asked = 0, seen = 0;                /* client requests; at init's last question */
@@ -1225,6 +1263,7 @@ int main(int argc, char **argv)
         if (from <= 0) continue;
         if (m.w[0] == NET_FRAMES) {
             if (m.uid != 0) r = -EPERM;
+            else if ((int)m.w[1] != cur) r = 0;      /* (from the interface not in use: dropped) */
             else {
                 for (size_t off = 0; off + 2 <= m.rlen;) {
                     size_t fl = in[off] | in[off + 1] << 8;
@@ -1238,7 +1277,7 @@ int main(int argc, char **argv)
             reply_val(from, r);
         } else if (m.w[0] == NET_LINK) {
             if (m.uid != 0) r = -EPERM;          /* only the (root) driver says so */
-            else { link_change((int)m.w[1]); r = 0; }
+            else { link_change((int)m.w[2], (int)m.w[1]); r = 0; }
             reply_val(from, r);
         } else if (m.w[0] == NET_TICK) {
             if (m.pid != self) reply_val(from, -EPERM);

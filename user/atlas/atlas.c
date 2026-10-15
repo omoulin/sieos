@@ -897,6 +897,15 @@ static void mouse_load(void)                            /* at login: the user's 
 
 /* ---- Terminals: open (a shell for the user, on "atlas#N"), close. */
 long atlas_auth(msg_t *m) { long e = call_named(&auth_port, "auth", m, 0); return e < 0 ? e : (long)m->w[0]; }
+/* The Wi-Fi server, only if it is already running (never waited for or
+ * started: a machine without one would hang the desktop otherwise). */
+long atlas_wifi(msg_t *m)
+{
+    long p = port_find("wifi");
+    if (p <= 0) return -ENOENT;
+    long e = ipc_call(p, m);
+    return e < 0 ? e : (long)m->w[0];
+}
 
 static long open_term(const char *pw)
 {

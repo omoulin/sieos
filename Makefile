@@ -41,6 +41,7 @@ BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest v
 LINKS   := passwd su useradd userdel    # other names of /bin/acct (symbolic links)
 SIEFS_CORE := crc tree space fs         # the SieFS library, linked into the file server
 
+BINS    += $(if $(filter arm64,$(ARCH)),wifi wifid)   # the Raspberry Pis' Wi-Fi: the command and its server
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
 all: $(B)/kernel.bin $(PROGS:%=$(B)/%.elf) $(KARCH_EXTRA) $(B)/disk.img
@@ -109,6 +110,16 @@ $(B)/vnet.elf: $(B)/user/vnet.o $(VNET_X) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) u
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(VNET_X) $(ULIB)
 $(B)/user/vnet.o: user/vnet/nic.h
 $(B)/user/vnet/%.o: user/vnet/%.c user/vnet/nic.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(UCFLAGS) -c $< -o $@
+
+# The Wi-Fi server (arm64 only): the SDIO host (sdio.c) and the FullMAC
+# driver (wifid.c); the command is an ordinary program (user/wifi/wifi.c).
+$(B)/wifid.elf: $(B)/user/wifi/wifid.o $(B)/user/wifi/sdio.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(B)/user/wifi/wifid.o $(B)/user/wifi/sdio.o $(ULIB)
+$(B)/wifi.elf: $(B)/user/wifi/wifi.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(B)/user/wifi/wifi.o $(ULIB)
+$(B)/user/wifi/%.o: user/wifi/%.c user/wifi/wifi.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
@@ -362,9 +373,24 @@ SDDISK  ?= 2G
 PIMODEL ?= smollm2-360m-instruct-q8_0.gguf
 .hosttools/rpi/%.dtb:
 	mkdir -p $(@D) && curl -sfL -o $@ https://raw.githubusercontent.com/raspberrypi/firmware/master/boot/$*.dtb
-sdcard: all
+# The Wi-Fi chip's firmware (not part of SIEOS: the Raspberry Pi's, under its
+# own licence), fetched once like the device trees, at a pinned commit of the
+# RPi-Distro firmware-nonfree repository, and copied onto the card by sdcard.
+# The .bin is Cypress's "standard" build (it has the internal supplicant, for
+# WPA2); the nvram .txt and the .clm_blob are the Pi's.
+BRCMFW  := https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/c91cd2804cf7463aab913e7247c176049f16bbd6/debian/config/brcm80211
+WIFIFW  := .hosttools/rpi/fw/brcmfmac43455-sdio.bin .hosttools/rpi/fw/brcmfmac43455-sdio.clm_blob .hosttools/rpi/fw/brcmfmac43455-sdio.txt
+.hosttools/rpi/fw/brcmfmac43455-sdio.bin:
+	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/cypress/cyfmac43455-sdio-standard.bin
+.hosttools/rpi/fw/brcmfmac43455-sdio.clm_blob:
+	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/cypress/cyfmac43455-sdio.clm_blob
+.hosttools/rpi/fw/brcmfmac43455-sdio.txt:
+	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/brcm/brcmfmac43455-sdio.txt
+sdcard: all $(WIFIFW)
 	rm -f $(B)/sd-siefs.img && $(B)/host/mkfs.siefs -s $(SDDISK) -L SIEOS -d $(B)/rootfs $(B)/sd-siefs.img
 	$(if $(SDMODEL),$(B)/host/siefs $(B)/sd-siefs.img mkdir /models && $(B)/host/siefs $(B)/sd-siefs.img put models/$(PIMODEL) /models/$(PIMODEL))
+	$(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware 2>/dev/null; $(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware/brcm 2>/dev/null; \
+	    for f in $(WIFIFW); do $(B)/host/siefs $(B)/sd-siefs.img put $$f /lib/firmware/brcm/$$(basename $$f); done
 	python3 tools/mksdcard.py $(B)/sieos-pi$(PI).img --pi $(PI) --kernel $(B)/kernel.bin --initrd $(B)/modules.img \
 	    --siefs $(B)/sd-siefs.img $(if $(FIRMWARE),--firmware $(FIRMWARE))
 	rm -f $(B)/sd-siefs.img
