@@ -15,11 +15,18 @@
  */
 #include "mk.h"
 
-static long wifi;
 static const char *const states[] = { "off", "idle", "scanning", "joining", "connected", "failed" };
 static const char *const secs[] = { "open", "WPA2", "other" };
 
-static int call(msg_t *m) { return (int)call_named(&wifi, "wifi", m, 1); }
+/* The Wi-Fi server, only if it is already running (never waited for or
+ * started: a machine without one would hang otherwise). */
+static int call(msg_t *m)
+{
+    long p = port_find("wifi");
+    if (p <= 0) return -ENOENT;
+    long e = ipc_call(p, m);
+    return e < 0 ? (int)e : (int)m->w[0];
+}
 
 static void show_status(void)
 {
