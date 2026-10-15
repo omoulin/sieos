@@ -102,6 +102,7 @@ A key is `(id, type << 56 | offset)`, compared as two unsigned numbers.
 | `VOLUME` 16 | 0 | in the root tree: the volume's file tree, next id, object count, flags, key id, and for snapshots their head and commit, dead list, creation time |
 | `VOLNAME` 17 | 0 | in the root tree: a snapshot's name |
 | `DEAD` 18 | first block | in the root tree, keyed by a dead list's id: a run of blocks a snapshot still uses (count, commit that wrote them) |
+| `VOLKEY` 19 | 0 | in the root tree: an encrypted volume's key, sealed by the key-encryption key; how that is derived; the owner, mode and mount point its locked root shows |
 
 Objects (files, directories, symlinks) have ids that are never reused;
 the root directory is object 2. Names that hash alike share one item.
@@ -221,25 +222,43 @@ with `project = SIEOS` reads only the matching index items, in order, and
 checks each candidate's real value (hashes can collide). This is what the
 desktop needs for projects and live queries.
 
-## Encryption (planned, the format is ready)
+## Encryption
 
-- **Unit:** one key per volume, so one per user's home. The key is derived
-  from the user's password with Argon2id, and wraps a random volume key
-  (so changing a password rewrites one record).
-- **Cipher:** XChaCha20-Poly1305 (fast without special CPU instructions)
-  or AES-256-GCM, chosen per volume (`flags`).
-- **Authenticated encryption:**
-  - Every node and data block is encrypted whole. Its 16-byte tag goes in
-    the parent's pointer (`mac`), next to the CRC.
-  - The nonce comes from the block number and the commit number. Copy-on-
-    write never writes the same block twice in one commit, so a nonce is
-    never reused.
-  - Tampering with the disk, even by someone who copies old blocks back,
-    is detected, not just garbled.
-- **What stays visible:**
-  - The root tree and the bitmap: block usage, not contents.
-  - In encrypted volumes, names are hashed with a keyed hash (SipHash), so
-    the tree's order reveals nothing.
+A volume can be **encrypted** (`siefs_mkvol_enc`): SIEOS makes each
+user's home one, keyed by their password.
+
+- **Keys:** the volume key is 32 random bytes. It is kept in the root
+  tree (`VOLKEY` item), sealed with a key-encryption key that the caller
+  derives from the password with Argon2id (the item records how: salt,
+  passes, memory). Changing the password seals the same key anew
+  (`siefs_rekey`): nothing else is rewritten.
+- **Cipher:** ChaCha20-Poly1305 (`lib/aead.c`: fast without special CPU
+  instructions), authenticated: tampering, even copying old blocks back,
+  is detected, not just garbled.
+- **What is sealed:**
+  - every tree node, except its 32-byte header (level, item count, commit,
+    tree), which is authenticated as associated data; its tag goes in the
+    pointer to it (`bptr_t.mac`), the nonce's salt in the pointer's flags;
+  - every data block, with the volume id as associated data; its tag in
+    the extent (one per block), the salt once per extent (`X_ENC`).
+  So names, attributes, small files kept inside the tree and file contents
+  are all sealed.
+- **Nonces:** the block's number and a 4-byte salt, random per commit for
+  nodes and a counter from a random start for data writes (the top bit
+  tells them apart). A block is never sealed twice with the same nonce in
+  one commit; a commit redone after a crash draws a new salt.
+- **Checksums** stay those of what is on the disk, so an encrypted volume
+  checks without its key (but its free space is not compared: see below).
+- **Locked:** after a mount, until `siefs_unlock` with the right key.
+  Its root still stats, as its owner's directory (the `VOLKEY` item keeps
+  owner, mode and mount point); everything else in it is `EACCES`.
+  `siefs_lock` closes it again (its cached nodes are dropped). Its
+  snapshots share its key.
+- **What stays visible:** the root tree (which volumes exist, their sizes
+  in objects), the bitmap (which blocks are used), node headers (how many
+  items, which commit), and how big files are on the disk.
+- **Checking** a locked volume: its blocks cannot be walked, so
+  `siefs_check` skips it and does not look for leaks (it says so).
 
 ## Memory and speed
 
@@ -300,6 +319,7 @@ SieFS itself on one core:
 | `siefs/space.c` | free space, the commit, format, mount |
 | `siefs/fs.c` | files, directories, links, rename, attributes; volumes: picking one per operation, mounting |
 | `siefs/vol.c` | snapshots: taking, deleting, restoring, listing |
+| `siefs/crypt.c` | encrypted volumes: sealing and opening nodes and blocks, the volume key |
 | `siefs/check.c` | `siefs_check`, the full verification |
 | `siefs/crc.c` | CRC-32C |
 
@@ -341,9 +361,13 @@ siefs disk.img find project SIEOS                   every object with that attri
   after every commit. At the end, with the files, snapshots and volume
   removed, all the space is free again. `siefs-test snapshots SEED` runs
   it with another seed.
+- **An encryption test:** nothing of an encrypted volume in clear on the
+  disk (contents, names, small files, attributes), locked after a mount,
+  the wrong key refused, a new password, a changed block refused by its
+  tag. The snapshot test also runs inside an encrypted volume.
 - **A crash test:** about 6,000 simulated power cuts, at every write of a
   transaction, half the scenarios with snapshots taken, deleted and
-  restored. Unflushed writes are randomly kept, dropped or torn. The
+  restored, a third inside an encrypted volume. Unflushed writes are randomly kept, dropped or torn. The
   remounted state must be exactly the old or the new one (with snapshots,
   which commit by themselves: the state after one of the operations), and
   check clean.

@@ -130,6 +130,8 @@ int t_get_node(siefs_t *fs, const bptr_t *p, node_t **out)
         fs->env.free(n);
         return E(EIO);                                  /* unreadable, or not what the parent wrote */
     }
+    int e = node_open(fs, n, p);                        /* an encrypted volume's: opened here, once */
+    if (e) { fs->env.free(n); return e; }
     n->blk = p->blk; n->dirty = 0;
     cache_add(fs, n);
     *out = n;
@@ -497,9 +499,12 @@ int t_flush(siefs_t *fs, bptr_t *p)
     if (fs->wn && (b != fs->wstart + fs->wn || fs->wn == EXT_MAX) && (e = t_wflush(fs))) return e;
     if (!fs->wn) fs->wstart = b;
     NH(n)->gen = fs->txn;
-    memcpy(fs->io + fs->wn++ * BS, n->d, BS);
+    uint8_t *out = fs->io + fs->wn * BS;
+    *p = (bptr_t){ .blk = b, .gen = fs->txn };
+    if ((e = node_seal(fs, n, out, p))) return e;       /* (encrypted: sealed on its way out) */
+    fs->wn++;
     fs->dirty[s] = 0; fs->ndirty--;
-    *p = (bptr_t){ .blk = b, .gen = fs->txn, .csum = siefs_crc32c(0, n->d, BS) };
+    p->csum = siefs_crc32c(0, out, BS);
     n->blk = b; n->dirty = 0;
     cache_add(fs, n);
     return 0;

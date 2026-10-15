@@ -144,8 +144,9 @@ wait("atlas: greeter", 60)
 if b"accounts needed" in full:
     fail("the second boot asked for the first start again: the accounts were not kept")
 type_text("alice\talicepass1\n")
+wait("fs: /home/alice unlocked")                   # her password opened her encrypted home
 wait("atlas: login alice: ok")
-print("ok: second boot: the accounts were kept (alice logged in)")
+print("ok: second boot: the accounts were kept (alice logged in, her encrypted home opened)")
 power_off()
 
 # ---- 3: the key on the host: its SieFS partition checked, the file read back
@@ -173,7 +174,10 @@ with open(image, "rb") as f:
         if r.returncode:
             fail(f"fsck.siefs: {r.stdout}{r.stderr}")
         c = subprocess.run([os.path.join(host, "siefs"), part.name, "cat", "/home/alice/keep.txt"], capture_output=True, text=True)
-        if "written on the key" not in c.stdout:
-            fail(f"alice's file is not on the key: {c.stdout}{c.stderr}")
-print(f"ok: the key's SieFS partition checks clean ({r.stdout.strip().splitlines()[-1].split(': ')[-1]}); alice's file is there")
+        if "written on the key" in c.stdout or "permission denied" not in c.stdout + c.stderr:   # her home is encrypted
+            fail(f"alice's file is readable without her password: {c.stdout}{c.stderr}")
+        part.seek(0)
+        if b"written on the key" in part.read():
+            fail("alice's file is on the key in clear")
+print(f"ok: the key's SieFS partition checks clean ({r.stdout.strip().splitlines()[-1].split(': ')[-1]}); alice's home is encrypted (not readable without her password)")
 print("PASS")

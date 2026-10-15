@@ -232,7 +232,9 @@ static int accounts_exist(void)
 /* A new password: at least AUTH_PWMIN characters, and not the name itself. */
 static int pw_ok(const char *name, const char *pw) { return strlen(pw) >= AUTH_PWMIN && strcmp(pw, name); }
 
-/* Create a user: records, group, home folder (0700, theirs). */
+/* Create a user: records, group, home folder (0700, theirs). A user's
+ * home is a volume of its own, encrypted with a key wrapped by the
+ * password (docs/siefs.md): it opens at each login with the password. */
 static int user_create(const char *name, const char *full, const char *pw, int uid)
 {
     char line[256], u[12], home[64];
@@ -257,7 +259,7 @@ static int user_create(const char *name, const char *full, const char *pw, int u
     r = file_edit("/etc/groups", H_GROUPS, 3, name, t.p, 0644);
     free(t.p);
     if (r || (uid && (r = members(name, "users")))) return r;
-    r = (int)fs_mkdir(home, 0700);
+    r = uid ? (int)fs_mkvol(home, 0700, uid, uid, pw) : (int)fs_mkdir(home, 0700);
     if (r && r != -EEXIST) return r;
     if ((r = (int)fs_chown(home, uid, uid))) return r;
     char *f[] = { (char *)name, u, u, home, "/bin/sh", (char *)full };
@@ -280,6 +282,10 @@ static long login(const char *name, const char *pw, int nopw, int parent, const 
         sys_sleep(1000000000);                          /* slow down guessing */
         note("auth: failed login for %s\n", name);
         return -EACCES;
+    }
+    if (!nopw && u.uid) {                              /* the password opens the home (if it is encrypted) */
+        long e = fs_unlock(u.home, pw);
+        if (e) note("auth: %s's home did not open (error %ld)\n", name, -e);
     }
     mk_spawn_t o = { .flags = SPAWN_GROUPS | SPAWN_PARENT, .parent = parent };
     acct_groups(name, &o.groups);
@@ -401,6 +407,10 @@ static long serve(msg_t *m, long token)
         long r = secret_line(s[0], s[2], line, sizeof line);
         if (!r) r = file_edit("/etc/secrets", H_SECRETS, 7, s[0], line, 0600);
         if (!r) note("auth: password of %s changed\n", s[0]);
+        if (!r && u.uid) {                              /* the home's key: wrapped by the new one */
+            long e = fs_rekey(u.home, s[2], s[1]);
+            if (e) note("auth: %s's home keeps its old password: it was locked and the old one was not given (error %ld)\n", s[0], -e);
+        }
         return r;
     }
     case AUTH_CHECK: {                          /* "name\0password": the desktop asks before a system change */

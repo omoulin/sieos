@@ -511,21 +511,23 @@ wait("atlas: files /home: ")
 time.sleep(0.4)
 click(*latest("crumb", "-1"))                      # the path's first part: the top folder
 wait("atlas: files /: ")
-# snapshots: one taken, a file changed, the old version still in the snapshot
-send("snap take before /")
+# snapshots: one of alice's home (a volume of its own) taken, a file changed,
+# the old version still in the snapshot; Files opens the volume's .snapshots
+send("snap take before /home/alice")
 expect("snapshot before taken")
 send("echo changed after the snapshot > /home/alice/note.txt")
 time.sleep(0.3)
-click(*latest("filesnap"))                          # Files: the volume's hidden .snapshots
+click(*latest("filesnap"))                          # Files, at "/": that volume's hidden .snapshots
 wait("atlas: files /.snapshots: ")
-send("cat /.snapshots/before/home/alice/note.txt")
+send("cat /home/alice/.snapshots/before/note.txt")
 expect("edited on the desktop")
 send("cat /home/alice/note.txt")
 expect("changed after the snapshot")
-send("snap list /")                                 # (oldest first: the hourly one, taken when the server started)
-expect("auto-")
+send("snap list /home/alice")
 expect("before")
-send("snap delete before /")
+send("snap list /")                                 # "/": the hourly one, taken when the file server started
+expect("auto-")
+send("snap delete before /home/alice")
 expect("snapshot before deleted")
 send("echo edited on the desktop > /home/alice/note.txt")
 print(f"ok: Files listed the home folder; note.txt opened by a double-click, edited, saved ({got.strip()}); demo.c from the tree in a second tab; tabs shown and closed; Up; the path's / part; a snapshot taken, browsed in Files, read, deleted")

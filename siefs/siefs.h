@@ -53,6 +53,7 @@ typedef struct {
     uint32_t cache_nodes;   /* tree nodes kept in RAM besides dirty ones (0 = 128: 512 KiB) */
     uint32_t dirty_limit;   /* commit by itself past this many changed nodes (0 = 256: 1 MiB) */
     int64_t commit_ns;      /* ... or this long after the first change (0 = 5 s) */
+    int (*random)(void *buf, size_t n);   /* random bytes (0 or -1): needed to write encrypted volumes */
 } siefs_env_t;
 
 typedef struct {
@@ -139,6 +140,24 @@ int  siefs_snapshot_restore(siefs_t *fs, uint64_t ino, const char *name);
 int  siefs_snapshot_list(siefs_t *fs, uint64_t ino, uint64_t *cursor, siefs_snap_t *s);   /* 1, or 0 at the end; oldest first */
 int  siefs_volume_root(siefs_t *fs, uint64_t ino, uint64_t *root);   /* the root of ino's volume (its head's, for a snapshot) */
 int  siefs_volume_next(siefs_t *fs, uint64_t *cursor, uint64_t *root);   /* every open volume but snapshots: 1, or 0 at the end */
+
+/* Encrypted volumes (a user's home). Every tree node and data block is
+ * sealed with the volume's own random key (ChaCha20-Poly1305: its tag in
+ * the pointer to it), and that key is kept wrapped by a key-encryption key
+ * the caller derives from a password with Argon2id (siefs_kdf_t says how;
+ * the library does not do that slow part). Locked (at mount, until
+ * siefs_unlock), a volume's root still stats, as its owner's directory,
+ * but nothing in it can be read. Snapshots share their volume's key. */
+typedef struct {
+    uint8_t salt[16];
+    uint32_t t, m_kib;                      /* Argon2id passes and memory */
+} siefs_kdf_t;
+int  siefs_mkvol_enc(siefs_t *fs, uint64_t dir, const char *name, uint32_t mode, uint32_t uid, uint32_t gid,
+                     const siefs_kdf_t *kdf, const uint8_t kek[32], uint64_t *ino);
+int  siefs_kdf(siefs_t *fs, uint64_t ino, siefs_kdf_t *kdf);           /* -EINVAL: ino's volume is not encrypted */
+int  siefs_unlock(siefs_t *fs, uint64_t ino, const uint8_t kek[32]);   /* -EACCES: not its key */
+int  siefs_rekey(siefs_t *fs, uint64_t ino, const siefs_kdf_t *kdf, const uint8_t kek[32]);   /* unlocked: a new password */
+int  siefs_lock(siefs_t *fs, uint64_t ino);
 
 /* Check everything: checksums, tree order, free space, links, attribute
  * index. data != 0: also read and check every data block. Returns the

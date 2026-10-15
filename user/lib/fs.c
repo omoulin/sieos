@@ -6,6 +6,7 @@
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
+#include "mk/crypto.h"
 
 static long fsport;
 static int fsgen = 1;                       /* +1 each time the file server is found again */
@@ -287,10 +288,26 @@ long fs_snaplist(const char *path, uint64_t *cursor, void *buf, size_t size)
     if (r >= 0) *cursor = m.w[1];
     return r;
 }
-long fs_mkvol(const char *path, int mode, int uid, int gid)
+long fs_mkvol(const char *path, int mode, int uid, int gid, const char *password)
 {
     msg_t m = { .w = { FS_MKVOL, (uint64_t)mode, (uint64_t)uid, (uint64_t)gid } };
-    return pcall(&m, path, 0, 0);
+    return pcall(&m, path, password ? password : "", 0);
+}
+long fs_unlock(const char *path, const char *password)
+{
+    msg_t m = { .w = { FS_UNLOCK } };
+    return pcall(&m, path, password, 0);
+}
+long fs_rekey(const char *path, const char *password, const char *old)
+{
+    char s[FS_PATH * 2 + 2];
+    size_t a = strlen(path) + 1, b = strlen(password) + 1, c = strlen(old ? old : "") + 1;
+    if (a + b + c > sizeof s) return -ENAMETOOLONG;
+    memcpy(s, path, a); memcpy(s + a, password, b); memcpy(s + a + b, old ? old : "", c);
+    msg_t m = { .w = { FS_REKEY }, .sbuf = s, .slen = a + b + c };
+    long r = fs_call(&m);
+    wipe(s, sizeof s);
+    return r;
 }
 long fs_rmvol(const char *path)
 {

@@ -33,7 +33,7 @@ checklist in [raspberrypi.md](raspberrypi.md).
 - The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
   Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
 - The Pis: USB input, Ethernet, faster SD; running on the real boards.
-- A `make` for SIEOS (sicc runs there now: `/bin/cc`), encryption.
+- A `make` for SIEOS (sicc runs there now: `/bin/cc`).
 
 ## History
 
@@ -70,3 +70,7 @@ checklist in [raspberrypi.md](raspberrypi.md).
   through dead lists; the file server takes one of every volume each hour
   (kept a day) and lets the oldest go when the disk is full; `snap`, and
   the Snapshots button in Files ([siefs.md](siefs.md#snapshots)).
+- **2026-10-15, later.** Encrypted homes: each user's home is a volume
+  sealed with ChaCha20-Poly1305, its key wrapped by the user's password
+  (Argon2id); it opens at login and gets a new wrapping when the password
+  changes ([siefs.md](siefs.md#encryption), [accounts.md](accounts.md)).

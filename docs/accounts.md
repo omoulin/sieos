@@ -111,7 +111,14 @@ good (stopped, or given up after crashing), it tells auth itself. Then, and
 only then, login asks for root's password and a first user on the terminal.
 
 auth creates `/root` and `/home/NAME` (both mode 0700), and the three files
-below.
+below. A user's home is a volume of its own, **encrypted**: its key is
+wrapped by a key derived from the user's password (Argon2id, as for
+logins), so on the disk nothing of it can be read without the password
+([siefs.md](siefs.md#encryption)). It opens at each login with the
+password (auth asks the file server, `FS_UNLOCK`) and stays open until the
+machine stops: what it protects is the disk at rest (a lost card, a copied
+image), not a running system, where root can read everything anyway.
+Homes made before this (plain folders) stay as they are.
 
 ## The files
 
@@ -157,7 +164,12 @@ erased from memory after use.
   people's files there: it is "sticky"), and what the permissions allow.
 - Only root may power off or restart the machine.
 - `passwd`: anyone may change their own password (with the current one);
-  root may set anyone's.
+  root may set anyone's. The home's key is wrapped by the new password
+  (`FS_REKEY`); when root sets the password of someone whose home is locked
+  (they have not logged in since the machine started), the home keeps the
+  old password, since nothing else can open it: auth says so in the log.
+- `su NAME` and other logins without a password (root) do not open an
+  encrypted home: only the user's password does.
 - `su NAME`: a shell as NAME, with NAME's password (root needs none). Type
   `exit` to come back.
 - `userdel` keeps the user's home folder.

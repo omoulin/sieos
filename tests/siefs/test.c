@@ -103,11 +103,19 @@ static void mem_crash(mem_t *m)
     memcpy(m->cur, m->dur, m->nb * BS);
     m->npend = 0; m->cut = -1; m->dead = 0;
 }
+static uint64_t rs2 = 77;                               /* (its own sequence: the model's stays as it was) */
+static int mrand(void *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++) { rs2 = rs2 * 6364136223846793005ULL + 1; ((uint8_t *)b)[i] = (uint8_t)(rs2 >> 56); }
+    return 0;
+}
 static siefs_env_t env_of(mem_t *m)
 {
     return (siefs_env_t){ .ctx = m, .nblocks = m->nb, .read = mrd, .write = mwr, .flush = mfl,
-                          .alloc = xalloc, .free = xfree, .now = now, .commit_ns = (int64_t)1 << 62 };
+                          .alloc = xalloc, .free = xfree, .now = now, .commit_ns = (int64_t)1 << 62, .random = mrand };
 }
+static const siefs_kdf_t KDF = { "0123456789abcdef", 3, 64 };
+static const uint8_t KEK[32] = "the key-encryption key for tests", KEK2[32] = "a new one, after a password chg";
 
 static void quiet(void *ctx, const char *msg) { (void)ctx; printf("    check: %s\n", msg); }
 
@@ -480,7 +488,7 @@ static void mcopy(model_t *to, const model_t *from)
 }
 static void mclear(model_t *m) { for (int i = 0; i < m->no; i++) free(m->o[i].data); memset(m, 0, sizeof *m); }
 
-static void snapshots(int rounds)
+static void snapshots(int rounds, int enc)
 {
     enum { NS = 6 };
     static model_t m, sm[NS];
@@ -492,7 +500,7 @@ static void snapshots(int rounds)
     siefs_t *fs;
     uint64_t home, ino, a, b;
     siefs_statfs_t st0, st1;
-    printf("snapshot test: %d rounds, snapshots taken, deleted and restored at random\n", rounds);
+    printf("snapshot test%s: %d rounds, snapshots taken, deleted and restored at random\n", enc ? " (encrypted volume)" : "", rounds);
     mem_init(&mem, 8192);
     env = env_of(&mem);
     env.cache_nodes = 16;
@@ -514,7 +522,8 @@ static void snapshots(int rounds)
     CHECK(siefs_rmvol(fs, SIEFS_ROOT, "home") == 0);
     CHECK(siefs_walk(fs, "/home", &ino) == -SIEFS_ENOENT);
     CHECK(siefs_sync(fs) == 0 && siefs_sync(fs) == 0 && siefs_sync(fs) == 0 && siefs_check(fs, 1, quiet, 0) == 0);
-    CHECK(siefs_mkvol(fs, SIEFS_ROOT, "home", 0755, 1000, 1000, &home) == 0);
+    CHECK((enc ? siefs_mkvol_enc(fs, SIEFS_ROOT, "home", 0755, 1000, 1000, &KDF, KEK, &home)
+               : siefs_mkvol(fs, SIEFS_ROOT, "home", 0755, 1000, 1000, &home)) == 0);
 
     mpre = "/home";
     for (int round = 0; round < rounds && !fails; round++) {
@@ -541,7 +550,11 @@ static void snapshots(int rounds)
         }
         CHECK(siefs_sync(fs) == 0);
         CHECK(siefs_check(fs, 1, quiet, 0) == 0);
-        if (round % 10 == 9) { CHECK(siefs_unmount(fs) == 0 && siefs_mount(&env, &fs) == 0); mcompare(fs, &m); }
+        if (round % 10 == 9) {
+            CHECK(siefs_unmount(fs) == 0 && siefs_mount(&env, &fs) == 0);
+            if (enc) CHECK(siefs_unlock(fs, home, KEK) == 0);   /* (locked again after a mount) */
+            mcompare(fs, &m);
+        }
     }
     for (int j = 0; j < NS; j++)                        /* a snapshot is read only */
         if (sname[j][0] && sm[j].ne) {
@@ -582,8 +595,108 @@ static void snapshots(int rounds)
     mem_free(&mem);
 }
 
+/* ================================================================ 2c. encryption
+ * An encrypted volume: nothing of it in clear on the disk, locked after a
+ * mount (its root still stats as its owner's), the wrong key refused, a
+ * new password, and the checker without the key. */
+static int on_disk(mem_t *m, const char *s)
+{
+    size_t n = strlen(s);
+    for (uint64_t i = 0; i + n <= m->nb * BS; i++) if (m->cur[i] == (uint8_t)s[0] && !memcmp(m->cur + i, s, n)) return 1;
+    return 0;
+}
+static void encryption(void)
+{
+    mem_t mem;
+    siefs_env_t env;
+    siefs_t *fs;
+    uint64_t sec, pub, a, ino;
+    siefs_stat_t st;
+    siefs_dirent_t de;
+    static char data[20000];
+    printf("encryption test\n");
+    mem_init(&mem, 4096);
+    env = env_of(&mem);
+    CHECK(siefs_format(&env, "enc") == 0 && siefs_mount(&env, &fs) == 0);
+    CHECK(siefs_mkvol_enc(fs, SIEFS_ROOT, "secret", 0700, 1000, 1000, &KDF, KEK, &sec) == 0);
+    CHECK(siefs_mkvol(fs, SIEFS_ROOT, "public", 0755, 1000, 1000, &pub) == 0);
+    for (int i = 0; i < 20000; i++) data[i] = "ENCRYPTED-MARKER "[i % 17];
+    CHECK(siefs_create(fs, sec, "hidden-name.txt", SIEFS_IFREG | 0600, 1000, 1000, &a) == 0);
+    CHECK(siefs_write(fs, a, 0, data, sizeof data) == (long)sizeof data);
+    CHECK(siefs_create(fs, sec, "small", SIEFS_IFREG | 0600, 1000, 1000, &a) == 0);
+    CHECK(siefs_write(fs, a, 0, "SMALL-INLINE-SECRET", 19) == 19);
+    CHECK(siefs_setxattr(fs, a, "topic", "XATTR-SECRET", 12) == 0);
+    CHECK(siefs_create(fs, pub, "visible-name.txt", SIEFS_IFREG | 0644, 1000, 1000, &a) == 0);
+    CHECK(siefs_write(fs, a, 0, "PLAIN-MARKER", 12) == 12);
+    CHECK(siefs_snapshot(fs, sec, "s") == 0);
+    CHECK(siefs_sync(fs) == 0 && siefs_check(fs, 1, quiet, 0) == 0);
+    CHECK(!on_disk(&mem, "ENCRYPTED-MARKER") && !on_disk(&mem, "hidden-name") && !on_disk(&mem, "SMALL-INLINE") &&
+          !on_disk(&mem, "XATTR-SECRET"));
+    CHECK(on_disk(&mem, "PLAIN-MARKER") && on_disk(&mem, "visible-name"));   /* (the test can see) */
+    CHECK(siefs_unmount(fs) == 0 && siefs_mount(&env, &fs) == 0);
+
+    /* locked: the root stats as its owner's directory; nothing else */
+    uint64_t cur = 2;
+    CHECK(siefs_walk(fs, "/secret", &ino) == 0 && ino == sec);
+    CHECK(siefs_stat(fs, sec, &st) == 0 && st.uid == 1000 && (st.mode & 07777) == 0700 && (st.mode >> 12) == 4);
+    CHECK(siefs_readdir(fs, sec, &cur, &de) == -SIEFS_EACCES);
+    CHECK(siefs_walk(fs, "/secret/small", &ino) == -SIEFS_EACCES);
+    CHECK(siefs_walk(fs, "/secret/.snapshots/s/small", &ino) == -SIEFS_EACCES);
+    CHECK(siefs_check(fs, 1, 0, 0) == 0);                /* the rest checks; leaks are not looked for */
+    uint64_t vr;
+    CHECK(siefs_volume_root(fs, sec, &vr) == 0 && vr == sec);   /* (found while locked: to unlock it) */
+    CHECK(siefs_unlock(fs, sec, KEK2) == -SIEFS_EACCES);
+    siefs_kdf_t k;
+    CHECK(siefs_kdf(fs, sec, &k) == 0 && !memcmp(k.salt, KDF.salt, 16) && k.t == KDF.t && k.m_kib == KDF.m_kib);
+    CHECK(siefs_kdf(fs, pub, &k) == -SIEFS_EINVAL);
+    CHECK(siefs_unlock(fs, sec, KEK) == 0);
+    char got[32];
+    CHECK(siefs_walk(fs, "/secret/small", &ino) == 0 && siefs_read(fs, ino, 0, got, 32) == 19 && !memcmp(got, "SMALL-INLINE-SECRET", 19));
+    CHECK(siefs_walk(fs, "/secret/hidden-name.txt", &ino) == 0 && siefs_read(fs, ino, 0, data, sizeof data) == (long)sizeof data &&
+          !memcmp(data, "ENCRYPTED-MARKER", 16));
+    CHECK(siefs_walk(fs, "/secret/.snapshots/s/small", &ino) == 0 && siefs_read(fs, ino, 0, got, 32) == 19);
+    CHECK(siefs_check(fs, 1, quiet, 0) == 0);
+
+    /* a new password: the same key, wrapped anew */
+    siefs_kdf_t k2 = { "fedcba9876543210", 3, 64 };
+    CHECK(siefs_rekey(fs, sec, &k2, KEK2) == 0);
+    CHECK(siefs_unmount(fs) == 0 && siefs_mount(&env, &fs) == 0);
+    CHECK(siefs_unlock(fs, sec, KEK) == -SIEFS_EACCES && siefs_unlock(fs, sec, KEK2) == 0);
+    CHECK(siefs_walk(fs, "/secret/small", &ino) == 0 && siefs_read(fs, ino, 0, got, 32) == 19);
+
+    /* locked again, while mounted */
+    CHECK(siefs_lock(fs, sec) == 0 && siefs_walk(fs, "/secret/small", &ino) == -SIEFS_EACCES);
+    CHECK(siefs_unlock(fs, sec, KEK2) == 0 && siefs_walk(fs, "/secret/small", &ino) == 0);
+
+    /* tampering: a byte of a sealed data block changed, its checksum fixed: the tag says no */
+    path_t pa;
+    extent_t x;
+    volx_t *v = vol_get(fs, sec >> 48);
+    CHECK(siefs_walk(fs, "/secret/hidden-name.txt", &a) == 0);
+    fs->cv = v;
+    CHECK(t_seek(fs, &v->ft, K(a & LMASK, T_EXTENT, 0), &pa) == 1 && ext_dec(pval(&pa), plen(&pa), &x) == 0 && (x.flags & X_ENC));
+    static uint8_t blk[BS];
+    memcpy(blk, mem.cur + x.blk * BS, BS);              /* the sealed block opens with its tag ... */
+    CHECK(data_open(fs, v, x.blk, x.salt, blk, x.mac[0]) == 0 && !memcmp(blk, "ENCRYPTED-MARKER", 16));
+    memcpy(blk, mem.cur + x.blk * BS, BS);
+    blk[100] ^= 1;                                      /* ... and not with one bit changed, */
+    CHECK(data_open(fs, v, x.blk, x.salt, blk, x.mac[0]) == -SIEFS_EIO);
+    memcpy(blk, mem.cur + x.blk * BS, BS);              /* nor at another place on the disk */
+    CHECK(data_open(fs, v, x.blk + 1, x.salt, blk, x.mac[0]) == -SIEFS_EIO);
+    siefs_unmount(fs);
+    printf("  nothing in clear on the disk; locked after a mount; wrong key refused; new password; tampering seen\n");
+    mem_free(&mem);
+}
+
 /* ================================================================ 3. crashes */
-static int snaps;                                       /* crash scenarios with snapshots in them */
+static int snaps, encd;                                 /* crash scenarios with snapshots in them; /dir encrypted */
+static int mount_open(siefs_env_t *env, siefs_t **fs)  /* (mount, and unlock /dir when it is encrypted) */
+{
+    uint64_t d;
+    int e = siefs_mount(env, fs);
+    if (!e && encd && !siefs_walk(*fs, "/dir", &d)) e = siefs_unlock(*fs, d, KEK);
+    return e;
+}
 static uint32_t steps[512]; static int nsteps = -1;     /* (dry run: the state after each operation: a snapshot's commits can land between) */
 static uint32_t sig(siefs_t *fs);
 static void ops_batch(siefs_t *fs, uint64_t seed, int n)
@@ -622,9 +735,10 @@ static void ops_batch(siefs_t *fs, uint64_t seed, int n)
 static void crash(int seeds)
 {
     long runs = 0, newer = 0;
-    printf("crash test: %d scenarios, a power cut at every write of a transaction (half with snapshots)\n", seeds);
+    printf("crash test: %d scenarios, a power cut at every write of a transaction (half with snapshots, a third encrypted)\n", seeds);
     for (int s = 1; s <= seeds && !fails; s++) {
         snaps = s % 2 == 0;
+        encd = s % 3 == 0;
         mem_t m;
         siefs_env_t env;
         siefs_t *fs;
@@ -633,7 +747,8 @@ static void crash(int seeds)
         env = env_of(&m);
         clk = 0;
         CHECK(siefs_format(&env, "crash") == 0 && siefs_mount(&env, &fs) == 0);
-        siefs_create(fs, SIEFS_ROOT, "dir", SIEFS_IFDIR | 0755, 0, 0, &d);
+        if (encd) CHECK(siefs_mkvol_enc(fs, SIEFS_ROOT, "dir", 0755, 0, 0, &KDF, KEK, &d) == 0);
+        else siefs_create(fs, SIEFS_ROOT, "dir", SIEFS_IFDIR | 0755, 0, 0, &d);
         ops_batch(fs, (uint64_t)s * 1000, 40);
         CHECK(siefs_unmount(fs) == 0);                  /* state A, committed */
         uint8_t *a_img = malloc(m.nb * BS);
@@ -642,7 +757,7 @@ static void crash(int seeds)
         uint32_t sa, sb;
         long w0, total;
         /* a dry run: state B, and how many writes its commit makes */
-        CHECK(siefs_mount(&env, &fs) == 0);
+        CHECK(mount_open(&env, &fs) == 0);
         sa = sig(fs);
         int64_t c0 = clk;
         int nops = 10 + 6 * s;                           /* bigger and bigger transactions */
@@ -660,7 +775,7 @@ static void crash(int seeds)
                 memcpy(m.cur, a_img, m.nb * BS);
                 memcpy(m.dur, a_img, m.nb * BS);
                 m.npend = 0;
-                CHECK(siefs_mount(&env, &fs) == 0);
+                CHECK(mount_open(&env, &fs) == 0);
                 clk = c0;
                 m.cut = m.writes + cut;                  /* the power fails at write number cut */
                 ops_batch(fs, (uint64_t)s * 7777, nops);
@@ -669,7 +784,7 @@ static void crash(int seeds)
                 siefs_unmount(fs);
                 mem_crash(&m);
                 siefs_t *fs2;
-                if (siefs_mount(&env, &fs2)) { CHECK(!"mount after crash"); continue; }
+                if (mount_open(&env, &fs2)) { CHECK(!"mount after crash"); continue; }
                 uint32_t sg = sig(fs2);
                 int mid = 0;
                 for (int i = 0; snaps && i < nst; i++) mid |= sg == steps[i];
@@ -843,13 +958,15 @@ int main(int argc, char **argv)
     int quick = argc > 1 && !strcmp(argv[1], "quick");
     if (argc > 2 && !strcmp(argv[1], "snapshots")) {    /* (more seeds: siefs-test snapshots SEED) */
         rs = strtoull(argv[2], 0, 10);
-        snapshots(300);
+        snapshots(300, argc > 3);
         printf(fails ? "%ld FAILURES\n" : "passed\n", fails);
         return fails != 0;
     }
     unit();
     model(quick ? 30 : 300);
-    snapshots(quick ? 40 : 300);
+    snapshots(quick ? 40 : 300, 0);
+    snapshots(quick ? 40 : 150, 1);
+    encryption();
     crash(quick ? 3 : 30);
     damage();
     if (!fails) measure();

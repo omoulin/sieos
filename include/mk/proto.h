@@ -114,10 +114,15 @@ enum {
                        deleting, restoring: root, or the owner of the volume's root. LIST:
                        w[2] = cursor; rbuf <- records {i64 created (ns), u8 length, name}
                                                      -> bytes (LIST: w[1] = next cursor) */
-    FS_MKVOL,       /* path; w[1] = mode, w[2] = uid, w[3] = gid (root only): a new volume
-                       mounted at path (a user's home)                        -> 0 */
+    FS_MKVOL,       /* "path\0password"; w[1] = mode, w[2] = uid, w[3] = gid (root only): a
+                       new volume mounted at path (a user's home), encrypted with a key
+                       wrapped by the password unless it is ""                -> 0 */
     FS_RMVOL,       /* path (root only): an empty volume, without snapshots   -> 0 */
     FS_AUTOSNAP,    /* (the server's own snapshot thread: the hourly snapshots) -> ns to wait */
+    FS_UNLOCK,      /* "path\0password" (root: auth, at a login): path's encrypted volume opens
+                       (0 also when it is not encrypted, or open already)   -> 0, -EACCES */
+    FS_REKEY,       /* "path\0new\0old" (root: auth, a new password): the volume key is
+                       wrapped anew; old opens it first if it is locked   -> 0 */
 };
 enum { SNAP_TAKE = 1, SNAP_DELETE, SNAP_RESTORE, SNAP_LIST };
 

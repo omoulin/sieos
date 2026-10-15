@@ -200,17 +200,21 @@ code, text = host("fsck.siefs", copy)
 if code:
     sys.exit(f"FAIL: fsck.siefs found problems:\n{text}")
 print("ok: fsck.siefs: clean")
-code, text = host("siefs", copy, "cat", "/home/alice/note.txt")
-if code or "hello alice" not in text:
-    sys.exit(f"FAIL: the host does not see alice's file:\n{text}")
+code, text = host("siefs", copy, "cat", "/home/alice/note.txt")   # alice's home is encrypted (docs/siefs.md)
+if not code or "hello alice" in text:
+    sys.exit(f"FAIL: the host reads alice's file without her password:\n{text}")
+with open(copy, "rb") as f:
+    if b"hello alice" in f.read():
+        sys.exit("FAIL: alice's file is on the disk in clear")
+print("ok: alice's home is encrypted: the host cannot read it, nothing of it in clear on the disk")
 code, text = host("siefs", copy, "cat", "/etc/secrets")
 if code or text.count("argon2id") != 3 or "carl" in text:
     sys.exit(f"FAIL: /etc/secrets is not as expected:\n{text}")
-print("ok: the host sees the files; /etc/secrets holds root, alice, bob")
+print("ok: the host sees the other files; /etc/secrets holds root, alice, bob")
 
 # ---- second boot: the accounts and files are still there
 boot()
-login("alice", "alicepass2")
+login("alice", "alicepass2")                 # (her new password opens her home: the key was wrapped anew)
 check("cat note.txt", "hello alice")
 logout()
 login("bob", "bobpass11")

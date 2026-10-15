@@ -156,7 +156,7 @@ void vol_drop(siefs_t *fs, volx_t *v)
     for (uint32_t i = 0; i < fs->nvols; i++)
         if (fs->vols[i] == v) { fs->vols[i] = fs->vols[--fs->nvols]; break; }
     if (fs->cv == v) fs->cv = vol_get(fs, 1);
-    if (v->key) { memset(v->key, 0, 64); fs->env.free(v->key); }
+    if (v->key) { memset(v->key, 0, sizeof(aead_t)); fs->env.free(v->key); }
     fs->env.free(v);
 }
 
@@ -228,6 +228,7 @@ int commit(siefs_t *fs, int force)
     if (!force && !fs->changed) return 0;
     fs->pre = blk_alloc(fs, fs->ndirty + 8, &got);
     fs->pren = got;
+    fs->nsalt = crypt_salt(fs) | NSALT_NODE;            /* (a new one each time: a commit redone after a crash too) */
     for (uint32_t i = 0; i < fs->nvols; i++) {          /* every volume's tree, then its record */
         volx_t *v = fs->vols[i];
         if (!(v->ft.root.blk & TMP) && !v->dirty) continue;
@@ -286,7 +287,7 @@ static void fs_close(siefs_t *fs)
     void (*fr)(void *) = fs->env.free;
     if (fs->dirty) nodes_free(fs);
     void *p[] = { fs->map, fs->busy, fs->fresh, fs->bmdirty[0], fs->bmdirty[1], fs->bmsum[0], fs->bmsum[1],
-                  fs->pend[0].r, fs->pend[1].r, fs->fruns.r, fs->dirty, fs->hash, fs->io, fs->dead };
+                  fs->pend[0].r, fs->pend[1].r, fs->fruns.r, fs->dirty, fs->hash, fs->io, fs->dead, fs->ctmp };
     for (size_t i = 0; i < sizeof p / sizeof *p; i++) if (p[i]) fr(p[i]);
     while (fs->nvols) vol_drop(fs, fs->vols[0]);
     if (fs->vols) fr(fs->vols);
@@ -322,6 +323,7 @@ static int fs_open(const siefs_env_t *env, const sb_t *sb, siefs_t **out)
     fs->hint = sb->data_start;
     fs->rt.id = 0;
     fs->next_vid = 2;
+    fs->dsalt = crypt_salt(fs) & ~NSALT_NODE;
     if (!fs->map || !fs->busy || !fs->fresh || !fs->bmdirty[0] || !fs->bmdirty[1] || !fs->bmsum[0] ||
         !fs->bmsum[1] || !fs->hash || !fs->io) { fs_close(fs); return E(ENOMEM); }
     *out = fs;

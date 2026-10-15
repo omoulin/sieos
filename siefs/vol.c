@@ -83,6 +83,13 @@ int siefs_snapshot(siefs_t *fs, uint64_t g, const char *name)
     if (!(s = vol_add(fs, fs->next_vid++, &sv))) return end(fs, E(ENOMEM));
     memcpy(s->name, name, strlen(name) + 1);
     s->dirty = 1;
+    if (h->key) {                                       /* the snapshot shares the key */
+        uint8_t k[32];
+        memcpy(k, ((aead_t *)h->key)->key, 32);
+        e = vol_secret(fs, h, k);
+        memset(k, 0, sizeof k);
+        if (e) return end(fs, e);
+    }
     fs->opmod = 1;
     if ((e = t_put(fs, &fs->rt, K(s->id, T_VOLNAME, 0), name, (unsigned)strlen(name)))) return end(fs, e);
     h->v.dl = fs->next_vid++;                           /* from now on: what s still uses */
@@ -220,10 +227,11 @@ int siefs_volume_next(siefs_t *fs, uint64_t *cursor, uint64_t *root)
     return 1;
 }
 
-int siefs_volume_root(siefs_t *fs, uint64_t g, uint64_t *root)
+int siefs_volume_root(siefs_t *fs, uint64_t g, uint64_t *root)   /* (a locked one too: to unlock it) */
 {
-    volx_t *h;
-    int e = head_of(fs, g, &h);
-    if (!e) *root = h->id == 1 ? SIEFS_ROOT : h->id << VSHIFT | SIEFS_ROOT;
-    return e;
+    volx_t *h = vol_get(fs, VOLOF(g));
+    if (h && (h->v.flags & V_SNAP)) h = vol_get(fs, h->v.parent);
+    if (!h) return E(ENOENT);
+    *root = h->id == 1 ? SIEFS_ROOT : h->id << VSHIFT | SIEFS_ROOT;
+    return 0;
 }

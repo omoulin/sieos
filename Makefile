@@ -39,7 +39,7 @@ ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
 BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio snap   # programs on the disk, in /bin
 LINKS   := passwd su useradd userdel    # other names of /bin/acct (symbolic links)
-SIEFS_CORE := crc tree space fs vol     # the SieFS library, linked into the file server
+SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
@@ -475,19 +475,19 @@ usb-dev-test: all $(B)/host/fsck.siefs $(if $(filter arm64,$(ARCH)),$(B)/modules
 #   make siefs-test          unit, model, crash and corruption tests, with measurements
 #   make siefs-freestanding  compile the library with the SIEOS flags (no C library)
 HOSTCFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Isiefs -Itools/siefs -Itools -Iinclude
-SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/vol.c siefs/check.c lib/fmt.c
+SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/vol.c siefs/crypt.c siefs/check.c lib/fmt.c lib/aead.c lib/chacha20.c
 SIEFS_H     := siefs/siefs.h siefs/siefs_int.h tools/siefs/host.h
 SIEFS_TOOLS := mkfs.siefs fsck.siefs siefs-dump siefs
 SIEFS_FCFLAGS := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-pic \
            -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns -mgeneral-regs-only -Iinclude -Isiefs
 
 siefs-tools: $(SIEFS_TOOLS:%=$(B)/host/%)
-$(B)/host/%: tools/siefs/%.c tools/siefs/host.c tools/hostdir.c $(SIEFS_LIB) $(SIEFS_H)
+$(B)/host/%: tools/siefs/%.c tools/siefs/host.c tools/hostdir.c tools/siefs/hostlib.c $(SIEFS_LIB) $(SIEFS_H)
 	@mkdir -p $(@D)
-	gcc $(HOSTCFLAGS) -o $@ $< tools/siefs/host.c tools/hostdir.c $(SIEFS_LIB)
+	gcc $(HOSTCFLAGS) -o $@ $< tools/siefs/host.c tools/hostdir.c $(SIEFS_LIB) tools/siefs/hostlib.c
 $(B)/host/siefs-test: tests/siefs/test.c $(SIEFS_LIB) $(SIEFS_H)
 	@mkdir -p $(@D)
-	gcc $(HOSTCFLAGS) -o $@ tests/siefs/test.c $(SIEFS_LIB)
+	gcc $(HOSTCFLAGS) -o $@ tests/siefs/test.c $(SIEFS_LIB) tools/siefs/hostlib.c
 siefs-test: $(B)/host/siefs-test siefs-freestanding
 	$(B)/host/siefs-test
 

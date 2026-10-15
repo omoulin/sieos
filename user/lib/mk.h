@@ -193,7 +193,10 @@ long fs_find(const char *name, const char *value, uint64_t *cursor, char *buf, s
 long fs_statfs(siefs_statfs_t *st);
 long fs_snap(const char *path, int op, const char *name);   /* SNAP_TAKE / _DELETE / _RESTORE */
 long fs_snaplist(const char *path, uint64_t *cursor, void *buf, size_t size);
-long fs_mkvol(const char *path, int mode, int uid, int gid);  /* root: a volume mounted at path */
+long fs_mkvol(const char *path, int mode, int uid, int gid, const char *password);   /* root: a volume at path
+                                                              (a password: encrypted, its key wrapped by it) */
+long fs_unlock(const char *path, const char *password);      /* root: path's encrypted volume opens */
+long fs_rekey(const char *path, const char *password, const char *old);   /* root: its key wrapped anew */
 long fs_rmvol(const char *path);
 long fs_sync(void);
 long fs_chdir(const char *path);

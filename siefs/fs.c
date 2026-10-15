@@ -16,7 +16,8 @@
  * volume (a volume mounted there, or a volume root's mount point) holds
  * its whole number, the volume always written (1 << 48 for volume 1).
  * Snapshots are read only; a volume's root has a hidden ".snapshots"
- * directory (local id 1, made up on the fly) listing them.
+ * directory (local id 1, made up on the fly) listing them. A snapshot does
+ * not show the volumes mounted in its volume (they are not in it).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -197,7 +198,8 @@ static int lookup(siefs_t *fs, uint64_t dir, const char *name, uint64_t *ino)
     }
     if (dir == SIEFS_ROOT && n == 10 && !memcmp(name, ".snapshots", 10) && !(fs->cv->v.flags & V_SNAP)) { *ino = G(fs, SNAPDIR); return 0; }
     if ((e = dir_find(fs, dir, name, n, &x, 0))) return e;
-    *ino = ref_dec(fs, x);
+    if ((x >> VSHIFT) && (fs->cv->v.flags & V_SNAP)) return E(ENOENT);   /* a snapshot holds no other volume: */
+    *ino = ref_dec(fs, x);                                                   /* (that one would be live) */
     return 0;
 }
 
@@ -309,7 +311,20 @@ int siefs_symlink(siefs_t *fs, uint64_t dir, const char *name, const char *targe
 
 /* A new volume, mounted at dir/name: its root directory is that name's
  * object. Its root's parent, and the entry naming it, cross volumes. */
+static int mkvol(siefs_t *fs, uint64_t g, const char *name, uint32_t mode, uint32_t uid, uint32_t gid,
+                 const siefs_kdf_t *kdf, const uint8_t *kek, uint64_t *ino);
 int siefs_mkvol(siefs_t *fs, uint64_t g, const char *name, uint32_t mode, uint32_t uid, uint32_t gid, uint64_t *ino)
+{
+    return mkvol(fs, g, name, mode, uid, gid, 0, 0, ino);
+}
+int siefs_mkvol_enc(siefs_t *fs, uint64_t g, const char *name, uint32_t mode, uint32_t uid, uint32_t gid,
+                    const siefs_kdf_t *kdf, const uint8_t kek[32], uint64_t *ino)
+{
+    if (!kdf || !kek || !fs->env.random) return E(EINVAL);
+    return mkvol(fs, g, name, mode, uid, gid, kdf, kek, ino);
+}
+static int mkvol(siefs_t *fs, uint64_t g, const char *name, uint32_t mode, uint32_t uid, uint32_t gid,
+                 const siefs_kdf_t *kdf, const uint8_t *kek, uint64_t *ino)
 {
     inode_t d;
     uint64_t dir, x;
@@ -327,6 +342,8 @@ int siefs_mkvol(siefs_t *fs, uint64_t g, const char *name, uint32_t mode, uint32
     volx_t *v = vol_add(fs, fs->next_vid++, &nv);
     if (!v) return (int)end(fs, E(ENOMEM));
     v->dirty = 1;
+    fs->opmod = 1;
+    if (kdf && (e = vol_new_key(fs, v, kdf, kek, mode, uid, gid, G(fs, dir)))) return (int)end(fs, e);
     fs->cv = v;
     inode_t root = { .mode = SIEFS_IFDIR | (mode & 07777), .uid = uid, .gid = gid, .nlink = 2,
                      .parent = pv->id << VSHIFT | dir, .atime = t, .mtime = t, .ctime = t, .btime = t };
@@ -560,6 +577,7 @@ int siefs_readdir(siefs_t *fs, uint64_t g, uint64_t *cursor, siefs_dirent_t *de)
         for (; p + 10 <= n; p += 10 + b[p + 9], idx++) {
             if (h == ch && (uint64_t)idx < ci) continue;
             memcpy(&de->ino, b + p, 8);
+            if ((de->ino >> VSHIFT) && (fs->cv->v.flags & V_SNAP)) continue;   /* (see lookup) */
             de->ino = ref_dec(fs, de->ino);
             de->type = b[p + 8];
             memcpy(de->name, b + p + 10, b[p + 9]);
@@ -637,6 +655,7 @@ static int rd_ext(siefs_t *fs, const extent_t *x, uint32_t from, uint32_t n, uin
     int e = dev_read(fs, x->blk + from, n, dst);
     for (uint32_t i = 0; !e && i < n; i++)
         if (siefs_crc32c(0, dst + i * BS, BS) != x->csum[from + i]) e = E(EIO);
+        else if (x->flags & X_ENC) e = data_open(fs, fs->cv, x->blk + from + i, x->salt, dst + i * BS, x->mac[from + i]);
     return e;
 }
 
@@ -751,8 +770,9 @@ static int wblocks(siefs_t *fs, uint64_t ino, uint64_t off, const uint8_t *src, 
         uint64_t got, want = last - b + 1 < EXT_MAX ? last - b + 1 : EXT_MAX;
         uint64_t at = blk_alloc(fs, want, &got);
         extent_t nx = { .blk = at, .n = (uint32_t)got, .flags = X_GEN, .gen = fs->txn };
-        int e;
+        int e, enc = (VOL.flags & V_ENC) != 0;
         if (!got) return E(ENOSPC);
+        if (enc) { nx.flags |= X_ENC; nx.salt = fs->dsalt++ & ~NSALT_NODE; }
         for (uint64_t i = 0; i < got; i++) {
             uint8_t *d = fs->io + i * BS;
             uint64_t lo = (b + i) * BS, hi = lo + BS;
@@ -760,6 +780,7 @@ static int wblocks(siefs_t *fs, uint64_t ino, uint64_t off, const uint8_t *src, 
             if ((c0 > lo || c1 < hi) && (e = rd_block(fs, ino, b + i, d))) return e;
             if (src) memcpy(d + (c0 - lo), src + (c0 - off), c1 - c0);
             else memset(d + (c0 - lo), 0, c1 - c0);
+            if (enc && (e = data_seal(fs, fs->cv, at + i, nx.salt, d, nx.mac[i]))) return e;
             nx.csum[i] = siefs_crc32c(0, d, BS);
         }
         if ((e = dev_write(fs, at, (uint32_t)got, fs->io)) || (e = punch(fs, ino, b, b + got)) ||
@@ -854,6 +875,9 @@ int siefs_stat(siefs_t *fs, uint64_t g, siefs_stat_t *st)
 {
     inode_t in;
     BEGIN(fs);
+    volx_t *lv = vol_get(fs, VOLOF(g));
+    if (lv && lv->locked && (g & LMASK) == SIEFS_ROOT && !(lv->v.flags & V_SNAP))   /* locked: what its key record says */
+        return (int)end(fs, vol_locked_stat(fs, lv, st));
     uint64_t ino;
     PICK(g, ino);
     int e = iget(fs, ino, &in);

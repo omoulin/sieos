@@ -21,6 +21,12 @@
  * volume each hour ("auto-YYYY-MM-DD-HH00"), kept a day. When the disk is
  * full, a write first lets the oldest hourly snapshot go and tries again.
  *
+ * Encrypted volumes (a home, docs/siefs.md): their key is wrapped by a key
+ * this server derives from the user's password with Argon2id (as auth
+ * checks logins: 16 MiB, 24 passes); auth asks FS_UNLOCK at a login with
+ * the password, and FS_REKEY when it changes. A home stays open until the
+ * machine stops: what encryption protects is the disk at rest.
+ *
  * If this server crashes, init starts it again: it mounts the disk's last
  * commit, and programs' file handles are reopened by their library. If the
  * disk driver crashes, the requests to it are simply sent again.
@@ -32,6 +38,10 @@
  */
 #include "mk.h"
 #include "siefs.h"
+#include "mk/crypto.h"
+
+#define KDF_KIB 16384                       /* Argon2id for the key-encryption key: as auth's logins */
+#define KDF_T   24
 
 #define COMMIT_NS 1000000000L               /* commit 1 s after the first change: at most 1 s of
                                                changes is lost if the server (or the machine) dies */
@@ -64,6 +74,35 @@ static int d_flush(void *ctx)
     msg_t m = { .w = { DISK_FLUSH } };
     return call_named(&disk, "disk", &m, 1) < 0 || (long)m.w[0] < 0 ? -EIO : 0;
 }
+static int rnd(void *b, size_t n)
+{
+    for (int i = 0; i < 100; i++) {                     /* the kernel may still be gathering */
+        long r = sys_random(b, n);
+        if (r == (long)n) return 0;
+        if (r != -EAGAIN) return -1;
+        sys_sleep(50000000);
+    }
+    return -1;
+}
+
+/* The key-encryption key of a password: Argon2id with the volume's salt. */
+static int kek_of(const char *pw, const siefs_kdf_t *k, uint8_t kek[32])
+{
+    if (k->m_kib < 8 || k->m_kib > (1 << 20) || !k->t || k->t > 64) return -EINVAL;
+    void *mem = malloc((size_t)k->m_kib << 10);
+    if (!mem) return -ENOMEM;
+    argon2_t a = { pw, k->salt, 0, 0, (uint32_t)strlen(pw), 16, 0, 0, k->t, k->m_kib, 1, ARGON2_ID };
+    int r = argon2(&a, kek, 32, mem);
+    wipe(mem, (size_t)k->m_kib << 10);
+    free(mem);
+    return r ? -EINVAL : 0;
+}
+static int new_kdf(const char *pw, siefs_kdf_t *k, uint8_t kek[32])
+{
+    k->t = KDF_T; k->m_kib = KDF_KIB;
+    return rnd(k->salt, sizeof k->salt) ? -EAGAIN : kek_of(pw, k, kek);
+}
+
 /* Wall-clock time: there is no clock chip driver yet, so the build's date
  * plus the time since boot. */
 static int64_t now(void) { return (int64_t)EPOCH * 1000000000 + sys_clock(); }
@@ -588,9 +627,45 @@ static long serve(msg_t *m, long from, const void **out, uint64_t *outlen, uint6
         r = walk(s1, 0, c, &ino, &dir, name);
         if (!r) return -EEXIST;
         if (r != -ENOENT || !dir) return r;
-        if ((r = siefs_mkvol(fs, dir, name, (uint32_t)m->w[1], (uint32_t)m->w[2], (uint32_t)m->w[3], &ino))) return r;
+        int enc = *s2 != 0;
+        if (enc) {                                    /* with a password: encrypted */
+            siefs_kdf_t k;
+            uint8_t kek[32];
+            if (!(r = new_kdf(s2, &k, kek)))
+                r = siefs_mkvol_enc(fs, dir, name, (uint32_t)m->w[1], (uint32_t)m->w[2], (uint32_t)m->w[3], &k, kek, &ino);
+            wipe(kek, sizeof kek);
+            wipe(s2, strlen(s2));
+        } else r = siefs_mkvol(fs, dir, name, (uint32_t)m->w[1], (uint32_t)m->w[2], (uint32_t)m->w[3], &ino);
+        if (r) return r;
+        printf("fs: volume %s made%s\n", s1, enc ? ", encrypted" : "");
         changed();
         return 0;
+    case FS_UNLOCK: case FS_REKEY: {
+        if (c.uid) return -EPERM;
+        siefs_kdf_t k;
+        uint8_t kek[32];
+        uint64_t root, od;
+        const char *old = s2 + strlen(s2) + 1;
+        char path[96];
+        strlcpy(path, s1, sizeof path);              /* (the request is wiped: it holds passwords) */
+        if (old > buf + m->rlen) old = "";
+        r = walk(s1, 1, c, &ino, 0, 0);
+        if (!r) r = siefs_volume_root(fs, ino, &root);
+        if (!r && (r = siefs_kdf(fs, root, &k)) == -EINVAL) r = 1;   /* (not encrypted: nothing to do) */
+        if (!r && (m->w[0] == FS_UNLOCK || *old)) {   /* open it: with the password, or the old one */
+            if (!(r = kek_of(m->w[0] == FS_UNLOCK ? s2 : old, &k, kek))) r = siefs_unlock(fs, root, kek);
+            if (!r) orphans_of(root, &od);
+        }
+        if (!r && m->w[0] == FS_REKEY) {
+            if (!(r = new_kdf(s2, &k, kek))) r = siefs_rekey(fs, root, &k, kek);
+        }
+        wipe(kek, sizeof kek);
+        wipe(buf, m->rlen);
+        if (r == 1) return 0;
+        if (!r) printf("fs: %s %s\n", path, m->w[0] == FS_UNLOCK ? "unlocked" : "has a new key");
+        else if (r == -EACCES) printf("fs: %s: not its password\n", path);
+        return r;
+    }
     case FS_RMVOL:
         if (c.uid) return -EPERM;
         if ((r = walk(s1, 0, c, &ino, &dir, name))) return r;
@@ -626,7 +701,7 @@ int main(int argc, char **argv)
     self = in.self_pid;
     msg_t m = { .w = { DISK_INFO } };
     static siefs_env_t env = { .read = d_read, .write = d_write, .flush = d_flush,
-                               .alloc = malloc, .free = free, .now = now, .commit_ns = 1L << 62 };
+                               .alloc = malloc, .free = free, .now = now, .commit_ns = 1L << 62, .random = rnd };
     long r = call_named(&disk, "disk", &m, 1) < 0 || (long)m.w[0] <= 0 ? -EIO : 0;
     env.nblocks = m.w[0];
     if (!r) r = siefs_mount(&env, &fs);

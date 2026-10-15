@@ -6,6 +6,7 @@
  */
 #pragma once
 #include "siefs.h"
+#include "mk/crypto.h"         /* ChaCha20-Poly1305 for encrypted volumes (lib/aead.c) */
 #if __STDC_HOSTED__
 #include <string.h>
 #else
@@ -112,6 +113,22 @@ _Static_assert(sizeof(vol_t) == 112, "volume record size");
 
 typedef struct { uint64_t dl, b, n, gen; } dead_t;   /* a dead-list entry waiting for the commit */
 
+/* In the root tree: (volume id, T_VOLKEY, 0), for V_ENC: the volume key,
+ * wrapped (sealed with the key-encryption key, the volume id as associated
+ * data), how that key is derived, and what a locked volume's root shows. */
+typedef struct {
+    uint32_t version, t, m_kib, mode;
+    uint8_t salt[16], nonce[12];
+    uint32_t uid, gid;
+    uint64_t parent;                    /* the mount point's directory */
+    uint8_t wrapped[48];                /* the 32-byte key + its tag */
+} volkey_t;
+
+/* Nonces: block number (8 bytes) and a salt (4): the commit's for nodes
+ * (top bit set), a write's for data (top bit clear), so a block number is
+ * never sealed twice with the same salt under one key. */
+#define NSALT_NODE 0x80000000u
+
 /* ---- The superblock, twice: blocks 1 and 2. A commit with sequence
  * number s writes slot s % 2, so the previous one is never touched. */
 typedef struct {
@@ -190,6 +207,8 @@ struct siefs {
     uint64_t wstart, wn;                /* commit: the run of nodes gathered in io */
     int64_t first_change;
     int changed, broken, opmod;
+    uint32_t nsalt, dsalt;              /* encryption: this commit's node salt; the next data salt */
+    uint8_t *ctmp;                      /* a block and its tag: sealing and opening */
 };
 
 /* crc.c */
@@ -225,6 +244,16 @@ void vol_drop(siefs_t *fs, volx_t *v);
 void cache_forget(siefs_t *fs, uint64_t b);
 /* vol.c */
 int  vol_free_tree(siefs_t *fs, volx_t *v);
+/* crypt.c */
+int  node_open(siefs_t *fs, node_t *n, const bptr_t *p);              /* after reading: in place */
+int  node_seal(siefs_t *fs, const node_t *n, uint8_t *out, bptr_t *p);  /* out: the block to write */
+int  data_seal(siefs_t *fs, volx_t *v, uint64_t blk, uint32_t salt, uint8_t *b, uint8_t mac[16]);
+int  data_open(siefs_t *fs, volx_t *v, uint64_t blk, uint32_t salt, uint8_t *b, const uint8_t mac[16]);
+int  vol_secret(siefs_t *fs, volx_t *v, const uint8_t key[32]);       /* v (and its snapshots) unlocked */
+int  vol_new_key(siefs_t *fs, volx_t *v, const siefs_kdf_t *kdf, const uint8_t kek[32], uint32_t mode, uint32_t uid,
+                 uint32_t gid, uint64_t parent);
+int  vol_locked_stat(siefs_t *fs, volx_t *v, siefs_stat_t *st);
+uint32_t crypt_salt(siefs_t *fs);
 uint64_t commit_block(siefs_t *fs);
 int  space_reserve(siefs_t *fs, uint64_t need);
 int  commit(siefs_t *fs, int force);
