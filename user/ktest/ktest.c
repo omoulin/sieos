@@ -15,6 +15,10 @@
  *   ktest ipcmany [n]     n client threads (default 40) calling one server
  *                         thread at once, on every CPU: the time per call
  *                         over all of them (how the kernel's locks scale)
+ *   ktest place           P-cores and E-cores (booted with pcores=N where
+ *                         all cores are alike): normal threads run on
+ *                         P-cores, background ones on E-cores; more work
+ *                         than cores of one kind uses the other kind
  * Prints "ktest NAME: ok" or "... FAIL"; exit status 0 if all went well.
  * Built twice for the tests: by gcc (ktest), and by sicc (ktest-sicc,
  * without the AVX part: sicc does not encode AVX instructions yet). On
@@ -237,6 +241,89 @@ static int test_ipcmany(int n)
     return bad;
 }
 
+/* ---- P-cores and E-cores (boot with pcores=N where all cores are alike):
+ * busy threads, normal or background, each counting where it runs. */
+static volatile int on_e[64];
+static int place_ms[64], place_from;     /* each thread's time; samples count from place_from ms */
+static int place_wait;                   /* normal threads sleep this long (ms) first */
+/* Busy for ms, counting where it runs (from `from` ms on): -> the
+ * percentage of that time on E-cores. */
+static int busy_place(int bg, int ms, int from)
+{
+    if (bg) sys_place(0, PLACE_BACKGROUND);
+    else if (place_wait) sys_sleep(place_wait * 1000000UL);
+    int e = 0, p = 0;
+    for (uint64_t t0 = sys_clock(), t; (t = sys_clock() - t0) < ms * 1000000UL; ) {
+        for (volatile int i = 0; i < 20000; i++) ;
+        mk_info_t in;
+        sys_info(&in);
+        if (t < from * 1000000UL) continue;
+        if (in.cpu_e) e++; else p++;
+    }
+    return e + p ? e * 100 / (e + p) : 0;
+}
+static void place_thread(void *a)
+{
+    int k = (int)(intptr_t)a & 63, bg = (int)(intptr_t)a >> 6;
+    on_e[k] = busy_place(bg, place_ms[k], place_from);
+    __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
+}
+/* n threads: the first nn normal, the others background, 300 ms each
+ * unless set; -> the average percentage on E-cores of each kind (*e_normal
+ * over the normal ones from first on, *e_bg). */
+static void place_run(int n, int nn, int first, int *e_normal, int *e_bg)
+{
+    done = 0;
+    for (int k = 0; k < n; k++) {
+        if (!place_ms[k]) place_ms[k] = 300;
+        thread_start(place_thread, (void *)(intptr_t)(k | (k >= nn) << 6), 16384);
+    }
+    wait_all(n);
+    int sn = 0, sb = 0;
+    for (int k = 0; k < n; k++) { if (k < nn) sn += k >= first ? on_e[k] : 0; else sb += on_e[k]; place_ms[k] = 0; }
+    *e_normal = nn > first ? sn / (nn - first) : 0;
+    *e_bg = n > nn ? sb / (n - nn) : 0;
+    place_from = 0;
+}
+static int test_place(void)
+{
+    mk_info_t in;
+    sys_info(&in);
+    if (!in.ecores) { printf("ktest place: all cores alike, skipped (boot with pcores=N to test)\n"); return 0; }
+    if (in.ncpus > 63) { printf("ktest place: more than 63 CPUs, skipped\n"); return 0; }
+    int np = in.ncpus - in.ecores, ne = in.ecores, fails = 0, a, b;
+    printf("ktest place: %d CPUs, %d P-cores, %d E-cores\n", in.ncpus, np, ne);
+    place_run(np + ne, np, 0, &a, &b);       /* one per CPU: each kind on its own */
+    printf("ktest place: %d normal and %d background threads: normal %d%% on E-cores, background %d%%\n", np, ne, a, b);
+    fails += a > 15 || b < 85;
+    place_run(1, 0, 0, &a, &b);              /* alone: background still prefers E-cores */
+    printf("ktest place: 1 background thread alone: %d%% on E-cores\n", b);
+    fails += b < 85;
+    place_run(np + ne, np + ne, 0, &a, &b);  /* more normal work than P-cores: overflows to E-cores */
+    printf("ktest place: %d normal threads: %d%% on E-cores\n", np + ne, a);
+    fails += a < 100 * ne / (np + ne) / 2;
+    for (int k = 0; k < ne; k++) place_ms[k] = 100;   /* ... then fewer: P-cores take them back */
+    place_from = 150;
+    place_run(np + ne, np + ne, ne, &a, &b);
+    printf("ktest place: %d of them end after 100 ms: the other %d, from 150 ms on: %d%% on E-cores\n", ne, np, a);
+    fails += a > 15;
+    place_run(np + ne, 0, 0, &a, &b);        /* idle P-cores take background work */
+    printf("ktest place: %d background threads: %d%% on E-cores\n", np + ne, b);
+    fails += b > 100 - 100 * np / (np + ne) / 2;
+    place_wait = 50;                         /* ... until normal work comes: it takes a P-core back */
+    place_run(np + ne + 1, 1, 0, &a, &b);
+    place_wait = 0;
+    printf("ktest place: then a normal thread wakes up: %d%% on E-cores\n", a);
+    fails += a > 15;
+    mk_spawn_t o = { .flags = SPAWN_BACKGROUND };   /* a background process (init's services) */
+    long pid = spawn_file("/bin/ktest", "ktest place-child", -1, -1, &o);
+    int st = -1;
+    if (pid < 0 || sys_wait(pid, &st, 0) < 0) st = -1;
+    printf("ktest place: a process started background: %d%% on E-cores\n", st);
+    fails += st < 85;
+    return fails;
+}
+
 /* SYS_LOG: a line printed is in the log; reading moves the position; the
  * oldest kept is at most LOG_KEEP bytes back. */
 static int test_log(void)
@@ -278,6 +365,7 @@ int main(int argc, char **argv)
     if (n < 1 || n > 64) n = 16;
     if (!strcmp(what, "quota-child")) return quota_child(0);
     if (!strcmp(what, "quota-grand")) return quota_child(1);
+    if (!strcmp(what, "place-child")) return busy_place(0, 300, 0);   /* (background: its parent said so) */
     if (!strcmp(what, "fpu")) fails = test_fpu(n);
 #ifndef __SICC__
     else if (!strcmp(what, "avx")) fails = test_avx(n);
@@ -286,8 +374,9 @@ int main(int argc, char **argv)
     else if (!strcmp(what, "quota")) fails = test_quota();
     else if (!strcmp(what, "ipc")) fails = test_ipc();
     else if (!strcmp(what, "ipcmany")) fails = test_ipcmany(argc > 2 ? n : 40);
+    else if (!strcmp(what, "place")) fails = test_place();
     else if (!strcmp(what, "log")) fails = test_log();
-    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|log [threads]\n"); return 2; }
+    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|place|log [threads]\n"); return 2; }
     printf("ktest %s: %s\n", what, fails ? "FAIL" : "ok");
     return fails != 0;
 }

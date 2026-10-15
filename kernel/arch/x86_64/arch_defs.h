@@ -144,6 +144,14 @@ static inline void arch_tls_switch(arch_cpu_t *a, uint64_t base)            /* a
 {
     if (base != a->fs_loaded) wrmsr(0xC0000100, a->fs_loaded = base);
 }
-/* A CPU waiting for the kernel lock still answers TLB shootdowns (smp.c):
- * the holder may be waiting for exactly that. */
-#define arch_lock_wait(c) do { if ((c)->tlb_req) tlb_ack(c); arch_relax(); } while (0)
+/* Full barriers (kernel.h): a locked instruction orders like mfence, and
+ * costs less; xchg is a store and a full barrier at once. */
+#define smp_mb() asm volatile("lock orl $0, (%%rsp)" : : : "memory", "cc")
+#define store_mb(p, v) ((void)__atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST))
+/* Idle polling (task.c): let pending interrupts in for a moment (sti takes
+ * effect after the next instruction). */
+static inline void arch_irq_window(void) { asm volatile("sti; nop; cli" : : : "memory"); }
+/* A CPU spinning in the kernel (for a lock, or for a thread to leave its
+ * CPU) still answers TLB shootdowns (smp.c): the CPU it waits for may be
+ * waiting for exactly that. */
+#define arch_lock_wait(c) do { if ((c)->tlb_want != (c)->tlb_done) tlb_ack(c); arch_relax(); } while (0)

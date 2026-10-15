@@ -14,8 +14,9 @@
  *  - The other CPUs: started with PSCI CPU_ON (QEMU, the Pi 5) or the
  *    "spin table" (the Pi 4's firmware: write the entry address where the
  *    device tree says, then "sev"); each enters boot.S's secondary_start.
- *  - TLB: invalidations are broadcast by the hardware ("tlbi ...is", mmu.c):
- *    no shootdown interrupts.
+ *  - TLB: invalidations are broadcast by the hardware ("tlbi ...is", mmu.c);
+ *    a shootdown only waits until no CPU still copies to or from the
+ *    unmapped pages (SGI_SYNC).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -61,7 +62,7 @@ void gic_cpu_init(cpu_t *c)
 {
     gicd[D_ICENABLER] = 0xFFFF0000;               /* its per-CPU lines off ... */
     for (int i = 0; i < 8; i++) gicd[D_IPRIORITYR + i] = 0xA0A0A0A0;
-    gicd[D_ISENABLER] = 1u << SGI_KICK | 1u << SGI_HALT | 1u << PPI_VTIMER;   /* ... but these */
+    gicd[D_ISENABLER] = 1u << SGI_KICK | 1u << SGI_HALT | 1u << SGI_SYNC | 1u << PPI_VTIMER;   /* ... but these */
     c->a.gic_mask = *(volatile uint8_t *)&gicd[D_ITARGETSR];
     gicc[C_PMR] = 0xF0;                           /* every priority we use gets through */
     gicc[C_BPR] = 0;
@@ -85,12 +86,40 @@ void arch_timer_set(uint64_t d)
 /* Wake CPU c (halted in idle) or make it reschedule. */
 void arch_kick(cpu_t *c) { gic_sgi(c, SGI_KICK); }
 
-/* The hardware broadcasts TLB invalidations (mmu.c): only wait for them. */
-void tlb_shootdown(proc_t *p) { (void)p; asm volatile("dsb ish" : : : "memory"); }
-void tlb_ack(cpu_t *c) { (void)c; }
+/* ---- Shootdowns. The hardware broadcasts TLB invalidations (mmu.c), but
+ * any CPU may be copying a message into or out of the pages just unmapped
+ * (vm_copy): they are freed once every other CPU has answered (tlb_done)
+ * an interrupt (SGI_SYNC). It answers from its interrupt handler, which
+ * only runs in user mode or idle, or from a spin loop in the kernel
+ * (arch_lock_wait): never in the middle of a copy. Counters rather than a
+ * flag: several CPUs may ask at once. (A process ending uses it too, to
+ * reach every CPU: proc_stop.) */
+void tlb_ack(cpu_t *c)
+{
+    uint32_t w = __atomic_load_n(&c->tlb_want, __ATOMIC_ACQUIRE);
+    asm volatile("dsb ish" : : : "memory");
+    __atomic_store_n(&c->tlb_done, w, __ATOMIC_RELEASE);
+}
+
+void tlb_shootdown(proc_t *p)
+{
+    (void)p;
+    cpu_t *me = this_cpu();
+    int n = ncpus();
+    asm volatile("dsb ish" : : : "memory");       /* (the invalidations are done) */
+    for (int i = 0; i < n; i++) {
+        cpu_t *c = cpus[i];
+        if (c == me) continue;
+        __atomic_add_fetch(&c->tlb_want, 1, __ATOMIC_SEQ_CST);
+        gic_sgi(c, SGI_SYNC);
+    }
+    for (int i = 0; i < n; i++)
+        while (cpus[i] != me && __atomic_load_n(&cpus[i]->tlb_done, __ATOMIC_ACQUIRE) != cpus[i]->tlb_want)
+            arch_lock_wait(me);                   /* (answering others meanwhile: they may wait for us) */
+}
 
 /* ---- Every interrupt, from a program or from idle (entry.S). Returns 1
- * if it took the kernel lock (then kernel_exit releases it). */
+ * to leave through kernel_exit. */
 int trap_irq(regs_t *r)
 {
     (void)r;
@@ -102,8 +131,8 @@ int trap_irq(regs_t *r)
         if (halting) arch_halt_forever();
         return 0;
     }
-    klock();
-    rand_event(iar ^ ticks());                    /* every interrupt's time feeds the random pool */
+    if (id == SGI_SYNC) { tlb_ack(c); gicc[C_EOIR] = iar; return 1; }   /* (then kernel_exit: proc_stop) */
+    rand_event(iar ^ ticks());                   /* every interrupt's time feeds the random pool */
     if (id == PPI_VTIMER) {
         asm volatile("msr cntv_ctl_el0, xzr; isb");   /* it stays up until changed: off; kernel_exit re-arms */
         gicc[C_EOIR] = iar;
@@ -163,7 +192,6 @@ void ap_main(cpu_t *c)
     arch_as_load(c->cur_as = kernel_as);   /* leave boot.S's identity map */
     gic_cpu_init(c);
     c->online = 1;
-    klock();
     idle();
 }
 
@@ -200,10 +228,11 @@ void smp_start(void)
             kprintf("mk: CPU %lx did not accept to start\n", mpidr);
             continue;
         }
-        for (uint64_t end = ticks() + ns_to_ticks(2000000000UL); !c->online && ticks() < end; ) arch_relax();
+        for (uint64_t end = ticks() + ns_to_ticks(2000000000UL); !c->online && ticks() < end; )
+            arch_lock_wait(cpus[0]);         /* (the CPUs already started may ask us for a shootdown) */
         if (!c->online) { kprintf("mk: CPU %lx did not start\n", mpidr); continue; }
-        cpus[ncpu++] = c;                /* (its idle() takes the kernel lock after us) */
+        cpus[ncpu] = c;                  /* (it already runs idle(): the others see it from now on) */
+        __atomic_store_n(&ncpu, ncpu + 1, __ATOMIC_RELEASE);
     }
-    kprintf("mk: %d CPU%s running\n", ncpu, ncpu > 1 ? "s" : "");
-    diag_stage(11);                              /* step 11: the other CPUs started (or given up) */
+    diag_stage(11);                             /* step 11: the other CPUs started (or given up) */
 }

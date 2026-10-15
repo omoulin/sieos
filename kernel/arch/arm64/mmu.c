@@ -126,6 +126,7 @@ static uint64_t *walk(uint64_t as, uint64_t va, int create)
         if (!(*e & D_VALID)) {
             uint64_t pa;
             if (!create || !(pa = page_alloc(1))) return 0;
+            asm volatile("dsb ishst" : : : "memory");   /* its zeroes first: other CPUs walk it at once */
             *e = pa | D_TABLE;
         }
         t = P2V(*e & D_ADDR);

@@ -13,9 +13,9 @@
  * interrupted: the kernel runs with interrupts masked) it is the current
  * stack.
  *
- * The kernel lock: the C handlers take it; they return 1 if they did, and
- * kernel_exit() (task.c) gives it back on the way out. A thread switch
- * happens with the lock held; the thread that resumes releases it.
+ * The way out: the C handlers return 1 to leave through kernel_exit()
+ * (task.c: a thread of an ending process ends there; the CPU's timer is
+ * set), 0 when it is not needed (spurious and halt interrupts).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -122,7 +122,7 @@ bad_entry:
     bl    trap_bad
 
 trap_out:
-    cbz   w0, 1f                    /* did the handler take the kernel lock? */
+    cbz   w0, 1f                    /* leave through kernel_exit? */
     .global trap_return
 trap_return:                        /* new threads also start here (cpu.c) */
     bl    kernel_exit

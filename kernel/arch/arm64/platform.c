@@ -157,6 +157,7 @@ void arm64_main(uint64_t dtb, uint64_t phys)
         }
         if (e0 > s0) modules_from(s0, e0 - s0);
     } else diag_fault(2, 0, 0, 0);                    /* no boot modules at all */
+    bi.cmdline = ch >= 0 ? fdt_prop(fdt, ch, "bootargs", 0) : 0;   /* the boot options (QEMU's -append) */
 
     /* PSCI: how to start CPUs and power off */
     int ps = fdt_find(fdt, -1, "arm,psci-1.0");

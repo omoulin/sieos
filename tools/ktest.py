@@ -6,7 +6,9 @@
           the middle of an answer (init restarts it), speed and memory
   bench   the IPC round trip, and 40 clients calling one server at once
           (the kernel's locking; three runs each)
-Usage: ktest.py <kernel|sia|bench> <cpus> <disk image> <qemu command line...>
+  place   P-cores and E-cores: the kernel booted with pcores=N (QEMU's
+          cores are all alike) says so at boot, and places threads by kind
+Usage: ktest.py <kernel|sia|bench|place> <cpus> <disk image> <qemu command line...>
 The image must be a fresh one (first-start setup); the test works in a copy.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -92,6 +94,15 @@ if what == "kernel":
         res.append(expect(re.compile(rb"ktest fpu: (ok|FAIL)"), 120)[1].group(1))
     ok("two processes computing at once", res == [b"ok", b"ok"])
     run("", 10)
+
+elif what == "place":
+    m = re.search(rb"mk: \d+ CPUs running: (\d+) P-cores, (\d+) E-cores", seen)
+    ok("the boot line tells P-cores from E-cores", m is not None, m.group(0).decode() if m else "no such line")
+    for prog in ("ktest", "ktest-sicc"):
+        r = run(f"{prog} place", 120)
+        lines = [l.strip() for l in r.splitlines() if l.strip().startswith("ktest place")]
+        for l in lines[:-1]: print("   ", l)
+        ok(f"{prog} place", "ktest place: ok" in r, lines[-1] if lines else r.strip()[-120:])
 
 elif what == "bench":
     for t in ("ipc", "ipc", "ipc", "ipcmany", "ipcmany", "ipcmany"):

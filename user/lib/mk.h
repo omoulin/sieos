@@ -72,6 +72,9 @@ static inline long sys_modules(char *buf, size_t size)  { return SYS(SYS_MODULES
 static inline long sys_want(const char *name, long err) { return SYS(SYS_WANT, name, err); }
 static inline long sys_wanted(char *buf, size_t size)   { return SYS(SYS_WANTED, buf, size); }
 static inline long sys_wake(int tid)                    { return SYS(SYS_WAKE, tid, 0); }
+/* SYS_PLACE: thread tid (0: the caller, -1: the whole process) is normal work
+ * (PLACE_NORMAL: P-cores first) or background work (PLACE_BACKGROUND: E-cores first). */
+static inline long sys_place(int tid, int place)       { return SYS(SYS_PLACE, tid, place); }
 static inline long sys_wait(int pid, int *status, int flags) { return syscall4(SYS_WAIT, pid, (long)status, flags, 0); }
 static inline long sys_random(void *buf, size_t n)      { return SYS(SYS_RANDOM, buf, n); }
 static inline long sys_ident(int pid, mk_ident_t *id)   { return SYS(SYS_IDENT, pid, id); }

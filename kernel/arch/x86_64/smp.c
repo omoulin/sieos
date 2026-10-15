@@ -105,29 +105,37 @@ void arch_timer_set(uint64_t d)
 void arch_kick(cpu_t *c) { send_ipi(c->a.apic_id, VEC_RESCHED); }
 
 /* ---- TLB shootdown. Threads of one process may run on several CPUs at
- * once, each with copies of the process's page translations in its TLB.
- * After removing mappings, every other CPU running a thread of the process
- * must flush its TLB before the freed pages can be reused. We set its
- * tlb_req, send it an interrupt and wait. It answers at once: from user
- * mode, the interrupt handler flushes without needing the kernel lock (we
- * hold it); a CPU waiting for the kernel lock answers from klock's loop. */
+ * once, each with copies of the process's page translations in its TLB;
+ * and any CPU may be copying a message into or out of its pages (vm_copy).
+ * After removing mappings (vm_unmap), every other CPU must flush its TLB
+ * and be done with such a copy before the pages are freed. We ask each
+ * one (tlb_want), send it an interrupt and wait for its answer (tlb_done).
+ * It answers from its interrupt handler, which only runs in user mode or
+ * idle, or from a spin loop in the kernel (arch_lock_wait): never in the
+ * middle of a copy. Counters rather than a flag: several CPUs may ask at
+ * once; each answer covers every request made before its flush. (A
+ * process ending uses it too, to reach every CPU: proc_stop.) */
 void tlb_ack(cpu_t *c)
 {
+    uint32_t w = __atomic_load_n(&c->tlb_want, __ATOMIC_ACQUIRE);
     write_cr3(c->cur_as);                /* reloading CR3 flushes the non-global entries */
-    __atomic_store_n(&c->tlb_req, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&c->tlb_done, w, __ATOMIC_RELEASE);
 }
 
 void tlb_shootdown(proc_t *p)
 {
+    (void)p;
     cpu_t *me = this_cpu();
-    for (int i = 0; i < ncpu; i++) {
+    int n = ncpus();
+    for (int i = 0; i < n; i++) {
         cpu_t *c = cpus[i];
-        if (c == me || !c->running || c->running->proc != p) continue;
-        c->tlb_req = 1;
+        if (c == me) continue;
+        __atomic_add_fetch(&c->tlb_want, 1, __ATOMIC_SEQ_CST);   /* (after the page tables changed) */
         send_ipi(c->a.apic_id, VEC_TLB);
     }
-    for (int i = 0; i < ncpu; i++)
-        while (__atomic_load_n(&cpus[i]->tlb_req, __ATOMIC_ACQUIRE)) asm volatile("pause");
+    for (int i = 0; i < n; i++)
+        while (cpus[i] != me && __atomic_load_n(&cpus[i]->tlb_done, __ATOMIC_ACQUIRE) != cpus[i]->tlb_want)
+            arch_lock_wait(me);          /* (answering others meanwhile: they may wait for us) */
 }
 
 /* ---- ACPI: the RSDP ("RSD PTR ") is in the first KiB of the EBDA or in
@@ -168,6 +176,7 @@ static sdt_t *acpi_find(const char *sig)
  * the MADT says otherwise ("interrupt source overrides"). */
 static struct { volatile uint32_t *r; int base, count; } ioapic[8];
 static int nioapic;
+static spinlock_t io_lock;               /* (select, then read or write: two accesses) */
 static int irq_gsi[16];                  /* ISA IRQ -> GSI */
 static uint16_t irq_flags[MAXIRQ];       /* per API irq: polarity (low = 1) | trigger (level = 2) */
 
@@ -190,8 +199,10 @@ int irq_route(int irq, int cpu)
     int pin, a = io_find(irq, &pin);
     if (a < 0 || irq >= MAXIRQ) return -EINVAL;
     uint32_t lo = (VEC_IRQ0 + irq) | 1 << 16 | (irq_flags[irq] & 1 ? 1 << 13 : 0) | (irq_flags[irq] & 2 ? 1 << 15 : 0);
+    spin_lock(&io_lock);
     io_write(a, 0x11 + 2 * pin, (uint32_t)cpus[cpu]->a.apic_id << 24);
     io_write(a, 0x10 + 2 * pin, lo);
+    spin_unlock(&io_lock);
     return 0;
 }
 /* A PCI device's line routed by the chipset to an ISA IRQ (IRQ_LEVEL):
@@ -202,8 +213,10 @@ static void irq_set_mask(int irq, int m)
 {
     int pin, a = io_find(irq, &pin);
     if (a < 0) return;
+    spin_lock(&io_lock);
     uint32_t lo = io_read(a, 0x10 + 2 * pin);
     io_write(a, 0x10 + 2 * pin, m ? lo | 1 << 16 : lo & ~(1u << 16));
+    spin_unlock(&io_lock);
 }
 void irq_mask(int irq)   { irq_set_mask(irq, 1); }
 void irq_unmask(int irq) { irq_set_mask(irq, 0); }
@@ -298,7 +311,6 @@ void ap_main(cpu_t *c)
     cpu_setup(c);
     lapic_setup();
     c->online = 1;
-    klock();
     idle();
 }
 
@@ -337,12 +349,12 @@ void smp_start(void)
         for (int s = 0; s < 2 && !c->online; s++) {
             send_ipi(c->a.apic_id, 0x4600 | TRAMP >> 12);
             for (uint64_t end = rdtsc() + ns_to_ticks(s ? 100000000 : 1000000); !c->online && rdtsc() < end; )
-                asm volatile("pause");
+                arch_lock_wait(cpus[0]);    /* (the CPUs already started may ask us for a shootdown) */
         }
         if (!c->online) { kprintf("mk: CPU with APIC id %d did not start\n", c->a.apic_id); continue; }
-        cpus[ncpu++] = c;                /* (its idle() will take the kernel lock after us) */
+        cpus[ncpu] = c;                  /* (it already runs idle(): the others see it from now on) */
+        __atomic_store_n(&ncpu, ncpu + 1, __ATOMIC_RELEASE);
     }
     page_free(pml4, 1);
     page_free(TRAMP, 1);                 /* the trampoline is not needed any more */
-    kprintf("mk: %d CPU%s running\n", ncpu, ncpu > 1 ? "s" : "");
 }
