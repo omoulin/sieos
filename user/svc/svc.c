@@ -3,8 +3,9 @@
  *   svc                       list them: state, pid, restarts, last status, uptime, memory
  *   svc restart NAME          stop it if running, start it again (root)
  *   svc stop NAME             stop it for good (root)
- *   svc add [-p PORT [-i SECONDS]] [-w PORT] NAME PATH [always|on-failure|never] [ARGS...]
- *           (-w: init pings PORT and ends the server if it stops answering)
+ *   svc add [-p PORT [-i SECONDS]] [-w PORT] [-b] NAME PATH [always|on-failure|never] [ARGS...]
+ *           (-w: init pings PORT and ends the server if it stops answering;
+ *            -b: background work, on E-cores where the processor has them)
  *                             supervise a program from the disk (root); with -p it
  *                             starts on demand, when PORT is looked up
  *   svc idle NAME SECONDS     an on-demand service stops after this long unused
@@ -75,9 +76,10 @@ int main(int argc, char **argv)
                 if (sec) { char *q = t + sizeof t; *--q = 0; *--q = 's'; do *--q = '0' + sec % 10; while (sec /= 10);
                            strlcpy(d + strlen(d), q, sizeof d - strlen(d)); }
             }
-            printf("%-8s  %-9s %4d  %8d  %4d  %-10s  %3lu:%02lu:%02lu  %6s  %7s  %6d  %s%s\n", s[i].name, state[s[i].state],
+            printf("%-8s  %-9s %4d  %8d  %4d  %-10s  %3lu:%02lu:%02lu  %6s  %7s  %6d  %s%s%s\n", s[i].name, state[s[i].state],
                    s[i].pid, s[i].restarts, s[i].last_status, policy[s[i].policy],
-                   up / 3600, up / 60 % 60, up % 60, a, b, s[i].starts, d, s[i].driver ? "  driver" : "");
+                   up / 3600, up / 60 % 60, up % 60, a, b, s[i].starts, d, s[i].driver ? "  driver" : "",
+                   s[i].bg ? "  background" : "");
         }
         return 0;
     }
@@ -94,7 +96,10 @@ int main(int argc, char **argv)
     if (argc >= 4 && !strcmp(argv[1], "add")) {
         const char *dport = "", *wport = "";   /* -p PORT -i SECONDS: started on demand; -w PORT: watched */
         uint64_t idle = 0;
-        while (argc >= 6 && argv[2][0] == '-') {
+        int bg = 0;                            /* -b: background work */
+        while (argc >= 5 && argv[2][0] == '-') {
+            if (!strcmp(argv[2], "-b")) { bg = 1; argv++; argc--; continue; }
+            if (argc < 6) break;
             if (!strcmp(argv[2], "-p")) dport = argv[3];
             else if (!strcmp(argv[2], "-i")) idle = strnum(argv[3]);
             else if (!strcmp(argv[2], "-w")) wport = argv[3];
@@ -121,11 +126,11 @@ int main(int argc, char **argv)
         n += strlcpy(req + n, dport, sizeof req - n) + 1;   /* "name\0path\0args\0port\0watched port" */
         n += strlcpy(req + n, wport, sizeof req - n) + 1;
         if (n > sizeof req) return fail("add", -EINVAL);
-        msg_t m = { .w = { INIT_ADD, pol, idle }, .sbuf = req, .slen = n };
+        msg_t m = { .w = { INIT_ADD, pol, idle, bg }, .sbuf = req, .slen = n };
         long r = call(&m);
         return r < 0 ? fail(argv[2], r) : 0;
     }
     printf("usage: svc | svc restart NAME | svc stop NAME | svc idle NAME SECONDS\n"
-           "       svc add [-p PORT [-i SECONDS]] NAME PATH [always|on-failure|never] [ARGS...]\n");
+           "       svc add [-p PORT [-i SECONDS]] [-w PORT] [-b] NAME PATH [always|on-failure|never] [ARGS...]\n");
     return 1;
 }

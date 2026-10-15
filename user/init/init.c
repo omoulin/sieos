@@ -41,6 +41,11 @@
  * whose parent ended: if login crashes, its open session becomes init's
  * child, and the next login prompt waits until that session ends.
  *
+ * Background work: a service marked so (bg in the table, `svc add -b`) is
+ * started with SPAWN_BACKGROUND: on a processor with P-cores and E-cores,
+ * its threads run on E-cores (the others, servers and the assistant
+ * included, on P-cores first). No effect where all cores are alike.
+ *
  * Stuck servers: a server that does not end but stops answering (a loop
  * that never ends, a deadlock) is as gone as a crashed one. A watcher thread
  * pings the core servers every 10 s (SVC_PING: any answer will do); one that
@@ -95,8 +100,9 @@ static svc_t svc[MAXSVC] = {
     /* the desktop (screen: a driver); with no display card it ends with 0: not restarted */
     { .i = { "atlas", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/atlas", "atlas", .watch = "atlas" },
     /* the console's log on a Pimoroni GFX HAT (a Pi's screen and buttons, a driver);
-     * with no HAT (or no Pi) it ends with 0 at once and is not started again */
-    { .i = { "gfxhat", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/gfxhat", "gfxhat" },
+     * with no HAT (or no Pi) it ends with 0 at once and is not started again.
+     * Background work: on a processor with E-cores, it runs there */
+    { .i = { "gfxhat", 0, 0, 0, 0, SVC_ON_FAILURE, 1, .bg = 1 }, "/bin/gfxhat", "gfxhat" },
     /* the pins (a Pi's GPIO; simulated elsewhere): started by its first user, then
      * kept (a pattern may be playing) */
     { .i = { "gpio",  0, 0, 0, 0, SVC_ALWAYS, 1, 0, "gpio", 0 }, "/bin/gpiod", "gpiod" },
@@ -128,7 +134,8 @@ static void say(const char *fmt, ...)
 
 static void start(svc_t *s)
 {
-    mk_spawn_t o = { .flags = (s->i.driver ? SPAWN_DRIVER : 0) | (s->quota ? SPAWN_QUOTA : 0), .quota = s->quota };
+    mk_spawn_t o = { .flags = (s->i.driver ? SPAWN_DRIVER : 0) | (s->quota ? SPAWN_QUOTA : 0) |
+                              (s->i.bg ? SPAWN_BACKGROUND : 0), .quota = s->quota };
     long pid;
     if (s->module) {
         o.flags |= SPAWN_MODULE;
@@ -361,7 +368,7 @@ static long serve(msg_t *m, msg_t *a, long from, char *req)
             (long)m->w[2] < 0)
             return -EINVAL;
         s = &svc[nsvc++];
-        *s = (svc_t){ .i = { .policy = (int)m->w[1], .state = SVC_WAITING } };
+        *s = (svc_t){ .i = { .policy = (int)m->w[1], .state = SVC_WAITING, .bg = m->w[3] == 1 } };
         strlcpy(s->i.name, req, sizeof s->i.name);
         strlcpy(s->src, path, sizeof s->src);
         strlcpy(s->args, *args ? args : req, sizeof s->args);
