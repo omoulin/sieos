@@ -10,15 +10,22 @@ SIEOS's network is three programs and a library, all written for SIEOS:
         │ NET_* messages, port "net"
         ▼
   netd  (/bin/netd)             IPv4, ARP, ICMP, UDP, TCP, DHCP client, DNS resolver
-        │ NIC_SEND (frames in batches)      ▲ NET_FRAMES (frames received, in batches)
-        ▼                                   │
-  vnet  (/bin/vnet, driver)     the network card, port "nic0"; also reads the clock chip
-        │                       ▲ NET_LINK (cable up / down)
+        │ NIC_SEND              ▲ NET_FRAMES / NET_LINK (received frames, the link;
+        ▼                       │                        both carry the interface)
+  vnet  (port "nic0")           the cable, and the clock chip      ┐  one interface
+  wifid (port "wifi")           the Wi-Fi chip (the Raspberry Pis) ┘  used at a time
+        │                       ▲
         ▼
-  the network card: virtio-net (QEMU), GENET (Raspberry Pi 4), RP1's GEM (Raspberry Pi 5)
+  virtio-net (QEMU), GENET (Pi 4), RP1's GEM (Pi 5); the CYW43455 on SDIO (both Pis)
 ```
 
-`init` starts and supervises `vnet` and `netd` like the other servers.
+`init` starts and supervises `vnet`, `wifid` (on the Pis) and `netd` like
+the other servers. netd has two interfaces and uses one at a time: the
+cable (`nic0`) while its link is up, else Wi-Fi (`wifi`) while it is
+associated, else the cable anyway (virtio has no link to watch). Switching
+interface is a new network, so netd forgets its ARP cache and asks DHCP
+again. `NET_FRAMES` and `NET_LINK` carry which interface they are from;
+`nic_info_t` carries each interface's link state.
 
 ## The driver: vnet
 
@@ -31,13 +38,28 @@ One program serves "nic0" whatever the card: it tries its backends in turn
 | `genet.c` | Raspberry Pi 4: BCM2711 GENET v5, PHY BCM54213PE | interrupt (status bit 13) | **untested on hardware** (QEMU has no GENET) |
 | `gem.c` | Raspberry Pi 5: RP1's Cadence GEM over PCIe, PHY BCM54213PE | polled: 0.2 ms after traffic, up to 10 ms when quiet (RP1's interrupts need MSI-X, not routed yet) | **untested on hardware** (no Pi 5 emulator) |
 
-The Pi backends find the controller, the PHY's MDIO address, the MAC
-address (the device tree's `local-mac-address`, else the firmware's
+The Pi backends find the controller, the PHY's MDIO address (the MAC
+node's `phy-handle`, else address 1, else whichever address answers), the
+MAC address (the device tree's `local-mac-address`, else the firmware's
 mailbox) and the RGMII clock delays (`phy-mode`) in the device tree; they
 start auto-negotiation and a third thread checks the cable once a second.
 When the link comes up or goes down, vnet tells netd (`NET_LINK`); netd
 asks DHCP again on "up", so plugging a cable in later works. The MAC
 follows the speed and duplex the PHY agreed on (10/100/1000).
+
+The two backends were reviewed against Linux's `bcmgenet`, `macb_main` and
+`clk-rp1` and the boards' device trees (none could be run here). GENET: the
+MAC reset is pulsed (bit 1 of the flush register; the old code pulsed bit
+0, only the receive buffer), the transmit FIFO and the hardware filters are
+flushed, and the RGMII delay mode follows `phy-mode` exactly (`rgmii-rxid`
+on the Pi 4). GEM: SIEOS leaves RP1 as the firmware set it up
+(`pciex4_reset=0` in `config.txt`), checks RP1's PCIe link and the
+controller's id before touching it, turns RP1's Ethernet clock on if the
+firmware left it off (125 MHz from `pll_sys_sec`), pulses the PHY's reset
+line (RP1 GPIO 32, from `phy-reset-gpios`) and parks the controller's
+unused queues on a "used" descriptor. New log lines (below) say where the
+MAC came from, the RGMII mode, RP1's clock and the design registers, so a
+real-board report is diagnosable.
 
 Caches: the Pis' devices do not see the CPU's caches. GENET keeps its
 descriptors in its own registers, so only frame buffers need `dma_sync`.
@@ -92,6 +114,68 @@ network costs no CPU.
   pings and `NET_INFO` are simply sent again.
 
 The protocol is in `include/mk/proto.h` (`NET_*`, `NIC_*`).
+
+## Wi-Fi: wifid (the Raspberry Pis)
+
+`wifid` (`user/wifi`, arm64 only, started at boot on the Pis) drives the
+**CYW43455** on both the Pi 4 and the Pi 5, over SDIO, as a second network
+interface (port `wifi`). Open and WPA2-PSK networks. **Untested on
+hardware**: QEMU emulates neither the SDIO controller's card side nor the
+chip; it was written from the controllers' register layout, the device
+trees and Linux's `brcmfmac` and Plan 9's `ether4330`. What to check on a
+real board, and what the log lines mean, is in
+[raspberrypi.md](raspberrypi.md).
+
+```
+  wifi (/bin/wifi), Settings ──WIFI_*──► wifid ──SDIO──► the CYW43455
+                      netd ◄──NET_FRAMES / NET_LINK──┘
+```
+
+- **The SDIO host** (`sdio.c`): an SDHCI controller (the same register
+  layout as the disk's `sd.c`) driven as an SDIO host — CMD5 brings the
+  card up, CMD52 reads or writes one register, CMD53 moves a block or a
+  byte stream to a function; 4-bit, High Speed, the card's interrupt. It
+  finds the Wi-Fi controller by its `brcm,bcm4329-fmac` child (the Pi 4's
+  legacy "emmc" `mmcnr@7e300000`, the Pi 5's "sdio2" `mmc@1001100000`),
+  sets the pins (Pi 4: GPIO 34-39 to ALT3; Pi 5: GPIO 30-35 to the "sd2"
+  function through the BCM2712 pin controller) and powers the chip (WL_ON:
+  the Pi 4's firmware GPIO expander by the mailbox, the Pi 5's always-on
+  GPIO block). No 1.8 V switch and no card detection: the chip is fixed.
+- **The driver** (`wifid.c`): over SDIO function 1 it reaches the chip's
+  backplane (a 32 KiB sliding window onto its cores and RAM): it scans the
+  cores, resets the ARM and the 802.11 core, downloads the firmware and the
+  nvram into chip RAM, takes the ARM core out of reset, waits for the chip's
+  "HT" clock and enables function 2 (frames). Then the **BCDC/SDPCM**
+  protocol carries control commands (iovars) and data frames. Scanning is
+  the firmware's `escan` (results arrive as events); joining sets the
+  security (`wsec` AES, `wpa_auth` WPA2-PSK, `sup_wpa` so the **firmware's
+  own supplicant** does the 4-way handshake — no handshake code on the
+  host) and the passphrase (`WLC_SET_WSEC_PMK`, as a passphrase, not a
+  pre-computed key), then the `join` iovar; link up/down come as events.
+  Data frames go to netd as the Wi-Fi interface, DHCP and the rest the same
+  as on the cable.
+- **The chosen network** is kept in `/etc/wifi.conf` (root only:
+  `ssid=`, `passphrase=`) and rejoined at every start.
+- The SDIO bus is shared by two threads (the receiver, blocked on the
+  card's interrupt, and the one serving requests); one lock serializes a
+  chip transaction. Frames read while waiting for a command's reply are
+  still delivered.
+
+**The chip's firmware** is the Raspberry Pi's, not part of SIEOS (it has
+its own licence), so it is not in the repository. `make ARCH=arm64 PI=4|5
+sdcard` fetches it once (like the device trees) and copies it onto the
+card's SieFS partition, into `/lib/firmware/brcm/`:
+
+| On the card | From (RPi-Distro `firmware-nonfree`, commit `c91cd28`) |
+|---|---|
+| `brcmfmac43455-sdio.bin` | `debian/config/brcm80211/cypress/cyfmac43455-sdio-standard.bin` |
+| `brcmfmac43455-sdio.clm_blob` | `debian/config/brcm80211/cypress/cyfmac43455-sdio.clm_blob` |
+| `brcmfmac43455-sdio.txt` (nvram) | `debian/config/brcm80211/brcm/brcmfmac43455-sdio.txt` |
+
+The exact URLs are pinned in the `Makefile`
+(<https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/c91cd2804cf7463aab913e7247c176049f16bbd6/>...).
+The **"standard"** Cypress build is used, not "minimal": it has the internal
+supplicant (`idsup`/`sup_wpa`) that WPA2 needs. Version 7.45.265 (2023).
 
 ## The library: sockets, HTTP, TLS
 
@@ -184,8 +268,13 @@ transfer.
 - The date comes from the clock chip read when vnet starts (no NTP). The
   Raspberry Pis have no clock chip: the date is unknown there, and TLS then
   skips the certificates' validity dates (everything else is checked).
-- Raspberry Pi Ethernet is untested on hardware (see
-  [raspberrypi.md](raspberrypi.md)); the Pi 5's is polled.
+- Raspberry Pi Ethernet and Wi-Fi are untested on hardware (see
+  [raspberrypi.md](raspberrypi.md)); the Pi 5's Ethernet is polled.
+- Wi-Fi: open and WPA2-PSK only (no WPA3, no enterprise, no WEP); 2.4 and
+  5 GHz as the firmware's regulatory blob allows; one network at a time; no
+  access-point mode. The host runs no supplicant: the chip's firmware does
+  the handshake. A scan blocks the caller (and the desktop) for a few
+  seconds.
 - The card sits in PCI slot 5 in QEMU (line 10, apart from the disk's); the
   kernel now lets up to 4 drivers share a line, so this is no longer needed,
   only kept.
