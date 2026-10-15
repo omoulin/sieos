@@ -115,7 +115,9 @@ below. A user's home is a volume of its own, **encrypted**: its key is
 wrapped by a key derived from the user's password (Argon2id, as for
 logins), so on the disk nothing of it can be read without the password
 ([siefs.md](siefs.md#encryption)). It opens at each login with the
-password (auth asks the file server, `FS_UNLOCK`) and stays open until the
+password (auth derives the key-encryption key, Argon2id like a login
+check, and hands only that to the file server: `FS_UNLOCK`; the file
+server never sees a password) and stays open until the
 machine stops: what it protects is the disk at rest (a lost card, a copied
 image), not a running system, where root can read everything anyway.
 Homes made before this (plain folders) stay as they are.

@@ -45,9 +45,9 @@ void __start(char *args)
     char *dir = args;                       /* our parent's current folder, after a \001 (spawn_file) */
     while (*dir && *dir != '\001') dir++;
     if (*dir) { *dir++ = 0; fs_chdir(dir); }
-    char *argv[16];
+    char *argv[32];
     int argc = 0;
-    while (*args && argc < 15) {            /* split at spaces, in place */
+    while (*args && argc < 31) {            /* split at spaces, in place (31 words at most) */
         while (*args == ' ') *args++ = 0;
         if (*args) argv[argc++] = args;
         while (*args && *args != ' ') args++;

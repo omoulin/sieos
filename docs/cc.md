@@ -402,6 +402,7 @@ beyond line tables.
 | `tests/cc/a64/t_vecreg.c` | Vectors in registers against scalar code: more vectors than registers (spills), vectors alive across calls, accumulating loops, halves and combinations, branches, lanes mixed with promoted vectors, vectors through calls. | 6/6, `-O0` and `-O2` |
 | `make llm-neon-test` | The engine's NEON kernels built by sicc vs plain C, then their speed (`tests/llm/neon_bench.c`). | all formats agree |
 | `make cc-sieos-test` | sicc on SIEOS (`/bin/cc`, x86-64 and AArch64): compiles and runs two programs, `-S`, an error with its line. | PASS on both |
+| `make make-test` | `/bin/make` with `/bin/cc` on SIEOS: a project in three files, rebuilds, errors; SIEOS's hello, sh and make built there ([make.md](make.md)). | PASS on both |
 
 ## Measurements
 
@@ -561,6 +562,5 @@ cc -O2 -c a.c              an object; -S assembly; -E preprocessed text
 
 Limits: on x86-64, `long double` constants are read at `double` precision
 (`fmt.c`'s `strtold` is its `strtod`; SIEOS's AArch64 has `long double` =
-`double` anyway); no `make` yet (one `cc` per file, or several sources in
-one `cc`); a program's arguments, with the folder, fit in 256 bytes and
-in 15 words.
+`double` anyway); a program's arguments, with the folder, fit in 256 bytes
+and in 31 words. `/bin/make` builds projects with it: [make.md](make.md).

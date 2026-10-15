@@ -21,11 +21,11 @@
  * volume each hour ("auto-YYYY-MM-DD-HH00"), kept a day. When the disk is
  * full, a write first lets the oldest hourly snapshot go and tries again.
  *
- * Encrypted volumes (a home, docs/siefs.md): their key is wrapped by a key
- * this server derives from the user's password with Argon2id (as auth
- * checks logins: 16 MiB, 24 passes); auth asks FS_UNLOCK at a login with
- * the password, and FS_REKEY when it changes. A home stays open until the
- * machine stops: what encryption protects is the disk at rest.
+ * Encrypted volumes (a home, docs/siefs.md): their key is wrapped by a
+ * key-encryption key that auth derives from the user's password (it never
+ * comes here); auth asks FS_UNLOCK at a login, FS_REKEY when the password
+ * changes. A home stays open until the machine stops: what encryption
+ * protects is the disk at rest.
  *
  * If this server crashes, init starts it again: it mounts the disk's last
  * commit, and programs' file handles are reopened by their library. If the
@@ -39,9 +39,6 @@
 #include "mk.h"
 #include "siefs.h"
 #include "mk/crypto.h"
-
-#define KDF_KIB 16384                       /* Argon2id for the key-encryption key: as auth's logins */
-#define KDF_T   24
 
 #define COMMIT_NS 1000000000L               /* commit 1 s after the first change: at most 1 s of
                                                changes is lost if the server (or the machine) dies */
@@ -85,27 +82,13 @@ static int rnd(void *b, size_t n)
     return -1;
 }
 
-/* The key-encryption key of a password: Argon2id with the volume's salt. */
-static int kek_of(const char *pw, const siefs_kdf_t *k, uint8_t kek[32])
-{
-    if (k->m_kib < 8 || k->m_kib > (1 << 20) || !k->t || k->t > 64) return -EINVAL;
-    void *mem = malloc((size_t)k->m_kib << 10);
-    if (!mem) return -ENOMEM;
-    argon2_t a = { pw, k->salt, 0, 0, (uint32_t)strlen(pw), 16, 0, 0, k->t, k->m_kib, 1, ARGON2_ID };
-    int r = argon2(&a, kek, 32, mem);
-    wipe(mem, (size_t)k->m_kib << 10);
-    free(mem);
-    return r ? -EINVAL : 0;
-}
-static int new_kdf(const char *pw, siefs_kdf_t *k, uint8_t kek[32])
-{
-    k->t = KDF_T; k->m_kib = KDF_KIB;
-    return rnd(k->salt, sizeof k->salt) ? -EAGAIN : kek_of(pw, k, kek);
-}
-
 /* Wall-clock time: there is no clock chip driver yet, so the build's date
- * plus the time since boot. */
-static int64_t now(void) { return (int64_t)EPOCH * 1000000000 + sys_clock(); }
+ * plus the time since boot, moved ahead to the newest file time asked
+ * about (a disk made after this build): a file written now is never older
+ * than the files it was made from (make compares those times). */
+static int64_t ahead;
+static int64_t now(void) { return (int64_t)EPOCH * 1000000000 + sys_clock() + ahead; }
+static void seen(int64_t t) { int64_t n = now(); if (t >= n) ahead += t - n + 1; }
 
 /* ---- Commit timing. The commit thread asks FS_TICK; the answer is how
  * long to sleep. With nothing changed, the answer waits until a change
@@ -369,22 +352,12 @@ static int path_of(uint64_t ino, char *out, size_t size)
 /* ---- Hourly snapshots: "auto-YYYY-MM-DD-HH00" of every volume, kept a
  * day; the oldest ones also go first when the disk is full. */
 #define KEEP_NS (24LL * 3600 * 1000000000)
-static void auto_name(int64_t ns, char *s)
+static void auto_name(int64_t ns, char *s)              /* "auto-2026-10-15-1400" */
 {
-    int64_t t = ns / 1000000000, d = t / 86400 + 719468, sec = t % 86400;   /* days -> civil date */
-    int64_t era = d / 146097, doe = d - era * 146097, yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
-    int64_t day = doy - (153 * mp + 2) / 5 + 1, mon = mp < 10 ? mp + 3 : mp - 9, y = yoe + era * 400 + (mon <= 2);
-    int v[4] = { (int)y, (int)mon, (int)day, (int)(sec / 3600) };
-    s += strlcpy(s, "auto-", 6);
-    for (int i = 0; i < 4; i++) {
-        int w = i ? 2 : 4, x = v[i];
-        for (int k = w - 1; k >= 0; k--) { s[k] = (char)('0' + x % 10); x /= 10; }
-        s += w;
-        *s++ = i < 3 ? '-' : '0';
-    }
-    *s++ = '0';
-    *s = 0;
+    char d[20];
+    date_str(ns, d);                                    /* "2026-10-15 14:07" */
+    d[10] = '-'; memcpy(d + 13, "00", 3);
+    memcpy(s, "auto-", 5); memcpy(s + 5, d, 16);
 }
 static int is_auto(const char *n) { return !memcmp(n, "auto-", 5); }
 
@@ -477,6 +450,7 @@ static long serve(msg_t *m, long from, const void **out, uint64_t *outlen, uint6
         if (m->w[0] == FS_FSTAT) { if (!(h = hnd_get(m->w[1], pid))) return -EBADF; ino = h->ino; }
         else if ((r = walk(s1, !m->w[1], c, &ino, 0, 0))) return r;    /* w[1] = 1: the link itself */
         if ((r = siefs_stat(fs, ino, (siefs_stat_t *)buf))) return r;
+        seen(((siefs_stat_t *)buf)->mtime);
         *out = buf; *outlen = sizeof(siefs_stat_t);
         return 0;
     case FS_READDIR: {
@@ -627,43 +601,40 @@ static long serve(msg_t *m, long from, const void **out, uint64_t *outlen, uint6
         r = walk(s1, 0, c, &ino, &dir, name);
         if (!r) return -EEXIST;
         if (r != -ENOENT || !dir) return r;
-        int enc = *s2 != 0;
-        if (enc) {                                    /* with a password: encrypted */
-            siefs_kdf_t k;
-            uint8_t kek[32];
-            if (!(r = new_kdf(s2, &k, kek)))
-                r = siefs_mkvol_enc(fs, dir, name, (uint32_t)m->w[1], (uint32_t)m->w[2], (uint32_t)m->w[3], &k, kek, &ino);
-            wipe(kek, sizeof kek);
-            wipe(s2, strlen(s2));
-        } else r = siefs_mkvol(fs, dir, name, (uint32_t)m->w[1], (uint32_t)m->w[2], (uint32_t)m->w[3], &ino);
+        const fs_key_t *key = (const fs_key_t *)s2;   /* (after the path, if it came) */
+        int enc = s2 + sizeof *key <= buf + m->rlen;
+        r = enc ? siefs_mkvol_enc(fs, dir, name, (uint32_t)m->w[1], (uint32_t)m->w[2], (uint32_t)m->w[3],
+                                  (const siefs_kdf_t *)key, key->kek, &ino)
+                : siefs_mkvol(fs, dir, name, (uint32_t)m->w[1], (uint32_t)m->w[2], (uint32_t)m->w[3], &ino);
+        wipe(buf, m->rlen);
         if (r) return r;
         printf("fs: volume %s made%s\n", s1, enc ? ", encrypted" : "");
         changed();
         return 0;
-    case FS_UNLOCK: case FS_REKEY: {
+    case FS_UNLOCK: case FS_REKEY: case FS_KDF: {
         if (c.uid) return -EPERM;
-        siefs_kdf_t k;
-        uint8_t kek[32];
         uint64_t root, od;
-        const char *old = s2 + strlen(s2) + 1;
         char path[96];
-        strlcpy(path, s1, sizeof path);              /* (the request is wiped: it holds passwords) */
-        if (old > buf + m->rlen) old = "";
-        r = walk(s1, 1, c, &ino, 0, 0);
-        if (!r) r = siefs_volume_root(fs, ino, &root);
-        if (!r && (r = siefs_kdf(fs, root, &k)) == -EINVAL) r = 1;   /* (not encrypted: nothing to do) */
-        if (!r && (m->w[0] == FS_UNLOCK || *old)) {   /* open it: with the password, or the old one */
-            if (!(r = kek_of(m->w[0] == FS_UNLOCK ? s2 : old, &k, kek))) r = siefs_unlock(fs, root, kek);
-            if (!r) orphans_of(root, &od);
+        strlcpy(path, s1, sizeof path);
+        const uint8_t *kek = (const uint8_t *)s2;     /* FS_UNLOCK: the key; FS_REKEY: an fs_key_t, then the old key */
+        const fs_key_t *nk = (const fs_key_t *)s2;
+        size_t have = (size_t)(buf + m->rlen - s2);
+        if (!(r = walk(s1, 1, c, &ino, 0, 0)) && !(r = siefs_volume_root(fs, ino, &root))) {
+            if (m->w[0] == FS_KDF) {
+                if (!(r = siefs_kdf(fs, root, (siefs_kdf_t *)buf))) { *out = buf; *outlen = sizeof(siefs_kdf_t); }
+                return r;
+            }
+            if (m->w[0] == FS_UNLOCK) r = have >= 32 ? siefs_unlock(fs, root, kek) : -EINVAL;
+            else if (have < sizeof *nk) r = -EINVAL;
+            else {
+                if (have >= sizeof *nk + 32) r = siefs_unlock(fs, root, (const uint8_t *)(nk + 1));   /* (locked: the old key) */
+                if (!r) r = siefs_rekey(fs, root, (const siefs_kdf_t *)nk, nk->kek);
+            }
+            if (!r && m->w[0] == FS_UNLOCK) orphans_of(root, &od);
         }
-        if (!r && m->w[0] == FS_REKEY) {
-            if (!(r = new_kdf(s2, &k, kek))) r = siefs_rekey(fs, root, &k, kek);
-        }
-        wipe(kek, sizeof kek);
         wipe(buf, m->rlen);
-        if (r == 1) return 0;
         if (!r) printf("fs: %s %s\n", path, m->w[0] == FS_UNLOCK ? "unlocked" : "has a new key");
-        else if (r == -EACCES) printf("fs: %s: not its password\n", path);
+        else if (r == -EACCES) printf("fs: %s: not its key\n", path);
         return r;
     }
     case FS_RMVOL:

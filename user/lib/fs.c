@@ -288,25 +288,43 @@ long fs_snaplist(const char *path, uint64_t *cursor, void *buf, size_t size)
     if (r >= 0) *cursor = m.w[1];
     return r;
 }
-long fs_mkvol(const char *path, int mode, int uid, int gid, const char *password)
+/* A request: a path, then binary data (keys). */
+static long bcall(msg_t *m, const char *path, const void *d, size_t n)
+{
+    char s[FS_PATH + 96];
+    long e = absolute(path, s);
+    if (e) return e;
+    size_t k = strlen(s) + 1;
+    if (n > 96) return -EINVAL;
+    if (n) memcpy(s + k, d, n);
+    m->sbuf = s; m->slen = k + n;
+    e = fs_call(m);
+    wipe(s, sizeof s);
+    return e;
+}
+long fs_mkvol(const char *path, int mode, int uid, int gid, const fs_key_t *key)
 {
     msg_t m = { .w = { FS_MKVOL, (uint64_t)mode, (uint64_t)uid, (uint64_t)gid } };
-    return pcall(&m, path, password ? password : "", 0);
+    return bcall(&m, path, key, key ? sizeof *key : 0);
 }
-long fs_unlock(const char *path, const char *password)
+long fs_kdf(const char *path, siefs_kdf_t *k)
+{
+    msg_t m = { .w = { FS_KDF }, .rbuf = k, .rlen = sizeof *k };
+    return bcall(&m, path, 0, 0);
+}
+long fs_unlock(const char *path, const uint8_t kek[32])
 {
     msg_t m = { .w = { FS_UNLOCK } };
-    return pcall(&m, path, password, 0);
+    return bcall(&m, path, kek, 32);
 }
-long fs_rekey(const char *path, const char *password, const char *old)
+long fs_rekey(const char *path, const fs_key_t *key, const uint8_t *old)
 {
-    char s[FS_PATH * 2 + 2];
-    size_t a = strlen(path) + 1, b = strlen(password) + 1, c = strlen(old ? old : "") + 1;
-    if (a + b + c > sizeof s) return -ENAMETOOLONG;
-    memcpy(s, path, a); memcpy(s + a, password, b); memcpy(s + a + b, old ? old : "", c);
-    msg_t m = { .w = { FS_REKEY }, .sbuf = s, .slen = a + b + c };
-    long r = fs_call(&m);
-    wipe(s, sizeof s);
+    uint8_t b[sizeof *key + 32];
+    memcpy(b, key, sizeof *key);
+    if (old) memcpy(b + sizeof *key, old, 32);
+    msg_t m = { .w = { FS_REKEY } };
+    long r = bcall(&m, path, b, sizeof *key + (old ? 32 : 0));
+    wipe(b, sizeof b);
     return r;
 }
 long fs_rmvol(const char *path)

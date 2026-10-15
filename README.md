@@ -149,6 +149,9 @@ tour, file by file, with the crash and on-demand mechanisms:
   with certificate checking; `fetch URL`.
 - **sia, the assistant** ([docs/sia.md](docs/sia.md)): below.
 - **sicc, the C compiler** ([docs/cc.md](docs/cc.md)): below.
+- **make** ([docs/make.md](docs/make.md)): `/bin/make` builds C projects on
+  SIEOS with `/bin/cc` (pattern rules, variables, functions, `-n -k -B -C`);
+  SIEOS's own hello, sh and make build there.
 
 ## The assistant: sia
 
@@ -181,7 +184,8 @@ One program (`cc/`) that preprocesses, compiles, assembles and links C11
 (plus the GNU extensions SIEOS uses) for **x86-64 and AArch64**, with its
 own optimizer, assemblers and linker. It builds all of SIEOS, compiles
 itself (byte-identical stages, on both architectures), and compiles SIEOS
-about 15 times faster than gcc. Details: [docs/cc.md](docs/cc.md).
+about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
+`/bin/make` ([docs/make.md](docs/make.md)). Details: [docs/cc.md](docs/cc.md).
 
 ## Make targets
 
@@ -210,6 +214,7 @@ about 15 times faster than gcc. Details: [docs/cc.md](docs/cc.md).
 | `make crypto-test` | BLAKE2b, ChaCha20, Argon2 against official vectors |
 | `make cc` / `cc-test` / `cc-bootstrap` / `cc-bench` | sicc / its tests / self-compilation / speed vs gcc |
 | `make cc-sieos` | all of SIEOS (x86-64) built by sicc, then the boot and crash tests |
+| `make cc-sieos-test` / `make-test` | `/bin/cc` on SIEOS / `/bin/make` there, with SIEOS's own programs |
 | `make cc-a64-test` / `cc-a64-bootstrap` | sicc's AArch64 tests / self-compilation, emulated |
 | `make llm` / `llm-test` / `llm-neon-test` / `llm-bench` / `llm-freestanding` | the engine's host tools / tests / NEON tests / speed / freestanding check |
 
@@ -234,9 +239,9 @@ directory), `CPU64=cortex-a72|max` (the emulated ARM processor).
 
 Done: microkernel, SieFS, disk, users, supervisor, on-demand servers,
 the desktop, network and TLS, sia (local and remote), sicc (x86-64 and AArch64),
-AArch64 port (QEMU, Raspberry Pi 4 in QEMU, card images). Next: the
-assistant's memory, the laptop (UEFI, NVMe, USB, NVIDIA compute), the Pis
-on real boards (USB, Ethernet), sicc running on SIEOS.
+AArch64 port (QEMU, Raspberry Pi 4 in QEMU, card images); sicc and make
+running on SIEOS. Next: the assistant's memory, the laptop (UEFI, NVMe,
+USB, NVIDIA compute), the Pis on real boards (USB, Ethernet).
 Details: [docs/status.md](docs/status.md).
 
 ## License

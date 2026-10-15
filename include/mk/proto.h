@@ -114,16 +114,21 @@ enum {
                        deleting, restoring: root, or the owner of the volume's root. LIST:
                        w[2] = cursor; rbuf <- records {i64 created (ns), u8 length, name}
                                                      -> bytes (LIST: w[1] = next cursor) */
-    FS_MKVOL,       /* "path\0password"; w[1] = mode, w[2] = uid, w[3] = gid (root only): a
-                       new volume mounted at path (a user's home), encrypted with a key
-                       wrapped by the password unless it is ""                -> 0 */
+    FS_MKVOL,       /* "path\0" [fs_key_t]; w[1] = mode, w[2] = uid, w[3] = gid (root only):
+                       a new volume mounted at path (a user's home); with a key: encrypted,
+                       its key wrapped by that key-encryption key           -> 0 */
     FS_RMVOL,       /* path (root only): an empty volume, without snapshots   -> 0 */
     FS_AUTOSNAP,    /* (the server's own snapshot thread: the hourly snapshots) -> ns to wait */
-    FS_UNLOCK,      /* "path\0password" (root: auth, at a login): path's encrypted volume opens
-                       (0 also when it is not encrypted, or open already)   -> 0, -EACCES */
-    FS_REKEY,       /* "path\0new\0old" (root: auth, a new password): the volume key is
-                       wrapped anew; old opens it first if it is locked   -> 0 */
+    FS_UNLOCK,      /* "path\0" kek[32] (root: auth, at a login): path's encrypted volume
+                       opens (0 if it is open already)                     -> 0, -EACCES */
+    FS_REKEY,       /* "path\0" fs_key_t [old kek[32]] (root: auth, a new password): the
+                       volume key is wrapped anew; the old key opens it first if locked -> 0 */
+    FS_KDF,         /* path (root): how its volume's key-encryption key is derived; a
+                       siefs_kdf_t in rbuf (-EINVAL: the volume is not encrypted) -> 0 */
 };
+/* A key-encryption key and how it was derived from a password (Argon2id:
+ * auth does that, as for its logins; the file server never sees passwords). */
+typedef struct { uint8_t salt[16]; uint32_t t, m_kib; uint8_t kek[32]; } fs_key_t;
 enum { SNAP_TAKE = 1, SNAP_DELETE, SNAP_RESTORE, SNAP_LIST };
 
 /* Accounts server, port "auth" (/bin/auth, run as root by init). It alone

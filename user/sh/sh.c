@@ -1,7 +1,8 @@
 /*
  * sh - The SIEOS shell. Built-in commands for the system and the files;
  * any other word is a program: /bin/NAME (or a path with a '/') is read
- * from the disk, started, and waited for.
+ * from the disk, started, and waited for. "sh -c LINE" runs one line and
+ * ends with its status (make runs its recipes so).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -20,6 +21,7 @@ static const char *errstr(long e)
     case ENAMETOOLONG: return "name too long";    case ENOTEMPTY: return "directory not empty";
     case ELOOP: return "too many symbolic links"; case EBUSY: return "busy";
     case 61: return "no such attribute";          case ENOMEM: return "out of memory";
+    case EROFS: return "read only (a snapshot)";  case EXDEV: return "not across volumes";
     }
     return "error";
 }
@@ -127,22 +129,6 @@ static void mode_str(uint32_t m, char *s)
     if (m & 01000) s[9] = s[9] == 'x' ? 't' : 'T';
     s[10] = 0;
 }
-static void date_str(int64_t ns, char *s)
-{
-    int64_t t = ns / 1000000000, d = t / 86400 + 719468, sec = t % 86400;   /* days -> civil date */
-    int64_t era = d / 146097, doe = d - era * 146097, yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
-    int64_t day = doy - (153 * mp + 2) / 5 + 1, mon = mp < 10 ? mp + 3 : mp - 9, y = yoe + era * 400 + (mon <= 2);
-    int v[5] = { (int)y, (int)mon, (int)day, (int)(sec / 3600), (int)(sec / 60 % 60) };
-    for (int i = 0; i < 5; i++) {
-        int w = i ? 2 : 4, x = v[i];
-        for (int k = w - 1; k >= 0; k--) { s[k] = (char)('0' + x % 10); x /= 10; }
-        s += w;
-        if (i < 4) *s++ = "-- :"[i];
-    }
-    *s = 0;
-}
-
 static void ls_one(const char *path, const char *name, int lng)
 {
     siefs_stat_t st;
@@ -230,6 +216,22 @@ static int cmd_simple(int ac, char **av)
     const char *c = av[0];
     long r = -EINVAL;
     long (*each)(const char *) = !strcmp(c, "rmdir") ? fs_rmdir : !strcmp(c, "rm") ? fs_unlink : 0;
+    if (!strcmp(c, "rm") && ac > 1 && !strcmp(av[1], "-f")) {     /* -f: missing files are fine */
+        for (int i = 2; i < ac; i++) if ((r = fs_unlink(av[i])) != -ENOENT && err(av[i], r)) return 1;
+        return 0;
+    }
+    if (!strcmp(c, "touch")) {                          /* a new empty file, or a file's time now */
+        for (int i = 1; i < ac; i++) {
+            siefs_stat_t st;
+            long h = fs_open(av[i], FS_WRONLY | FS_CREAT, 0644);
+            if (err(av[i], h)) return 1;
+            r = fs_fstat(h, &st);
+            if (!r) r = fs_truncate(h, st.size);    /* (the same size: only the time changes) */
+            fs_close(h);
+            if (err(av[i], r)) return 1;
+        }
+        return ac < 2 && err(c, -EINVAL);
+    }
     if (!strcmp(c, "mkdir")) { for (int i = 1; i < ac; i++) if (err(av[i], fs_mkdir(av[i], 0755))) return 1; return ac < 2 && err(c, r); }
     if (each) { for (int i = 1; i < ac; i++) if (err(av[i], each(av[i]))) return 1; return ac < 2 && err(c, r); }
     if (!strcmp(c, "mv") && ac == 3) r = fs_rename(av[1], av[2]);
@@ -249,6 +251,40 @@ static int cmd_simple(int ac, char **av)
     }
     if (!strcmp(c, "sync")) r = fs_sync();
     return err(c, r);
+}
+
+/* cp FROM TO, or cp FILE... DIR */
+static int cp_one(const char *from, const char *to)
+{
+    siefs_stat_t st;
+    char path[FS_PATH];
+    long h = fs_open(from, FS_RDONLY, 0), o, n = 0;
+    if (err(from, h)) return 1;
+    if (!fs_stat(to, &st, 0) && (st.mode & SIEFS_IFMT) == SIEFS_IFDIR) {   /* into the folder, same name */
+        const char *b = from + strlen(from);
+        while (b > from && b[-1] != '/') b--;
+        size_t k = strlcpy(path, to, sizeof path);
+        if (k + 1 + strlen(b) >= sizeof path) { fs_close(h); return err(to, -ENAMETOOLONG); }
+        path[k] = '/';
+        strlcpy(path + k + 1, b, sizeof path - k - 1);
+        to = path;
+    }
+    if (fs_fstat(h, &st) || (o = fs_open(to, FS_WRONLY | FS_CREAT | FS_TRUNC, st.mode & 0777)) < 0) {
+        fs_close(h);
+        return err(to, -EACCES);
+    }
+    uint64_t off = 0;
+    while ((n = fs_read(h, off, io, sizeof io)) > 0 && (n = fs_write(o, off, io, n)) > 0) off += n;
+    fs_close(h);
+    fs_close(o);
+    return err(to, n);
+}
+static int cmd_cp(int ac, char **av)
+{
+    int bad = 0;
+    if (ac < 3) return err("cp", -EINVAL);
+    for (int i = 1; i < ac - 1; i++) bad |= cp_one(av[i], av[ac - 1]);
+    return bad;
 }
 
 static int cmd_stat(int ac, char **av)
@@ -312,6 +348,39 @@ static int cmd_find(int ac, char **av)
     return 0;
 }
 
+/* snap: the snapshots of a path's volume (docs/siefs.md): list, take,
+ * delete, restore. The file server also takes one of each volume hourly. */
+static int cmd_snap(int ac, char **av)
+{
+    const char *op = ac > 1 ? av[1] : "list";
+    if (!strcmp(op, "list")) {
+        const char *path = ac > 2 ? av[2] : ".";
+        uint64_t cur = 0;
+        int n = 0;
+        do {
+            long r = fs_snaplist(path, &cur, io, sizeof io);
+            if (err("snap", r)) return 1;
+            for (long p = 0; p + 9 <= r; n++) {
+                int64_t t;
+                char d[20], nm[64];
+                int l = (uint8_t)io[p + 8] < 63 ? (uint8_t)io[p + 8] : 63;
+                memcpy(&t, io + p, 8);
+                memcpy(nm, io + p + 9, l); nm[l] = 0;
+                date_str(t, d);
+                printf("%s  %s\n", d, nm);
+                p += 9 + (uint8_t)io[p + 8];
+            }
+        } while (cur);
+        if (!n) printf("no snapshots of this volume yet (snap take NAME)\n");
+        return 0;
+    }
+    int k = !strcmp(op, "take") ? SNAP_TAKE : !strcmp(op, "delete") ? SNAP_DELETE : !strcmp(op, "restore") ? SNAP_RESTORE : 0;
+    if (!k || ac < 3) { printf("usage: snap [list [PATH]] | take|delete|restore NAME [PATH]\n"); return 1; }
+    if (err(av[2], fs_snap(ac > 3 ? av[3] : ".", k, av[2]))) return 1;
+    printf("snapshot %s %s\n", av[2], k == SNAP_TAKE ? "taken" : k == SNAP_DELETE ? "deleted" : "restored");
+    return 0;
+}
+
 static const struct { const char *name, *help; int (*run)(int, char **); } cmds[] = {
     { "help",   "this list",                                cmd_help },
     { "ls",     "[-l] [PATH...]  list a directory",         cmd_ls },
@@ -321,7 +390,9 @@ static const struct { const char *name, *help; int (*run)(int, char **); } cmds[
     { "echo",   "WORDS [> FILE | >> FILE]  print or write", cmd_echo },
     { "mkdir",  "DIR...",                                   cmd_simple },
     { "rmdir",  "DIR...",                                   cmd_simple },
-    { "rm",     "FILE...",                                  cmd_simple },
+    { "rm",     "[-f] FILE...  (-f: missing ones too)",     cmd_simple },
+    { "cp",     "FROM TO, or FILE... DIR  copy files",      cmd_cp },
+    { "touch",  "FILE...  create, or set the time to now",  cmd_simple },
     { "mv",     "FROM TO  rename or move",                  cmd_simple },
     { "ln",     "[-s] FROM TO  link (-s: symbolic)",        cmd_simple },
     { "chmod",  "MODE PATH  (octal: 644)",                  cmd_simple },
@@ -333,6 +404,7 @@ static const struct { const char *name, *help; int (*run)(int, char **); } cmds[
     { "tags",   "FILE  list its attributes",                cmd_tags },
     { "untag",  "FILE KEY  remove an attribute",            cmd_untag },
     { "find",   "KEY=VALUE  files with this attribute",     cmd_find },
+    { "snap",   "[list [PATH]] | take|delete|restore NAME [PATH]  snapshots", cmd_snap },
     { "ps",     "the running programs",                     cmd_ps },
     { "kill",   "PID...  end programs (yours; root: any)",  cmd_kill },
     { "mem",    "memory, processes, CPUs",                  cmd_mem },
@@ -358,8 +430,11 @@ static int cmd_help(int ac, char **av)
     return 0;
 }
 
-/* A program from the disk; it gets "name args" as its argument string. */
-static void program(int ac, char **av)
+static int batch;                       /* sh -c: no "exit status" message (the caller tells) */
+
+/* A program from the disk; it gets "name args" as its argument string.
+ * -> its exit status (127: not found, 126: could not start). */
+static int program(int ac, char **av)
 {
     int bg = ac > 1 && !strcmp(av[ac - 1], "&");
     if (bg) av[--ac] = 0;
@@ -377,12 +452,36 @@ static void program(int ac, char **av)
     args[n] = 0;
     long r;
     if (bg) {                                        /* "cmd &": do not wait for it */
-        if ((r = spawn_file(path, args, -1, -1, 0)) > 0) { printf("[%ld]\n", r); return; }
+        if ((r = spawn_file(path, args, -1, -1, 0)) > 0) { printf("[%ld]\n", r); return 0; }
     } else r = run(path, args);
-    if (r == -ENOENT) printf("%s: unknown command (try 'help')\n", av[0]);
-    else if (r == EXIT_KILLED) printf("%s: killed\n", av[0]);
-    else if (r < 0) printf("%s: %s\n", av[0], errstr(r));
-    else if (r) printf("%s: exit status %ld\n", av[0], r);
+    if (r == -ENOENT) { printf("%s: unknown command (try 'help')\n", av[0]); return 127; }
+    if (r == EXIT_KILLED) printf("%s: killed\n", av[0]);
+    else if (r < 0) { printf("%s: %s\n", av[0], errstr(r)); return 126; }
+    else if (r && !batch) printf("%s: exit status %ld\n", av[0], r);
+    return (int)r;
+}
+
+/* One line: split into words ("..." keeps spaces, a word that starts
+ * with '#' starts a comment), then a built-in command or a program -> its status. */
+static int line_run(char *line)
+{
+    char *v[32];
+    int c = 0;
+    for (char *p = line, *o; *p && c < 31; ) {
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        if (!*p || *p == '#') break;
+        v[c++] = o = p;
+        for (int q = 0; *p && (q || (*p != ' ' && *p != '\t' && *p != '\n')); p++)
+            if (*p == '"') q = !q; else *o++ = *p;
+        if (*p) p++;
+        *o = 0;
+    }
+    v[c] = 0;
+    if (!c) return 0;
+    size_t i = 0;
+    while (i < NCMD && strcmp(cmds[i].name, v[0])) i++;
+    if (i < NCMD && cmds[i].run) return cmds[i].run(c, v);
+    return program(c, v);
 }
 
 /* Programs started with '&' that have ended since the last prompt. */
@@ -397,12 +496,22 @@ static void reap(void)
 
 int main(int ac, char **av)
 {
-    char line[512], *v[32], host[32] = "sieos";
+    char line[512], host[32] = "sieos";
     long n;
     sys_ident(0, &me);
     if (acct_user(0, me.uid, &user)) { strlcpy(user.name, me.uid ? "?" : "root", sizeof user.name); strlcpy(user.home, "/", 2); }
     char *hn = file_get("/etc/hostname", 0);
     if (hn) { strlcpy(host, hn, sizeof host); char *e = strchr(host, '\n'); if (e) *e = 0; free(hn); }
+    if (ac > 2 && !strcmp(av[1], "-c")) {          /* sh -c LINE: its words as one line again */
+        size_t n = 0;
+        for (int i = 2; i < ac && n < sizeof line - 1; i++) {
+            if (i > 2) line[n++] = ' ';
+            n += strlcpy(line + n, av[i], sizeof line - n);
+        }
+        line[n < sizeof line ? n : sizeof line - 1] = 0;
+        batch = 1;
+        return line_run(line);
+    }
     if (ac > 1 && !strcmp(av[1], "-l")) {          /* a login shell: start at home, say welcome */
         long h = fs_open("/etc/motd", FS_RDONLY, 0);
         printf("\n");
@@ -416,21 +525,6 @@ int main(int ac, char **av)
         if (n == -EIO) return 0;                      /* our terminal is gone (a closed window) */
         if (n <= 0) { if (n == 0) printf("\n"); continue; }
         line[n] = 0;
-        int c = 0;                                    /* split into words; "..." keeps spaces */
-        for (char *p = line, *o; *p && c < 31; ) {
-            while (*p == ' ' || *p == '\t' || *p == '\n') p++;
-            if (!*p) break;
-            v[c++] = o = p;
-            for (int q = 0; *p && (q || (*p != ' ' && *p != '\t' && *p != '\n')); p++)
-                if (*p == '"') q = !q; else *o++ = *p;
-            if (*p) p++;
-            *o = 0;
-        }
-        v[c] = 0;
-        if (!c) continue;
-        size_t i = 0;
-        while (i < NCMD && strcmp(cmds[i].name, v[0])) i++;
-        if (i < NCMD && cmds[i].run) cmds[i].run(c, v);
-        else program(c, v);
+        line_run(line);
     }
 }

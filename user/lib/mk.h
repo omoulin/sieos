@@ -164,6 +164,9 @@ void tty_input(tty_t *t, char c);
 long tty_read(tty_t *t, long from, size_t want);   /* 0, or -EBUSY */
 void tty_deliver(tty_t *t);
 
+/* date.c */
+void date_str(int64_t ns, char *s);    /* ns since 1970 -> "YYYY-MM-DD HH:MM" (17 bytes) */
+
 /* fs.c: files, through the file server (port "fs"). Errors are -E... */
 #include "siefs.h"                     /* siefs_stat_t, siefs_statfs_t, the mode bits */
 #define FS_PATH 512                    /* longest path a program may use */
@@ -193,10 +196,11 @@ long fs_find(const char *name, const char *value, uint64_t *cursor, char *buf, s
 long fs_statfs(siefs_statfs_t *st);
 long fs_snap(const char *path, int op, const char *name);   /* SNAP_TAKE / _DELETE / _RESTORE */
 long fs_snaplist(const char *path, uint64_t *cursor, void *buf, size_t size);
-long fs_mkvol(const char *path, int mode, int uid, int gid, const char *password);   /* root: a volume at path
-                                                              (a password: encrypted, its key wrapped by it) */
-long fs_unlock(const char *path, const char *password);      /* root: path's encrypted volume opens */
-long fs_rekey(const char *path, const char *password, const char *old);   /* root: its key wrapped anew */
+long fs_mkvol(const char *path, int mode, int uid, int gid, const fs_key_t *key);   /* root: a volume at path
+                                                              (with a key: encrypted, its key wrapped by it) */
+long fs_kdf(const char *path, siefs_kdf_t *k);               /* root: how its key-encryption key is derived */
+long fs_unlock(const char *path, const uint8_t kek[32]);     /* root: path's encrypted volume opens */
+long fs_rekey(const char *path, const fs_key_t *key, const uint8_t *old);   /* root: its key wrapped anew (old: if locked) */
 long fs_rmvol(const char *path);
 long fs_sync(void);
 long fs_chdir(const char *path);
