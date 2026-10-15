@@ -20,6 +20,7 @@ real board yet).
 | Screen | Pi 4: frame buffer from the firmware (mailbox); Pi 5: the firmware's `simple-framebuffer` | Pi 4: tested |
 | Keyboard, mouse | USB: **not supported yet** | the screen shows a notice; log in on the serial console |
 | Network | Pi 4: GENET Ethernet (`user/vnet/genet.c`); Pi 5: RP1's GEM over PCIe (`user/vnet/gem.c`, polled); DHCP again when a cable is plugged in | **written, untested on hardware** (QEMU has neither): checks 16-23 below |
+| GPIO | the 40-pin header's pins through `/bin/gpiod` ([gpio.md](gpio.md)): Pi 4: the BCM2711 GPIO block; Pi 5: RP1's GPIO over PCIe (bank 0: `IO_BANK0`, `SYS_RIO0`, `PADS_BANK0`) | simulated pins tested (`make gpio-test`); both boards: **untested on hardware**: `gpio selftest`, checks 30-32 |
 | Assistant | the local model with NEON kernels; `sdot` on the Pi 5 (the kernel reports it), plain NEON on the Pi 4 | emulated: tested; estimates in [llm.md](llm.md) |
 | Power off, restart | Pi 4: the power manager's watchdog (halt partition); Pi 5: PSCI | Pi 4: tested |
 | Tests | `make ARCH=arm64 pi4-test`: first start, logins, permissions, files, second boot, crash recovery | pass |
@@ -344,7 +345,8 @@ http://example.com`): `vnet` and `netd` start on demand.
     (`dma_sync`) is the first suspect.
 23. Pi 5: whether the firmware leaves RP1's Ethernet clocked and its PHY
     out of reset (if MDIO reads `ffff:ffff`, it does not; SIEOS does not
-    drive RP1's clock or GPIO blocks yet).
+    drive RP1's clocks, nor its GPIO bank 1, where the PHY's reset line
+    is: only bank 0, the header's).
 
 **SD card speed (both boards)**
 
@@ -388,6 +390,34 @@ a time, so these compare the driver's paths, not real cards): PIO 3.8-3.9
 MiB/s on `raspi4b` and on the PCI controller; ADMA2 with interrupts 5.4-5.6
 MiB/s (64- and 32-bit descriptors, standard and high-capacity cards); every
 card checked clean by `fsck.siefs` afterwards.
+
+**GPIO (both boards; nothing wired to the 40-pin header)**
+
+Take any HAT and jumper wire off the header first: the check drives the
+free pins high and low. Then, logged in on the serial console:
+
+30. `gpio` lists the pins: the first line names the board,
+    `Raspberry Pi 4 (BCM2711): 28 pins` or `Raspberry Pi 5 (RP1): 28 pins`
+    (not `simulated`). On the Pi 5, a console line `gpiod: RP1: the PCIe
+    link is down (status ...)` means the firmware reset the link to RP1:
+    check that `config.txt` has `pciex4_reset=0` (the card `make sdcard`
+    writes has it), and report the status value.
+31. `gpio selftest`: a row per pin, then `selftest: PASS: 22 pins checked,
+    0 failed, 6 skipped` (fewer checked, more skipped, if the firmware gave
+    some pins a function: they say `used by a device`). Every checked pin
+    should say `ok` in each column and `PASS`. Run it twice: the second
+    run must pass too, and `gpio` must list the pins the same before and
+    after (the `kept` column).
+32. If it fails, report the whole table, the output of `gpio` before it,
+    and the console's `gpiod:` lines. What a failure points to: `out 1`
+    and `out 0` failing on every pin: the levels do not reach the pads or
+    are not read back (Pi 5: RP1's `SYS_RIO` function, its `OE`/`OUT`
+    registers or the pads' input enable); only `pull-up` or only
+    `pull-down` failing: that pin's pad pull (or something is wired to
+    it); a pin that should be free shown `busy`: the firmware gave it a
+    function (Pi 5: its `CTRL` register's function is not `0x1f`); the
+    console stopping during the check (Pi 5): a read through PCIe did not
+    come back.
 
 ## How the device memory is handled (DMA and caches)
 

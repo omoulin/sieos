@@ -320,8 +320,19 @@ enum {
     GPIO_PLAYING,   /* -> the step being played, or -1: none; reply w[1] = rounds done */
     GPIO_RECORD,    /* rbuf <- uint32_t[steps]: every pin's level, sampled at each step of
                        the pattern as it played (the inputs' recording)  -> steps sampled */
+    GPIO_SELFTEST,  /* checks the free pins, nothing wired to them, then puts each back as it
+                       was (not while a pattern plays: -EBUSY); rbuf <- uint8_t[GPIO_PINS],
+                       a byte per pin (GPIO_CHK_...: the checks passed; 0: skipped)
+                                                                 -> pins that failed */
 };
 enum { GPIO_IN, GPIO_OUT, GPIO_BUSY };        /* a pin's mode (BUSY: a device's) */
 enum { GPIO_PULL_NONE, GPIO_PULL_DOWN, GPIO_PULL_UP };
+enum {                                        /* a pin's self-check: the checks it passed */
+    GPIO_CHK_DONE = 1,                        /* checked (not skipped) */
+    GPIO_CHK_HIGH = 2, GPIO_CHK_LOW = 4,      /* an output set to 1, to 0, reads it back */
+    GPIO_CHK_UP = 8, GPIO_CHK_DOWN = 16,      /* an input reads 1 with a pull-up, 0 with a pull-down */
+    GPIO_CHK_KEPT = 32,                       /* put back as it was */
+    GPIO_CHK_ALL = 63,
+};
 typedef struct { uint8_t mode, pull, level, pad; } gpio_pin_t;
 typedef struct { uint32_t mask, steps, step_us, loop; } gpio_pattern_t;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The GPIO server, library and command (docs/gpio.md): boot SIEOS without a
 window; as alice on the serial console, /bin/gpio (list, out, get, in with a
-pull, a device's pin refused, blink and stop), then a C program using gpio.h
+pull, a device's pin refused, blink and stop, the self-check), then a C program using gpio.h
 built with cc on SIEOS (tests/gpio, put in /tmp/t by the Makefile). With no
 GPIO here (x86-64, QEMU's virt) the server simulates the pins.
 Usage: gpiotest.py <cpus> <disk image> <qemu command line...> (make gpio-test)
@@ -71,6 +71,14 @@ r = run("gpio blink 22 10")
 time.sleep(0.5 * SLOW)
 r += run("gpio stop") + run("gpio")
 ok("gpio blink 22 10, then stop", "error" not in r and " 22  out" in r, "")
+run("gpio out 17 1")
+pins = lambda r: [l.split() for l in r.splitlines() if l.strip()[:1].isdigit()]   # the listing's rows
+a, t, b = run("gpio"), run("gpio selftest", 120), run("gpio")
+print("\n".join("   " + l for l in t.strip().splitlines()[1:]))
+ok("gpio selftest: every free pin passes", "selftest: PASS: 22 pins checked, 0 failed, 6 skipped" in t and t.count(" PASS\r") + t.count(" PASS\n") == 22,
+   " ".join(t.split())[-90:])
+ok("gpio selftest: the console's pins skipped", "  14  skipped" in t and "  15  skipped" in t)
+ok("gpio selftest: every pin put back", len(pins(a)) == 28 and pins(a) == pins(b), "")
 r = run("cd /tmp/t") + run("cc pins.c -o pins", 300)
 ok("cc pins.c (gpio.h, libsieos.a)", "error" not in r and "cannot" not in r, r.strip()[-200:])
 r = run("./pins", 60)

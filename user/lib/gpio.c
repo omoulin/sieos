@@ -56,4 +56,9 @@ int gpio_record(uint32_t *levels, int max)
     long r = call(&m);
     return (int)(r > max ? max : r);
 }
+int gpio_selftest(uint8_t res[GPIO_PINS])
+{
+    msg_t m = { .w = { GPIO_SELFTEST }, .rbuf = res, .rlen = GPIO_PINS };
+    return (int)call(&m);
+}
 void sleep_ms(long ms) { sys_sleep((uint64_t)ms * 1000000); }
