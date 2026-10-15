@@ -4,7 +4,9 @@
           variables (programs built by gcc and by sicc), memory quotas
   sia     the assistant: a question, two sessions at once, sia killed in
           the middle of an answer (init restarts it), speed and memory
-Usage: ktest.py <kernel|sia> <cpus> <disk image> <qemu command line...>
+  bench   the IPC round trip, and 40 clients calling one server at once
+          (the kernel's locking; three runs each)
+Usage: ktest.py <kernel|sia|bench> <cpus> <disk image> <qemu command line...>
 The image must be a fresh one (first-start setup); the test works in a copy.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -90,6 +92,13 @@ if what == "kernel":
         res.append(expect(re.compile(rb"ktest fpu: (ok|FAIL)"), 120)[1].group(1))
     ok("two processes computing at once", res == [b"ok", b"ok"])
     run("", 10)
+
+elif what == "bench":
+    for t in ("ipc", "ipc", "ipc", "ipcmany", "ipcmany", "ipcmany"):
+        r = run(f"ktest {t}", 300)
+        line = next((l.strip() for l in r.splitlines() if l.strip().startswith(f"ktest {t}: ") and "ok" not in l), "")
+        print(line)
+        ok(f"ktest {t}", f"ktest {t}: ok" in r)
 
 elif what == "sia":
     t = time.time()

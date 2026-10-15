@@ -298,6 +298,10 @@ kernel-test: all $(B)/ktest-sicc.elf
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img put $(B)/ktest-sicc.elf /bin/ktest-sicc && $(B)/host/siefs $(B)/test.img chmod 755 /bin/ktest-sicc
 	python3 tools/ktest.py kernel $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+# ipc-bench: the IPC round trip and 40 clients calling one server (SMP=1, 4, 8, 16...)
+ipc-bench: all
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	python3 tools/ktest.py bench $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # sia-test: the assistant on a fresh disk with a small model (fast):
 # answers, two conversations at once, siad killed during an answer
 # (init restarts it), speed and memory. SIATEST_MODEL= another one of models/.
@@ -343,7 +347,7 @@ clean:
 distclean:
 	rm -rf $(B)
 
-.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test gfxhat-test sia-test sia-mem-test demand-test model clean distclean newdisk FORCE
+.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test model clean distclean newdisk FORCE
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.

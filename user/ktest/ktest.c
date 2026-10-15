@@ -12,6 +12,9 @@
  *   ktest ipc             message round trip between two threads: neither
  *                         uses floating point, both do, both use AVX (what
  *                         saving and restoring their registers costs)
+ *   ktest ipcmany [n]     n client threads (default 40) calling one server
+ *                         thread at once, on every CPU: the time per call
+ *                         over all of them (how the kernel's locks scale)
  * Prints "ktest NAME: ok" or "... FAIL"; exit status 0 if all went well.
  * Built twice for the tests: by gcc (ktest), and by sicc (ktest-sicc,
  * without the AVX part: sicc does not encode AVX instructions yet). On
@@ -204,6 +207,36 @@ static int test_ipc(void)
     return bad;
 }
 
+/* ---- Many clients, one server: every client calls as fast as it can;
+ * the time from the first call to the last answer, per call. */
+static volatile uint64_t many_end;
+static void many_client(void *a)
+{
+    enum { N = 20000 };
+    (void)a;
+    for (int i = 0; i < N; i++) {
+        msg_t m = { .w = { i } };
+        if (ipc_call(ipc_port, &m) < 0 || m.w[0] != (uint64_t)i + 1) __atomic_fetch_add(&bad, 1, __ATOMIC_RELAXED);
+    }
+    uint64_t t = sys_clock();
+    if (__atomic_add_fetch(&done, 1, __ATOMIC_ACQ_REL) == 1000) many_end = t;   /* (main sets done to 1000 - n) */
+}
+static int test_ipcmany(int n)
+{
+    mk_info_t in;
+    sys_info(&in);
+    use_fp = 0;
+    ipc_port = port_create(0);
+    thread_start(ipc_server, 0, 16384);
+    done = 1000 - n;
+    uint64_t t0 = sys_clock();
+    for (int k = 0; k < n; k++) thread_start(many_client, 0, 16384);
+    wait_all(1000);
+    uint64_t ns = (many_end - t0) / (20000UL * n);
+    printf("ktest ipcmany: %d clients, 1 server, %d CPUs: %lu ns per call\n", n, in.ncpus, ns);
+    return bad;
+}
+
 /* SYS_LOG: a line printed is in the log; reading moves the position; the
  * oldest kept is at most LOG_KEEP bytes back. */
 static int test_log(void)
@@ -252,8 +285,9 @@ int main(int argc, char **argv)
     else if (!strcmp(what, "tls")) fails = test_tls(n);
     else if (!strcmp(what, "quota")) fails = test_quota();
     else if (!strcmp(what, "ipc")) fails = test_ipc();
+    else if (!strcmp(what, "ipcmany")) fails = test_ipcmany(argc > 2 ? n : 40);
     else if (!strcmp(what, "log")) fails = test_log();
-    else { printf("usage: ktest fpu|avx|tls|quota|ipc|log [threads]\n"); return 2; }
+    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|log [threads]\n"); return 2; }
     printf("ktest %s: %s\n", what, fails ? "FAIL" : "ok");
     return fails != 0;
 }
