@@ -22,6 +22,12 @@
  * to memory before the controller reads them, and dropped from the caches
  * before we read what it wrote (dma_sync).
  *
+ * Reset and the RGMII set-up follow Linux's bcmgenet (bcmgenet_open,
+ * init_umac, bcmgenet_mii_config): the MAC's reset is bit 1 of
+ * SYS_RBUF_FLUSH (bit 0 flushes the receive buffer); "rgmii-rxid", the Pi
+ * 4's mode, has the PHY delay the receive clock and the MAC the transmit
+ * clock (ID_MODE_DIS clear).
+ *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "nic.h"
@@ -31,7 +37,8 @@
 #define SYS_PORT_CTRL   0x0004          /* 3: an external PHY */
 #define SYS_RBUF_FLUSH  0x0008
 #define SYS_TBUF_FLUSH  0x000C
-#define EXT_RGMII_OOB   0x008C          /* bit 6 RGMII mode, 5 "link from registers" off, 4 link */
+#define EXT_RGMII_OOB   0x008C          /* bit 16 no transmit delay, 6 RGMII mode, 5 out-of-band
+                                           link off, 4 link */
 #define IRQ_STAT        0x0200          /* interrupt controller 0 */
 #define IRQ_CLEAR       0x0208
 #define IRQ_MASK_STAT   0x020C
@@ -47,6 +54,7 @@
 #define UMAC_TX_FLUSH   0x0B34
 #define UMAC_MIB_CTRL   0x0D80
 #define UMAC_MDIO       0x0E14
+#define HFB_CTRL        0xFC00          /* the receive filters (a network boot may leave them on) */
 #define RDMA            0x2000          /* the receive DMA block */
 #define TDMA            0x4000          /* the transmit DMA block */
 #define RING            (0xC00 + 16 * 0x40)    /* ring 16's registers, after the descriptors */
@@ -59,9 +67,11 @@ enum { C_RING_CFG = 0x00, C_CTRL = 0x04, C_STATUS = 0x08, C_BURST = 0x0C };
 #define CMD_TX_EN   (1u << 0)
 #define CMD_RX_EN   (1u << 1)
 #define CMD_PROMISC (1u << 4)
+#define CMD_RXPAUSE (1u << 8)               /* (pause frames ignored: we do not advertise pause) */
 #define CMD_HD      (1u << 10)
 #define CMD_RESET   (1u << 13)
 #define CMD_LOOP    (1u << 15)
+#define CMD_TXPAUSE (1u << 28)
 /* Descriptor status (low 16 bits; the length is in the high 16). */
 #define D_SOP   0x2000
 #define D_EOP   0x4000
@@ -125,12 +135,13 @@ static int setup(nic_info_t *info, char *what, size_t cap)
     g = map_phys(a, size ? size : 0x10000);
     if ((long)g < 0) return -1;
     const uint8_t *m = fdt_prop(f, n, "local-mac-address", &len);   /* the firmware fills it in */
+    const char *macfrom = "device tree";
     if (m && len == 6 && (m[0] | m[1] | m[2] | m[3] | m[4] | m[5])) memcpy(info->mac, m, 6);
     else if (nic_fw_mac(info->mac)) return -1;
-    for (int p = -1; (p = fdt_find(f, p, "ethernet-phy-ieee802.3-c22")) >= 0; ) {   /* its MDIO address */
-        const void *r = fdt_prop(f, p, "reg", &len);
-        if (r && len == 4) { phy_addr = (int)fdt_be32(r); break; }
-    }
+    else macfrom = "firmware";
+    phy_addr = phy_addr_dt(f, n, 1);                 /* its MDIO address */
+    const char *mode = fdt_prop(f, n, "phy-mode", &len);
+    if (!mode) mode = "rgmii-rxid";
     info->mtu = 1500;
 
     /* Memory: 64 receive buffers, the transmit area, small buffers for short frames. */
@@ -143,18 +154,26 @@ static int setup(nic_info_t *info, char *what, size_t cap)
     if ((long)pad < 0 || fdt_bus_addr(f, n, pa, &padbus)) return -1;
     dma_sync(rxbuf, NRX * BUFSZ);                /* nothing of ours left in the caches */
 
-    /* Quiet the DMA, reset the MAC (flush its buffers, pulse its reset). */
-    if (dma_stop(RDMA) || dma_stop(TDMA)) return -1;
-    wr(SYS_RBUF_FLUSH, 1); nic_udelay(10); wr(SYS_RBUF_FLUSH, 0); nic_udelay(10);
+    /* Reset the MAC: pulse its reset (bit 1), then a software reset; quiet the
+     * DMA, flush the transmit FIFO and the receive buffer (bit 0). */
+    wr(SYS_RBUF_FLUSH, rd(SYS_RBUF_FLUSH) | 2); nic_udelay(10);
+    wr(SYS_RBUF_FLUSH, rd(SYS_RBUF_FLUSH) & ~2u); nic_udelay(10);
+    wr(SYS_RBUF_FLUSH, 0); nic_udelay(10);
     wr(UMAC_CMD, 0);
     wr(UMAC_CMD, CMD_RESET | CMD_LOOP); nic_udelay(2); wr(UMAC_CMD, 0);
+    if (dma_stop(RDMA) || dma_stop(TDMA)) { printf("vnet: GENET: its DMA does not stop\n"); return -1; }
+    wr(UMAC_TX_FLUSH, 1); nic_udelay(10); wr(UMAC_TX_FLUSH, 0);
+    wr(SYS_RBUF_FLUSH, 1); nic_udelay(10); wr(SYS_RBUF_FLUSH, 0); nic_udelay(10);
+    wr(HFB_CTRL, 0); wr(HFB_CTRL + 4, 0); wr(HFB_CTRL + 8, 0);
     wr(UMAC_MIB_CTRL, 7); wr(UMAC_MIB_CTRL, 0);  /* counters reset */
     wr(UMAC_MAX_FRAME, 1536);
     wr(RBUF_CTRL, rd(RBUF_CTRL) & ~3u);          /* frames start at offset 0, no status block */
     wr(TBUF_CTRL, rd(TBUF_CTRL) & ~1u);
     wr(RBUF_TBUF_SIZE, 1);
     wr(SYS_PORT_CTRL, 3);                        /* an external PHY, over RGMII */
-    wr(EXT_RGMII_OOB, (rd(EXT_RGMII_OOB) & ~(1u << 5)) | 1u << 6);
+    uint32_t oob = (rd(EXT_RGMII_OOB) & ~(1u << 5 | 1u << 16)) | 1u << 6;
+    if (!strcmp(mode, "rgmii")) oob |= 1u << 16;     /* no delays at all: the board's traces add them */
+    wr(EXT_RGMII_OOB, oob);
     wr(UMAC_MAC0, (uint32_t)info->mac[0] << 24 | info->mac[1] << 16 | info->mac[2] << 8 | info->mac[3]);
     wr(UMAC_MAC1, (uint32_t)info->mac[4] << 8 | info->mac[5]);
     wr(IRQ_MASK_SET, 0xFFFFFFFF); wr(IRQ_CLEAR, 0xFFFFFFFF);
@@ -187,14 +206,18 @@ static int setup(nic_info_t *info, char *what, size_t cap)
     /* The MAC on (gigabit full duplex until the PHY says otherwise); all
      * frames accepted (netd filters what is not for us: simpler and safer
      * than programming the address filter, and a switch sends little else). */
-    wr(UMAC_CMD, CMD_TX_EN | CMD_RX_EN | 2u << 2 | CMD_PROMISC);
+    wr(UMAC_CMD, CMD_TX_EN | CMD_RX_EN | 2u << 2 | CMD_PROMISC | CMD_RXPAUSE | CMD_TXPAUSE);
     irq = spi | ((flags & 4) ? IRQ_LEVEL : 0);
     irq_port = port_create(0);
     if (irq_bind(irq, irq_port)) return -1;
     wr(IRQ_MASK_CLEAR, 1u << 13);                /* receive buffer done */
-    int id1 = mrd(PHY_ID1), id2 = mrd(PHY_ID2);
+    int id1, id2;
+    if (phy_probe(&bus, &phy_addr, &id1, &id2))
+        printf("vnet: GENET: no PHY answers on MDIO (ids %04x:%04x): the link will not come up\n", id1 & 0xFFFF, id2 & 0xFFFF);
     phy_delays(&bus, f, n);
     phy_start(&bus);
+    printf("vnet: GENET at %lx: MAC from the %s, %s, RGMII control %08x, DMA %s\n", (unsigned long)a, macfrom, mode,
+           rd(EXT_RGMII_OOB), rxbus >> 32 ? "above 4 GiB" : "below 4 GiB");
     int major = (int)(rd(0) >> 24 & 15);          /* the revision register says 6 for version 5 */
     nic_fmt(what, cap, "GENET v%d (Raspberry Pi 4), PHY %04x:%04x at %d, interrupt %d", major == 6 ? 5 : major,
             id1 & 0xFFFF, id2 & 0xFFFF, phy_addr, spi);
@@ -217,7 +240,7 @@ static size_t rx_take(uint8_t *batch, size_t cap)
     uint16_t prod = (uint16_t)rd(RDMA + RING + R_PROD);
     while (rx_cons != prod) {
         int i = rx_cons % NRX;
-        uint32_t ls = rd(RDMA + i * 12), fl = ls >> 16;
+        uint32_t ls = rd(RDMA + i * 12), fl = ls >> 16 & 0xFFF;
         uint8_t *b = rxbuf + i * BUFSZ;
         if ((ls & (D_SOP | D_EOP)) == (D_SOP | D_EOP) && !(ls & D_RXERR) && fl >= 14 && fl <= BUFSZ) {
             if (n + 2 + fl > cap) break;         /* full: the rest goes in the next batch */

@@ -11,6 +11,14 @@
  * (64-bit addressing): address low (receive: bit 0 "used" = the controller
  * filled it, bit 1 "wrap" = the last one), status or control, address high.
  *
+ * RP1 must still be set up by the firmware: config.txt says "pciex4_reset=0"
+ * (tools/mksdcard.py), else the firmware resets RP1's PCIe link before
+ * starting us and nothing answers at 0x1F_0000_0000. Then, as Linux does
+ * (clk-rp1.c, macb_main.c), we make sure RP1's Ethernet clock runs (125
+ * MHz from the PLL "sys_sec"), pulse the PHY's reset line (RP1's GPIO 32,
+ * the device tree's "phy-reset-gpios"), and point the controller's other
+ * queues at a descriptor marked "used", so they never move data.
+ *
  * Polled: RP1's interrupts arrive as PCIe MSI-X messages, which SIEOS does
  * not route yet. rx_wait sleeps 0.2 ms after traffic, growing to 10 ms when
  * the line is quiet: up to ~10 ms more latency on the first frame of a
@@ -41,9 +49,21 @@
 #define MAN    0x034                    /* PHY maintenance (MDIO) */
 #define SA1B   0x088
 #define SA1T   0x08C
+#define TSR    0x014
+#define RSR    0x020
+#define AMP    0x054                    /* AXI pipelines: 0-7 reads, 8-15 writes, 16 "AW to B" */
 #define DCFG1  0x280
-#define TBQPH  0x4C8
+#define DCFG6  0x294                    /* bits 1-7: queues 1-7 exist; 23: 64-bit addresses */
+#define TBQP1  0x440                    /* queues 1-7 (4 bytes each) */
+#define RBQP1  0x480
+#define TBQPH  0x4C8                    /* (the high half, for every queue) */
 #define RBQPH  0x4D4
+/* RP1's other blocks, as RP1 sees them (rp1.dtsi). */
+#define RP1_BASE   0xC040000000ULL      /* RP1's peripherals ... */
+#define RP1_WINDOW 0x1F00000000ULL      /* ... where the PCIe window shows them to us */
+#define CLK_ETH_CTRL 0x18064            /* the clocks block: bit 11 on, 5-9 source (0: pll_sys_sec) */
+#define CLK_ETH_DIV  0x18068
+#define PLL_SYS_SEC  0x20014            /* bits 8-12 divider (1 GHz / 8 = 125 MHz), 16 held in reset */
 
 #define NRX 64                          /* a multiple of 4: one cache line = 4 descriptors */
 #define NTX 64
@@ -62,13 +82,62 @@ static uint8_t *rxbuf, *txmem, *pad;
 static uint64_t rxdbus, txdbus, rxbus, txbus, padbus;
 static int64_t bus_off;                  /* RAM as RP1 sees it = physical + bus_off */
 static int rx_next, tx_next, phy_addr = 1, cur_mbps, cur_full, idle_ms;
+static volatile uint32_t *rp1;           /* RP1's first MiB of registers (clocks, GPIO) */
+
+static uint32_t rp1_rd(uint32_t o)             { return rp1[o / 4]; }
+static void     rp1_wr(uint32_t o, uint32_t v) { rp1[o / 4] = v; }
+
+/* The clock the controller sends frames with (RGMII, 125 MHz): the firmware
+ * sets it up for a network boot, perhaps not otherwise. */
+static void rp1_eth_clock(void)
+{
+    uint32_t ctrl = rp1_rd(CLK_ETH_CTRL), sec = rp1_rd(PLL_SYS_SEC);
+    if (ctrl & 1u << 11) return;
+    if (sec & 1u << 16 || (sec >> 8 & 31) != 8) {        /* sys_sec off, or not 125 MHz: divide by 8 */
+        rp1_wr(PLL_SYS_SEC, (sec & ~(31u << 8)) | 8u << 8 | 1u << 16);   /* (changed while held in reset) */
+        rp1_wr(PLL_SYS_SEC, (sec & ~(31u << 8 | 1u << 16)) | 8u << 8);
+    }
+    rp1_wr(CLK_ETH_DIV, 1);
+    rp1_wr(CLK_ETH_CTRL, (ctrl & ~(31u << 5)) | 1u << 11);
+    printf("vnet: RP1's Ethernet clock was off (control %x, sys_sec %x): turned on, 125 MHz\n", ctrl, sec);
+}
+
+/* The PHY's reset line: an RP1 GPIO held at its active level for
+ * "phy-reset-duration" ms, then released (Linux's macb_mdio_reset). RP1's
+ * GPIO, three banks (pins 0-27, 28-33, 34-53), each in three blocks 16 KiB
+ * apart: the pins' control words (+0xd0000: status, control; function 5 =
+ * driven by RIO), RIO (+0xe0000: OUT at 0, OE at 4; +0x2000 sets bits,
+ * +0x3000 clears them), the pads (+0xf0000, 4 + 4 n: bit 7 output off). */
+static void rp1_phy_reset(const void *f, int n)
+{
+    int len;
+    const uint8_t *g = fdt_prop(f, n, "phy-reset-gpios", &len), *d;
+    int c = g && len >= 12 ? fdt_phandle(f, fdt_be32(g)) : -1;
+    if (c < 0 || !fdt_compatible(f, c, "raspberrypi,rp1-gpio")) return;
+    uint32_t pin = fdt_be32(g + 4), act_low = fdt_be32(g + 8) & 1, ms = 10;
+    if ((d = fdt_prop(f, n, "phy-reset-duration", &len)) && len == 4 && fdt_be32(d) <= 1000) ms = fdt_be32(d);
+    if (pin >= 54) return;
+    uint32_t b = pin < 28 ? 0 : pin < 34 ? 1 : 2, k = pin - (b == 0 ? 0 : b == 1 ? 28 : 34);
+    uint32_t io = 0xd0000 + b * 0x4000 + 8 * k + 4, rio = 0xe0000 + b * 0x4000, pad = 0xf0000 + b * 0x4000 + 4 + 4 * k;
+    uint32_t assert = act_low ? 0x3000 : 0x2000, release = act_low ? 0x2000 : 0x3000;
+    rp1_wr(rio + assert, 1u << k);               /* OUT: reset ... */
+    rp1_wr(rio + 0x2000 + 4, 1u << k);           /* OE: driven */
+    rp1_wr(pad, (rp1_rd(pad) & ~0x80u) | 0x40);
+    rp1_wr(io, (rp1_rd(io) & ~(0x1Fu | 0xFu << 12)) | 5);
+    sys_sleep((uint64_t)ms * 1000000);
+    rp1_wr(rio + release, 1u << k);              /* ... released */
+    sys_sleep(10000000);                         /* (the PHY starts, then answers on MDIO) */
+    printf("vnet: PHY reset (RP1 GPIO %u, %u ms)\n", pin, ms);
+}
 
 static uint32_t rd(uint32_t o)             { return mmio_r32(g + o); }
 static void     wr(uint32_t o, uint32_t v) { mmio_w32(g + o, v); }
 
 static int mdio(uint32_t v)
 {
+    for (int k = 0; k < 1000 && !(rd(NSR) & 4); k++) nic_udelay(1);   /* the bus idle first */
     wr(MAN, v);
+    nic_udelay(1);
     for (int k = 0; k < 1000; k++) {
         if (rd(NSR) & 4) return (int)(rd(MAN) & 0xFFFF);
         nic_udelay(1);
@@ -94,25 +163,49 @@ static int setup(nic_info_t *info, char *what, size_t cap)
     uint64_t a, size, pa;
     if (!f || fdt_find(f, -1, "brcm,bcm2712-pcie") < 0) return -1;
     if ((n = fdt_find(f, -1, "raspberrypi,rp1-gem")) < 0 && (n = fdt_find(f, -1, "cdns,macb")) < 0) return -1;
+    for (int p = -1, d; (p = fdt_find(f, p, "brcm,bcm2712-pcie")) >= 0; ) {   /* RP1's link, as the firmware left it */
+        int c = (d = 0, fdt_next(f, p, &d));     /* (its first child, "rp1") */
+        uint64_t pa0, psz;
+        volatile uint32_t *pc;
+        if (c < 0 || d != 1 || memcmp(fdt_name(f, c), "rp1", 3) || fdt_reg(f, p, 0, &pa0, &psz) || (long)(pc = map_phys(pa0, 0x10000)) < 0)
+            continue;
+        uint32_t st = pc[0x4068 / 4];            /* bit 4 PHY link up, 5 data link active */
+        if ((st & 0x30) != 0x30) {
+            printf("vnet: RP1's PCIe link is down (status %x): config.txt needs pciex4_reset=0\n", st);
+            return -1;
+        }
+    }
     if (fdt_reg(f, n, 0, &a, &size)) return -1;
-    if (a >= 0xC040000000ULL) a = a - 0xC040000000ULL + 0x1F00000000ULL;   /* RP1's view -> the PCIe window */
+    if (a >= RP1_BASE) a = a - RP1_BASE + RP1_WINDOW;   /* RP1's view -> the PCIe window */
     g = map_phys(a, size ? size : 0x4000);
-    if ((long)g < 0) return -1;
+    rp1 = map_phys(RP1_WINDOW, 0x100000);
+    if ((long)g < 0 || (long)rp1 < 0) return -1;
+    uint32_t mid = rd(0xFC), cfg6 = rd(DCFG6);
+    if (mid == 0xFFFFFFFF || !mid) {                 /* (a PCIe read nobody answered) */
+        printf("vnet: RP1's Ethernet does not answer at %lx (id %x): is pciex4_reset=0 in config.txt?\n",
+               (unsigned long)a, mid);
+        return -1;
+    }
     uint64_t b;
     bus_off = !fdt_bus_addr(f, n, 0, &b) && b ? (int64_t)b : 0x1000000000LL;
     const uint8_t *m = fdt_prop(f, n, "local-mac-address", &len);
+    const char *macfrom = "device tree";
     if (m && len == 6 && (m[0] | m[1] | m[2] | m[3] | m[4] | m[5])) memcpy(info->mac, m, 6);
     else if (nic_fw_mac(info->mac)) return -1;
-    for (int p = -1; (p = fdt_find(f, p, "ethernet-phy-ieee802.3-c22")) >= 0; ) {
-        const void *r = fdt_prop(f, p, "reg", &len);
-        if (r && len == 4) { phy_addr = (int)fdt_be32(r); break; }
-    }
+    else macfrom = "firmware";
+    phy_addr = phy_addr_dt(f, n, 1);
     info->mtu = 1500;
+    if (!(cfg6 & 1u << 23)) printf("vnet: GEM: no 64-bit addressing (design %x): it cannot reach our memory\n", cfg6);
+    rp1_eth_clock();
+    rp1_phy_reset(f, n);
 
-    char *ring = dma_alloc(4096, &pa);           /* 64 + 64 descriptors */
+    char *ring = dma_alloc(4096, &pa);           /* 64 + 64 descriptors, and one for the other queues */
     if ((long)ring < 0) return -1;
     rxd = (desc_t *)ring; txd = (desc_t *)(ring + 2048);
     rxdbus = pa + bus_off; txdbus = pa + 2048 + bus_off;
+    volatile desc_t *stop = (desc_t *)(ring + 3072);   /* "used" to the receiver and the sender, wrapping */
+    uint64_t stopbus = pa + 3072 + bus_off;
+    *stop = (desc_t){ RX_USED | RX_WRAP, TX_USED | TX_WRAP, (uint32_t)(stopbus >> 32), 0 };
     if ((long)(rxbuf = dma_alloc(NRX * BUFSZ, &pa)) < 0) return -1;
     rxbus = pa + bus_off;
     if ((long)(txmem = dma_alloc(NET_MAX, &pa)) < 0) return -1;
@@ -120,8 +213,9 @@ static int setup(nic_info_t *info, char *what, size_t cap)
     if ((long)(pad = dma_alloc(NTX * 64, &pa)) < 0) return -1;
     padbus = pa + bus_off;
 
-    /* Quiet, then configure. */
-    wr(NCR, 0);
+    /* Quiet (statistics cleared, status flags cleared), then configure. */
+    wr(NCR, 1u << 5);
+    wr(TSR, 0xFFFFFFFF); wr(RSR, 0xFFFFFFFF);
     wr(IDR, 0xFFFFFFFF);
     rd(ISR);
     for (int i = 0; i < NRX; i++) rx_give(i);
@@ -135,16 +229,25 @@ static int setup(nic_info_t *info, char *what, size_t cap)
                                                     all frames (netd filters), checksum dropped, MDC /128 */
     wr(USRIO, 1);                                /* RGMII */
     wr(DMACFG, 16u | 3u << 8 | 1u << 10 | (uint32_t)(BUFSZ / 64) << 16 | 1u << 30);
+    wr(AMP, (rd(AMP) & ~0x1FFFFu) | (fdt_prop(f, n, "cdns,use-aw2b-fill", 0) ? 1u << 16 : 0) | 8u << 8 | 8);
     wr(RBQP, (uint32_t)rxdbus); wr(RBQPH, (uint32_t)(rxdbus >> 32));
     wr(TBQP, (uint32_t)txdbus); wr(TBQPH, (uint32_t)(txdbus >> 32));
+    for (int q = 1; q < 8; q++)                  /* the other queues: the "used" descriptor (one high half for all) */
+        if (cfg6 & 1u << q) { wr(TBQP1 + 4 * (q - 1), (uint32_t)stopbus); wr(RBQP1 + 4 * (q - 1), (uint32_t)stopbus); }
     wr(SA1B, (uint32_t)info->mac[3] << 24 | info->mac[2] << 16 | info->mac[1] << 8 | info->mac[0]);
     wr(SA1T, (uint32_t)info->mac[5] << 8 | info->mac[4]);
     wr(NCR, 1u << 4);                            /* MDIO on */
-    int id1 = mrd(PHY_ID1), id2 = mrd(PHY_ID2);
+    int id1, id2;
+    if (phy_probe(&bus, &phy_addr, &id1, &id2))
+        printf("vnet: GEM: no PHY answers on MDIO (ids %04x:%04x): RP1's Ethernet clock or the PHY's reset?\n",
+               id1 & 0xFFFF, id2 & 0xFFFF);
     phy_delays(&bus, f, n);
     phy_start(&bus);
     wr(NCR, 1u << 2 | 1u << 3 | 1u << 4);        /* receive, transmit, MDIO on */
-    nic_fmt(what, cap, "GEM r%x (Raspberry Pi 5, RP1), PHY %04x:%04x at %d, polled", rd(0xFC),
+    const char *mode = fdt_prop(f, n, "phy-mode", &len);
+    printf("vnet: GEM at %lx: MAC from the %s, %s, design %x, RP1 Ethernet clock %x, our memory at +%lx\n",
+           (unsigned long)a, macfrom, mode ? mode : "rgmii-id", cfg6, rp1_rd(CLK_ETH_CTRL), (unsigned long)bus_off);
+    nic_fmt(what, cap, "GEM r%x (Raspberry Pi 5, RP1), PHY %04x:%04x at %d, polled", mid,
             id1 & 0xFFFF, id2 & 0xFFFF, phy_addr);
     return 0;
 }

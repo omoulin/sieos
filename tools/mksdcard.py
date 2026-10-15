@@ -42,6 +42,10 @@ kernel=kernel8.img
 initramfs sieos.mod 0x02000000
 # the debug serial port (the 3-pin "UART" connector), 115200 bit/s: SIEOS's console
 enable_uart=1
+# RP1 (Ethernet, the header's GPIO) stays set up as the firmware left it:
+# SIEOS does not start RP1's PCIe link itself (by default the firmware
+# resets it before starting the system)
+pciex4_reset=0
 # the frame buffer the firmware sets up and describes for SIEOS
 framebuffer_width=1920
 framebuffer_height=1080

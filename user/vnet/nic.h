@@ -52,6 +52,14 @@ int nic_fw_mac(uint8_t mac[6]);
 enum { PHY_BMCR = 0, PHY_BMSR = 1, PHY_ID1 = 2, PHY_ID2 = 3, PHY_ADV = 4, PHY_LPA = 5,
        PHY_CTRL1000 = 9, PHY_STAT1000 = 10 };
 typedef struct { int (*rd)(int reg); void (*wr)(int reg, int v); } mdio_t;
+/* The PHY's MDIO address: the MAC node's "phy-handle" names the PHY's
+ * node, whose "reg" it is (the Pis' PHY nodes have no "compatible" to
+ * search for); dflt if the tree does not say. */
+int phy_addr_dt(const void *fdt, int mac_node, int dflt);
+/* Read the PHY's identifier at *addr; if nothing answers there (all ones
+ * or all zeros), try every address 0-31 and keep the first that answers
+ * (*addr is the variable m's calls use). 0 if a PHY answered. */
+int phy_probe(const mdio_t *m, int *addr, int *id1, int *id2);
 /* Start auto-negotiation (10/100/1000, full and half duplex). */
 void phy_start(const mdio_t *m);
 /* The RGMII clock delays, which the PHY (the Pis' BCM54213PE) adds as the
