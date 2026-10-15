@@ -272,6 +272,32 @@ long fs_find(const char *name, const char *value, uint64_t *cursor, char *buf, s
     if (r >= 0) *cursor = m.w[1];
     return r;
 }
+/* Snapshots of path's volume (docs/siefs.md): op SNAP_TAKE, _DELETE or
+ * _RESTORE with a name; fs_snaplist gives records {i64 created, u8 length,
+ * name} in buf, the cursor 0 when all were given. */
+long fs_snap(const char *path, int op, const char *name)
+{
+    msg_t m = { .w = { FS_SNAP, (uint64_t)op } };
+    return pcall(&m, path, name, 0);
+}
+long fs_snaplist(const char *path, uint64_t *cursor, void *buf, size_t size)
+{
+    msg_t m = { .w = { FS_SNAP, SNAP_LIST, *cursor, size }, .rbuf = buf, .rlen = size };
+    long r = pcall(&m, path, "", 0);
+    if (r >= 0) *cursor = m.w[1];
+    return r;
+}
+long fs_mkvol(const char *path, int mode, int uid, int gid)
+{
+    msg_t m = { .w = { FS_MKVOL, (uint64_t)mode, (uint64_t)uid, (uint64_t)gid } };
+    return pcall(&m, path, 0, 0);
+}
+long fs_rmvol(const char *path)
+{
+    msg_t m = { .w = { FS_RMVOL } };
+    return pcall(&m, path, 0, 0);
+}
+
 long fs_statfs(siefs_statfs_t *st)
 {
     msg_t m = { .w = { FS_STATFS }, .rbuf = st, .rlen = sizeof *st };

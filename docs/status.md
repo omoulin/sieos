@@ -33,7 +33,7 @@ checklist in [raspberrypi.md](raspberrypi.md).
 - The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
   Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
 - The Pis: USB input, Ethernet, faster SD; running on the real boards.
-- A `make` for SIEOS (sicc runs there now: `/bin/cc`), encryption, snapshots.
+- A `make` for SIEOS (sicc runs there now: `/bin/cc`), encryption.
 
 ## History
 
@@ -65,3 +65,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
   214 instructions to 15) and runs on SIEOS itself: `/bin/cc`, with SIEOS's
   headers and library in `/lib/sicc` ([cc.md](cc.md)); a program starts in
   its parent's current folder.
+- **2026-10-15.** SieFS: several volumes (a home can be one) and
+  snapshots, shared block by block with their volume, deleted ZFS-style
+  through dead lists; the file server takes one of every volume each hour
+  (kept a day) and lets the oldest go when the disk is full; `snap`, and
+  the Snapshots button in Files ([siefs.md](siefs.md#snapshots)).

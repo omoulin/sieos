@@ -110,7 +110,16 @@ enum {
     FS_STATFS,      /* a siefs_statfs_t comes in rbuf                         -> 0 */
     FS_SYNC,        /* commit everything to the disk now                      -> 0 */
     FS_TICK,        /* (the server's own commit thread)                       -> ns to wait */
+    FS_SNAP,        /* "path\0name", w[1] = SNAP_...: a snapshot of path's volume. Taking,
+                       deleting, restoring: root, or the owner of the volume's root. LIST:
+                       w[2] = cursor; rbuf <- records {i64 created (ns), u8 length, name}
+                                                     -> bytes (LIST: w[1] = next cursor) */
+    FS_MKVOL,       /* path; w[1] = mode, w[2] = uid, w[3] = gid (root only): a new volume
+                       mounted at path (a user's home)                        -> 0 */
+    FS_RMVOL,       /* path (root only): an empty volume, without snapshots   -> 0 */
+    FS_AUTOSNAP,    /* (the server's own snapshot thread: the hourly snapshots) -> ns to wait */
 };
+enum { SNAP_TAKE = 1, SNAP_DELETE, SNAP_RESTORE, SNAP_LIST };
 
 /* Accounts server, port "auth" (/bin/auth, run as root by init). It alone
  * reads the password hashes (/etc/secrets), changes the account files, and

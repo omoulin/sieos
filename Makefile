@@ -37,9 +37,9 @@ UCORE   := crt0 lib                     # in every program
 ULIBOBJ := fs acct tty fmt string fdt virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 pubkey net http tls x509   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
-BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio   # programs on the disk, in /bin
+BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio snap   # programs on the disk, in /bin
 LINKS   := passwd su useradd userdel    # other names of /bin/acct (symbolic links)
-SIEFS_CORE := crc tree space fs         # the SieFS library, linked into the file server
+SIEFS_CORE := crc tree space fs vol     # the SieFS library, linked into the file server
 
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
@@ -475,7 +475,7 @@ usb-dev-test: all $(B)/host/fsck.siefs $(if $(filter arm64,$(ARCH)),$(B)/modules
 #   make siefs-test          unit, model, crash and corruption tests, with measurements
 #   make siefs-freestanding  compile the library with the SIEOS flags (no C library)
 HOSTCFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Isiefs -Itools/siefs -Itools -Iinclude
-SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/check.c lib/fmt.c
+SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/vol.c siefs/check.c lib/fmt.c
 SIEFS_H     := siefs/siefs.h siefs/siefs_int.h tools/siefs/host.h
 SIEFS_TOOLS := mkfs.siefs fsck.siefs siefs-dump siefs
 SIEFS_FCFLAGS := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-pic \

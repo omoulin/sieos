@@ -132,7 +132,10 @@ tour, file by file, with the crash and on-demand mechanisms:
 - **SieFS** ([docs/siefs.md](docs/siefs.md)): copy-on-write B+tree, two
   superblocks, checksums in every pointer (a crash leaves the old or the
   new state, never a mix), small files inside the tree, attributes with an
-  index (`find key=value`). Tested with 2,151 simulated power cuts.
+  index (`find key=value`), several volumes (a home can be one), and
+  snapshots: a read-only picture of a volume that costs a few blocks,
+  browsable in `.snapshots`, taken hourly and with `snap`. Tested with about
+  6,000 simulated power cuts, snapshot operations among them.
 - **Users** ([docs/accounts.md](docs/accounts.md)): Argon2id passwords,
   groups, permissions enforced by the file server with the identity the
   kernel stamps on every message; `passwd`, `su`, `useradd`, `userdel`.
@@ -232,8 +235,8 @@ Done: microkernel, SieFS, disk, users, supervisor, on-demand servers,
 the desktop, network and TLS, sia (local and remote), sicc (x86-64 and AArch64),
 AArch64 port (QEMU, Raspberry Pi 4 in QEMU, card images). Next: the
 assistant's memory, the laptop (UEFI, NVMe, USB, NVIDIA compute), the Pis
-on real boards (USB, Ethernet), sicc running on SIEOS, encryption and
-snapshots. Details: [docs/status.md](docs/status.md).
+on real boards (USB, Ethernet), sicc running on SIEOS, encryption.
+Details: [docs/status.md](docs/status.md).
 
 ## License
 

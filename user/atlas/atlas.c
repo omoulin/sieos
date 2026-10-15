@@ -269,6 +269,8 @@ int atlas_may(const char *path, int write)
 {
     siefs_stat_t st;
     if (uid < 0 || fs_stat(path, &st, 0)) return 0;
+    for (const char *p = path; write && *p; p++)        /* a snapshot: read only, for everyone */
+        if (!memcmp(p, "/.snapshots", 11) && (p[11] == '/' || !p[11])) return 0;
     if (uid == 0) return 1;
     int bit = write ? 2 : 4, in = (int)st.gid == ugid;
     if ((int)st.uid == uid) return st.mode >> 6 & bit;

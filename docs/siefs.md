@@ -95,21 +95,70 @@ A key is `(id, type << 56 | offset)`, compared as two unsigned numbers.
 |---|---|---|
 | `INODE` 1 | 0 | mode, uid, gid, nlink, size, parent, flags, times (ns), 96 bytes |
 | `INLINE` 2 | 0 | the whole contents of a small file or a symlink target |
-| `EXTENT` 3 | byte offset in the file | first disk block, block count (≤ 32), flags, one CRC per block |
+| `EXTENT` 3 | byte offset in the file | first disk block, block count (≤ 32), flags, one CRC per block, then (flag `X_GEN`) the commit that wrote the blocks |
 | `DIRENT` 4 | 56-bit hash of the name | list of `ino (8) · type (1) · name length (1) · name` |
 | `XATTR` 5 | 56-bit hash of the name | list of `name length (1) · value length (2) · name · value` |
 | `XINDEX` 6 | object id | none; the id is `1 << 63 \| hash(name, value)` |
-| `VOLUME` 16 | 0 | in the root tree: the volume's file tree, next id, object count, key id |
+| `VOLUME` 16 | 0 | in the root tree: the volume's file tree, next id, object count, flags, key id, and for snapshots their head and commit, dead list, creation time |
+| `VOLNAME` 17 | 0 | in the root tree: a snapshot's name |
+| `DEAD` 18 | first block | in the root tree, keyed by a dead list's id: a run of blocks a snapshot still uses (count, commit that wrote them) |
 
 Objects (files, directories, symlinks) have ids that are never reused;
 the root directory is object 2. Names that hash alike share one item.
 
-### Two levels of trees
+### Two levels of trees: volumes
 
 The superblock points at a **root tree** whose items are **volumes**,
-each with its own **file tree**. Version 1 has one volume (id 1). The
-level exists so that later each user's home can be its own volume, with
-its own encryption key and its own snapshots, without changing the format.
+each with its own **file tree**. Volume 1 is "/". Another volume is
+mounted at a directory entry of its own (`siefs_mkvol`), for example a
+user's home: the entry holds the volume's root, and that root's parent
+is the entry's directory. An object's number says which volume it is in:
+`volume << 48 | id`, and just the id in volume 1, so disks made before
+volumes existed read the same. Rename and hard links do not cross
+volumes (`EXDEV`); a mounted volume's entry cannot be removed or renamed
+(`EBUSY`); `siefs_rmvol` removes an empty one.
+
+## Snapshots
+
+A **snapshot** is a read-only picture of a whole volume at one commit. It
+is a volume record whose tree root is the one its volume (its *head*) had
+then: nothing is copied, so taking one costs a few blocks, at any size.
+Each volume's root has a hidden `.snapshots` directory (it is not stored:
+the library makes it up) listing them by name, so `/home/alice/.snapshots/
+before-upgrade/notes.txt` is that file as it was. Writing there is
+`EROFS`. `siefs_snapshot_restore` makes the head what a snapshot shows
+(newer snapshots are deleted first).
+
+**Keeping what a snapshot uses.** After a snapshot, the head and the
+snapshot share blocks; the head keeps copying on write, and must not free
+a block the snapshot still needs. Every block knows the commit that wrote
+it (a node: its pointer's `gen`; data: its extent's `gen`), and a head
+knows its newest snapshot's commit. When the head lets go of a block:
+
+- written after that commit: it was the head's alone, it is freed as
+  usual;
+- written at or before it: the snapshot uses it, so it goes on the head's
+  **dead list** instead (items `(dead list, DEAD, first block)` in the root
+  tree), still marked in use.
+
+When a snapshot is taken, the head's dead list becomes the snapshot's,
+and the head starts a new one. Each dead list thus holds the blocks freed
+between the snapshot before it and itself. **Deleting** snapshot S, with P
+the snapshot before it and N the one after it (or the head): N's dead list
+holds the blocks freed between S and N. Those written after P were used
+only by S: they are freed. The others P still uses: they join S's dead
+list, which becomes N's. No tree is walked; only that dead list is read.
+This is how ZFS deletes snapshots. **Restoring** S walks the head's tree
+down only where blocks are newer than S, frees them, drops the head's dead
+list (S uses those blocks again), and gives the head S's root.
+
+Extents written before `X_GEN` existed count as written at commit 0:
+older than any snapshot, which is exactly what the rule needs.
+
+Each of these operations is one commit, like everything else. The tests
+take, delete and restore snapshots at random while comparing every
+snapshot with a copy of the model taken with it, and cut the power during
+them (see Tests).
 
 ## The commit, step by step
 
@@ -234,8 +283,7 @@ SieFS itself on one core:
 - **Directory listings:** in hash order. A cursor stays valid across
   insertions; removing a name that shares a hash bucket can make a running
   listing skip one entry.
-- **Not yet:** snapshots, quotas, encryption (the format has room for
-  all of them), several volumes.
+- **Not yet:** quotas.
 - **Errors:**
   - An operation that fails *after* it started changing things (only a
     device error or no memory can do that) stops the mount
@@ -250,7 +298,8 @@ SieFS itself on one core:
 | `siefs/siefs_int.h` | the on-disk formats and in-memory state |
 | `siefs/tree.c` | the copy-on-write B+tree, the node cache, the commit's node writes |
 | `siefs/space.c` | free space, the commit, format, mount |
-| `siefs/fs.c` | files, directories, links, rename, attributes |
+| `siefs/fs.c` | files, directories, links, rename, attributes; volumes: picking one per operation, mounting |
+| `siefs/vol.c` | snapshots: taking, deleting, restoring, listing |
 | `siefs/check.c` | `siefs_check`, the full verification |
 | `siefs/crc.c` | CRC-32C |
 
@@ -285,9 +334,19 @@ siefs disk.img find project SIEOS                   every object with that attri
 - **A model test:** 12,000 random operations compared against an
   in-memory model, with a full check after every commit and remount, on
   a 16-node cache.
-- **A crash test:** about 2,000 simulated power cuts, at every write of a
-  transaction. Unflushed writes are randomly kept, dropped or torn. The
-  remounted state must be exactly the old or the new one, and check clean.
+- **A snapshot test:** the model test again, inside a mounted volume,
+  while snapshots are taken, deleted and restored at random (about 80, 70
+  and 10 a run): every snapshot must keep showing the model as it was when
+  taken, and everything must check clean (dead lists included, no leaks)
+  after every commit. At the end, with the files, snapshots and volume
+  removed, all the space is free again. `siefs-test snapshots SEED` runs
+  it with another seed.
+- **A crash test:** about 6,000 simulated power cuts, at every write of a
+  transaction, half the scenarios with snapshots taken, deleted and
+  restored. Unflushed writes are randomly kept, dropped or torn. The
+  remounted state must be exactly the old or the new one (with snapshots,
+  which commit by themselves: the state after one of the operations), and
+  check clean.
 - **Damage tests:** broken superblock, flipped bits in data, nodes and
   bitmap.
 - **The measurements above.**

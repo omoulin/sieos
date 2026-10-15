@@ -3,12 +3,21 @@
  * row each (icon, name, kind, size) under a header, folders first, every
  * other row tinted. Double-click (or Enter): a folder opens in place, a
  * file in the editor, a launcher (.app) starts. Up (or Backspace) goes to
- * the parent; a click on a part of the path goes there. It starts in the
+ * the parent; a click on a part of the path goes there. Snapshots opens
+ * the hidden .snapshots folder of the volume this folder is in
+ * (docs/siefs.md): old versions of everything, read only. It starts in the
  * home folder; it shows only what the logged-in user may read.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "atlas.h"
+
+/* Where "/.snapshots" starts in a path, or 0. */
+static char *strstr_snap(char *p)
+{
+    for (; *p; p++) if (!memcmp(p, "/.snapshots", 11) && (p[11] == '/' || !p[11])) return p;
+    return 0;
+}
 
 #define TOP 48                           /* the insides start this far below their top */
 #define ROW 34
@@ -64,6 +73,27 @@ static void load(void)
 }
 
 void files_open(const char *dir) { strlcpy(cwd, dir, sizeof cwd); load(); }
+
+/* The snapshots of this folder's volume: the nearest folder at or above it
+ * that has a ".snapshots" (a volume's root). */
+static void snapshots(void)
+{
+    char p[sizeof cwd + 16], *s;
+    siefs_stat_t st;
+    strlcpy(p, cwd, sizeof cwd);
+    if ((s = strstr_snap(p))) *s = 0;                    /* (inside one already: from its volume) */
+    if (!p[0]) strlcpy(p, "/", sizeof p);
+    for (;;) {
+        size_t n = strlen(p);
+        strlcpy(p + n, n > 1 ? "/.snapshots" : ".snapshots", sizeof p - n);
+        if (!fs_stat(p, &st, 0)) { strlcpy(cwd, p, sizeof cwd); load(); return; }
+        p[n] = 0;
+        s = 0;
+        for (char *q = p; *q; q++) if (*q == '/') s = q;
+        if (!s || n <= 1) return;
+        if (s == p) p[1] = 0; else *s = 0;
+    }
+}
 const char *files_dir(void) { return cwd; }
 
 static void up(void)
@@ -113,6 +143,7 @@ static void go_part(int k)
 }
 
 static int X0, Y0, X1, Y1;
+static int in_snapshots(void) { return strstr_snap(cwd) != 0; }
 static int rows(void) { return (Y1 - (Y0 + TOP + 54 + HEAD) - 8) / ROW; }
 
 void files_draw(int x0, int y0, int x1, int y1, int focused)
@@ -123,6 +154,9 @@ void files_draw(int x0, int y0, int x1, int y1, int focused)
     int ty = y0 + TOP;                                   /* the bar: Up, the folder */
     int ux = pill(x0 + 14, ty, "Up", 0, H_FILE, -2);
     if (atlas_debug) say("atlas: dbg fileup at %d %d\n", x0 + 40, ty + 21);
+    int sx = x1 - 16 - (tw(9, 2) + 28);                 /* Snapshots, at the right end */
+    pill(sx, ty, "Snapshots", in_snapshots(), H_FILE, -3);
+    if (atlas_debug) say("atlas: dbg filesnap at %d %d\n", sx + 60, ty + 21);
     {                                                    /* the path: each part a link, the last one bold */
         int x = ux + 16, parts = 0;
         for (const char *q = cwd; *q; q++) parts += *q == '/' && q[1];   /* ("/home/alice": 2, "/": 0) */
@@ -132,12 +166,12 @@ void files_draw(int x0, int y0, int x1, int y1, int focused)
             int l = k < 0 ? 1 : 0;
             if (k >= 0) { while (s[l] && s[l] != '/') l++; p = s + l + (s[l] == '/'); }
             int last = k == parts - 1, w = tw(l, 2);
-            dl_text(x, ty + 10, s, l, S(2), last ? C_TXT : C_DIM, x0, ty, x1 - 16, ty + 42);
-            if (last) dl_text(x + 1, ty + 10, s, l, S(2), C_TXT, x0, ty, x1 - 16, ty + 42);
+            dl_text(x, ty + 10, s, l, S(2), last ? C_TXT : C_DIM, x0, ty, sx - 12, ty + 42);
+            if (last) dl_text(x + 1, ty + 10, s, l, S(2), C_TXT, x0, ty, sx - 12, ty + 42);
             else hitbox(x - 4, ty + 4, x + w + 4, ty + 38, H_FILE, CRUMB - 1 - k);
             if (!last && atlas_debug) say("atlas: dbg crumb %d at %d %d\n", k, x + w / 2, ty + 21);
             x += w;
-            if (!last) { dl_text(x + 9, ty + 12, ">", 1, SS, C_LINE, x0, ty, x1 - 16, ty + 42); x += 30; }
+            if (!last) { dl_text(x + 9, ty + 12, ">", 1, SS, C_LINE, x0, ty, sx - 12, ty + 42); x += 30; }
         }
     }
     int hy = ty + 54, ly = hy + HEAD, kx = x1 - 24 - SIZEW - KINDW;   /* the columns' header */
@@ -179,6 +213,7 @@ int files_click(int kind, int arg)
 {
     if (kind != H_FILE) return 0;
     if (arg == -2) { up(); return 1; }
+    if (arg == -3) { snapshots(); return 1; }
     if (arg <= CRUMB) { go_part(CRUMB - 1 - arg); return 1; }
     if (arg < 0) return 1;
     uint64_t t = sys_clock();

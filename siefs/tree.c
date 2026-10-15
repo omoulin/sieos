@@ -59,6 +59,14 @@ void cache_trim(siefs_t *fs)
     }
 }
 
+/* A block that no tree uses any more: its cached node must not be found
+ * when the block is written again. */
+void cache_forget(siefs_t *fs, uint64_t b)
+{
+    for (node_t *n = fs->hash[hslot(fs, b)]; n; n = n->hnext)
+        if (n->blk == b) { cache_del(fs, n); fs->env.free(n); return; }
+}
+
 void nodes_free(siefs_t *fs)
 {
     fs->env.cache_nodes = 0;
@@ -130,14 +138,15 @@ int t_get_node(siefs_t *fs, const bptr_t *p, node_t **out)
 
 /* Copy-on-write: make node n changeable. ref is the pointer to it (in its
  * parent, already dirty, or the tree's root): it now names the copy. The
- * node's old block will be free once this transaction is committed. */
-static int make_dirty(siefs_t *fs, node_t *n, bptr_t *ref)
+ * node's old block will be free once this transaction is committed, or
+ * kept for a snapshot that still uses it (blk_release). */
+static int make_dirty(siefs_t *fs, tree_t *t, node_t *n, bptr_t *ref)
 {
     int s;
     if (n->dirty) return 0;
     if ((s = dslot(fs, n)) < 0) return s;
     cache_del(fs, n);
-    blk_free(fs, n->blk, 1);
+    blk_release(fs, t->id, n->blk, 1, ref->gen);
     n->dirty = 1; n->blk = TMP | (uint64_t)s;
     ref->blk = n->blk;
     changed(fs);
@@ -177,7 +186,7 @@ static int search(siefs_t *fs, tree_t *t, skey_t k, path_t *pa, int cow)
     int lv = NH(n)->level;
     pa->h = lv + 1;
     for (;;) {
-        if (cow && (e = make_dirty(fs, n, ref))) return e;
+        if (cow && (e = make_dirty(fs, t, n, ref))) return e;
         pa->n[lv] = n;
         if (!lv) break;
         if (!NH(n)->n) return E(EIO);
@@ -312,10 +321,10 @@ static int place(siefs_t *fs, tree_t *t, path_t *pa, skey_t k, const void *v, un
 /* ---- Removing: a node that becomes small is merged with a neighbour when
  * both fit in one; an empty one disappears; a root with a single child
  * gives way to it. All leaves stay at the same depth. */
-static int cow_child(siefs_t *fs, node_t *p, int i, node_t **out)
+static int cow_child(siefs_t *fs, tree_t *t, node_t *p, int i, node_t **out)
 {
     int e = t_get_node(fs, &IE(p, i)->p, out);
-    return e ? e : make_dirty(fs, *out, &IE(p, i)->p);
+    return e ? e : make_dirty(fs, t, *out, &IE(p, i)->p);
 }
 static unsigned nused(node_t *n) { return NH(n)->level ? NH(n)->n * sizeof(ientry_t) : lused(n); }
 static void ent_del(node_t *p, int i)
@@ -335,7 +344,7 @@ static int rebalance(siefs_t *fs, tree_t *t, path_t *pa, int lv)
                 NH(n)->level = 0; NH(n)->dstart = BS;
                 break;
             }
-            if ((e = cow_child(fs, n, 0, &c))) return e;
+            if ((e = cow_child(fs, t, n, 0, &c))) return e;
             t->root = (bptr_t){ .blk = c->blk };
             ndrop(fs, n);
             n = c;
@@ -354,7 +363,7 @@ static int rebalance(siefs_t *fs, tree_t *t, path_t *pa, int lv)
     fix_keys(pa, lv);
     if (nused(n) >= (BS - sizeof(nhdr_t)) / 4 || NH(p)->n < 2) return 0;
     int si = pi + 1 < NH(p)->n ? pi + 1 : pi - 1;       /* the right neighbour, or the left one */
-    if ((e = cow_child(fs, p, si, &s))) return e;
+    if ((e = cow_child(fs, t, p, si, &s))) return e;
     node_t *a = si > pi ? n : s, *b = si > pi ? s : n;
     int bi = si > pi ? si : pi;
     if (NH(a)->level ? NH(a)->n + NH(b)->n > IMAX : lused(a) + lused(b) > BS - sizeof(nhdr_t)) return 0;

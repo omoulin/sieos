@@ -31,7 +31,7 @@
  * The type sits in the top byte of the 64-bit offset field. */
 typedef struct { uint64_t id, off; } skey_t;
 enum { T_INODE = 1, T_INLINE = 2, T_EXTENT = 3, T_DIRENT = 4, T_XATTR = 5, T_XINDEX = 6,
-       T_VOLUME = 16 };
+       T_VOLUME = 16, T_VOLNAME = 17, T_DEAD = 18, T_VOLKEY = 19 };
 #define KOFF(type, o) ((uint64_t)(type) << 56 | (o))
 #define KTYPE(off)    ((int)((off) >> 56))
 #define OFFMASK       ((1ULL << 56) - 1)
@@ -65,12 +65,25 @@ typedef struct {                        /* T_INODE, offset 0 */
 } inode_t;                              /* 96 */
 #define F_INLINE 1                      /* the contents are in a T_INLINE item */
 
-typedef struct {                        /* T_EXTENT, offset = file offset of its first block */
+/* T_EXTENT, offset = file offset of its first block. On disk: blk (8),
+ * n (4), flags (4), one checksum per block (4 each), then with X_GEN the
+ * commit that wrote the blocks (8), then with X_ENC the nonce's salt (4),
+ * 4 bytes of padding and one 16-byte tag per block. Extents written
+ * before X_GEN existed count as written at commit 0: older than any
+ * snapshot, which is what matters (see space.c, dead lists). */
+typedef struct {
     uint64_t blk;                       /* first disk block */
-    uint32_t n, flags;                  /* how many blocks; flags reserved (encryption) */
-    uint32_t csum[EXT_MAX];             /* one checksum per block (only n stored) */
+    uint32_t n, flags;                  /* how many blocks; X_... */
+    uint32_t csum[EXT_MAX];             /* one checksum per block (of what is on the disk) */
+    uint64_t gen;                       /* the commit that wrote them (0: before X_GEN) */
+    uint32_t salt;                      /* X_ENC: the nonce's salt */
+    uint8_t mac[EXT_MAX][16];           /* X_ENC: one tag per block */
 } extent_t;
-#define EXT_SIZE(n) (16 + 4 * (n))
+#define X_GEN 1
+#define X_ENC 2
+#define EXT_SIZE(n) (16 + 4 * (n))      /* (the old format: no X_GEN) */
+int ext_dec(const void *v, unsigned len, extent_t *x);       /* 0, or -EIO */
+unsigned ext_enc(const extent_t *x, void *v);                 /* -> length */
 
 /* T_DIRENT (offset = hash of the name) holds a list of entries, packed:
  *   u64 ino, u8 type (mode >> 12), u8 name length, the name.
@@ -78,12 +91,26 @@ typedef struct {                        /* T_EXTENT, offset = file offset of its
  * length, name, value. T_XINDEX: key (IDX_BIT | hash(name, value), type,
  * object id), no value: one per indexed attribute. */
 
-typedef struct {                        /* in the root tree: (volume id, T_VOLUME, 0) */
+/* In the root tree: (volume id, T_VOLUME, 0). Volume 1 is "/". Others
+ * are mounted somewhere in another volume (a directory entry naming their
+ * root), or are snapshots: read-only volumes sharing the tree their head
+ * had at commit gen. A volume's name (snapshots) is (id, T_VOLNAME, 0).
+ *   head:     gen = the newest snapshot's commit (0: none), dl = its dead list
+ *   snapshot: gen = the commit it shows, parent = its head, dl = its dead list
+ * A dead list (dl, T_DEAD, first block) -> { blocks, gen } holds the blocks
+ * that left the trees after the snapshot before it, while an older
+ * snapshot still uses them (space.c). */
+typedef struct {
     bptr_t root;                        /* the volume's file tree */
-    uint64_t next_id, inodes, flags;
-    uint8_t key_id[16];                 /* reserved: which key encrypts this volume */
-    uint64_t reserved[4];
+    uint64_t next_id, inodes, flags;    /* flags: V_... */
+    uint8_t key_id[16];                 /* V_ENC: which key (the T_VOLKEY item's salt) */
+    uint64_t parent, gen, dl, created;
 } vol_t;
+#define V_SNAP 1                        /* a snapshot: read only */
+#define V_ENC  2                        /* encrypted (with T_VOLKEY) */
+_Static_assert(sizeof(vol_t) == 112, "volume record size");
+
+typedef struct { uint64_t dl, b, n, gen; } dead_t;   /* a dead-list entry waiting for the commit */
 
 /* ---- The superblock, twice: blocks 1 and 2. A commit with sequence
  * number s writes slot s % 2, so the previous one is never touched. */
@@ -117,6 +144,20 @@ typedef struct node {
 #define IE(n, i) ((ientry_t *)((n)->d + sizeof(nhdr_t)) + (i))
 
 typedef struct { bptr_t root; uint64_t id; } tree_t;
+
+/* A volume in memory: its record, its file tree (tree id = volume id). */
+typedef struct volx {
+    uint64_t id;
+    vol_t v;
+    tree_t ft;
+    char name[64];                      /* snapshots */
+    int dirty;                          /* the record must be written by the commit */
+    int locked;                         /* V_ENC without its key */
+    void *key;                          /* V_ENC: the volume key's state (crypt.c) */
+} volx_t;
+#define VSHIFT 48                       /* an object's number: volume << 48 | its id (volume 1: just the id) */
+#define LMASK ((1ULL << VSHIFT) - 1)
+#define VOLOF(ino) ((ino) >> VSHIFT > 1 ? (ino) >> VSHIFT : 1)
 typedef struct { node_t *n[MAXH]; int i[MAXH]; int h; } path_t;   /* n[0] = the leaf */
 typedef struct { uint64_t b, n; } run_t;
 typedef struct { run_t *r; size_t n, cap; } runs_t;
@@ -124,8 +165,12 @@ typedef struct { run_t *r; size_t n, cap; } runs_t;
 struct siefs {
     siefs_env_t env;
     sb_t sb;                            /* the last commit's superblock */
-    tree_t rt, ft;                      /* the root tree; volume 1's file tree */
-    vol_t vol;
+    tree_t rt;                          /* the root tree: the volumes */
+    volx_t **vols;                      /* every volume */
+    uint32_t nvols, vcap;
+    volx_t *cv;                         /* the volume the current operation works in */
+    uint64_t next_vid;                  /* for new volumes and dead lists */
+    dead_t *dead; size_t ndead, deadcap;   /* dead-list entries for the next commit */
     uint64_t txn;                       /* the transaction being built: sb.seq + 1 */
     /* space: three bitmaps of nblocks bits */
     uint8_t *map;                       /* referenced by the trees: what the next commit writes */
@@ -173,6 +218,13 @@ uint64_t xindex_id(const char *name, size_t nl, const void *v, size_t vl);
 /* space.c */
 uint64_t blk_alloc(siefs_t *fs, uint64_t want, uint64_t *got);
 void blk_free(siefs_t *fs, uint64_t b, uint64_t n);
+void blk_release(siefs_t *fs, uint64_t vid, uint64_t b, uint64_t n, uint64_t gen);   /* a tree lets go of them */
+volx_t *vol_get(siefs_t *fs, uint64_t id);
+volx_t *vol_add(siefs_t *fs, uint64_t id, const vol_t *v);
+void vol_drop(siefs_t *fs, volx_t *v);
+void cache_forget(siefs_t *fs, uint64_t b);
+/* vol.c */
+int  vol_free_tree(siefs_t *fs, volx_t *v);
 uint64_t commit_block(siefs_t *fs);
 int  space_reserve(siefs_t *fs, uint64_t need);
 int  commit(siefs_t *fs, int force);

@@ -9,11 +9,22 @@
  * an error after a change can only be the disk or memory failing, and then
  * the mount stops (fs->broken) rather than commit a half-done operation.
  *
+ * Volumes: an object's number carries its volume (volume << 48 | its id;
+ * volume 1's are just the id). Each public operation picks the volume of
+ * the object it is given (fs->cv), and the code below works in it with
+ * local ids. A directory entry or a parent naming an object of another
+ * volume (a volume mounted there, or a volume root's mount point) holds
+ * its whole number, the volume always written (1 << 48 for volume 1).
+ * Snapshots are read only; a volume's root has a hidden ".snapshots"
+ * directory (local id 1, made up on the fly) listing them.
+ *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "siefs_int.h"
 
 #define MAXBLK (OFFMASK / BS)                           /* files up to 2^56 bytes */
+#define FT  (&fs->cv->ft)                               /* the current volume's file tree */
+#define VOL (fs->cv->v)                                 /* ... and its record */
 #define ISDIR(m) (((m) & SIEFS_IFMT) == SIEFS_IFDIR)
 #define ISREG(m) (((m) & SIEFS_IFMT) == SIEFS_IFREG)
 #define ISLNK(m) (((m) & SIEFS_IFMT) == SIEFS_IFLNK)
@@ -33,12 +44,44 @@ static long end(siefs_t *fs, long r)
 }
 #define BEGIN(fs) do { int b_ = begin(fs); if (b_) return b_; } while (0)
 
+#define SNAPDIR 1                                       /* a volume's ".snapshots" (no item: made up) */
+static uint64_t G(siefs_t *fs, uint64_t l) { return fs->cv->id == 1 ? l : fs->cv->id << VSHIFT | l; }
+static uint64_t ref_dec(siefs_t *fs, uint64_t x)        /* a stored reference -> an object's number */
+{
+    return !(x >> VSHIFT) ? G(fs, x) : x >> VSHIFT == 1 ? x & LMASK : x;
+}
+static uint64_t ref_enc(siefs_t *fs, uint64_t g)        /* ... and back, from the current volume */
+{
+    return VOLOF(g) == fs->cv->id ? g & LMASK : VOLOF(g) << VSHIFT | (g & LMASK);
+}
+static int pick(siefs_t *fs, uint64_t g, uint64_t *l)   /* work in g's volume */
+{
+    volx_t *v = vol_get(fs, VOLOF(g));
+    if (!v) return E(ENOENT);
+    if (v->locked) return E(EACCES);
+    fs->cv = v;
+    *l = g & LMASK;
+    return 0;
+}
+static int ro(siefs_t *fs, uint64_t l) { return (fs->cv->v.flags & V_SNAP) || l == SNAPDIR ? E(EROFS) : 0; }
+#define PICK(g, l) do { int p_ = pick(fs, g, &(l)); if (p_) return end(fs, p_); } while (0)
+
 static int iget(siefs_t *fs, uint64_t ino, inode_t *in)
 {
-    int n = t_get(fs, &fs->ft, K(ino, T_INODE, 0), in, sizeof *in);
+    if (ino == SNAPDIR && !(fs->cv->v.flags & V_SNAP)) {   /* ".snapshots": read only, like the root */
+        inode_t r;
+        int e = iget(fs, SIEFS_ROOT, &r);
+        if (e) return e;
+        *in = (inode_t){ .mode = SIEFS_IFDIR | 0555, .uid = r.uid, .gid = r.gid, .nlink = 2, .parent = SIEFS_ROOT,
+                         .atime = r.btime, .mtime = r.btime, .ctime = r.btime, .btime = r.btime };
+        return 0;
+    }
+    int n = t_get(fs, FT, K(ino, T_INODE, 0), in, sizeof *in);
+    if (n >= 0 && ino == SIEFS_ROOT && (fs->cv->v.flags & V_SNAP))   /* a snapshot's root: in its head's ".snapshots" */
+        in->parent = fs->cv->v.parent << VSHIFT | SNAPDIR;
     return n < 0 ? n : n == sizeof *in ? 0 : E(EIO);
 }
-static int iput(siefs_t *fs, uint64_t ino, inode_t *in) { return t_update(fs, &fs->ft, K(ino, T_INODE, 0), in, sizeof *in); }
+static int iput(siefs_t *fs, uint64_t ino, inode_t *in) { return t_update(fs, FT, K(ino, T_INODE, 0), in, sizeof *in); }
 
 /* ---- Hashes: a 64-bit FNV-1a with a final mix. Directory entries and
  * attributes are found by the hash of their name (56 bits; names that
@@ -75,7 +118,7 @@ static int name_ok(const char *s, size_t *len)
 static int dir_find(siefs_t *fs, uint64_t dir, const char *name, size_t len, uint64_t *ino, int *type)
 {
     uint8_t b[MAXITEM];
-    int n = t_get(fs, &fs->ft, K(dir, T_DIRENT, name_hash(name, len)), b, sizeof b);
+    int n = t_get(fs, FT, K(dir, T_DIRENT, name_hash(name, len)), b, sizeof b);
     for (int p = 0; n > 0 && p + 10 <= n; p += 10 + b[p + 9])
         if (b[p + 9] == len && !memcmp(b + p + 10, name, len)) {
             memcpy(ino, b + p, 8);
@@ -89,7 +132,7 @@ static int dir_add(siefs_t *fs, uint64_t dir, const char *name, size_t len, uint
 {
     uint8_t b[MAXITEM];
     skey_t k = K(dir, T_DIRENT, name_hash(name, len));
-    int n = t_get(fs, &fs->ft, k, b, sizeof b);
+    int n = t_get(fs, FT, k, b, sizeof b);
     if (n == E(ENOENT)) n = 0;
     if (n < 0) return n;
     if (n + 10 + len > MAXITEM) return E(ENOSPC);       /* ~7 names with one 56-bit hash: never seen */
@@ -97,20 +140,20 @@ static int dir_add(siefs_t *fs, uint64_t dir, const char *name, size_t len, uint
     b[n + 8] = (uint8_t)type;
     b[n + 9] = (uint8_t)len;
     memcpy(b + n + 10, name, len);
-    return t_put(fs, &fs->ft, k, b, n + 10 + len);
+    return t_put(fs, FT, k, b, n + 10 + len);
 }
 
 static int dir_del(siefs_t *fs, uint64_t dir, const char *name, size_t len)
 {
     uint8_t b[MAXITEM];
     skey_t k = K(dir, T_DIRENT, name_hash(name, len));
-    int n = t_get(fs, &fs->ft, k, b, sizeof b);
+    int n = t_get(fs, FT, k, b, sizeof b);
     for (int p = 0; n > 0 && p + 10 <= n; p += 10 + b[p + 9])
         if (b[p + 9] == len && !memcmp(b + p + 10, name, len)) {
             int sz = 10 + b[p + 9];
             memmove(b + p, b + p + sz, n - p - sz);
             n -= sz;
-            return n ? t_update(fs, &fs->ft, k, b, n) : t_delete(fs, &fs->ft, k);
+            return n ? t_update(fs, FT, k, b, n) : t_delete(fs, FT, k);
         }
     return n < 0 ? n : E(ENOENT);
 }
@@ -118,35 +161,58 @@ static int dir_del(siefs_t *fs, uint64_t dir, const char *name, size_t len)
 static int dir_empty(siefs_t *fs, uint64_t dir)
 {
     path_t pa;
-    int r = t_seek(fs, &fs->ft, K(dir, T_DIRENT, 0), &pa);
+    int r = t_seek(fs, FT, K(dir, T_DIRENT, 0), &pa);
     if (r < 0) return r;
     return !(r && pkey(&pa).id == dir && KTYPE(pkey(&pa).off) == T_DIRENT);
 }
 
 /* ---- Names. */
+/* The snapshot of the current volume called name (n bytes). */
+static volx_t *snap_named(siefs_t *fs, const char *name, size_t n)
+{
+    for (uint32_t i = 0; i < fs->nvols; i++) {
+        volx_t *v = fs->vols[i];
+        if ((v->v.flags & V_SNAP) && v->v.parent == fs->cv->id && strlen(v->name) == n && !memcmp(v->name, name, n)) return v;
+    }
+    return 0;
+}
+
+/* Look name up in dir (local): the object's number (global) in *ino. */
 static int lookup(siefs_t *fs, uint64_t dir, const char *name, uint64_t *ino)
 {
     inode_t d;
     int e = iget(fs, dir, &d);
     size_t n = strlen(name);
+    uint64_t x;
     if (e) return e;
     if (!ISDIR(d.mode)) return E(ENOTDIR);
     if (n > SIEFS_NAME_MAX) return E(ENAMETOOLONG);
-    if (!n || (n == 1 && name[0] == '.')) { *ino = dir; return 0; }
-    if (n == 2 && name[0] == '.' && name[1] == '.') { *ino = d.parent; return 0; }
-    return dir_find(fs, dir, name, n, ino, 0);
+    if (!n || (n == 1 && name[0] == '.')) { *ino = G(fs, dir); return 0; }
+    if (n == 2 && name[0] == '.' && name[1] == '.') { *ino = ref_dec(fs, d.parent); return 0; }
+    if (dir == SNAPDIR) {
+        volx_t *s = snap_named(fs, name, n);
+        if (!s) return E(ENOENT);
+        *ino = s->id << VSHIFT | SIEFS_ROOT;
+        return 0;
+    }
+    if (dir == SIEFS_ROOT && n == 10 && !memcmp(name, ".snapshots", 10) && !(fs->cv->v.flags & V_SNAP)) { *ino = G(fs, SNAPDIR); return 0; }
+    if ((e = dir_find(fs, dir, name, n, &x, 0))) return e;
+    *ino = ref_dec(fs, x);
+    return 0;
 }
 
 int siefs_lookup(siefs_t *fs, uint64_t dir, const char *name, uint64_t *ino)
 {
+    uint64_t l;
     BEGIN(fs);
-    return (int)end(fs, lookup(fs, dir, name, ino));
+    PICK(dir, l);
+    return (int)end(fs, lookup(fs, l, name, ino));
 }
 
 int siefs_walk(siefs_t *fs, const char *path, uint64_t *ino)
 {
     char c[SIEFS_NAME_MAX + 1];
-    uint64_t cur = SIEFS_ROOT;
+    uint64_t cur = SIEFS_ROOT, l;
     int e = 0;
     BEGIN(fs);
     while (*path && !e) {
@@ -157,7 +223,7 @@ int siefs_walk(siefs_t *fs, const char *path, uint64_t *ino)
         if (n > SIEFS_NAME_MAX) { e = E(ENAMETOOLONG); break; }
         memcpy(c, path, n); c[n] = 0;
         path += n;
-        e = lookup(fs, cur, c, &cur);
+        if (!(e = pick(fs, cur, &l))) e = lookup(fs, l, c, &cur);
     }
     if (!e) *ino = cur;
     return (int)end(fs, e);
@@ -169,16 +235,21 @@ static int free_object(siefs_t *fs, uint64_t ino)
 {
     for (;;) {
         path_t pa;
-        int r = t_seek(fs, &fs->ft, K(ino, 0, 0), &pa);
+        int r = t_seek(fs, FT, K(ino, 0, 0), &pa);
         if (r < 0) return r;
         if (!r || pkey(&pa).id != ino) break;
         skey_t k = pkey(&pa);
         int ty = KTYPE(k.off);
-        if (ty == T_EXTENT) { extent_t x; memcpy(&x, pval(&pa), plen(&pa)); blk_free(fs, x.blk, x.n); }
+        if (ty == T_EXTENT) {
+            extent_t x;
+            if ((r = ext_dec(pval(&pa), plen(&pa), &x))) return r;
+            blk_release(fs, fs->cv->id, x.blk, x.n, x.gen);
+        }
         if (ty == T_XATTR) { uint8_t b[MAXITEM]; int n = (int)plen(&pa); memcpy(b, pval(&pa), n); unindex(fs, ino, b, n); }
-        if ((r = t_delete(fs, &fs->ft, k))) return r;
+        if ((r = t_delete(fs, FT, k))) return r;
     }
-    fs->vol.inodes--;
+    VOL.inodes--;
+    fs->cv->dirty = 1;
     return 0;
 }
 
@@ -198,57 +269,136 @@ static int mkobj(siefs_t *fs, uint64_t dir, const char *name, uint32_t mode, uin
     if (!(e = dir_find(fs, dir, name, len, &x, 0))) return E(EEXIST);
     if (e != E(ENOENT) || (e = space_reserve(fs, 8))) return e;
 
-    uint64_t ino = fs->vol.next_id++;
+    uint64_t ino = VOL.next_id++;
     int64_t t = fs->env.now();
     inode_t in = { .mode = mode, .uid = uid, .gid = gid, .nlink = type == SIEFS_IFDIR ? 2 : 1,
                    .parent = dir, .atime = t, .mtime = t, .ctime = t, .btime = t };
     if (link) { in.size = ll; in.flags = F_INLINE; }
-    if ((e = t_insert(fs, &fs->ft, K(ino, T_INODE, 0), &in, sizeof in)) ||
-        (link && (e = t_insert(fs, &fs->ft, K(ino, T_INLINE, 0), link, (unsigned)ll))) ||
+    if ((e = t_insert(fs, FT, K(ino, T_INODE, 0), &in, sizeof in)) ||
+        (link && (e = t_insert(fs, FT, K(ino, T_INLINE, 0), link, (unsigned)ll))) ||
         (e = dir_add(fs, dir, name, len, ino, type >> 12))) return e;
     if (type == SIEFS_IFDIR) d.nlink++;
     d.mtime = d.ctime = t;
     if ((e = iput(fs, dir, &d))) return e;
-    fs->vol.inodes++;
+    VOL.inodes++;
+    fs->cv->dirty = 1;
     *out = ino;
     return 0;
 }
 
 int siefs_create(siefs_t *fs, uint64_t dir, const char *name, uint32_t mode, uint32_t uid, uint32_t gid, uint64_t *ino)
 {
+    uint64_t l, o;
+    int e;
     BEGIN(fs);
+    PICK(dir, l);
     if (ISLNK(mode)) return (int)end(fs, E(EINVAL));
-    return (int)end(fs, mkobj(fs, dir, name, mode, uid, gid, 0, ino));
+    if (!(e = ro(fs, l)) && !(e = mkobj(fs, l, name, mode, uid, gid, 0, &o))) *ino = G(fs, o);
+    return (int)end(fs, e);
 }
 
 int siefs_symlink(siefs_t *fs, uint64_t dir, const char *name, const char *target, uint32_t uid, uint32_t gid, uint64_t *ino)
 {
+    uint64_t l, o;
+    int e;
     BEGIN(fs);
-    return (int)end(fs, mkobj(fs, dir, name, SIEFS_IFLNK | 0777, uid, gid, target, ino));
+    PICK(dir, l);
+    if (!(e = ro(fs, l)) && !(e = mkobj(fs, l, name, SIEFS_IFLNK | 0777, uid, gid, target, &o))) *ino = G(fs, o);
+    return (int)end(fs, e);
 }
 
-long siefs_readlink(siefs_t *fs, uint64_t ino, char *buf, size_t size)
+/* A new volume, mounted at dir/name: its root directory is that name's
+ * object. Its root's parent, and the entry naming it, cross volumes. */
+int siefs_mkvol(siefs_t *fs, uint64_t g, const char *name, uint32_t mode, uint32_t uid, uint32_t gid, uint64_t *ino)
+{
+    inode_t d;
+    uint64_t dir, x;
+    size_t len;
+    int e;
+    BEGIN(fs);
+    PICK(g, dir);
+    volx_t *pv = fs->cv;
+    if ((e = ro(fs, dir)) || (e = name_ok(name, &len)) || (e = iget(fs, dir, &d))) return (int)end(fs, e);
+    if (!ISDIR(d.mode)) return (int)end(fs, E(ENOTDIR));
+    if (!(e = dir_find(fs, dir, name, len, &x, 0))) return (int)end(fs, E(EEXIST));
+    if (e != E(ENOENT) || (e = space_reserve(fs, 16))) return (int)end(fs, e);
+    int64_t t = fs->env.now();
+    vol_t nv = { .next_id = 16, .inodes = 1, .created = t };
+    volx_t *v = vol_add(fs, fs->next_vid++, &nv);
+    if (!v) return (int)end(fs, E(ENOMEM));
+    v->dirty = 1;
+    fs->cv = v;
+    inode_t root = { .mode = SIEFS_IFDIR | (mode & 07777), .uid = uid, .gid = gid, .nlink = 2,
+                     .parent = pv->id << VSHIFT | dir, .atime = t, .mtime = t, .ctime = t, .btime = t };
+    if ((e = t_new_root(fs, FT)) || (e = t_insert(fs, FT, K(SIEFS_ROOT, T_INODE, 0), &root, sizeof root))) return (int)end(fs, e);
+    fs->cv = pv;
+    if ((e = dir_add(fs, dir, name, len, ref_enc(fs, v->id << VSHIFT | SIEFS_ROOT), SIEFS_IFDIR >> 12))) return (int)end(fs, e);
+    d.nlink++;
+    d.mtime = d.ctime = t;
+    if ((e = iput(fs, dir, &d))) return (int)end(fs, e);
+    *ino = v->id << VSHIFT | SIEFS_ROOT;
+    return (int)end(fs, 0);
+}
+
+/* Remove a mounted volume: its root must be empty, and it must have no
+ * snapshots left. */
+int siefs_rmvol(siefs_t *fs, uint64_t g, const char *name)
+{
+    inode_t d;
+    uint64_t dir, x;
+    size_t len;
+    int e;
+    BEGIN(fs);
+    PICK(g, dir);
+    volx_t *pv = fs->cv, *v;
+    if ((e = ro(fs, dir)) || (e = name_ok(name, &len)) || (e = iget(fs, dir, &d)) || (e = dir_find(fs, dir, name, len, &x, 0)))
+        return (int)end(fs, e);
+    if (!(x >> VSHIFT) || !(v = vol_get(fs, VOLOF(x))) || v == pv) return (int)end(fs, E(EINVAL));   /* not a volume */
+    if (v->locked) return (int)end(fs, E(EACCES));
+    for (uint32_t i = 0; i < fs->nvols; i++)
+        if ((fs->vols[i]->v.flags & V_SNAP) && fs->vols[i]->v.parent == v->id) return (int)end(fs, E(EBUSY));
+    fs->cv = v;
+    if ((e = dir_empty(fs, SIEFS_ROOT)) <= 0) return (int)end(fs, e ? e : E(ENOTEMPTY));
+    if ((e = space_reserve(fs, 16)) || (e = commit(fs, 0)) || (e = vol_free_tree(fs, v))) return (int)end(fs, e);
+    fs->cv = pv;
+    fs->opmod = 1;
+    if ((e = dir_del(fs, dir, name, len))) return (int)end(fs, e);
+    d.nlink--;
+    d.mtime = d.ctime = fs->env.now();
+    if ((e = iput(fs, dir, &d)) || (e = t_delete(fs, &fs->rt, K(v->id, T_VOLUME, 0)))) return (int)end(fs, e);
+    vol_drop(fs, v);
+    fs->changed = 1;
+    return (int)end(fs, 0);
+}
+
+long siefs_readlink(siefs_t *fs, uint64_t g, char *buf, size_t size)
 {
     inode_t in;
     uint8_t b[INLINE_MAX];
+    uint64_t ino;
     BEGIN(fs);
+    PICK(g, ino);
     int e = iget(fs, ino, &in);
     if (e) return end(fs, e);
     if (!ISLNK(in.mode)) return end(fs, E(EINVAL));
-    if ((e = t_get(fs, &fs->ft, K(ino, T_INLINE, 0), b, sizeof b)) < 0) return end(fs, e);
+    if ((e = t_get(fs, FT, K(ino, T_INLINE, 0), b, sizeof b)) < 0) return end(fs, e);
     size_t n = (size_t)e < size ? (size_t)e : size;
     memcpy(buf, b, n);
     return end(fs, (long)n);
 }
 
-int siefs_link(siefs_t *fs, uint64_t ino, uint64_t dir, const char *name)
+int siefs_link(siefs_t *fs, uint64_t gi, uint64_t gd, const char *name)
 {
     inode_t in, d;
-    uint64_t x;
+    uint64_t x, ino, dir;
     size_t len;
     int e;
     BEGIN(fs);
-    if ((e = name_ok(name, &len)) || (e = iget(fs, ino, &in)) || (e = iget(fs, dir, &d))) return (int)end(fs, e);
+    PICK(gi, ino);
+    volx_t *v = fs->cv;
+    PICK(gd, dir);
+    if (fs->cv != v) return (int)end(fs, E(EXDEV));
+    if ((e = ro(fs, dir)) || (e = name_ok(name, &len)) || (e = iget(fs, ino, &in)) || (e = iget(fs, dir, &d))) return (int)end(fs, e);
     if (ISDIR(in.mode)) return (int)end(fs, E(EPERM));
     if (!ISDIR(d.mode)) return (int)end(fs, E(ENOTDIR));
     if (in.nlink >= 0xFFFF) return (int)end(fs, E(EMLINK));
@@ -272,7 +422,9 @@ static int remove_name(siefs_t *fs, uint64_t dir, const char *name, int wantdir)
     int e, type;
     if ((e = name_ok(name, &len)) || (e = iget(fs, dir, &d))) return e;
     if (!ISDIR(d.mode)) return E(ENOTDIR);
-    if ((e = dir_find(fs, dir, name, len, &ino, &type)) || (e = iget(fs, ino, &in))) return e;
+    if ((e = dir_find(fs, dir, name, len, &ino, &type))) return e;
+    if (ino >> VSHIFT) return E(EBUSY);                 /* a volume is mounted there */
+    if ((e = iget(fs, ino, &in))) return e;
     if (wantdir && !ISDIR(in.mode)) return E(ENOTDIR);
     if (!wantdir && ISDIR(in.mode)) return E(EISDIR);
     if (wantdir && (e = dir_empty(fs, ino)) <= 0) return e ? e : E(ENOTEMPTY);
@@ -285,8 +437,16 @@ static int remove_name(siefs_t *fs, uint64_t dir, const char *name, int wantdir)
     return e ? e : iput(fs, dir, &d);
 }
 
-int siefs_unlink(siefs_t *fs, uint64_t dir, const char *name) { BEGIN(fs); return (int)end(fs, remove_name(fs, dir, name, 0)); }
-int siefs_rmdir(siefs_t *fs, uint64_t dir, const char *name)  { BEGIN(fs); return (int)end(fs, remove_name(fs, dir, name, 1)); }
+static int unname(siefs_t *fs, uint64_t g, const char *name, int wantdir)
+{
+    uint64_t l;
+    int e;
+    BEGIN(fs);
+    PICK(g, l);
+    return (int)end(fs, (e = ro(fs, l)) ? e : remove_name(fs, l, name, wantdir));
+}
+int siefs_unlink(siefs_t *fs, uint64_t dir, const char *name) { return unname(fs, dir, name, 0); }
+int siefs_rmdir(siefs_t *fs, uint64_t dir, const char *name)  { return unname(fs, dir, name, 1); }
 
 /* Rename: atomic like everything else, since the whole operation lands in
  * one commit. A target that exists is replaced (a directory only by a
@@ -299,9 +459,12 @@ static int do_rename(siefs_t *fs, uint64_t sdir, const char *sname, uint64_t ddi
     int e, ty, dty;
     if ((e = name_ok(sname, &sl)) || (e = name_ok(dname, &dl)) || (e = iget(fs, sdir, &sd)) || (e = iget(fs, ddir, &dd))) return e;
     if (!ISDIR(sd.mode) || !ISDIR(dd.mode)) return E(ENOTDIR);
-    if ((e = dir_find(fs, sdir, sname, sl, &ino, &ty)) || (e = iget(fs, ino, &in))) return e;
+    if ((e = dir_find(fs, sdir, sname, sl, &ino, &ty))) return e;
+    if (ino >> VSHIFT) return E(EBUSY);                 /* a mounted volume stays where it is */
+    if ((e = iget(fs, ino, &in))) return e;
     int isd = ISDIR(in.mode), exists = !(e = dir_find(fs, ddir, dname, dl, &dino, &dty));
     if (!exists && e != E(ENOENT)) return e;
+    if (exists && dino >> VSHIFT) return E(EBUSY);
     if (exists && dino == ino) return 0;                /* two names of the same object */
     for (uint64_t p = ddir; isd; ) {                    /* a directory cannot move into itself */
         inode_t pi;
@@ -338,24 +501,33 @@ static int do_rename(siefs_t *fs, uint64_t sdir, const char *sname, uint64_t ddi
     return sdir != ddir ? iput(fs, ddir, pd) : 0;
 }
 
-int siefs_rename(siefs_t *fs, uint64_t sdir, const char *sname, uint64_t ddir, const char *dname)
+int siefs_rename(siefs_t *fs, uint64_t gs, const char *sname, uint64_t gd, const char *dname)
 {
+    uint64_t sdir, ddir;
+    int e;
     BEGIN(fs);
+    PICK(gs, sdir);
+    volx_t *v = fs->cv;
+    PICK(gd, ddir);
+    if (fs->cv != v) return (int)end(fs, E(EXDEV));
+    if ((e = ro(fs, sdir)) || (e = ro(fs, ddir))) return (int)end(fs, e);
     return (int)end(fs, do_rename(fs, sdir, sname, ddir, dname));
 }
 
 /* readdir: "." and "..", then the entries in hash order. The cursor is
  * the position of the next entry: (hash << 8 | index in its item). */
-int siefs_readdir(siefs_t *fs, uint64_t dir, uint64_t *cursor, siefs_dirent_t *de)
+int siefs_readdir(siefs_t *fs, uint64_t g, uint64_t *cursor, siefs_dirent_t *de)
 {
     inode_t d;
     path_t pa;
+    uint64_t dir;
     int e;
     BEGIN(fs);
+    PICK(g, dir);
     if ((e = iget(fs, dir, &d))) return (int)end(fs, e);
     if (!ISDIR(d.mode)) return (int)end(fs, E(ENOTDIR));
     if (*cursor < 2) {
-        de->ino = *cursor ? d.parent : dir;
+        de->ino = *cursor ? ref_dec(fs, d.parent) : G(fs, dir);
         de->type = SIEFS_IFDIR >> 12;
         de->name[0] = '.';
         de->name[1] = *cursor ? '.' : 0;
@@ -363,8 +535,22 @@ int siefs_readdir(siefs_t *fs, uint64_t dir, uint64_t *cursor, siefs_dirent_t *d
         (*cursor)++;
         return (int)end(fs, 1);
     }
+    if (dir == SNAPDIR) {                               /* the snapshots, oldest first */
+        volx_t *best = 0;
+        uint64_t after = *cursor == 2 ? 0 : *cursor - 2;   /* (the last one listed: its id) */
+        for (uint32_t i = 0; i < fs->nvols; i++) {
+            volx_t *v = fs->vols[i];
+            if ((v->v.flags & V_SNAP) && v->v.parent == fs->cv->id && v->id > after && (!best || v->id < best->id)) best = v;
+        }
+        if (!best) return (int)end(fs, 0);
+        de->ino = best->id << VSHIFT | SIEFS_ROOT;
+        de->type = SIEFS_IFDIR >> 12;
+        memcpy(de->name, best->name, strlen(best->name) + 1);
+        *cursor = best->id + 2;
+        return (int)end(fs, 1);
+    }
     uint64_t ch = *cursor == 2 ? 0 : *cursor >> 8, ci = *cursor == 2 ? 0 : *cursor & 0xFF;
-    for (int r = t_seek(fs, &fs->ft, K(dir, T_DIRENT, ch), &pa); ; r = t_next(fs, &pa)) {
+    for (int r = t_seek(fs, FT, K(dir, T_DIRENT, ch), &pa); ; r = t_next(fs, &pa)) {
         if (r <= 0) return (int)end(fs, r);
         skey_t k = pkey(&pa);
         if (k.id != dir || KTYPE(k.off) != T_DIRENT) return (int)end(fs, 0);
@@ -374,6 +560,7 @@ int siefs_readdir(siefs_t *fs, uint64_t dir, uint64_t *cursor, siefs_dirent_t *d
         for (; p + 10 <= n; p += 10 + b[p + 9], idx++) {
             if (h == ch && (uint64_t)idx < ci) continue;
             memcpy(&de->ino, b + p, 8);
+            de->ino = ref_dec(fs, de->ino);
             de->type = b[p + 8];
             memcpy(de->name, b + p + 10, b[p + 9]);
             de->name[b[p + 9]] = 0;
@@ -383,13 +570,52 @@ int siefs_readdir(siefs_t *fs, uint64_t dir, uint64_t *cursor, siefs_dirent_t *d
     }
 }
 
-/* ---- File contents. */
+/* ---- File contents. An extent item, from and to its disk form (see
+ * siefs_int.h). */
+int ext_dec(const void *v, unsigned len, extent_t *x)
+{
+    const uint8_t *b = v;
+    if (len < 16) return E(EIO);
+    memcpy(&x->blk, b, 8); memcpy(&x->n, b + 8, 4); memcpy(&x->flags, b + 12, 4);
+    if (!x->n || x->n > EXT_MAX || ((x->flags & X_ENC) && !(x->flags & X_GEN))) return E(EIO);
+    unsigned p = 16 + 4 * x->n;
+    if (len != p + (x->flags & X_GEN ? 8 : 0) + (x->flags & X_ENC ? 8 + 16 * x->n : 0)) return E(EIO);
+    memcpy(x->csum, b + 16, 4 * x->n);
+    x->gen = 0; x->salt = 0;
+    if (x->flags & X_GEN) { memcpy(&x->gen, b + p, 8); p += 8; }
+    if (x->flags & X_ENC) { memcpy(&x->salt, b + p, 4); memcpy(x->mac, b + p + 8, 16 * x->n); }
+    return 0;
+}
+unsigned ext_enc(const extent_t *x, void *v)
+{
+    uint8_t *b = v;
+    unsigned p = 16 + 4 * x->n;
+    memcpy(b, &x->blk, 8); memcpy(b + 8, &x->n, 4); memcpy(b + 12, &x->flags, 4);
+    memcpy(b + 16, x->csum, 4 * x->n);
+    if (x->flags & X_GEN) { memcpy(b + p, &x->gen, 8); p += 8; }
+    if (x->flags & X_ENC) { memcpy(b + p, &x->salt, 4); memset(b + p + 4, 0, 4); memcpy(b + p + 8, x->mac, 16 * x->n); p += 8 + 16 * x->n; }
+    return p;
+}
+static int ext_store(siefs_t *fs, uint64_t ino, uint64_t at, const extent_t *x, int update)
+{
+    uint8_t b[MAXITEM];
+    unsigned n = ext_enc(x, b);
+    return update ? t_update(fs, FT, K(ino, T_EXTENT, at * BS), b, n) : t_insert(fs, FT, K(ino, T_EXTENT, at * BS), b, n);
+}
+
+/* The last blocks of an extent from block d on (when its head is cut off). */
+static void ext_tail(extent_t *y, const extent_t *x, uint32_t d)
+{
+    *y = *x;
+    y->blk = x->blk + d; y->n = x->n - d;
+    memmove(y->csum, x->csum + d, 4 * y->n);
+    memmove(y->mac, x->mac + d, 16 * y->n);
+}
+
 static int ext_get(path_t *pa, extent_t *x, uint64_t *start)
 {
-    unsigned n = plen(pa);
-    if (n < 16 || n > sizeof *x) return E(EIO);
-    memcpy(x, pval(pa), n);
-    if (!x->n || x->n > EXT_MAX || n != EXT_SIZE(x->n)) return E(EIO);
+    int e = ext_dec(pval(pa), plen(pa), x);
+    if (e) return e;
     *start = (pkey(pa).off & OFFMASK) / BS;
     return 0;
 }
@@ -398,7 +624,7 @@ static int ext_get(path_t *pa, extent_t *x, uint64_t *start)
 static int ext_find(siefs_t *fs, uint64_t ino, uint64_t b, extent_t *x, uint64_t *s)
 {
     path_t pa;
-    int r = t_floor(fs, &fs->ft, K(ino, T_EXTENT, b * BS), &pa);
+    int r = t_floor(fs, FT, K(ino, T_EXTENT, b * BS), &pa);
     if (r <= 0) return r;
     if (pkey(&pa).id != ino || KTYPE(pkey(&pa).off) != T_EXTENT) return 0;
     if ((r = ext_get(&pa, x, s))) return r;
@@ -423,12 +649,14 @@ static int rd_block(siefs_t *fs, uint64_t ino, uint64_t b, uint8_t *dst)
     return rd_ext(fs, &x, (uint32_t)(b - s), 1, dst);
 }
 
-long siefs_read(siefs_t *fs, uint64_t ino, uint64_t off, void *buf, size_t n)
+long siefs_read(siefs_t *fs, uint64_t g, uint64_t off, void *buf, size_t n)
 {
     inode_t in;
     uint8_t *out = buf;
     int e;
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
     if ((e = iget(fs, ino, &in))) return end(fs, e);
     if (ISDIR(in.mode)) return end(fs, E(EISDIR));
     if (off >= in.size) return end(fs, 0);
@@ -436,7 +664,7 @@ long siefs_read(siefs_t *fs, uint64_t ino, uint64_t off, void *buf, size_t n)
     if (in.flags & F_INLINE) {
         uint8_t b[INLINE_MAX];
         memset(b, 0, sizeof b);
-        if ((e = t_get(fs, &fs->ft, K(ino, T_INLINE, 0), b, sizeof b)) < 0) return end(fs, e);
+        if ((e = t_get(fs, FT, K(ino, T_INLINE, 0), b, sizeof b)) < 0) return end(fs, e);
         memcpy(out, b + off, n);
         return end(fs, (long)n);
     }
@@ -472,22 +700,21 @@ static int punch(siefs_t *fs, uint64_t ino, uint64_t b0, uint64_t b1)
         if (r < 0) return r;
         if (!r) {                                       /* in a hole: go to the next extent */
             path_t pa;
-            if ((r = t_seek(fs, &fs->ft, K(ino, T_EXTENT, cur * BS), &pa)) <= 0) return r;
+            if ((r = t_seek(fs, FT, K(ino, T_EXTENT, cur * BS), &pa)) <= 0) return r;
             if (pkey(&pa).id != ino || KTYPE(pkey(&pa).off) != T_EXTENT) return 0;
             if ((r = ext_get(&pa, &x, &s))) return r;
             if (s >= b1) return 0;
         }
         uint64_t o0 = s > b0 ? s : b0, o1 = s + x.n < b1 ? s + x.n : b1;
-        if ((e = t_delete(fs, &fs->ft, K(ino, T_EXTENT, s * BS)))) return e;
-        blk_free(fs, x.blk + (o0 - s), o1 - o0);
+        if ((e = t_delete(fs, FT, K(ino, T_EXTENT, s * BS)))) return e;
+        blk_release(fs, fs->cv->id, x.blk + (o0 - s), o1 - o0, x.gen);
         if (s < o0) {                                   /* keep the head */
             y = x; y.n = (uint32_t)(o0 - s);
-            if ((e = t_insert(fs, &fs->ft, K(ino, T_EXTENT, s * BS), &y, EXT_SIZE(y.n)))) return e;
+            if ((e = ext_store(fs, ino, s, &y, 0))) return e;
         }
         if (s + x.n > o1) {                             /* keep the tail */
-            y.blk = x.blk + (o1 - s); y.n = (uint32_t)(s + x.n - o1); y.flags = x.flags;
-            memcpy(y.csum, x.csum + (o1 - s), 4 * y.n);
-            if ((e = t_insert(fs, &fs->ft, K(ino, T_EXTENT, o1 * BS), &y, EXT_SIZE(y.n)))) return e;
+            ext_tail(&y, &x, (uint32_t)(o1 - s));
+            if ((e = ext_store(fs, ino, o1, &y, 0))) return e;
         }
         cur = o1;
     }
@@ -495,23 +722,23 @@ static int punch(siefs_t *fs, uint64_t ino, uint64_t b0, uint64_t b1)
 }
 
 /* Record that file blocks [b, b+n) are now at disk blocks [blk, blk+n),
- * extending the previous extent when it continues on disk too. */
-static int ext_put(siefs_t *fs, uint64_t ino, uint64_t b, uint64_t blk, uint32_t n, const uint32_t *sums)
+ * written by this transaction, extending the previous extent when it
+ * continues on disk and was written by this transaction too (an extent has
+ * one gen; encrypted ones one salt, so they are never extended). */
+static int ext_put(siefs_t *fs, uint64_t ino, uint64_t b, const extent_t *nx)
 {
     extent_t x;
     uint64_t s;
-    if (b) {
+    if (b && !(nx->flags & X_ENC)) {
         int r = ext_find(fs, ino, b - 1, &x, &s);
         if (r < 0) return r;
-        if (r && s + x.n == b && x.blk + x.n == blk && x.n + n <= EXT_MAX) {
-            memcpy(x.csum + x.n, sums, 4 * n);
-            x.n += n;
-            return t_update(fs, &fs->ft, K(ino, T_EXTENT, s * BS), &x, EXT_SIZE(x.n));
+        if (r && s + x.n == b && x.blk + x.n == nx->blk && x.n + nx->n <= EXT_MAX && x.gen == fs->txn && !(x.flags & X_ENC)) {
+            memcpy(x.csum + x.n, nx->csum, 4 * nx->n);
+            x.n += nx->n;
+            return ext_store(fs, ino, s, &x, 1);
         }
     }
-    x.blk = blk; x.n = n; x.flags = 0;
-    memcpy(x.csum, sums, 4 * n);
-    return t_insert(fs, &fs->ft, K(ino, T_EXTENT, b * BS), &x, EXT_SIZE(n));
+    return ext_store(fs, ino, b, nx, 0);
 }
 
 /* Write file bytes [off, off+n) (src 0: zeros) into new blocks, up to
@@ -523,7 +750,7 @@ static int wblocks(siefs_t *fs, uint64_t ino, uint64_t off, const uint8_t *src, 
     while (b <= last) {
         uint64_t got, want = last - b + 1 < EXT_MAX ? last - b + 1 : EXT_MAX;
         uint64_t at = blk_alloc(fs, want, &got);
-        uint32_t sums[EXT_MAX];
+        extent_t nx = { .blk = at, .n = (uint32_t)got, .flags = X_GEN, .gen = fs->txn };
         int e;
         if (!got) return E(ENOSPC);
         for (uint64_t i = 0; i < got; i++) {
@@ -533,10 +760,10 @@ static int wblocks(siefs_t *fs, uint64_t ino, uint64_t off, const uint8_t *src, 
             if ((c0 > lo || c1 < hi) && (e = rd_block(fs, ino, b + i, d))) return e;
             if (src) memcpy(d + (c0 - lo), src + (c0 - off), c1 - c0);
             else memset(d + (c0 - lo), 0, c1 - c0);
-            sums[i] = siefs_crc32c(0, d, BS);
+            nx.csum[i] = siefs_crc32c(0, d, BS);
         }
         if ((e = dev_write(fs, at, (uint32_t)got, fs->io)) || (e = punch(fs, ino, b, b + got)) ||
-            (e = ext_put(fs, ino, b, at, (uint32_t)got, sums))) return e;
+            (e = ext_put(fs, ino, b, &nx))) return e;
         b += got;
     }
     return 0;
@@ -546,18 +773,21 @@ static int wblocks(siefs_t *fs, uint64_t ino, uint64_t off, const uint8_t *src, 
 static int uninline(siefs_t *fs, uint64_t ino, inode_t *in)
 {
     uint8_t b[INLINE_MAX];
-    int e = t_get(fs, &fs->ft, K(ino, T_INLINE, 0), b, sizeof b);
+    int e = t_get(fs, FT, K(ino, T_INLINE, 0), b, sizeof b);
     if (e < 0 && e != E(ENOENT)) return e;
-    if (e >= 0 && (e = t_delete(fs, &fs->ft, K(ino, T_INLINE, 0)))) return e;
+    if (e >= 0 && (e = t_delete(fs, FT, K(ino, T_INLINE, 0)))) return e;
     in->flags &= ~F_INLINE;
     return in->size ? wblocks(fs, ino, 0, b, (size_t)in->size) : 0;
 }
 
-long siefs_write(siefs_t *fs, uint64_t ino, uint64_t off, const void *buf, size_t n)
+long siefs_write(siefs_t *fs, uint64_t g, uint64_t off, const void *buf, size_t n)
 {
     inode_t in;
     int e;
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
+    { int r_ = ro(fs, ino); if (r_) return end(fs, r_); }
     if ((e = iget(fs, ino, &in))) return end(fs, e);
     if (!ISREG(in.mode)) return end(fs, ISDIR(in.mode) ? E(EISDIR) : E(EINVAL));
     if (!n) return end(fs, 0);
@@ -567,9 +797,9 @@ long siefs_write(siefs_t *fs, uint64_t ino, uint64_t off, const void *buf, size_
     if (size <= INLINE_MAX && (in.flags & F_INLINE || !in.size)) {   /* small: stays in the tree */
         uint8_t b[INLINE_MAX];
         memset(b, 0, sizeof b);
-        if (in.size && (e = t_get(fs, &fs->ft, K(ino, T_INLINE, 0), b, sizeof b)) < 0) return end(fs, e);
+        if (in.size && (e = t_get(fs, FT, K(ino, T_INLINE, 0), b, sizeof b)) < 0) return end(fs, e);
         memcpy(b + off, buf, n);
-        e = t_put(fs, &fs->ft, K(ino, T_INLINE, 0), b, (unsigned)size);
+        e = t_put(fs, FT, K(ino, T_INLINE, 0), b, (unsigned)size);
         in.flags |= F_INLINE;
     } else if (!(in.flags & F_INLINE) || !(e = uninline(fs, ino, &in)))
         e = wblocks(fs, ino, off, buf, n);
@@ -589,13 +819,13 @@ static int do_truncate(siefs_t *fs, uint64_t ino, inode_t *in, uint64_t size)
     if ((e = space_reserve(fs, 4))) return e;
     if (in->flags & F_INLINE) {
         if (size > INLINE_MAX) e = uninline(fs, ino, in);
-        else if (!size) { e = t_delete(fs, &fs->ft, K(ino, T_INLINE, 0)); in->flags &= ~F_INLINE; }
+        else if (!size) { e = t_delete(fs, FT, K(ino, T_INLINE, 0)); in->flags &= ~F_INLINE; }
         else {
             uint8_t b[INLINE_MAX];
             memset(b, 0, sizeof b);
-            if ((e = t_get(fs, &fs->ft, K(ino, T_INLINE, 0), b, sizeof b)) >= 0) {
+            if ((e = t_get(fs, FT, K(ino, T_INLINE, 0), b, sizeof b)) >= 0) {
                 if (size > in->size) memset(b + in->size, 0, size - in->size);
-                e = t_update(fs, &fs->ft, K(ino, T_INLINE, 0), b, (unsigned)size);
+                e = t_update(fs, FT, K(ino, T_INLINE, 0), b, (unsigned)size);
             }
         }
     } else if (size < in->size) {
@@ -609,29 +839,37 @@ static int do_truncate(siefs_t *fs, uint64_t ino, inode_t *in, uint64_t size)
     return iput(fs, ino, in);
 }
 
-int siefs_truncate(siefs_t *fs, uint64_t ino, uint64_t size)
+int siefs_truncate(siefs_t *fs, uint64_t g, uint64_t size)
 {
     inode_t in;
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
+    { int r_ = ro(fs, ino); if (r_) return end(fs, r_); }
     int e = iget(fs, ino, &in);
     return (int)end(fs, e ? e : do_truncate(fs, ino, &in, size));
 }
 
-int siefs_stat(siefs_t *fs, uint64_t ino, siefs_stat_t *st)
+int siefs_stat(siefs_t *fs, uint64_t g, siefs_stat_t *st)
 {
     inode_t in;
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
     int e = iget(fs, ino, &in);
-    if (!e) *st = (siefs_stat_t){ ino, in.size, (in.flags & F_INLINE) ? 0 : (in.size + BS - 1) / BS, in.parent,
+    if (!e) *st = (siefs_stat_t){ G(fs, ino), in.size, (in.flags & F_INLINE) ? 0 : (in.size + BS - 1) / BS, ref_dec(fs, in.parent),
                                   in.mode, in.uid, in.gid, in.nlink, in.atime, in.mtime, in.ctime, in.btime };
     return (int)end(fs, e);
 }
 
-int siefs_setattr(siefs_t *fs, uint64_t ino, const siefs_stat_t *st, unsigned mask)
+int siefs_setattr(siefs_t *fs, uint64_t g, const siefs_stat_t *st, unsigned mask)
 {
     inode_t in;
     int e;
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
+    { int r_ = ro(fs, ino); if (r_) return end(fs, r_); }
     if ((e = iget(fs, ino, &in))) return (int)end(fs, e);
     if ((mask & SIEFS_SET_SIZE) && (e = do_truncate(fs, ino, &in, st->size))) return (int)end(fs, e);
     if ((e = space_reserve(fs, 2))) return (int)end(fs, e);
@@ -669,26 +907,28 @@ static void unindex(siefs_t *fs, uint64_t ino, const uint8_t *b, int n)
 {
     for (int p = 0; p + 3 <= n; ) {
         int l = b[p], v = b[p + 1] | b[p + 2] << 8;
-        if (v <= 255) t_delete(fs, &fs->ft, K(xindex_id((const char *)b + p + 3, l, b + p + 3 + l, v), T_XINDEX, ino));
+        if (v <= 255) t_delete(fs, FT, K(xindex_id((const char *)b + p + 3, l, b + p + 3 + l, v), T_XINDEX, ino));
         p += 3 + l + v;
     }
 }
 
 static int xget(siefs_t *fs, uint64_t ino, const char *name, size_t nl, uint8_t *b, int *n, int *pos, int *vl)
 {
-    *n = t_get(fs, &fs->ft, K(ino, T_XATTR, name_hash(name, nl)), b, MAXITEM);
+    *n = t_get(fs, FT, K(ino, T_XATTR, name_hash(name, nl)), b, MAXITEM);
     if (*n == E(ENOENT)) *n = 0;
     if (*n < 0) return *n;
     return xscan(b, *n, name, nl, pos, vl) ? 0 : E(ENODATA);
 }
 
-long siefs_getxattr(siefs_t *fs, uint64_t ino, const char *name, void *buf, size_t size)
+long siefs_getxattr(siefs_t *fs, uint64_t g, const char *name, void *buf, size_t size)
 {
     uint8_t b[MAXITEM];
     size_t nl = strlen(name);
     int n, pos, vl, e;
     inode_t in;
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
     if (!nl || nl > 255) return end(fs, E(EINVAL));
     if ((e = iget(fs, ino, &in)) || (e = xget(fs, ino, name, nl, b, &n, &pos, &vl))) return end(fs, e);
     if (!size) return end(fs, vl);
@@ -714,7 +954,7 @@ static int xchange(siefs_t *fs, uint64_t ino, const char *name, const void *val,
     if (after > MAXITEM) return E(E2BIG);
     if ((e = space_reserve(fs, 4))) return e;
     if (have) {                                         /* take the old one out */
-        if (vl <= 255) t_delete(fs, &fs->ft, K(xindex_id(name, nl, b + pos + 3 + nl, vl), T_XINDEX, ino));
+        if (vl <= 255) t_delete(fs, FT, K(xindex_id(name, nl, b + pos + 3 + nl, vl), T_XINDEX, ino));
         memmove(b + pos, b + pos + 3 + nl + vl, n - pos - 3 - nl - vl);
         n -= 3 + (int)nl + vl;
     }
@@ -723,34 +963,42 @@ static int xchange(siefs_t *fs, uint64_t ino, const char *name, const void *val,
         memcpy(b + n + 3, name, nl);
         if (len) memcpy(b + n + 3 + nl, val, len);
         n += 3 + (int)(nl + len);
-        if (len <= 255 && (e = t_put(fs, &fs->ft, K(xindex_id(name, nl, val, len), T_XINDEX, ino), b, 0))) return e;
+        if (len <= 255 && (e = t_put(fs, FT, K(xindex_id(name, nl, val, len), T_XINDEX, ino), b, 0))) return e;
     }
-    if ((e = n ? t_put(fs, &fs->ft, k, b, n) : t_delete(fs, &fs->ft, k))) return e;
+    if ((e = n ? t_put(fs, FT, k, b, n) : t_delete(fs, FT, k))) return e;
     in.ctime = fs->env.now();
     return iput(fs, ino, &in);
 }
 
-int siefs_setxattr(siefs_t *fs, uint64_t ino, const char *name, const void *val, size_t len)
+int siefs_setxattr(siefs_t *fs, uint64_t g, const char *name, const void *val, size_t len)
 {
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
+    { int r_ = ro(fs, ino); if (r_) return end(fs, r_); }
     return (int)end(fs, xchange(fs, ino, name, val, len, 0));
 }
 
-int siefs_removexattr(siefs_t *fs, uint64_t ino, const char *name)
+int siefs_removexattr(siefs_t *fs, uint64_t g, const char *name)
 {
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
+    { int r_ = ro(fs, ino); if (r_) return end(fs, r_); }
     return (int)end(fs, xchange(fs, ino, name, 0, 0, 1));
 }
 
-long siefs_listxattr(siefs_t *fs, uint64_t ino, char *buf, size_t size)
+long siefs_listxattr(siefs_t *fs, uint64_t g, char *buf, size_t size)
 {
     path_t pa;
     long total = 0;
     inode_t in;
     int r;
     BEGIN(fs);
+    uint64_t ino;
+    PICK(g, ino);
     if ((r = iget(fs, ino, &in))) return end(fs, r);
-    for (r = t_seek(fs, &fs->ft, K(ino, T_XATTR, 0), &pa); r > 0; r = t_next(fs, &pa)) {
+    for (r = t_seek(fs, FT, K(ino, T_XATTR, 0), &pa); r > 0; r = t_next(fs, &pa)) {
         if (pkey(&pa).id != ino || KTYPE(pkey(&pa).off) != T_XATTR) break;
         uint8_t *b = pval(&pa);
         int n = (int)plen(&pa);
@@ -766,6 +1014,8 @@ long siefs_listxattr(siefs_t *fs, uint64_t ino, char *buf, size_t size)
     return end(fs, r < 0 ? r : total);
 }
 
+/* Every volume that is not a snapshot and is open, in id order: the
+ * cursor is (volume << 48 | the next object id). */
 int siefs_find(siefs_t *fs, const char *name, const void *val, size_t len, uint64_t *cursor, uint64_t *ino)
 {
     uint8_t b[MAXITEM];
@@ -774,16 +1024,27 @@ int siefs_find(siefs_t *fs, const char *name, const void *val, size_t len, uint6
     int r;
     BEGIN(fs);
     if (!nl || nl > 255 || len > 255) return (int)end(fs, E(EINVAL));
-    uint64_t id = xindex_id(name, nl, val, len);
-    for (uint64_t at = *cursor; ; at++) {
-        if ((r = t_seek(fs, &fs->ft, K(id, T_XINDEX, at), &pa)) <= 0) return (int)end(fs, r);
-        if (pkey(&pa).id != id || KTYPE(pkey(&pa).off) != T_XINDEX) return (int)end(fs, 0);
-        at = pkey(&pa).off & OFFMASK;
-        int n, pos, vl;                                 /* the hash matched: check the real value */
-        if (!xget(fs, at, name, nl, b, &n, &pos, &vl) && (size_t)vl == len && !memcmp(b + pos + 3 + nl, val, len)) {
-            *ino = at;
-            *cursor = at + 1;
-            return (int)end(fs, 1);
+    uint64_t id = xindex_id(name, nl, val, len), vid = VOLOF(*cursor), at = *cursor & LMASK;
+    for (;;) {
+        volx_t *v = 0;                                  /* the volume vid, or the next one */
+        for (uint32_t i = 0; i < fs->nvols; i++) {
+            volx_t *w = fs->vols[i];
+            if (w->id >= vid && !(w->v.flags & V_SNAP) && !w->locked && (!v || w->id < v->id)) v = w;
         }
+        if (!v) return (int)end(fs, 0);
+        if (v->id != vid) { vid = v->id; at = 0; }
+        fs->cv = v;
+        for (;; at++) {
+            if ((r = t_seek(fs, FT, K(id, T_XINDEX, at), &pa)) < 0) return (int)end(fs, r);
+            if (!r || pkey(&pa).id != id || KTYPE(pkey(&pa).off) != T_XINDEX) break;
+            at = pkey(&pa).off & OFFMASK;
+            int n, pos, vl;                             /* the hash matched: check the real value */
+            if (!xget(fs, at, name, nl, b, &n, &pos, &vl) && (size_t)vl == len && !memcmp(b + pos + 3 + nl, val, len)) {
+                *ino = G(fs, at);
+                *cursor = vid << VSHIFT | (at + 1);
+                return (int)end(fs, 1);
+            }
+        }
+        vid++; at = 0;
     }
 }

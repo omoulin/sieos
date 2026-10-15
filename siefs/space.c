@@ -19,6 +19,14 @@
  * commit t + 1, so the two superblocks on disk always describe two intact
  * states (the newest, and the one before as a fallback).
  *
+ * Snapshots share blocks with their volume. Every block knows the commit
+ * that wrote it (its pointer's gen, an extent's gen), so when a volume
+ * lets go of a block, blk_release can tell: written after the volume's
+ * newest snapshot, it is the volume's alone and is freed; written before,
+ * that snapshot still uses it, and it goes on the volume's dead list
+ * instead (as in ZFS). Deleting a snapshot sorts its successor's dead list
+ * (vol.c): blocks only it used are freed, the others stay listed.
+ *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "siefs_int.h"
@@ -98,6 +106,60 @@ void blk_free(siefs_t *fs, uint64_t b, uint64_t n)
     }
 }
 
+/* A tree (volume vid; 0: the root tree) no longer uses blocks [b, b+n),
+ * written by commit gen. */
+void blk_release(siefs_t *fs, uint64_t vid, uint64_t b, uint64_t n, uint64_t gen)
+{
+    volx_t *v = vid ? vol_get(fs, vid) : 0;
+    if (!v || !v->v.gen || gen > v->v.gen) { blk_free(fs, b, n); return; }
+    if (fs->ndead == fs->deadcap) {                     /* a snapshot uses them: the dead list */
+        size_t cap = fs->deadcap ? fs->deadcap * 2 : 64;
+        dead_t *d = fs->env.alloc(cap * sizeof *d);
+        if (!d) { fs->broken = 1; return; }
+        if (fs->ndead) memcpy(d, fs->dead, fs->ndead * sizeof *d);
+        fs->env.free(fs->dead);
+        fs->dead = d; fs->deadcap = cap;
+    }
+    fs->dead[fs->ndead++] = (dead_t){ v->v.dl, b, n, gen };
+    fs->changed = 1;
+}
+
+/* ---- The volumes in memory, by id. */
+volx_t *vol_get(siefs_t *fs, uint64_t id)
+{
+    for (uint32_t i = 0; i < fs->nvols; i++) if (fs->vols[i]->id == id) return fs->vols[i];
+    return 0;
+}
+volx_t *vol_add(siefs_t *fs, uint64_t id, const vol_t *v)
+{
+    volx_t *x;
+    if (fs->nvols == fs->vcap) {
+        uint32_t cap = fs->vcap ? fs->vcap * 2 : 8;
+        volx_t **a = fs->env.alloc(cap * sizeof *a);
+        if (!a) return 0;
+        if (fs->nvols) memcpy(a, fs->vols, fs->nvols * sizeof *a);
+        fs->env.free(fs->vols);
+        fs->vols = a; fs->vcap = cap;
+    }
+    if (!(x = fs->env.alloc(sizeof *x))) return 0;
+    memset(x, 0, sizeof *x);
+    x->id = id; x->v = *v;
+    x->ft = (tree_t){ v->root, id };
+    x->locked = (v->flags & V_ENC) != 0;
+    fs->vols[fs->nvols++] = x;
+    if (id >= fs->next_vid) fs->next_vid = id + 1;
+    if (v->dl >= fs->next_vid) fs->next_vid = v->dl + 1;
+    return x;
+}
+void vol_drop(siefs_t *fs, volx_t *v)
+{
+    for (uint32_t i = 0; i < fs->nvols; i++)
+        if (fs->vols[i] == v) { fs->vols[i] = fs->vols[--fs->nvols]; break; }
+    if (fs->cv == v) fs->cv = vol_get(fs, 1);
+    if (v->key) { memset(v->key, 0, 64); fs->env.free(v->key); }
+    fs->env.free(v);
+}
+
 /* A block for a node being written by the commit: from the run reserved
  * at its start (so nodes land together), else wherever. */
 uint64_t commit_block(siefs_t *fs)
@@ -166,10 +228,25 @@ int commit(siefs_t *fs, int force)
     if (!force && !fs->changed) return 0;
     fs->pre = blk_alloc(fs, fs->ndirty + 8, &got);
     fs->pren = got;
-    if ((e = t_flush(fs, &fs->ft.root))) goto fail;
-    fs->vol.root = fs->ft.root;
-    if ((e = t_wflush(fs)) || (e = t_update(fs, &fs->rt, K(1, T_VOLUME, 0), &fs->vol, sizeof fs->vol)) ||
-        (e = t_flush(fs, &fs->rt.root)) || (e = t_wflush(fs))) goto fail;
+    for (uint32_t i = 0; i < fs->nvols; i++) {          /* every volume's tree, then its record */
+        volx_t *v = fs->vols[i];
+        if (!(v->ft.root.blk & TMP) && !v->dirty) continue;
+        if ((e = t_flush(fs, &v->ft.root))) goto fail;
+        v->v.root = v->ft.root;
+        v->dirty = 1;
+    }
+    if ((e = t_wflush(fs))) goto fail;
+    for (size_t i = 0; i < fs->ndead; i++) {            /* blocks a snapshot keeps: on its dead list */
+        uint64_t d[2] = { fs->dead[i].n, fs->dead[i].gen };
+        if ((e = t_insert(fs, &fs->rt, K(fs->dead[i].dl, T_DEAD, fs->dead[i].b), d, sizeof d))) goto fail;
+    }
+    fs->ndead = 0;
+    for (uint32_t i = 0; i < fs->nvols; i++) {
+        volx_t *v = fs->vols[i];
+        if (v->dirty && (e = t_put(fs, &fs->rt, K(v->id, T_VOLUME, 0), &v->v, sizeof v->v))) goto fail;
+        v->dirty = 0;
+    }
+    if ((e = t_flush(fs, &fs->rt.root)) || (e = t_wflush(fs))) goto fail;
     if (fs->pren) { blk_free(fs, fs->pre, fs->pren); fs->pren = 0; }
     if ((e = dev_flush(fs)) || (e = write_bitmap(fs, s)) || (e = dev_flush(fs))) goto fail;
 
@@ -209,8 +286,10 @@ static void fs_close(siefs_t *fs)
     void (*fr)(void *) = fs->env.free;
     if (fs->dirty) nodes_free(fs);
     void *p[] = { fs->map, fs->busy, fs->fresh, fs->bmdirty[0], fs->bmdirty[1], fs->bmsum[0], fs->bmsum[1],
-                  fs->pend[0].r, fs->pend[1].r, fs->fruns.r, fs->dirty, fs->hash, fs->io };
+                  fs->pend[0].r, fs->pend[1].r, fs->fruns.r, fs->dirty, fs->hash, fs->io, fs->dead };
     for (size_t i = 0; i < sizeof p / sizeof *p; i++) if (p[i]) fr(p[i]);
+    while (fs->nvols) vol_drop(fs, fs->vols[0]);
+    if (fs->vols) fr(fs->vols);
     fr(fs);
 }
 
@@ -241,7 +320,8 @@ static int fs_open(const siefs_env_t *env, const sb_t *sb, siefs_t **out)
     fs->hash = zalloc(fs, sizeof(node_t *) << fs->hbits);
     fs->io = zalloc(fs, EXT_MAX * BS);
     fs->hint = sb->data_start;
-    fs->rt.id = 0; fs->ft.id = 1;
+    fs->rt.id = 0;
+    fs->next_vid = 2;
     if (!fs->map || !fs->busy || !fs->fresh || !fs->bmdirty[0] || !fs->bmdirty[1] || !fs->bmsum[0] ||
         !fs->bmsum[1] || !fs->hash || !fs->io) { fs_close(fs); return E(ENOMEM); }
     *out = fs;
@@ -284,11 +364,12 @@ int siefs_format(const siefs_env_t *env, const char *label)
 
     int64_t t = env->now();
     inode_t root = { .mode = SIEFS_IFDIR | 0755, .nlink = 2, .parent = SIEFS_ROOT, .atime = t, .mtime = t, .ctime = t, .btime = t };
-    fs->vol = (vol_t){ .next_id = 16, .inodes = 1 };
-    if (!(e = t_new_root(fs, &fs->rt)) && !(e = t_new_root(fs, &fs->ft)) &&
-        !(e = t_insert(fs, &fs->ft, K(SIEFS_ROOT, T_INODE, 0), &root, sizeof root)) &&
-        !(e = t_insert(fs, &fs->rt, K(1, T_VOLUME, 0), &fs->vol, sizeof fs->vol)) &&
-        !(e = commit(fs, 1)))
+    vol_t v1 = { .next_id = 16, .inodes = 1, .created = t };
+    volx_t *v = vol_add(fs, 1, &v1);
+    if (!v) e = E(ENOMEM);
+    else if (!(e = t_new_root(fs, &fs->rt)) && !(e = t_new_root(fs, &v->ft)) &&
+        !(e = t_insert(fs, &v->ft, K(SIEFS_ROOT, T_INODE, 0), &root, sizeof root)) &&
+        !(v->dirty = 1, e = commit(fs, 1)))
         e = commit(fs, 1);
     fs_close(fs);
     return e;
@@ -327,11 +408,27 @@ static int load(siefs_t *fs)
     memset(fs->bmdirty[!s], 0xFF, (fs->sb.nbm + 7) / 8);   /* the other copy: rewrite it entirely */
     fs->rt.root = fs->sb.root;
     fs->txn = fs->sb.seq + 1;
-    if ((e = t_get(fs, &fs->rt, K(1, T_VOLUME, 0), &fs->vol, sizeof fs->vol)) < 0) return e;
-    if (e != sizeof fs->vol) return E(EIO);
-    fs->ft.root = fs->vol.root;
+    path_t pa;                                          /* every volume (and its name) */
+    for (int r = t_seek(fs, &fs->rt, K(0, 0, 0), &pa); ; r = t_next(fs, &pa)) {
+        if (r < 0) return r;
+        if (!r) break;
+        skey_t k = pkey(&pa);
+        volx_t *v;
+        if (KTYPE(k.off) == T_VOLUME) {
+            if (plen(&pa) != sizeof(vol_t)) return E(EIO);
+            vol_t rec;
+            memcpy(&rec, pval(&pa), sizeof rec);
+            if (!(v = vol_add(fs, k.id, &rec))) return E(ENOMEM);
+        } else if (KTYPE(k.off) == T_VOLNAME && (v = vol_get(fs, k.id))) {
+            unsigned l = plen(&pa) < sizeof v->name - 1 ? plen(&pa) : sizeof v->name - 1;
+            memcpy(v->name, pval(&pa), l); v->name[l] = 0;
+        } else if (KTYPE(k.off) == T_DEAD && k.id >= fs->next_vid) fs->next_vid = k.id + 1;
+    }
+    volx_t *v1 = vol_get(fs, 1);
+    if (!v1) return E(EIO);
+    fs->cv = v1;
     node_t *n;
-    return t_get_node(fs, &fs->ft.root, &n);
+    return t_get_node(fs, &v1->ft.root, &n);
 }
 
 /* Mount: of the two superblocks, use the newest valid one whose state
@@ -376,7 +473,8 @@ int siefs_statfs(siefs_t *fs, siefs_statfs_t *st)
     st->blocks = fs->sb.nblocks;
     st->free = fs->nfree;
     st->pending = fs->npend;
-    st->inodes = fs->vol.inodes;
+    st->inodes = 0;
+    for (uint32_t i = 0; i < fs->nvols; i++) if (!(fs->vols[i]->v.flags & V_SNAP)) st->inodes += fs->vols[i]->v.inodes;
     st->commits = fs->sb.seq;
     memcpy(st->label, fs->sb.label, sizeof st->label);
     st->label[31] = 0;

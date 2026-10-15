@@ -34,6 +34,7 @@
 enum { SIEFS_EPERM = 1, SIEFS_ENOENT = 2, SIEFS_EIO = 5, SIEFS_E2BIG = 7, SIEFS_EACCES = 13,
        SIEFS_ENOMEM = 12, SIEFS_EEXIST = 17, SIEFS_EXDEV = 18, SIEFS_ENOTDIR = 20,
        SIEFS_EISDIR = 21, SIEFS_EINVAL = 22, SIEFS_EFBIG = 27, SIEFS_ENOSPC = 28,
+       SIEFS_EROFS = 30, SIEFS_EBUSY = 16,
        SIEFS_EMLINK = 31, SIEFS_ERANGE = 34, SIEFS_ENAMETOOLONG = 36, SIEFS_ENOTEMPTY = 39,
        SIEFS_ENODATA = 61 };
 
@@ -115,6 +116,29 @@ long siefs_listxattr(siefs_t *fs, uint64_t ino, char *buf, size_t size);  /* "a\
 int  siefs_find(siefs_t *fs, const char *name, const void *val, size_t len, uint64_t *cursor, uint64_t *ino); /* 1, or 0 at the end */
 
 int  siefs_statfs(siefs_t *fs, siefs_statfs_t *st);
+
+/* Volumes. "/" is volume 1; another volume is mounted at a directory
+ * entry of its own (siefs_mkvol), e.g. a user's home. An object's number
+ * says which volume it is in; rename and link do not cross volumes. */
+int  siefs_mkvol(siefs_t *fs, uint64_t dir, const char *name, uint32_t mode, uint32_t uid, uint32_t gid, uint64_t *ino);
+int  siefs_rmvol(siefs_t *fs, uint64_t dir, const char *name);   /* empty, without snapshots */
+
+/* Snapshots: a read-only picture of a whole volume (the one object ino is
+ * in), sharing its blocks, so taking one costs a few blocks. Each volume's
+ * root has a hidden ".snapshots" directory listing them by name. Restore
+ * makes the volume what the snapshot shows (newer snapshots are deleted). */
+typedef struct {
+    char name[64];
+    uint64_t ino;                           /* the snapshot's root directory */
+    int64_t created;                        /* ns */
+    uint64_t commit;
+} siefs_snap_t;
+int  siefs_snapshot(siefs_t *fs, uint64_t ino, const char *name);
+int  siefs_snapshot_delete(siefs_t *fs, uint64_t ino, const char *name);
+int  siefs_snapshot_restore(siefs_t *fs, uint64_t ino, const char *name);
+int  siefs_snapshot_list(siefs_t *fs, uint64_t ino, uint64_t *cursor, siefs_snap_t *s);   /* 1, or 0 at the end; oldest first */
+int  siefs_volume_root(siefs_t *fs, uint64_t ino, uint64_t *root);   /* the root of ino's volume (its head's, for a snapshot) */
+int  siefs_volume_next(siefs_t *fs, uint64_t *cursor, uint64_t *root);   /* every open volume but snapshots: 1, or 0 at the end */
 
 /* Check everything: checksums, tree order, free space, links, attribute
  * index. data != 0: also read and check every data block. Returns the

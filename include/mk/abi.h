@@ -122,7 +122,7 @@ typedef struct { uint64_t pa, size; uint32_t width, height, pitch, format; } mk_
 /* Errors (the POSIX numbers, returned negated). */
 enum { EPERM = 1, ENOENT = 2, ESRCH = 3, EIO = 5, EBADF = 9, ECHILD = 10, EAGAIN = 11, ENOMEM = 12, EACCES = 13,
        EFAULT = 14, EBUSY = 16, EEXIST = 17, ENOTDIR = 20, EISDIR = 21, EINVAL = 22, EMFILE = 24,
-       ENOSPC = 28, EPIPE = 32, ENAMETOOLONG = 36, ENOSYS = 38, ENOTEMPTY = 39, ELOOP = 40 };
+       EXDEV = 18, ENOSPC = 28, EROFS = 30, EPIPE = 32, ENAMETOOLONG = 36, ENOSYS = 38, ENOTEMPTY = 39, ELOOP = 40 };
 
 /*
  * A message. Small values travel in w[]; larger data is copied by the

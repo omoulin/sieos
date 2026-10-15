@@ -101,6 +101,11 @@ What a window can be:
   (or Backspace) goes to the parent folder; the path beside it is a link
   a part at a time (`/ > home > alice`: a click on `home` goes there). An
   empty folder says so in the middle. Only what you may read is shown.
+  *Snapshots* (at the right) opens the hidden `.snapshots` folder of the
+  volume you are in ([siefs.md](siefs.md#snapshots)): one folder per
+  snapshot, the hourly `auto-...` ones and those taken with `snap`, with
+  everything as it was then, read only (a file opens in the editor read
+  only); `snap restore NAME` takes the whole volume back to one.
 - **The assistant** (`panel.c`). A conversation with `sia`, shown as it is
   written: your questions on a lighter band marked *you*, sia's answers
   beside a line in the gutter, the model at the top after a dot (lit when

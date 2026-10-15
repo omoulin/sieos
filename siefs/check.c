@@ -1,8 +1,8 @@
 /*
  * check.c - siefs_check: verify a whole SieFS volume.
  *
- * It walks both trees from the superblock down. Reading a node verifies
- * its checksum; on top of that it checks:
+ * It walks the root tree and every volume's tree from the superblock
+ * down. Reading a node verifies its checksum; on top of that it checks:
  *   - every node: right tree, right level, keys in order, items inside the
  *     block, entry keys equal to their child's first key;
  *   - every block is used once, and the bitmap says "in use" exactly for
@@ -12,6 +12,11 @@
  *     size, every name pointing at an existing object;
  *   - the attribute index matches the attributes, both ways;
  *   - with data != 0, every file block against its checksum.
+ * Snapshots share blocks with their volume: they are walked last, only
+ * for the blocks they reach (a block reached already is shared, and so is
+ * everything under it). Every dead-list block must be reached by one. An
+ * encrypted volume without its key cannot be walked: then leaks are not
+ * looked for (a note says so).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -39,6 +44,7 @@ typedef struct {
     char msg[200];
     size_t mlen;
     uint8_t *blk;                   /* one block, for data checks */
+    int shared;                     /* walking a snapshot: blocks may be reached already */
 } ck_t;
 
 static void mput(void *c, char ch) { ck_t *k = c; if (k->mlen < sizeof k->msg - 1) k->msg[k->mlen++] = ch; }
@@ -70,7 +76,7 @@ static void use(ck_t *c, uint64_t b, uint64_t n, const char *what)
 {
     for (uint64_t i = b; i < b + n; i++) {
         if (i < c->fs->sb.data_start || i >= c->fs->sb.nblocks) { bad(c, "%s block %lu outside the data area", what, i); continue; }
-        if (bit(c->reach, i)) bad(c, "%s block %lu is used twice", what, i);
+        if (bit(c->reach, i) && !c->shared) bad(c, "%s block %lu is used twice", what, i);
         c->reach[i >> 3] |= 1 << (i & 7);
     }
 }
@@ -87,7 +93,7 @@ static void item(ck_t *c, skey_t k, const uint8_t *v, unsigned len)
         uint8_t b[MAXITEM];
         int n, found = 0;
         path_t pa;
-        for (int r = t_seek(fs, &fs->ft, K(off, T_XATTR, 0), &pa); r > 0 && !found; r = t_next(fs, &pa)) {
+        for (int r = t_seek(fs, &fs->cv->ft, K(off, T_XATTR, 0), &pa); r > 0 && !found; r = t_next(fs, &pa)) {
             if (pkey(&pa).id != off || KTYPE(pkey(&pa).off) != T_XATTR) break;
             n = (int)plen(&pa);
             memcpy(b, pval(&pa), n);
@@ -116,9 +122,8 @@ static void item(ck_t *c, skey_t k, const uint8_t *v, unsigned len)
         break;
     case T_EXTENT: {
         extent_t x;
-        if (len < 16 || len > sizeof x) { bad(c, "object %lu: bad extent item", k.id); return; }
-        memcpy(&x, v, len);
-        if (!x.n || x.n > EXT_MAX || len != EXT_SIZE(x.n) || off % BS) { bad(c, "object %lu: bad extent at %lu", k.id, off); return; }
+        if (ext_dec(v, len, &x) || off % BS) { bad(c, "object %lu: bad extent at %lu", k.id, off); return; }
+        if (x.gen >= fs->txn) bad(c, "object %lu: extent from commit %lu, after the last one", k.id, x.gen);
         uint64_t s = off / BS;
         if (!o->seen || (o->flags & F_INLINE)) bad(c, "object %lu: unexpected extent", k.id);
         if (s < o->end) bad(c, "object %lu: extents overlap at block %lu", k.id, s);
@@ -137,6 +142,13 @@ static void item(ck_t *c, skey_t k, const uint8_t *v, unsigned len)
             if (p + 10 > len || p + 10 + v[p + 9] > len || !v[p + 9]) { bad(c, "directory %lu: damaged entry list", k.id); break; }
             memcpy(&ino, v + p, 8);
             if (name_hash((const char *)v + p + 10, v[p + 9]) != off) bad(c, "directory %lu: a name filed under the wrong hash", k.id);
+            if (ino >> VSHIFT) {                        /* another volume mounted here: checked on its own */
+                if (v[p + 8] != SIEFS_IFDIR >> 12 || !vol_get(fs, VOLOF(ino)) || (ino & LMASK) != SIEFS_ROOT)
+                    bad(c, "directory %lu: a mount entry for a volume that does not exist", k.id);
+                else obj(c, k.id)->subdirs++;
+                p += 10 + v[p + 9];
+                continue;
+            }
             obj_t *t = obj(c, ino);
             if (!t) { bad(c, "too many objects to check"); return; }
             t->links++;
@@ -152,7 +164,7 @@ static void item(ck_t *c, skey_t k, const uint8_t *v, unsigned len)
             if (name_hash((const char *)v + p + 3, nl) != off) bad(c, "object %lu: an attribute filed under the wrong hash", k.id);
             if (vl <= 255) {
                 uint8_t dummy;
-                if (t_get(fs, &fs->ft, K(xindex_id((const char *)v + p + 3, nl, v + p + 3 + nl, vl), T_XINDEX, k.id), &dummy, 0) < 0)
+                if (t_get(fs, &fs->cv->ft, K(xindex_id((const char *)v + p + 3, nl, v + p + 3 + nl, vl), T_XINDEX, k.id), &dummy, 0) < 0)
                     bad(c, "object %lu: attribute missing from the index", k.id);
             }
             p += 3 + nl + vl;
@@ -170,6 +182,7 @@ static void walk(ck_t *c, uint64_t tree, const bptr_t *p, int level, const skey_
 {
     siefs_t *fs = c->fs;
     node_t *cn;
+    if (c->shared && !(p->blk & TMP) && p->blk < fs->sb.nblocks && bit(c->reach, p->blk)) return;   /* shared with its volume */
     if (t_get_node(fs, p, &cn)) { bad(c, "tree %lu: node at block %lu unreadable or damaged", tree, p->blk); return; }
     node_t *n = fs->env.alloc(sizeof *n);
     if (!n) { bad(c, "out of memory"); return; }
@@ -190,18 +203,29 @@ static void walk(ck_t *c, uint64_t tree, const bptr_t *p, int level, const skey_
         if (h->level) { walk(c, tree, &IE(n, i)->p, h->level - 1, &IE(n, i)->k, i + 1 < cnt ? &IE(n, i + 1)->k : limit); continue; }
         litem_t *it = LI(n, i);
         if (it->off < h->dstart || it->off + it->len > BS || it->len > MAXITEM) { bad(c, "tree %lu: node %lu: item %d (%u bytes at %u, data from %u) outside the block", tree, p->blk, i, it->len, it->off, h->dstart); continue; }
-        if (tree == 1) item(c, k, n->d + it->off, it->len);
-        else if (KTYPE(k.off) != T_VOLUME || it->len != sizeof(vol_t)) bad(c, "root tree: unexpected item");
+        if (c->shared) {                                /* a snapshot: just the blocks */
+            extent_t x;
+            if (KTYPE(k.off) == T_EXTENT && !(k.id & IDX_BIT) && !ext_dec(n->d + it->off, it->len, &x)) use(c, x.blk, x.n, "data");
+        } else if (tree) item(c, k, n->d + it->off, it->len);
+        else {
+            int ty = KTYPE(k.off);
+            if (!(ty == T_VOLUME && it->len == sizeof(vol_t)) && !(ty == T_VOLNAME && it->len && it->len < 64) &&
+                !(ty == T_DEAD && it->len == 16) && ty != T_VOLKEY) bad(c, "root tree: unexpected item");
+        }
     }
     fs->env.free(n);
 }
 
+static void objects(ck_t *c, volx_t *v);
 long siefs_check(siefs_t *fs, int data, void (*report)(void *, const char *), void *ctx)
 {
     ck_t c = { .fs = fs, .data = data, .report = report, .ctx = ctx };
-    uint64_t nb = fs->sb.nblocks;
+    uint64_t nb = fs->sb.nblocks, most = 0;
+    volx_t *cv = fs->cv;
+    int locked = 0;
+    for (uint32_t i = 0; i < fs->nvols; i++) if (fs->vols[i]->v.inodes > most) most = fs->vols[i]->v.inodes;
     c.cap = 1024;
-    while (c.cap < 4 * (fs->vol.inodes + 16)) c.cap *= 2;
+    while (c.cap < 4 * (most + 16)) c.cap *= 2;
     c.reach = fs->env.alloc(fs->sb.nbm * BS);
     c.tab = fs->env.alloc(c.cap * sizeof *c.tab);
     c.blk = fs->env.alloc(BS);
@@ -213,37 +237,71 @@ long siefs_check(siefs_t *fs, int data, void (*report)(void *, const char *), vo
     if (fs->ndirty && report) report(ctx, "note: changes not committed yet: checking memory, not the disk");
 
     walk(&c, 0, &fs->rt.root, -1, 0, 0);
-    walk(&c, 1, &fs->ft.root, -1, 0, 0);
+    for (uint32_t i = 0; i < fs->nvols; i++) {          /* each volume: its tree and its objects */
+        volx_t *v = fs->vols[i];
+        if (v->v.flags & V_SNAP) continue;
+        if (v->locked) { locked = 1; if (report) report(ctx, "note: an encrypted volume is locked: its blocks are not checked"); continue; }
+        fs->cv = v;
+        memset(c.tab, 0, c.cap * sizeof *c.tab);
+        c.nobj = c.maxino = 0;
+        walk(&c, v->id, &v->ft.root, -1, 0, 0);
+        objects(&c, v);
+    }
+    c.shared = 1;                                       /* then the snapshots: what they share is reached */
+    for (uint32_t i = 0; i < fs->nvols; i++) {
+        volx_t *v = fs->vols[i];
+        if (!(v->v.flags & V_SNAP) || v->locked) continue;
+        if (!vol_get(fs, v->v.parent)) bad(&c, "snapshot %lu of a volume that does not exist", v->id);
+        fs->cv = v;
+        walk(&c, v->v.parent, &v->ft.root, -1, 0, 0);
+    }
+    c.shared = 0;
+    path_t pa;                                          /* dead lists: blocks a snapshot keeps */
+    for (int r = t_seek(fs, &fs->rt, K(0, 0, 0), &pa); r > 0; r = t_next(fs, &pa)) {
+        skey_t k = pkey(&pa);
+        uint64_t d[2];
+        if (KTYPE(k.off) != T_DEAD) continue;
+        memcpy(d, pval(&pa), sizeof d);
+        for (uint64_t b = k.off & OFFMASK; !locked && b < (k.off & OFFMASK) + d[0]; b++)
+            if (b >= nb || !bit(c.reach, b)) { bad(&c, "dead list %lu: block %lu is in no snapshot", k.id, b); break; }
+    }
+    for (size_t i = 0; i < fs->ndead; i++)              /* (not committed yet) */
+        for (uint64_t b = fs->dead[i].b; b < fs->dead[i].b + fs->dead[i].n && b < nb; b++) c.reach[b >> 3] |= 1 << (b & 7);
+    fs->cv = cv;
 
     uint64_t freed = 0, leaked = 0;                          /* the bitmap must match the trees */
     for (uint64_t b = 0; b < nb; b++) {
         int r = bit(c.reach, b), m = bit(fs->map, b);
         if (r && !m && freed++ < 10) bad(&c, "block %lu is in use but marked free", b);
-        if (!r && m && leaked++ < 10) bad(&c, "block %lu is marked in use but unused (leak)", b);
+        if (!r && m && !locked && leaked++ < 10) bad(&c, "block %lu is marked in use but unused (leak)", b);
     }
     if (freed > 10) bad(&c, "... %lu blocks in use but marked free in all", freed);
     if (leaked > 10) bad(&c, "... %lu leaked blocks in all", leaked);
-
-    uint64_t seen = 0;
-    for (uint64_t i = 0; i < c.cap; i++) {
-        obj_t *o = &c.tab[i];
-        if (!o->ino) continue;
-        if (!o->seen) { bad(&c, "object %lu has a name but does not exist", o->ino); continue; }
-        seen++;
-        int dir = ISDIR_M(o->mode);
-        uint32_t want = dir ? 2 + o->subdirs : o->links;
-        if (o->ino == SIEFS_ROOT) { if (o->links) bad(&c, "the root directory has a name"); }
-        else if (!o->links) bad(&c, "object %lu has no name (orphan)", o->ino);
-        else if (o->dtype != o->mode >> 12) bad(&c, "object %lu: its directory entry has the wrong type", o->ino);
-        if (o->nlink != want) bad(&c, "object %lu: link count %u, should be %u", o->ino, o->nlink, want);
-        if (dir && o->links > 1) bad(&c, "directory %lu has %u names", o->ino, o->links);
-        if (dir && o->ino != SIEFS_ROOT && o->links && o->parent != o->dirparent) bad(&c, "directory %lu: wrong parent", o->ino);
-        if ((o->flags & F_INLINE) && !o->inl && o->size) bad(&c, "object %lu: inline data missing", o->ino);
-        if (dir && o->size) bad(&c, "directory %lu has a size", o->ino);
-    }
-    if (seen != fs->vol.inodes) bad(&c, "the volume counts %lu objects, found %lu", fs->vol.inodes, seen);
-    if (c.maxino >= fs->vol.next_id) bad(&c, "object %lu is beyond the next free id %lu", c.maxino, fs->vol.next_id);
 out:
     fs->env.free(c.reach); fs->env.free(c.tab); fs->env.free(c.blk);
     return c.errs;
+}
+
+/* The objects of one volume, once its tree has been walked. */
+static void objects(ck_t *c, volx_t *v)
+{
+    uint64_t seen = 0;
+    for (uint64_t i = 0; i < c->cap; i++) {
+        obj_t *o = &c->tab[i];
+        if (!o->ino) continue;
+        if (!o->seen) { bad(c, "object %lu has a name but does not exist", o->ino); continue; }
+        seen++;
+        int dir = ISDIR_M(o->mode);
+        uint32_t want = dir ? 2 + o->subdirs : o->links;
+        if (o->ino == SIEFS_ROOT) { if (o->links) bad(c, "the root directory has a name"); }
+        else if (!o->links) bad(c, "object %lu has no name (orphan)", o->ino);
+        else if (o->dtype != o->mode >> 12) bad(c, "object %lu: its directory entry has the wrong type", o->ino);
+        if (o->nlink != want) bad(c, "object %lu: link count %u, should be %u", o->ino, o->nlink, want);
+        if (dir && o->links > 1) bad(c, "directory %lu has %u names", o->ino, o->links);
+        if (dir && o->ino != SIEFS_ROOT && o->links && o->parent != o->dirparent) bad(c, "directory %lu: wrong parent", o->ino);
+        if ((o->flags & F_INLINE) && !o->inl && o->size) bad(c, "object %lu: inline data missing", o->ino);
+        if (dir && o->size) bad(c, "directory %lu has a size", o->ino);
+    }
+    if (seen != v->v.inodes) bad(c, "volume %lu counts %lu objects, found %lu", v->id, v->v.inodes, seen);
+    if (c->maxino >= v->v.next_id) bad(c, "volume %lu: object %lu is beyond the next free id %lu", v->id, c->maxino, v->v.next_id);
 }

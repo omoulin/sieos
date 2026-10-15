@@ -191,6 +191,10 @@ long fs_listxattr(const char *path, char *buf, size_t size);
 long fs_rmxattr(const char *path, const char *name);
 long fs_find(const char *name, const char *value, uint64_t *cursor, char *buf, size_t size);
 long fs_statfs(siefs_statfs_t *st);
+long fs_snap(const char *path, int op, const char *name);   /* SNAP_TAKE / _DELETE / _RESTORE */
+long fs_snaplist(const char *path, uint64_t *cursor, void *buf, size_t size);
+long fs_mkvol(const char *path, int mode, int uid, int gid);  /* root: a volume mounted at path */
+long fs_rmvol(const char *path);
 long fs_sync(void);
 long fs_chdir(const char *path);
 const char *fs_getcwd(void);

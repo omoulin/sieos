@@ -15,6 +15,12 @@
  *     FS_SYNC), written by SieFS all together, so a crash loses at most
  *     that last second and never leaves a half-done change.
  *
+ * Volumes and snapshots (docs/siefs.md): a user's home can be a volume of
+ * its own (FS_MKVOL); FS_SNAP takes, deletes, restores and lists the
+ * snapshots of a path's volume, and a helper thread takes one of every
+ * volume each hour ("auto-YYYY-MM-DD-HH00"), kept a day. When the disk is
+ * full, a write first lets the oldest hourly snapshot go and tries again.
+ *
  * If this server crashes, init starts it again: it mounts the disk's last
  * commit, and programs' file handles are reopened by their library. If the
  * disk driver crashes, the requests to it are simply sent again.
@@ -35,7 +41,6 @@ static siefs_t *fs;
 static long disk, port;
 static int self;                            /* our pid: FS_TICK comes from our own thread */
 static char buf[FS_MAX + PATH_MAX + 8];     /* every message in, and every reply out */
-static uint64_t orphans;                    /* "/.orphans": open files whose last name went */
 
 /* ---- The block device, for the library: calls to the disk driver. */
 static int dio(int op, uint64_t blk, uint32_t n, void *p)
@@ -80,16 +85,15 @@ static void changed(void)
 
 static void ticker(void *arg)
 {
-    (void)arg;
     for (;;) {
-        msg_t m = { .w = { FS_TICK } };
+        msg_t m = { .w = { (uint64_t)arg } };           /* FS_TICK, or FS_AUTOSNAP */
         if (ipc_call(port, &m) < 0) return;
         sys_sleep(m.w[0]);
     }
 }
 
 /* ---- Open files. A handle is an index in this table; pid 0 = free. */
-typedef struct { int pid, flags, orphan; uint64_t ino; } hnd_t;
+typedef struct { int pid, flags, orphan; uint64_t ino, odir; } hnd_t;
 static hnd_t *hnd;
 static int nhnd;
 
@@ -114,7 +118,7 @@ static long hnd_new(int pid, int flags, uint64_t ino)
 {
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < nhnd; i++)
-            if (!hnd[i].pid) { hnd[i] = (hnd_t){ pid, flags, 0, ino }; return i; }
+            if (!hnd[i].pid) { hnd[i] = (hnd_t){ pid, flags, 0, ino, 0 }; return i; }
         if (!pass) collect();
     }
     if (nhnd >= 4096) return -EMFILE;
@@ -130,8 +134,31 @@ static long hnd_new(int pid, int flags, uint64_t ino)
 static hnd_t *hnd_get(uint64_t i, int pid) { return i < (uint64_t)nhnd && hnd[i].pid == pid ? &hnd[i] : 0; }
 static int is_open(uint64_t ino) { for (int i = 0; i < nhnd; i++) if (hnd[i].pid && hnd[i].ino == ino) return 1; return 0; }
 
-/* The name of an orphan in /.orphans: its object number in hex. */
+/* The name of an orphan in .orphans: its object number in hex. */
 static void orphan_name(uint64_t ino, char *s) { int i = 16; s[i] = 0; while (i--) { s[i] = "0123456789abcdef"[ino & 15]; ino >>= 4; } }
+
+/* Each volume's ".orphans" (in its root: a file cannot be renamed into
+ * another volume): open files whose last name went. Emptied the first time
+ * this server run needs it, since what is there then is left from before. */
+static struct { uint64_t root, dir; } orph[64];
+static int norph;
+static long orphans_of(uint64_t ino, uint64_t *dir)
+{
+    uint64_t root, d, cur;
+    siefs_dirent_t de;
+    long r = siefs_volume_root(fs, ino, &root);
+    if (r) return r;
+    for (int i = 0; i < norph; i++) if (orph[i].root == root) { *dir = orph[i].dir; return 0; }
+    if (siefs_lookup(fs, root, ".orphans", &d) && (r = siefs_create(fs, root, ".orphans", SIEFS_IFDIR | 0700, 0, 0, &d))) return r;
+    for (char nm[SIEFS_NAME_MAX + 1]; cur = 2, siefs_readdir(fs, d, &cur, &de) == 1; ) {
+        strlcpy(nm, de.name, sizeof nm);
+        if (siefs_unlink(fs, d, nm)) break;
+    }
+    changed();
+    if (norph < 64) orph[norph++] = (typeof(orph[0])){ root, d };
+    *dir = d;
+    return 0;
+}
 
 static void hnd_close(hnd_t *h)
 {
@@ -139,7 +166,7 @@ static void hnd_close(hnd_t *h)
     if (h->orphan && !is_open(h->ino)) {          /* the last user of a deleted file: delete it now */
         char nm[17];
         orphan_name(h->ino, nm);
-        siefs_unlink(fs, orphans, nm);
+        siefs_unlink(fs, h->odir, nm);
         changed();
     }
 }
@@ -261,7 +288,7 @@ static int search(uint64_t dir, uint64_t ino, char *path, size_t len, int depth)
         path[len] = '/';
         memcpy(path + len + 1, de.name, n + 1);
         if (de.ino == ino) return 1;
-        if (de.type == 4 && de.ino != orphans && search(de.ino, ino, path, len + n + 1, depth + 1)) return 1;
+        if (de.type == 4 && strcmp(de.name, ".orphans") && search(de.ino, ino, path, len + n + 1, depth + 1)) return 1;
     }
     path[len] = 0;
     return 0;
@@ -298,6 +325,62 @@ static int path_of(uint64_t ino, char *out, size_t size)
     if (len + 1 > size) return -ENAMETOOLONG;
     memcpy(out, tmp, len + 1);
     return 0;
+}
+
+/* ---- Hourly snapshots: "auto-YYYY-MM-DD-HH00" of every volume, kept a
+ * day; the oldest ones also go first when the disk is full. */
+#define KEEP_NS (24LL * 3600 * 1000000000)
+static void auto_name(int64_t ns, char *s)
+{
+    int64_t t = ns / 1000000000, d = t / 86400 + 719468, sec = t % 86400;   /* days -> civil date */
+    int64_t era = d / 146097, doe = d - era * 146097, yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
+    int64_t day = doy - (153 * mp + 2) / 5 + 1, mon = mp < 10 ? mp + 3 : mp - 9, y = yoe + era * 400 + (mon <= 2);
+    int v[4] = { (int)y, (int)mon, (int)day, (int)(sec / 3600) };
+    s += strlcpy(s, "auto-", 6);
+    for (int i = 0; i < 4; i++) {
+        int w = i ? 2 : 4, x = v[i];
+        for (int k = w - 1; k >= 0; k--) { s[k] = (char)('0' + x % 10); x /= 10; }
+        s += w;
+        *s++ = i < 3 ? '-' : '0';
+    }
+    *s++ = '0';
+    *s = 0;
+}
+static int is_auto(const char *n) { return !memcmp(n, "auto-", 5); }
+
+/* The oldest hourly snapshot of any volume goes: 1 if there was one. */
+static int drop_oldest_auto(void)
+{
+    uint64_t vc = 0, root, best_root = 0;
+    siefs_snap_t sn;
+    char best[64] = "";
+    int64_t when = 0;
+    while (siefs_volume_next(fs, &vc, &root) == 1)
+        for (uint64_t cur = 0; siefs_snapshot_list(fs, root, &cur, &sn) == 1; )
+            if (is_auto(sn.name) && (!best[0] || sn.created < when)) { strlcpy(best, sn.name, sizeof best); when = sn.created; best_root = root; }
+    if (!best[0] || siefs_snapshot_delete(fs, best_root, best)) return 0;
+    printf("fs: disk full: snapshot %s let go\n", best);
+    return 1;
+}
+
+static void autosnap(void)
+{
+    char nm[32], old[64][64];
+    uint64_t vc = 0, root;
+    siefs_snap_t sn;
+    siefs_statfs_t sf;
+    int64_t t = now();
+    auto_name(t, nm);
+    while (siefs_volume_next(fs, &vc, &root) == 1) {
+        int n = 0;
+        for (uint64_t cur = 0; siefs_snapshot_list(fs, root, &cur, &sn) == 1 && n < 64; )
+            if (is_auto(sn.name) && t - sn.created > KEEP_NS) strlcpy(old[n++], sn.name, sizeof old[0]);
+        for (int i = 0; i < n; i++) siefs_snapshot_delete(fs, root, old[i]);
+        long r = siefs_snapshot(fs, root, nm);
+        if (r && r != -EEXIST) printf("fs: hourly snapshot %s: error %ld\n", nm, -r);
+    }
+    while (!siefs_statfs(fs, &sf) && sf.free + sf.pending < sf.blocks / 10 && drop_oldest_auto()) ;   /* keep a tenth free */
 }
 
 /* ---- One request. Returns the result; out and outlen: data to send back,
@@ -347,6 +430,7 @@ static long serve(msg_t *m, long from, const void **out, uint64_t *outlen, uint6
         uint64_t off = m->w[2];
         if (h->flags & FS_APPEND) { if ((r = siefs_stat(fs, h->ino, &st))) return r; off = st.size; }
         r = siefs_write(fs, h->ino, off, buf, m->rlen);
+        if (r == -ENOSPC && drop_oldest_auto()) r = siefs_write(fs, h->ino, off, buf, m->rlen);
         if (r > 0) changed();
         return r;
     }
@@ -389,9 +473,10 @@ static long serve(msg_t *m, long from, const void **out, uint64_t *outlen, uint6
         else if ((st.mode & SIEFS_IFMT) == SIEFS_IFDIR) return -EISDIR;
         else if (st.nlink == 1 && is_open(ino)) {     /* still open: keep it until the last close */
             char nm[17];
+            uint64_t od;
             orphan_name(ino, nm);
-            if (!(r = siefs_rename(fs, dir, name, orphans, nm)))
-                for (int i = 0; i < nhnd; i++) if (hnd[i].pid && hnd[i].ino == ino) hnd[i].orphan = 1;
+            if (!(r = orphans_of(ino, &od)) && !(r = siefs_rename(fs, dir, name, od, nm)))
+                for (int i = 0; i < nhnd; i++) if (hnd[i].pid && hnd[i].ino == ino) { hnd[i].orphan = 1; hnd[i].odir = od; }
         } else r = siefs_unlink(fs, dir, name);
         if (!r) changed();
         return r;
@@ -473,6 +558,54 @@ static long serve(msg_t *m, long from, const void **out, uint64_t *outlen, uint6
         r = dirty ? siefs_sync(fs) : 0;
         if (!r) dirty = 0;
         return r;
+    case FS_SNAP: {
+        uint64_t root, cur = m->w[2], len = 0, max = m->w[3] < FS_MAX ? m->w[3] : FS_MAX;
+        siefs_snap_t sn;
+        if ((r = walk(s1, 1, c, &ino, 0, 0)) || (r = siefs_volume_root(fs, ino, &root)) || (r = siefs_stat(fs, root, &st))) return r;
+        if (m->w[1] == SNAP_LIST) {
+            if ((r = may(c, &st, 4))) return r;
+            for (;;) {
+                uint64_t before = cur;
+                if ((r = siefs_snapshot_list(fs, root, &cur, &sn)) <= 0) { if (r < 0) return r; cur = 0; break; }
+                size_t n = strlen(sn.name);
+                if (len + 9 + n > max) { cur = before; break; }
+                memcpy(buf + len, &sn.created, 8);
+                buf[len + 8] = (char)n;
+                memcpy(buf + len + 9, sn.name, n);
+                len += 9 + n;
+            }
+            *out = buf; *outlen = len; *w1 = cur;
+            return (long)len;
+        }
+        if (c.uid && c.uid != st.uid) return -EPERM;  /* the volume's owner (a home's user), or root */
+        r = m->w[1] == SNAP_TAKE ? siefs_snapshot(fs, root, s2) : m->w[1] == SNAP_DELETE ? siefs_snapshot_delete(fs, root, s2) :
+            m->w[1] == SNAP_RESTORE ? siefs_snapshot_restore(fs, root, s2) : -EINVAL;
+        if (!r) printf("fs: snapshot %s of %s: %s\n", s2, s1, m->w[1] == SNAP_TAKE ? "taken" : m->w[1] == SNAP_DELETE ? "deleted" : "restored");
+        return r;
+    }
+    case FS_MKVOL:
+        if (c.uid) return -EPERM;
+        r = walk(s1, 0, c, &ino, &dir, name);
+        if (!r) return -EEXIST;
+        if (r != -ENOENT || !dir) return r;
+        if ((r = siefs_mkvol(fs, dir, name, (uint32_t)m->w[1], (uint32_t)m->w[2], (uint32_t)m->w[3], &ino))) return r;
+        changed();
+        return 0;
+    case FS_RMVOL:
+        if (c.uid) return -EPERM;
+        if ((r = walk(s1, 0, c, &ino, &dir, name))) return r;
+        if (!dir) return -EBUSY;
+        siefs_rmdir(fs, ino, ".orphans");             /* (its own, if empty) */
+        for (int i = 0; i < norph; i++) if (orph[i].root == ino) orph[i] = orph[--norph];
+        if ((r = siefs_rmvol(fs, dir, name))) return r;
+        changed();
+        return 0;
+    case FS_AUTOSNAP: {
+        if (pid != self) return -EPERM;
+        autosnap();
+        int64_t t = now(), hour = 3600LL * 1000000000;
+        return hour - t % hour + 1000000000;         /* the next hour, and a second */
+    }
     case FS_TICK: {
         if (pid != self) return -EPERM;
         int64_t left = dirty_since + COMMIT_NS - sys_clock();
@@ -505,19 +638,12 @@ int main(int argc, char **argv)
     }
 
     /* Files deleted while open, left over from the last run: delete them. */
-    char nm[SIEFS_NAME_MAX + 1];
-    if (siefs_lookup(fs, SIEFS_ROOT, ".orphans", &orphans) &&
-        siefs_create(fs, SIEFS_ROOT, ".orphans", SIEFS_IFDIR | 0700, 0, 0, &orphans) == 0) changed();
-    for (siefs_dirent_t de; ; ) {
-        uint64_t cur = 2;
-        if (siefs_readdir(fs, orphans, &cur, &de) != 1) break;
-        strlcpy(nm, de.name, sizeof nm);
-        if (siefs_unlink(fs, orphans, nm)) break;
-        changed();
-    }
+    uint64_t vc = 0, root, od;
+    while (siefs_volume_next(fs, &vc, &root) == 1) orphans_of(root, &od);
 
     port = port_create("fs");
-    thread_start(ticker, 0, 8192);
+    thread_start(ticker, (void *)FS_TICK, 8192);
+    thread_start(ticker, (void *)FS_AUTOSNAP, 8192);
     m = (msg_t){ .rbuf = buf, .rlen = FS_MAX + PATH_MAX };
     long from = ipc_recv(port, &m);
     for (;;) {

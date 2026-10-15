@@ -14,7 +14,7 @@
 static const char *tname(int t)
 {
     static const char *n[] = { "?", "INODE", "INLINE", "EXTENT", "DIRENT", "XATTR", "XINDEX" };
-    return t == T_VOLUME ? "VOLUME" : t < 7 ? n[t] : "?";
+    return t == T_VOLUME ? "VOLUME" : t == T_VOLNAME ? "VOLNAME" : t == T_DEAD ? "DEAD" : t == T_VOLKEY ? "VOLKEY" : t < 7 ? n[t] : "?";
 }
 
 static void item(skey_t k, const uint8_t *v, unsigned len)
@@ -27,8 +27,10 @@ static void item(skey_t k, const uint8_t *v, unsigned len)
         printf("mode %o uid %u gid %u links %u size %llu parent %llu%s", in.mode, in.uid, in.gid, in.nlink,
                (unsigned long long)in.size, (unsigned long long)in.parent, in.flags & F_INLINE ? " inline" : "");
     } else if (t == T_EXTENT) {
-        extent_t x; memcpy(&x, v, len < sizeof x ? len : sizeof x);
-        printf("%u blocks at %llu", x.n, (unsigned long long)x.blk);
+        extent_t x;
+        if (ext_dec(v, len, &x)) printf("damaged");
+        else printf("%u blocks at %llu, commit %llu%s", x.n, (unsigned long long)x.blk, (unsigned long long)x.gen,
+                    x.flags & X_ENC ? ", encrypted" : "");
     } else if (t == T_DIRENT) {
         for (unsigned p = 0; p + 10 <= len; p += 10 + v[p + 9]) {
             uint64_t ino; memcpy(&ino, v + p, 8);
@@ -90,8 +92,12 @@ int main(int argc, char **argv)
     if (!(fs = host_mount(argv[1], &im))) return 1;
     printf("mounted commit %llu\nroot tree:\n", (unsigned long long)fs->sb.seq);
     dump(fs, &fs->rt.root, 1);
-    printf("file tree (volume 1):\n");
-    dump(fs, &fs->ft.root, 1);
+    for (uint32_t i = 0; i < fs->nvols; i++) {
+        volx_t *v = fs->vols[i];
+        printf("volume %llu%s%s%s%s:\n", (unsigned long long)v->id, v->v.flags & V_SNAP ? " (snapshot \"" : "",
+               v->v.flags & V_SNAP ? v->name : "", v->v.flags & V_SNAP ? "\")" : "", v->locked ? " (encrypted, locked)" : "");
+        if (!v->locked) dump(fs, &v->ft.root, 1);
+    }
     siefs_unmount(fs);
     image_close(&im);
     return 0;

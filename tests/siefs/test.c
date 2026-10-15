@@ -282,13 +282,20 @@ static int mnew(model_t *m, int type)
     for (int i = 0; i < 256; i++) if (!m->o[i].type) { m->o[i] = (mobj_t){ type, 0, 0, 0, "" }; if (i >= m->no) m->no = i + 1; return i; }
     return -1;
 }
+static const char *mpre = "";                           /* where the model's "/" is (a volume, a snapshot) */
+static int mwalk(siefs_t *fs, const char *p, uint64_t *ino)
+{
+    char b[160];
+    snprintf(b, sizeof b, "%s%s", mpre, p);
+    return siefs_walk(fs, b[0] ? b : "/", ino);
+}
 static int split(siefs_t *fs, const char *path, uint64_t *dir, const char **name)
 {
     const char *s = strrchr(path, '/');
     char d[64];
     memcpy(d, path, (size_t)(s - path)); d[s - path] = 0;
     *name = s + 1;
-    return siefs_walk(fs, d[0] ? d : "/", dir);
+    return mwalk(fs, d, dir);
 }
 
 /* Compare SieFS with the model, entry by entry. */
@@ -299,7 +306,7 @@ static void mcompare(siefs_t *fs, model_t *m)
     for (int i = 0; i < m->ne; i++) {
         mobj_t *o = &m->o[m->e[i].obj];
         siefs_stat_t st;
-        if (siefs_walk(fs, m->e[i].path, &ino) || siefs_stat(fs, ino, &st)) { CHECK(!"missing"); printf("  %s\n", m->e[i].path); continue; }
+        if (mwalk(fs, m->e[i].path, &ino) || siefs_stat(fs, ino, &st)) { CHECK(!"missing"); printf("  %s%s\n", mpre, m->e[i].path); continue; }
         CHECK((int)(st.mode >> 12) == (o->type == MDIR ? 4 : o->type == MREG ? 8 : 10));
         if (o->type != MDIR) CHECK(st.nlink == (uint32_t)o->nlink);
         if (o->type == MREG) {
@@ -315,7 +322,7 @@ static void mcompare(siefs_t *fs, model_t *m)
         siefs_dirent_t de;
         uint64_t cur = 2;
         int n = 0;
-        if (siefs_walk(fs, mdirs[i][0] ? mdirs[i] : "/", &ino)) continue;
+        if (mwalk(fs, mdirs[i], &ino)) continue;
         while (siefs_readdir(fs, ino, &cur, &de) == 1) n++;
         CHECK(n == mchildren(m, mdirs[i]));
     }
@@ -357,7 +364,7 @@ static void mop(siefs_t *fs, model_t *m)
     } else if (at < 0) return;
     else {
         mobj_t *o = &m->o[m->e[at].obj];
-        if (siefs_walk(fs, path, &ino)) { CHECK(!"walk"); return; }
+        if (mwalk(fs, path, &ino)) { CHECK(!"walk"); return; }
         if (r < 60 && o->type == MREG) {                 /* write */
             static const size_t sizes[] = { 1, 100, 1500, 3000, 4096, 9000, 70000, 190000 };
             size_t n = sizes[rn(8)] + rn(50);
@@ -460,7 +467,125 @@ static void model(int rounds)
     mem_free(&mem);
 }
 
+/* ================================================================ 2b. snapshots
+ * The model test again, inside a mounted volume (/home), while snapshots
+ * are taken, deleted and restored at random: each snapshot must keep
+ * showing the model as it was when taken, and the whole volume must check
+ * clean (blocks, dead lists, no leaks) after every commit. */
+static void mcopy(model_t *to, const model_t *from)
+{
+    *to = *from;
+    for (int i = 0; i < from->no; i++)
+        if (from->o[i].data) { to->o[i].data = malloc(from->o[i].len + 1); memcpy(to->o[i].data, from->o[i].data, from->o[i].len); }
+}
+static void mclear(model_t *m) { for (int i = 0; i < m->no; i++) free(m->o[i].data); memset(m, 0, sizeof *m); }
+
+static void snapshots(int rounds)
+{
+    enum { NS = 6 };
+    static model_t m, sm[NS];
+    static char sname[NS][16];
+    static long sseq[NS];
+    long seq = 0, taken = 0, deleted = 0, restored = 0;
+    mem_t mem;
+    siefs_env_t env;
+    siefs_t *fs;
+    uint64_t home, ino, a, b;
+    siefs_statfs_t st0, st1;
+    printf("snapshot test: %d rounds, snapshots taken, deleted and restored at random\n", rounds);
+    mem_init(&mem, 8192);
+    env = env_of(&mem);
+    env.cache_nodes = 16;
+    CHECK(siefs_format(&env, "snap") == 0 && siefs_mount(&env, &fs) == 0);
+    CHECK(siefs_statfs(fs, &st0) == 0);
+
+    /* volumes: one mounted at /home; names do not cross volumes */
+    CHECK(siefs_mkvol(fs, SIEFS_ROOT, "home", 0755, 1000, 1000, &home) == 0 && home >> 48 > 1);
+    CHECK(siefs_walk(fs, "/home", &ino) == 0 && ino == home);
+    CHECK(siefs_create(fs, home, "f", SIEFS_IFREG | 0644, 0, 0, &a) == 0 && a >> 48 == home >> 48);
+    CHECK(siefs_create(fs, SIEFS_ROOT, "g", SIEFS_IFREG | 0644, 0, 0, &b) == 0 && b >> 48 == 0);
+    CHECK(siefs_walk(fs, "/home/..", &ino) == 0 && ino == SIEFS_ROOT);
+    CHECK(siefs_rename(fs, home, "f", SIEFS_ROOT, "f") == -SIEFS_EXDEV);
+    CHECK(siefs_link(fs, a, SIEFS_ROOT, "h") == -SIEFS_EXDEV);
+    CHECK(siefs_rmdir(fs, SIEFS_ROOT, "home") == -SIEFS_EBUSY);
+    CHECK(siefs_rmvol(fs, SIEFS_ROOT, "home") == -SIEFS_ENOTEMPTY);
+    CHECK(siefs_unlink(fs, home, "f") == 0 && siefs_unlink(fs, SIEFS_ROOT, "g") == 0);
+    CHECK(siefs_sync(fs) == 0 && siefs_check(fs, 1, quiet, 0) == 0);
+    CHECK(siefs_rmvol(fs, SIEFS_ROOT, "home") == 0);
+    CHECK(siefs_walk(fs, "/home", &ino) == -SIEFS_ENOENT);
+    CHECK(siefs_sync(fs) == 0 && siefs_sync(fs) == 0 && siefs_sync(fs) == 0 && siefs_check(fs, 1, quiet, 0) == 0);
+    CHECK(siefs_mkvol(fs, SIEFS_ROOT, "home", 0755, 1000, 1000, &home) == 0);
+
+    mpre = "/home";
+    for (int round = 0; round < rounds && !fails; round++) {
+        for (int i = 0; i < 40; i++) mop(fs, &m);
+        int r = (int)rn(10), k = (int)rn(NS);
+        if (r < 4 && !sname[k][0]) {                    /* take one */
+            snprintf(sname[k], sizeof sname[k], "s%d", round);
+            CHECK(siefs_snapshot(fs, home, sname[k]) == 0);
+            mcopy(&sm[k], &m); sseq[k] = ++seq; taken++;
+        } else if (r < 6 && sname[k][0]) {              /* delete one */
+            CHECK(siefs_snapshot_delete(fs, home, sname[k]) == 0);
+            mclear(&sm[k]); sname[k][0] = 0; deleted++;
+        } else if (r == 6 && sname[k][0]) {             /* go back to one: the newer ones go */
+            CHECK(siefs_snapshot_restore(fs, home, sname[k]) == 0);
+            mclear(&m); mcopy(&m, &sm[k]); restored++;
+            for (int j = 0; j < NS; j++) if (sname[j][0] && sseq[j] > sseq[k]) { mclear(&sm[j]); sname[j][0] = 0; }
+        }
+        mcompare(fs, &m);
+        for (int j = 0; j < NS; j++) {                  /* every snapshot shows its time */
+            char p[64];
+            if (!sname[j][0]) continue;
+            snprintf(p, sizeof p, "/home/.snapshots/%s", sname[j]);
+            mpre = p; mcompare(fs, &sm[j]); mpre = "/home";
+        }
+        CHECK(siefs_sync(fs) == 0);
+        CHECK(siefs_check(fs, 1, quiet, 0) == 0);
+        if (round % 10 == 9) { CHECK(siefs_unmount(fs) == 0 && siefs_mount(&env, &fs) == 0); mcompare(fs, &m); }
+    }
+    for (int j = 0; j < NS; j++)                        /* a snapshot is read only */
+        if (sname[j][0] && sm[j].ne) {
+            char p[96];
+            snprintf(p, sizeof p, "/home/.snapshots/%s", sname[j]);
+            CHECK(siefs_walk(fs, p, &ino) == 0);
+            CHECK(siefs_create(fs, ino, "new", SIEFS_IFREG | 0644, 0, 0, &a) == -SIEFS_EROFS);
+            break;
+        }
+    uint64_t cur = 0;
+    siefs_snap_t sn;
+    int listed = 0, live = 0;
+    while (siefs_snapshot_list(fs, home, &cur, &sn) == 1) listed++;
+    for (int j = 0; j < NS; j++) live += sname[j][0] != 0;
+    CHECK(listed == live);
+    for (int j = 0; j < NS; j++) if (sname[j][0]) { CHECK(siefs_snapshot_delete(fs, home, sname[j]) == 0); mclear(&sm[j]); sname[j][0] = 0; }
+    mcompare(fs, &m);
+    CHECK(siefs_sync(fs) == 0 && siefs_check(fs, 1, quiet, 0) == 0);
+    for (int i = 0; i < m.ne; i++) {                    /* empty the volume, remove it: all the space comes back */
+        int d = 0;
+        for (int j = 0; j < m.ne; j++) if (strlen(m.e[j].path) > strlen(m.e[d].path)) d = j;
+        const char *name;
+        uint64_t dir;
+        if (split(fs, m.e[d].path, &dir, &name)) { CHECK(!"split"); break; }
+        CHECK((m.o[m.e[d].obj].type == MDIR ? siefs_rmdir(fs, dir, name) : siefs_unlink(fs, dir, name)) == 0);
+        mdel(&m, d); i = -1;
+    }
+    CHECK(siefs_rmvol(fs, SIEFS_ROOT, "home") == 0);
+    for (int i = 0; i < 3; i++) CHECK(siefs_sync(fs) == 0);
+    CHECK(siefs_check(fs, 1, quiet, 0) == 0);
+    CHECK(siefs_statfs(fs, &st1) == 0);
+    CHECK(st1.free + st1.pending == st0.free + st0.pending);
+    printf("  %ld taken, %ld deleted, %ld restored; all space back at the end: %s\n", taken, deleted, restored,
+           st1.free + st1.pending == st0.free + st0.pending ? "yes" : "NO");
+    mpre = "";
+    siefs_unmount(fs);
+    mclear(&m);
+    mem_free(&mem);
+}
+
 /* ================================================================ 3. crashes */
+static int snaps;                                       /* crash scenarios with snapshots in them */
+static uint32_t steps[512]; static int nsteps = -1;     /* (dry run: the state after each operation: a snapshot's commits can land between) */
+static uint32_t sig(siefs_t *fs);
 static void ops_batch(siefs_t *fs, uint64_t seed, int n)
 {
     static uint8_t data[50000];
@@ -481,14 +606,25 @@ static void ops_batch(siefs_t *fs, uint64_t seed, int n)
         else if (r < 8) { char to[16]; sprintf(to, "n%u", rn(12)); siefs_rename(fs, dir, name, SIEFS_ROOT, to); }
         else if (r < 9 && !siefs_lookup(fs, dir, name, &ino)) siefs_setxattr(fs, ino, "tag", name, strlen(name));
         else if (!siefs_lookup(fs, dir, name, &ino)) siefs_truncate(fs, ino, rn(30000));
+        if (nsteps >= 0 && nsteps < 512) steps[nsteps++] = sig(fs);
+        if (snaps && !rn(6)) {                          /* snapshots too: taken, deleted, restored */
+            char sn[8];
+            sprintf(sn, "s%u", rn(4));
+            int q = (int)rn(4);
+            if (q < 2) siefs_snapshot(fs, SIEFS_ROOT, sn);
+            else if (q < 3) siefs_snapshot_delete(fs, SIEFS_ROOT, sn);
+            else siefs_snapshot_restore(fs, SIEFS_ROOT, sn);
+        }
+        if (nsteps >= 0 && nsteps < 512) steps[nsteps++] = sig(fs);
     }
 }
 
 static void crash(int seeds)
 {
     long runs = 0, newer = 0;
-    printf("crash test: %d scenarios, a power cut at every write of a transaction\n", seeds);
+    printf("crash test: %d scenarios, a power cut at every write of a transaction (half with snapshots)\n", seeds);
     for (int s = 1; s <= seeds && !fails; s++) {
+        snaps = s % 2 == 0;
         mem_t m;
         siefs_env_t env;
         siefs_t *fs;
@@ -511,7 +647,10 @@ static void crash(int seeds)
         int64_t c0 = clk;
         int nops = 10 + 6 * s;                           /* bigger and bigger transactions */
         w0 = m.writes;
+        nsteps = 0;                                      /* (snapshots commit by themselves: any step can land) */
         ops_batch(fs, (uint64_t)s * 7777, nops);
+        int nst = nsteps;
+        nsteps = -1;
         sb = sig(fs);
         CHECK(siefs_sync(fs) == 0);
         total = m.writes - w0;                           /* every write: file data, nodes, bitmap, superblock */
@@ -532,8 +671,10 @@ static void crash(int seeds)
                 siefs_t *fs2;
                 if (siefs_mount(&env, &fs2)) { CHECK(!"mount after crash"); continue; }
                 uint32_t sg = sig(fs2);
-                CHECK(sg == sa || sg == sb);
-                if (sg != sa && sg != sb) printf("  scenario %d, cut at write %ld/%ld: neither old nor new\n", s, cut, total);
+                int mid = 0;
+                for (int i = 0; snaps && i < nst; i++) mid |= sg == steps[i];
+                CHECK(sg == sa || sg == sb || mid);
+                if (sg != sa && sg != sb && !mid) printf("  scenario %d, cut at write %ld/%ld: neither old nor new\n", s, cut, total);
                 newer += sg == sb;
                 if (cut == total) CHECK(sg == sb);
                 CHECK(siefs_check(fs2, 1, quiet, 0) == 0);
@@ -576,11 +717,11 @@ static void damage(void)
     siefs_unmount(fs);
     m.cur[(1 + slot) * BS + 100] ^= 1;
     CHECK(siefs_mount(&env, &fs) == 0 && sig(fs) == s2);
-    uint64_t root = fs->ft.root.blk, bm = fs->sb.bm[fs->sb.seq & 1];
+    uint64_t root = vol_get(fs, 1)->ft.root.blk, bm = fs->sb.bm[fs->sb.seq & 1];
     extent_t x;
     path_t pa;
-    CHECK(t_seek(fs, &fs->ft, K(a, T_EXTENT, 0), &pa) == 1);
-    memcpy(&x, pval(&pa), plen(&pa));
+    CHECK(t_seek(fs, &vol_get(fs, 1)->ft, K(a, T_EXTENT, 0), &pa) == 1);
+    CHECK(ext_dec(pval(&pa), plen(&pa), &x) == 0);
     siefs_unmount(fs);
 
     m.cur[x.blk * BS + 7] ^= 0x10;                      /* a bit flips in file data */
@@ -700,8 +841,15 @@ static void measure(void)
 int main(int argc, char **argv)
 {
     int quick = argc > 1 && !strcmp(argv[1], "quick");
+    if (argc > 2 && !strcmp(argv[1], "snapshots")) {    /* (more seeds: siefs-test snapshots SEED) */
+        rs = strtoull(argv[2], 0, 10);
+        snapshots(300);
+        printf(fails ? "%ld FAILURES\n" : "passed\n", fails);
+        return fails != 0;
+    }
     unit();
     model(quick ? 30 : 300);
+    snapshots(quick ? 40 : 300);
     crash(quick ? 3 : 30);
     damage();
     if (!fails) measure();
