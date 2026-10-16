@@ -112,12 +112,11 @@ static svc_t svc[MAXSVC] = {
     /* the network: kept a while, since starting means a new DHCP exchange;
      * the card's driver stops after netd (it is busy while netd runs) */
     { .i = { "vnet",  0, 0, 0, 0, SVC_ALWAYS, 1, 0, "nic0", 10 * MIN }, "/bin/vnet", "vnet" },
-#if defined(__aarch64__)
-    /* the Raspberry Pis' Wi-Fi (a driver): it serves the port "wifi" (netd,
-     * Settings, /bin/wifi). Started at boot so the port is there to find; on
-     * a machine with no CYW43455 it ends with 0 and is not started again */
+    /* Wi-Fi (a driver): the port "wifi" (netd, Settings, /bin/wifi), the
+     * Raspberry Pis' CYW43455 or a PC's Intel AX210. Started at boot so the
+     * port is there to find; on a machine with no Wi-Fi chip it ends with 0
+     * and is not started again */
     { .i = { "wifi",  0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/wifid", "wifid", .watch = "wifi" },
-#endif
     { .i = { "netd",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "net", 10 * MIN },  "/bin/netd", "netd" },
     /* the SSH server (docs/ssh.md): only where /etc/ssh/sshd_config exists, else it
      * ends with 0 at once and is not started again; it listens, so it starts the

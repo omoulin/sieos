@@ -60,6 +60,10 @@ void sha1_init(sha1_t *s);
 void sha1_update(sha1_t *s, const void *in, size_t n);
 void sha1_final(sha1_t *s, uint8_t out[20]);
 void sha1(uint8_t out[20], const void *in, size_t n);
+/* HMAC-SHA-1 and PBKDF2-HMAC-SHA-1 (RFC 2104, 8018; sha1.c): WPA2's
+ * passphrase to key (4096 rounds) and its handshake MICs. */
+void hmac_sha1(uint8_t out[20], const void *key, size_t klen, const void *in, size_t n);
+void pbkdf2_sha1(uint8_t *out, size_t olen, const void *pw, size_t plen, const void *salt, size_t slen, int rounds);
 /* HMAC (RFC 2104) and HKDF (RFC 5869) over those hashes. */
 typedef struct { sha_t inner, outer; } hmac_t;
 void hmac_init(hmac_t *h, int alg, const void *key, size_t klen);
@@ -80,6 +84,10 @@ void aead_seal(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t 
                const void *in, size_t n, uint8_t *out);
 int  aead_open(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t adlen,
                const void *in, size_t n, uint8_t *out);
+
+/* AES key unwrap (RFC 3394): n bytes of in (8 more than the key data)
+ * into out (n - 8); kek of 16 or 32 bytes. -1 if the integrity check fails. */
+int aes_unwrap(const uint8_t *kek, size_t klen, const uint8_t *in, size_t n, uint8_t *out);
 
 /* The pieces of ChaCha20-Poly1305 on their own, for SSH's variant
  * (chacha20-poly1305@openssh.com: user/lib/ssh.c): the keystream from block

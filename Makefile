@@ -43,7 +43,7 @@ NETLINKS := ping host nslookup ifconfig netstat traceroute nc curl wget   # othe
 LINKS   += $(NETLINKS:%=fetch/%)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
-BINS    += $(if $(filter arm64,$(ARCH)),wifi wifid)   # the Raspberry Pis' Wi-Fi: the command and its server
+BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
 BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
@@ -116,13 +116,16 @@ $(B)/user/vnet/%.o: user/vnet/%.c user/vnet/nic.h user/lib/mk.h include/mk/*.h $
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
-# The Wi-Fi server (arm64 only): the SDIO host (sdio.c) and the FullMAC
-# driver (wifid.c); the command is an ordinary program (user/wifi/wifi.c).
-$(B)/wifid.elf: $(B)/user/wifi/wifid.o $(B)/user/wifi/sdio.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
-	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(B)/user/wifi/wifid.o $(B)/user/wifi/sdio.o $(ULIB)
+# The Wi-Fi server (wifid.c) and its chip driver: arm64 the Pis' CYW43455
+# (bcm.c, over the SDIO host sdio.c), x86-64 Intel's AX210 (iwl.c, with the
+# host's WPA2 handshake wpa.c); the command is an ordinary program (wifi.c).
+WIFIOBJ_arm64  := wifid bcm sdio
+WIFIOBJ_x86_64 := wifid iwl wpa
+$(B)/wifid.elf: $(WIFIOBJ_$(ARCH):%=$(B)/user/wifi/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(WIFIOBJ_$(ARCH):%=$(B)/user/wifi/%.o) $(ULIB)
 $(B)/wifi.elf: $(B)/user/wifi/wifi.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(B)/user/wifi/wifi.o $(ULIB)
-$(B)/user/wifi/%.o: user/wifi/%.c user/wifi/wifi.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
+$(B)/user/wifi/%.o: user/wifi/%.c user/wifi/wifi.h user/wifi/wpa.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
@@ -526,8 +529,16 @@ $(B)/uefi/BOOTX64.EFI: boot/uefi/start.S boot/uefi/loader.c boot/uefi/efi.h boot
 USBMAKE = python3 tools/mkusb.py $(1) --size $(2) --efi $(B)/uefi/BOOTX64.EFI --kernel $(B)/kernel.bin \
           --module $(B)/init.elf --module $(B)/con.elf --module $(B)/usb.elf --module $(B)/vblk.elf --module $(B)/fs.elf \
           --mkfs $(B)/host/mkfs.siefs --siefs-tool $(B)/host/siefs --rootfs $(B)/rootfs --screen $(USBSCREEN)
-usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs
-	$(call USBMAKE,$(B)/sieos-usb.img,$(USBDISK)) $(if $(USBMODEL),--put models/$(MODEL) /models/$(MODEL))
+# The Intel AX210's firmware (not part of SIEOS: Intel's, under its own
+# licence), fetched once at a pinned commit of the linux-firmware repository
+# and copied onto the USB key, like the Pis' Wi-Fi firmware. Version 89.
+IWLFW_URL := https://gitlab.com/kernel-firmware/linux-firmware/-/raw/38c1a7096dfb2188f55f342b835f14c362c59409/intel/iwlwifi
+IWLFW := .hosttools/intel/iwlwifi-ty-a0-gf-a0-89.ucode .hosttools/intel/iwlwifi-ty-a0-gf-a0.pnvm
+.hosttools/intel/%:
+	mkdir -p $(@D) && curl -sfL -o $@ $(IWLFW_URL)/$*
+usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW)
+	$(call USBMAKE,$(B)/sieos-usb.img,$(USBDISK)) $(if $(USBMODEL),--put models/$(MODEL) /models/$(MODEL)) \
+	    $(foreach f,$(IWLFW),--put $(f) /lib/firmware/$(notdir $(f)))
 QEMU_UEFI = qemu-system-x86_64 -smp $(SMP) -m $(MEM) $(ACCEL) -no-reboot \
            -bios $(UEFI_FW) \
            -drive if=none,id=k,file=$(1),format=raw \
@@ -716,7 +727,7 @@ llm-neon-test: $(SICC)
 # HTTPS) on each other kind of card, MACHINE:CARD (x86-64: the default cards
 # of QEMU's "pc" and "q35", virtio 1.0 without the legacy interface; arm64:
 # virtio on PCIe, what "-nic user" gives on virt).
-NET_CRYPTO := lib/sha2.c lib/aead.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
+NET_CRYPTO := lib/sha2.c lib/sha1.c user/wifi/wpa.c lib/aead.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
 $(B)/host/net-crypto-test: tests/net/crypto.c $(NET_CRYPTO) include/mk/crypto.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/net/crypto.c $(NET_CRYPTO)

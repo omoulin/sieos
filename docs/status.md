@@ -32,9 +32,11 @@ checklist in [raspberrypi.md](raspberrypi.md).
 
 - The assistant's memory: history across sessions and restarts, with
   compaction ([sia.md](sia.md)).
-- The target laptop: UEFI boot from USB into RAM, USB input, the
-  Realtek network card (written: try it there), its two NVMe drives (the
-  driver passes in QEMU), then NVIDIA compute ([ai-plan.md](ai-plan.md)).
+- The target laptop: its drivers are written and wait for a boot from
+  the USB key: the Intel display (full modeset), NVMe (passes in QEMU), the
+  Realtek network card, the AX210 Wi-Fi ([net.md](net.md)), HD Audio
+  (passes in QEMU, [audio.md](audio.md)); then NVIDIA compute
+  ([gpu-plan.md](gpu-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
   written but untested there, [raspberrypi.md](raspberrypi.md)).
 
