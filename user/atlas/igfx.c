@@ -477,6 +477,8 @@ int screen_backlight(int pct)
     }
     return bright;
 }
+void screen_blank(int off) { if (active && out[0].on && blmax) backlight(!off); }   /* (the lid) */
+int screen_wake(void);                                   /* (below: after modeset) */
 static void native(int *w, int *h) { *w = out[0].m.hd < fbw ? out[0].m.hd : fbw; *h = out[0].m.vd < fbh ? out[0].m.vd : fbh; }
 int screen_native(int *w, int *h) { if (active && out[0].on) native(w, h); return active && out[0].on; }
 
@@ -688,6 +690,18 @@ static int modeset(void)
     for (int i = 1; i < nout; i++)
         if (out[i].m.clock && enable(&out[i], mask)) { lg("port %d left off\n", out[i].port); pipe_off(out[i].pipe); pll_off(out[i].pipe); }
     return 0;
+}
+
+/* Awake after a suspend: the display lost everything; set up again as at
+ * the start (the state found then kept) -> 0; -1: not ours. */
+int screen_wake(void)
+{
+    if (!active) return -1;
+    lg("awake: modeset again\n");
+    int r = modeset();
+    dump(r ? "after waking: FAILED" : "after waking");
+    save();
+    return r;
 }
 
 int igfx_init(const mk_screen_t *g)                      /* -> 0: ours; -1: not here (or failed); 1: ours, PW x PH refused */

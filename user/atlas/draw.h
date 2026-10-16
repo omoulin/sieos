@@ -25,6 +25,8 @@ int  screen_init(screen_t *s);      /* 0: ready, at SW x SH if the screen can ta
 int  screen_native(int *w, int *h); /* a resizable screen's own size (the Intel display's
                                        panel, igfx.c): 1, or 0 if it has none */
 int  screen_backlight(int pct);     /* the panel's brightness in %: set it (pct >= 0) -> now; -1: none */
+int  screen_wake(void);            /* after a suspend: the Intel display set up again -> 0; -1: not it */
+void screen_blank(int off);        /* the panel's backlight off (1: the lid closed) or on again */
 long rtc_seconds(void);            /* the time of day in seconds (UTC), or -1: no clock */
 
 void draw_init(const screen_t *s);

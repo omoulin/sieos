@@ -8,6 +8,8 @@
  *              size shows at once and goes back by itself after 15 s unless
  *              kept (a monitor that cannot show it is never a dead end); the
  *              panel's brightness (the Intel display). Kept in /etc/display.conf.
+ *   Power      (laptops: the ACPI server) the battery; the lid closed: the
+ *              screen off, or sleep. Kept in /etc/display.conf (lid=).
  *   Look       Phosphor (a green monitor), Amber 1984, Glass or BeOS (draw.c),
  *              and the size of everything, 50% to 400% (draw.c's zoom):
  *              the user's own (~/.look), applied at login.
@@ -28,7 +30,7 @@
 #define TOP 48                           /* the window's title strip */
 #define ROW 54                           /* a row of buttons or a field */
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
-       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130,
+       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130, S_LID = 140,
        S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET };
 enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
 
@@ -450,6 +452,23 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
         choices("Volume", vn, 5, vol < 0 ? -1 : vol & AUDIO_MUTE ? 0 : ((vol & 0xFF) + 12) / 25, S_VOL);
     }
 
+    if (atlas_power.flags & (ACPI_BAT | ACPI_LID)) {     /* a laptop (the ACPI server): battery, lid */
+        heading("POWER");
+        acpi_status_t *b = &atlas_power;
+        p = t;
+        if (!(b->flags & ACPI_BAT)) strlcpy(p, "No battery.", 12);
+        else {
+            p += num(p, b->percent); p += strlcpy(p, b->flags & ACPI_CHARGING ? "%, charging" : b->flags & ACPI_AC ? "%, on AC" : "%", 12);
+            if (b->minutes >= 0) { p += strlcpy(p, " (", 3); p += num(p, b->minutes / 60); *p++ = ':'; *p++ = '0' + b->minutes % 60 / 10;
+                                   *p++ = '0' + b->minutes % 10; strlcpy(p, b->flags & ACPI_CHARGING ? " to full)" : " left)", 10); }
+        }
+        row_label("Battery");
+        if (fits(42)) label(cx, cy + 10, t, 2, C_TXT);
+        cy += ROW;
+        static const char *ln[2] = { "Screen off", "Sleep" };
+        if (b->flags & ACPI_LID) choices("Lid closed", ln, (b->flags & ACPI_S3) ? 2 : 1, atlas_lid_sleep, S_LID);
+    }
+
     heading("NETWORK");
     if (!wifi_have) {
         row_label("Wi-Fi");
@@ -517,6 +536,10 @@ int settings_click(int kind, int arg)
     if (arg >= S_SIZE && arg < S_SIZE + NSIZE) set_size(sizes[arg - S_SIZE][0], sizes[arg - S_SIZE][1]);
     else if (arg == S_SIZE + NSIZE) set_size(nat[0], nat[1]);
     else if (arg >= S_BRIGHT && arg < S_BRIGHT + 5) set_bright(brights[arg - S_BRIGHT]);
+    else if (arg >= S_LID && arg < S_LID + 2) {
+        const char *kv[1] = { (atlas_lid_sleep = arg - S_LID) ? "lid=sleep" : "lid=off" };
+        conf_set("/etc/display.conf", kv, 1);
+    }
     else if (arg == S_KEEP) keep();
     else if (arg == S_BACK) { gen++; settings_revert(); back.on = 0; }
     else if (arg >= S_SPEED && arg < S_SPEED + 4) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(speeds[arg - S_SPEED], w, r); }

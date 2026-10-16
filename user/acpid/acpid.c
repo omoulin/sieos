@@ -37,6 +37,7 @@ static int self;
 static const uint8_t *fadt;
 static uint16_t pm1a, pm1b, pm1len, gpe0, gpelen, ec_data, ec_sc;   /* ports; gpelen: status bytes */
 static uint8_t gpe_en[16];                      /* the GPEs we enabled */
+static uint16_t hits[128];                      /* each one's events since the last tick */
 static int ec = -1, ec_gpe = -1, bat = -1, ac = -1, lid = -1, pwrb = -1, sci = -1;
 static int s3, bif = 1, button, dirty;          /* ACPI_S3 if it can sleep; read the battery's capacities again; the power button
                                                    was pressed; read all again */
@@ -205,8 +206,9 @@ static void events(void)
             if (edge || g == ec_gpe) outb(gpe0 + i, (uint8_t)(1 << b));   /* edge: cleared before, level: after */
             int64_t r;
             if (g == ec_gpe) ec_events();
-            if (k >= 0 && aml_eval(k, 0, 0, 0, &r, 1) < 0) {
-                log_line("GPE %02x: %s failed: GPE disabled\n", g, m);
+            int bad = k >= 0 && aml_eval(k, 0, 0, 0, &r, 1) < 0;
+            if (bad || ++hits[g] > 3000) {                /* (a storm: 100 a second for 30 s) */
+                log_line("GPE %02x: %s %s: GPE disabled\n", g, m, bad ? "failed" : "keeps coming");
                 gpe_en[i] &= (uint8_t)~(1 << b);
                 gpe_set();
             }
@@ -217,7 +219,8 @@ static void events(void)
 
 /* ---- The fixed hardware armed (at start, after waking): ACPI mode (the
  * firmware asked through its SMI port if not on), status bits cleared, the
- * fixed power button (unless it is a device) and our GPEs enabled. */
+ * fixed power button (unless it is a device) and our GPEs enabled, the
+ * controller's pending queries run. */
 static uint16_t cnt, smi;
 static void arm(void)
 {
@@ -234,25 +237,29 @@ static void arm(void)
     }
     for (int i = 0; i < gpelen; i++) outb(gpe0 + i, 0xFF);
     gpe_set();
+    if (ec >= 0) ec_events();                       /* (news it had before: no new GPE edge for them) */
 }
 
 /* ---- PCI: what the sleep loses. Each function's header (BARs, command,
  * bridges' buses and windows, interrupt line) and its PCI Express control
- * registers are kept, then written back on waking (the bridges first, as
- * found; the command last), before the drivers start again. */
-#define NPCI 128
-static struct { uint32_t at, cap, h[16], x[4]; } pcs[NPCI];
+ * registers are kept, then written back where they changed on waking (the
+ * bridges first, as found; the command last), before the drivers start
+ * again; the host and ISA bridges' whole configuration (the chipset's own:
+ * QEMU's ICH9 loses its ACPI ports; a real firmware restores them itself). */
+#define NPCI 64
+static struct { uint32_t at, cap, h[64], x[4]; } pcs[NPCI];
 static int npcs;
+static const uint8_t pcie[4] = { 8, 0x10, 0x28, 0x30 };   /* PCI Express: device, link control (and their 2s) */
 static void pci_keep(void)
 {
     pci_t p;
     for (npcs = 0; npcs < NPCI && !pci_scan(&p, 0, 0, 0, npcs); npcs++) {
         pcs[npcs].at = p.at;
         pcs[npcs].cap = 0;
-        for (int r = 0; r < 16; r++) pcs[npcs].h[r] = pci_cfg(&p, 4 * r);
+        for (int r = 0; r < 64; r++) pcs[npcs].h[r] = pci_cfg(&p, 4 * r);
         for (int c = pcs[npcs].h[13] & 0xFC, k = 0; c && k < 48; c = pci_cfg(&p, c) >> 8 & 0xFC, k++)
             if ((pci_cfg(&p, c) & 0xFF) == 0x10) { pcs[npcs].cap = (uint32_t)c; break; }
-        for (int r = 0; r < 4 && pcs[npcs].cap; r++) pcs[npcs].x[r] = pci_cfg(&p, pcs[npcs].cap + (int[]){ 8, 0x10, 0x28, 0x30 }[r]);
+        for (int r = 0; r < 4 && pcs[npcs].cap; r++) pcs[npcs].x[r] = pci_cfg(&p, pcs[npcs].cap + pcie[r]);
     }
     log_line("PCI: %d functions kept, %d interrupt links\n", npcs, aml_links(0));
 }
@@ -263,8 +270,8 @@ static void pci_back(void)
     for (int i = 0; i < npcs; i++) {
         pci_t p = { .at = pcs[i].at };
         if (pci_cfg(&p, 0) != pcs[i].h[0]) continue;     /* (gone, or behind a bridge not back yet) */
-        for (int r = 0; r < 4 && pcs[i].cap; r++) pci_cfgw(&p, pcs[i].cap + (int[]){ 8, 0x10, 0x28, 0x30 }[r], pcs[i].x[r] & 0xFFFF);
-        for (int r = 15; r >= 1; r--)
+        for (int r = 0; r < 4 && pcs[i].cap; r++) pci_cfgw(&p, pcs[i].cap + pcie[r], pcs[i].x[r] & 0xFFFF);
+        for (int r = (pcs[i].h[2] >> 24 == 6 && (pcs[i].h[2] >> 16 & 0xFF) <= 1) ? 63 : 15; r >= 1; r--)   /* (host, ISA bridges: all) */
             if (pci_cfg(&p, 4 * r) != pcs[i].h[r]) pci_cfgw(&p, 4 * r, r == 1 ? pcs[i].h[1] & 0xFFFF : pcs[i].h[r]), n++;
     }
     log_line("PCI: %d registers written back\n", n);
@@ -392,7 +399,7 @@ int main(int argc, char **argv)
                 if (m.w[1] == st.seq && nwait < 8) { waiters[nwait++] = from; from = 0; break; }
                 /* fall through */
             case ACPI_STATUS: out = st; r.sbuf = &out; r.slen = sizeof out; break;
-            case TICK: if (m.pid != self) r.w[0] = -EPERM; else dirty = 1; break;
+            case TICK: if (m.pid != self) r.w[0] = -EPERM; else dirty = 1, memset(hits, 0, sizeof hits); break;
             default: r.w[0] = -ENOSYS;
             }
             if (from) ipc_reply(from, &r);

@@ -149,6 +149,5 @@ LBA formats as read, a SieFS partition on one (no tool makes it yet: copy
   [raspberrypi.md](raspberrypi.md)).
 - The kernel and the modules must fit below 4 GiB, and the memory at 1 MiB
   must be free (it is on the firmwares we know of).
-- Power off on real hardware: the ACPI sleep command needs the firmware's
-  tables to be read (not done yet): on a real PC, `poweroff` stops SIEOS and
-  writes the disk, then the machine is turned off with its power button.
+- Power off, restart and sleep on real hardware go through the firmware's
+  ACPI tables ([power.md](power.md)); untested on the laptop yet.

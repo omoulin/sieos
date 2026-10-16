@@ -145,7 +145,10 @@ What a window can be:
   Settings; the apps of `/etc/apps`; every open window (minimized ones
   "(hidden)"); *Log out*.
 - **The tray:** sia's state (idle, local, online) after a dot, lit while
-  sia runs, and the clock in the title size.
+  sia runs, and the clock in the title size. On a laptop, the battery left of the
+  clock (its outline filled as charged; accent while charging, red under
+  15%; the % in Settings and `battery`); the menu then has Sleep, and Settings a Power section (the
+  lid closed: screen off, or sleep). See [power.md](power.md).
 - **The apps:** Terminal, sia, Files, Text editor, Pins, Settings. A running
   one is in bold with a lit dot (Terminal: and how many, from 2): a click
   brings its window back in front (the terminal used last, for Terminal);

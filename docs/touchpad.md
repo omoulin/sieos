@@ -11,10 +11,10 @@ once and is not started again.
 
 | File | What it does |
 |---|---|
-| `user/i2chid/aml.c` | a small reader of the ACPI tables (AML): finds the `PNP0C50` devices and evaluates what they need |
+| `user/lib/aml.c` | a small interpreter of the ACPI tables (AML), shared with `acpid` ([power.md](power.md)): finds the `PNP0C50` devices and evaluates what they need |
 | `user/i2chid/i2chid.c` | the LPSS I2C controller (DesignWare), HID over I2C, the GPIO interrupt |
 | `user/lib/hidrep.c` | report descriptors and reports: mice, tablets, precision touchpads (shared with `user/usb/hid.c`) |
-| `kernel/arch/x86_64/smp.c` | `SYS_ACPI`: the DSDT and SSDTs, one after the other (drivers only) |
+| `kernel/arch/x86_64/smp.c` | `SYS_ACPI`: the FADT, DSDT and SSDTs, one after the other (drivers only) |
 
 ## How it works
 
