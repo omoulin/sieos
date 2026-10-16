@@ -111,9 +111,17 @@ long net_close(long s)
     return call(&m, 0);
 }
 
-long net_ping(uint32_t ip, unsigned timeout_ms)
+long net_ping_ttl(uint32_t ip, int ttl, uint32_t *from, unsigned timeout_ms)
 {
-    msg_t m = { .w = { NET_PING, ip, 0, (uint64_t)timeout_ms << 16 } };
+    msg_t m = { .w = { NET_PING, ip, (uint64_t)ttl, (uint64_t)timeout_ms << 16 } };
+    long r = call(&m, 1);
+    if (r >= 0 && from) *from = (uint32_t)m.w[1];
+    return r;
+}
+
+long net_sockets(net_sock_t *s, int max)
+{
+    msg_t m = { .w = { NET_SOCKETS }, .rbuf = s, .rlen = (size_t)max * sizeof *s };
     return call(&m, 1);
 }
 

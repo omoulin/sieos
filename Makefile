@@ -34,11 +34,12 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs date acct tty fmt string fdt virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 pubkey net http tls x509   # the library: a program gets only what it uses
+ULIBOBJ := fs date acct tty fmt string fdt pci virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 pubkey net http tls x509   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
 BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make   # programs on the disk, in /bin
 LINKS   := passwd su useradd userdel    # other names of /bin/acct (symbolic links)
+NETLINKS := ping host nslookup ifconfig netstat traceroute nc curl wget   # other names of /bin/fetch (docs/net.md)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
 BINS    += $(if $(filter arm64,$(ARCH)),wifi wifid)   # the Raspberry Pis' Wi-Fi: the command and its server
@@ -103,9 +104,9 @@ $(B)/user/vblk/%.o: user/vblk/%.c user/vblk/*.h user/lib/mk.h include/mk/*.h $(T
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
-# The network card server: virtio, and on arm64 also the Raspberry Pis' own
+# The network card server: virtio; on x86-64 also Intel e1000 (e1000.c), on arm64 the Raspberry Pis' own
 # Ethernet (genet.c: Pi 4; gem.c: Pi 5's RP1).
-VNET_X  := $(if $(filter arm64,$(ARCH)),$(B)/user/vnet/genet.o $(B)/user/vnet/gem.o)
+VNET_X  := $(if $(filter arm64,$(ARCH)),$(B)/user/vnet/genet.o $(B)/user/vnet/gem.o,$(B)/user/vnet/e1000.o)
 $(B)/vnet.elf: $(B)/user/vnet.o $(VNET_X) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(VNET_X) $(ULIB)
 $(B)/user/vnet.o: user/vnet/nic.h
@@ -209,6 +210,7 @@ $(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atla
 	for p in $(BINS); do cp $(B)/$$p.elf $(B)/rootfs/bin/$$p; done
 	$(if $(filter atlas,$(KARCH_NOBINS)),cp $(B)/noscreen.elf $(B)/rootfs/bin/atlas)
 	for l in $(LINKS); do ln -s acct $(B)/rootfs/bin/$$l; done
+	for l in $(NETLINKS); do ln -s fetch $(B)/rootfs/bin/$$l; done
 	chmod -R u=rwX,go=rX $(B)/rootfs && chmod 755 $(B)/rootfs/bin/* && chmod 1777 $(B)/rootfs/tmp
 	touch $@
 $(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs
@@ -222,6 +224,7 @@ $(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs
 	        ../host/siefs ../disk.img put $$f /$${f#./} && \
 	        case $$f in ./bin/*) ../host/siefs ../disk.img chmod 755 /$${f#./};; esac; done; \
 	    for l in $(LINKS); do ../host/siefs ../disk.img symlink acct /bin/$$l 2>/dev/null; done; \
+	    for l in $(NETLINKS); do ../host/siefs ../disk.img symlink fetch /bin/$$l 2>/dev/null; done; \
 	    cd ../.. && touch $@; \
 	fi
 # The default model for sia (models/, docs/llm.md) goes in /models once
@@ -653,9 +656,13 @@ llm-neon-test: $(SICC)
 
 # ---- the network (docs/net.md): the TLS crypto against official vectors and
 # openssl-made signatures (host), then the whole stack in SIEOS: DHCP, ping,
-# DNS, HTTP, a listening socket, HTTPS (real sites and a test CA), sia's
+# DNS, HTTP, a listening socket, HTTPS (real sites and a test CA), the
+# network commands (ping, host, ifconfig, netstat, nc, wget...), sia's
 # remote backend against a mock server, a netd restart. NET_OFFLINE=1 skips
-# the real sites.
+# the real sites. net-nic-test: the essentials (DHCP, ping, DNS, HTTP,
+# HTTPS) on each other kind of card, MACHINE:CARD (x86-64: the default cards
+# of QEMU's "pc" and "q35", virtio 1.0 without the legacy interface; arm64:
+# virtio on PCIe, what "-nic user" gives on virt).
 NET_CRYPTO := lib/sha2.c lib/aead.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
 $(B)/host/net-crypto-test: tests/net/crypto.c $(NET_CRYPTO) include/mk/crypto.h
 	@mkdir -p $(@D)
@@ -666,4 +673,12 @@ net-crypto-test: $(B)/host/net-crypto-test
 net-test: all $(B)/host/fsck.siefs net-crypto-test
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/nettest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
-.PHONY: net-crypto-test net-test
+NICS_x86_64 := pc:e1000 q35:e1000e pc:virtio-net-pci,disable-legacy=on q35:virtio-net-pci,disable-legacy=on
+NICS_arm64  := virt:virtio-net-pci
+net-nic-test: all $(B)/host/fsck.siefs
+	for n in $(NICS_$(ARCH)); do \
+	    rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null && \
+	    NET_QUICK=1 NET_NIC=$${n#*:} NET_MACHINE=$(if $(filter x86_64,$(ARCH)),$${n%%:*}) \
+	    python3 tools/nettest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio || exit 1; \
+	done
+.PHONY: net-crypto-test net-test net-nic-test

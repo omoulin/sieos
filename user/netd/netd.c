@@ -155,13 +155,14 @@ static void ip_out_frame(uint32_t hop, const uint8_t *pkt, size_t n)
 
 /* Send an IPv4 packet: header + payload (the payload is copied). */
 static uint16_t ip_id;
+static uint8_t ip_ttl = 64;
 static void ip_send(uint32_t dst, int proto, const uint8_t *payload, size_t n)
 {
     static uint8_t pkt[1600];
     if (n > 1480) return;
     uint8_t *h = pkt;
     h[0] = 0x45; h[1] = 0; p16(h + 2, 20 + n); p16(h + 4, ++ip_id); p16(h + 6, 0x4000);   /* DF */
-    h[8] = 64; h[9] = (uint8_t)proto; p16(h + 10, 0);
+    h[8] = ip_ttl; h[9] = (uint8_t)proto; p16(h + 10, 0);
     p32(h + 12, my_ip); p32(h + 16, dst);
     p16(h + 10, csum_fold(csum_add(0, h, 20)));
     memcpy(pkt + 20, payload, n);
@@ -836,7 +837,7 @@ static void resolve(long token, const char *name, uint64_t ms)
 }
 
 /* ---- ICMP: answer pings; send ours. */
-static struct { long token; uint32_t ip; uint16_t seq; int64_t sent, deadline; } pings[8];
+static struct { long token; uint32_t ip; uint16_t seq; uint8_t ttl; int64_t sent, deadline; } pings[8];
 static uint16_t ping_seq;
 
 static void icmp_input(uint32_t src, const uint8_t *p, size_t n)
@@ -849,10 +850,17 @@ static void icmp_input(uint32_t src, const uint8_t *p, size_t n)
         r[0] = 0; p16(r + 2, 0);
         p16(r + 2, csum_fold(csum_add(0, r, n)));
         ip_send(src, 1, r, n);
-    } else if (p[0] == 0 && g16(p + 4) == 0x5349) {   /* echo reply to one of ours ("SI") */
+    } else if (p[0] == 0 || p[0] == 11) {          /* echo reply, or "time exceeded" for one */
+        uint32_t dst = src;                      /* (that one quotes our packet's IP header and 8 bytes) */
+        if (p[0] == 11) {
+            size_t ihl = n >= 36 ? (p[8] & 15) * 4u : 0;
+            if (ihl < 20 || n < 16 + ihl || p[8 + ihl] != 8) return;
+            dst = g32(p + 24); p += ihl + 8;
+        }
+        if (g16(p + 4) != 0x5349) return;        /* ours: "SI" */
         for (int i = 0; i < 8; i++)
-            if (pings[i].token && pings[i].ip == src && pings[i].seq == g16(p + 6)) {
-                answer(pings[i].token, (now() - pings[i].sent) / 1000, 0, 0, 0, 0);
+            if (pings[i].token && pings[i].ip == dst && pings[i].seq == g16(p + 6)) {
+                answer(pings[i].token, (now() - pings[i].sent) / 1000, src, 0, 0, 0);
                 pings[i].token = 0;
             }
     }
@@ -866,7 +874,9 @@ static void ping_send(int i)
     memcpy(p + 8, "SIEOS ping", 10);
     p16(p + 2, csum_fold(csum_add(0, p, sizeof p)));
     pings[i].sent = now();
+    ip_ttl = pings[i].ttl ? pings[i].ttl : 64;
     ip_send(pings[i].ip, 1, p, sizeof p);
+    ip_ttl = 64;
 }
 
 /* ---- Frames received. */
@@ -1077,7 +1087,7 @@ static long request(long from, msg_t *m, const uint8_t *data, size_t dlen)
 {
     sock_t *s = 0;
     uint64_t op = m->w[0], timeout = m->w[3] >> 16;
-    if (op != NET_SOCKET && op != NET_RESOLVE && op != NET_PING && op != NET_INFO && op != NET_TICK && op != NET_FRAMES) {
+    if (op != NET_SOCKET && op != NET_RESOLVE && op != NET_PING && op != NET_INFO && op != NET_SOCKETS && op != NET_TICK && op != NET_FRAMES) {
         s = by_handle((long)m->w[1], m->pid);
         if (!s) return -EBADF;
     }
@@ -1201,7 +1211,7 @@ static long request(long from, msg_t *m, const uint8_t *data, size_t dlen)
         for (int i = 0; i < 8; i++)
             if (!pings[i].token) {
                 if (!nic_up) return -ENETUNREACH;
-                pings[i] = (typeof(pings[0])){ from, (uint32_t)m->w[1], ++ping_seq, 0, deadline_ms(timeout, 5 * SEC) };
+                pings[i] = (typeof(pings[0])){ from, (uint32_t)m->w[1], ++ping_seq, (uint8_t)m->w[2], 0, deadline_ms(timeout, 5 * SEC) };
                 if (my_ip) ping_send(i);
                 { deferred = 1; return 0; }
             }
@@ -1210,9 +1220,18 @@ static long request(long from, msg_t *m, const uint8_t *data, size_t dlen)
         stats.ip = my_ip; stats.mask = my_mask; stats.gw = my_gw; stats.dns = my_dns;
         memcpy(stats.mac, mac, 6); stats.mtu = 1500; stats.up = nic_up;
         stats.time = rtc_base ? rtc_base + (now() - rtc_ns) / SEC : 0;
+        stats.iface = cur; stats.link = cur >= 0 ? ifs[cur].link : -1;
         memcpy(outbuf, &stats, sizeof stats);
         answer(from, 0, 0, 0, outbuf, sizeof stats);
         { deferred = 1; return 0; }
+    case NET_SOCKETS: {                          /* (netstat) */
+        net_sock_t *o = (net_sock_t *)outbuf;
+        int n = 0;
+        for (int i = 0; i < MAXSOCK; i++)
+            if ((s = socks[i])) o[n++] = (net_sock_t){ s->rip, s->lport, s->rport, (uint8_t)s->type, (uint8_t)s->state, { 0 }, s->owner };
+        answer(from, n, 0, 0, outbuf, n * sizeof *o);
+        { deferred = 1; return 0; }
+    }
     }
     return -ENOSYS;
 }

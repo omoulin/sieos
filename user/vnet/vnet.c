@@ -1,9 +1,10 @@
 /*
  * vnet - The network card server: port "nic0", whatever the card is. It
  * tries its backends in turn (nic.h) and serves with the first that finds a
- * card: virtio (QEMU: "-device virtio-net-pci,disable-modern=on" on x86-64,
- * "-device virtio-net-device" on arm64's virt), the Raspberry Pi 4's GENET
- * (genet.c), the Raspberry Pi 5's RP1 Ethernet (gem.c).
+ * card: virtio (QEMU's virtio-net, on PCI, legacy or modern, or on arm64's
+ * MMIO), Intel's e1000 and e1000e (e1000.c: QEMU's default cards on x86-64),
+ * the Raspberry Pi 4's GENET (genet.c), the Raspberry Pi 5's RP1 Ethernet
+ * (gem.c).
  *
  *   Receiving: a second thread waits for frames (rx_wait), packs a batch
  *   (rx_take) and sends it to the network server (port "net", NET_FRAMES):
@@ -36,11 +37,10 @@
 #endif
 
 /* ---- virtio: two virtqueues, 0 receives, 1 transmits. Every frame travels
- * with a small virtio header (10 bytes, all zeros: no offloads, the network
- * server computes its own checksums). */
+ * with a small virtio header (all zeros: no offloads, the network server
+ * computes its own checksums): 10 bytes, 12 on a modern device. */
 enum { D_NEXT = 1, D_WRITE = 2 };
 #define F_MAC (1u << 5)
-#define HDR 10                                   /* the legacy virtio-net header */
 #define NRX 64                                   /* receive buffers */
 #define BUFSZ 2048                               /* one receive buffer: header + frame */
 
@@ -60,6 +60,7 @@ static uint8_t *txmem;                           /* where NIC_SEND's frames land
 static uint64_t txmem_pa, zero_pa;               /* zero_pa: a zeroed header for every frame */
 static long irq_port;
 static int acked;                                /* this interrupt already acknowledged */
+static uint32_t hdr;                             /* the virtio-net header's size */
 
 /* printf into a buffer (always 0-terminated). */
 struct sbuf { char *p; size_t n, cap; };
@@ -101,6 +102,7 @@ static uint16_t vq_used_idx(vq_t *q) { return __atomic_load_n(&q->used[1], __ATO
 static int v_setup(nic_info_t *info, char *what, size_t cap)
 {
     if (vdev_find(&dev, VIRTIO_NET)) return -1;
+    hdr = dev.cc ? 12 : 10;
     vdev_status(&dev, 0);
     vdev_status(&dev, VS_ACK | VS_DRIVER);
     int mac = !!(vdev_features(&dev) & F_MAC);
@@ -114,7 +116,7 @@ static int v_setup(nic_info_t *info, char *what, size_t cap)
     if ((long)rxbuf < 0 || (long)txmem < 0 || (long)zero < 0) return -1;
     int n = NRX < rxq.size / 2 ? NRX : rxq.size / 2;
     for (int i = 0; i < n; i++) {                /* each buffer: header, then frame */
-        rxq.desc[2 * i] = (desc_t){ rxbuf_pa + (uint64_t)i * BUFSZ, HDR, D_NEXT | D_WRITE, (uint16_t)(2 * i + 1) };
+        rxq.desc[2 * i] = (desc_t){ rxbuf_pa + (uint64_t)i * BUFSZ, hdr, D_NEXT | D_WRITE, (uint16_t)(2 * i + 1) };
         rxq.desc[2 * i + 1] = (desc_t){ rxbuf_pa + (uint64_t)i * BUFSZ + 16, BUFSZ - 16, D_WRITE, 0 };
         vq_publish(&rxq, (uint16_t)(2 * i));
     }
@@ -124,7 +126,7 @@ static int v_setup(nic_info_t *info, char *what, size_t cap)
     vdev_status(&dev, VS_ACK | VS_DRIVER | VS_OK);
     dma_wmb();
     vdev_notify(&dev, 0);
-    nic_fmt(what, cap, "virtio, interrupt line %d", dev.irq & ~IRQ_LEVEL);
+    nic_fmt(what, cap, "virtio%s, interrupt line %d", dev.cc ? " 1.0" : "", dev.irq & ~IRQ_LEVEL);
     return 0;
 }
 
@@ -145,8 +147,8 @@ static size_t v_rx_take(uint8_t *batch, size_t cap)
     while (rxq.last != vq_used_idx(&rxq)) {
         volatile uint32_t *e = (volatile uint32_t *)(rxq.used + 2) + 2 * (rxq.last % rxq.size);
         uint32_t id = e[0], len = e[1];
-        if (len > HDR && len - HDR <= BUFSZ - 16 && id % 2 == 0) {
-            uint32_t fl = len - HDR;
+        if (len > hdr && len - hdr <= BUFSZ - 16 && id % 2 == 0) {
+            uint32_t fl = len - hdr;
             if (n + 2 + fl > cap) break;         /* full: the rest goes in the next batch */
             batch[n] = (uint8_t)fl; batch[n + 1] = (uint8_t)(fl >> 8);
             memcpy(batch + n + 2, rxbuf + (id / 2) * BUFSZ + 16, fl);
@@ -170,7 +172,7 @@ static long v_send(size_t len)
     for (size_t off = 0; off + 2 <= len; frames++) {
         uint32_t fl = txmem[off] | txmem[off + 1] << 8;
         if (fl < 14 || fl > 1514 || off + 2 + fl > len || d + 2 > txq.size) return -EINVAL;
-        txq.desc[d] = (desc_t){ zero_pa, HDR, D_NEXT, (uint16_t)(d + 1) };
+        txq.desc[d] = (desc_t){ zero_pa, hdr, D_NEXT, (uint16_t)(d + 1) };
         txq.desc[d + 1] = (desc_t){ txmem_pa + off + 2, fl, 0, 0 };
         vq_publish(&txq, d);
         d += 2;
@@ -335,7 +337,7 @@ static int64_t rtc_now(void)
 #if defined(__aarch64__)
 static const nic_t *const cards[] = { &nic_virtio, &nic_genet, &nic_gem };
 #else
-static const nic_t *const cards[] = { &nic_virtio };
+static const nic_t *const cards[] = { &nic_virtio, &nic_e1000 };
 #endif
 static const nic_t *card;
 static nic_info_t info;

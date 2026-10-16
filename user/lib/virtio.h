@@ -1,12 +1,17 @@
 /*
  * virtio.h - Finding and talking to a virtio device, whatever the "transport":
- *   x86-64: the legacy PCI interface (registers in an I/O port range, QEMU's
- *           "-device virtio-...-pci,disable-modern=on");
- *   arm64:  the legacy MMIO interface (registers in memory, found in the
- *           device tree: QEMU's virt, "-device virtio-...-device").
- * Both use the same "legacy" virtqueue layout (descriptors, available ring,
- * then the used ring on the next page), given to the device as a page
- * number. The drivers (vblk, vnet) only see these functions. virtio.c.
+ *   legacy PCI (x86-64): registers in an I/O port range (QEMU's
+ *           "-device virtio-...-pci" on a PCI bus, or with disable-modern=on);
+ *   legacy MMIO (arm64): registers in memory, found in the device tree
+ *           (QEMU's virt, "-device virtio-...-device");
+ *   virtio 1.0 PCI ("modern", both): registers in memory, in pieces the
+ *           device's PCI capabilities point to (QEMU's virtio-...-pci on
+ *           PCIe, on arm64's virt, or with disable-legacy=on).
+ * All three take the same "legacy" virtqueue layout (descriptors, available
+ * ring, then the used ring on the next page), given as its address. The
+ * drivers (vblk, vnet, con) only see these functions; the one difference
+ * left to them: a modern network card's frame header is 12 bytes, not 10.
+ * virtio.c.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -18,8 +23,12 @@ enum { VS_ACK = 1, VS_DRIVER = 2, VS_OK = 4 };      /* device status bits */
 
 typedef struct {
     int irq;                     /* its interrupt line (irq_bind; IRQ_LEVEL included when level) */
-    uint16_t io;                 /* x86-64: the I/O port range */
-    volatile uint8_t *mm;        /* arm64: the registers */
+    uint16_t io;                 /* legacy PCI: the I/O port range */
+    volatile uint8_t *mm;        /* legacy MMIO: the registers */
+    volatile uint8_t *cc, *nt, *isr, *dc;   /* modern: common configuration (0: not modern),
+                                               notifications, interrupt status, device's own */
+    uint32_t nmul;               /* modern: notification address = nt + queue's offset * nmul */
+    uint16_t noff[4];            /* modern: queues 0-3's offsets */
 } vdev_t;
 
 int      vdev_find(vdev_t *d, int type);            /* the first device of that type: 0 if found */

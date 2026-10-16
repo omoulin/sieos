@@ -19,8 +19,12 @@ long net_udp(uint16_t port);                                             /* -> s
 long net_sendto(long s, uint32_t ip, uint16_t port, const void *buf, size_t n);
 long net_recvfrom(long s, void *buf, size_t n, uint32_t *ip, uint16_t *port, unsigned timeout_ms);
 long net_close(long s);
-long net_ping(uint32_t ip, unsigned timeout_ms);                         /* -> round trip in µs */
+/* ping: -> the round trip in µs; ttl 0: 64; *from (if not 0): who answered
+ * (a router on the way when ttl is too small to get there) */
+long net_ping_ttl(uint32_t ip, int ttl, uint32_t *from, unsigned timeout_ms);
+static inline long net_ping(uint32_t ip, unsigned timeout_ms) { return net_ping_ttl(ip, 0, 0, timeout_ms); }
 long net_info(net_info_t *in);
+long net_sockets(net_sock_t *s, int max);                                /* -> how many */
 const char *net_ntoa(uint32_t ip, char buf[16]);                         /* "a.b.c.d" */
 const char *net_strerror(long e);                                        /* a few words */
 

@@ -3,6 +3,7 @@
  * driver. One program serves "nic0" whatever the card is; it tries each
  * backend in turn and keeps the first that finds its card:
  *   virtio  (vnet.c)   QEMU, on both architectures;
+ *   e1000   (e1000.c)  x86-64: Intel's 82540EM and 82574L (QEMU's default cards);
  *   genet   (genet.c)  the Raspberry Pi 4's own Ethernet (BCM2711 GENET v5);
  *   gem     (gem.c)    the Raspberry Pi 5's Ethernet, in its RP1 chip.
  *
@@ -36,7 +37,7 @@ typedef struct {
     void (*stop)(void);
 } nic_t;
 
-extern const nic_t nic_virtio, nic_genet, nic_gem;
+extern const nic_t nic_virtio, nic_e1000, nic_genet, nic_gem;
 
 /* printf into a buffer (vnet.c). */
 void nic_fmt(char *out, size_t cap, const char *fmt, ...);

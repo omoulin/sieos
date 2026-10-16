@@ -266,20 +266,34 @@ enum {
                        reply w[1] = sender's address, w[2] its port              */
     NET_CLOSE,      /* w[1] = handle                                              -> 0 */
     NET_RESOLVE,    /* sbuf = host name, w[3] = timeout -> 0; reply w[1] = address */
-    NET_PING,       /* w[1] = address, w[3] = timeout             -> round trip in µs */
+    NET_PING,       /* w[1] = address, w[2] = time to live (0: 64), w[3] = timeout -> round
+                       trip in µs; reply w[1] = who answered (with a small TTL: a router
+                       on the way, "time exceeded")                               */
     NET_INFO,       /* rbuf <- net_info_t                                         -> 0 */
     NET_FRAMES,     /* (from a network driver) w[1] = its interface (NET_IF_...); sbuf =
                        frames received, each a 16-bit length then the frame                                     -> 0 */
     NET_TICK,       /* (netd's own timer thread)                       -> ns to wait */
     NET_LINK,       /* (from a network driver) w[2] = its interface; w[1] = 1: the link came up
                        (netd asks DHCP again), 0: it went down               -> 0 */
+    NET_SOCKETS,    /* rbuf <- net_sock_t[], every socket                         -> how many */
 };
+typedef struct {
+    uint32_t rip;                              /* the other side's address and port (TCP) */
+    uint16_t lport, rport;                     /* lport: ours */
+    uint8_t type, state, _pad[2];              /* NET_TCP/NET_UDP; TCP's state: closed, listen,
+                                                  syn-sent, syn-received, established, fin-wait-1,
+                                                  fin-wait-2, closing, time-wait, close-wait,
+                                                  last-ack, waiting for the network */
+    int32_t owner;                             /* the process's pid */
+} net_sock_t;
 typedef struct {
     uint32_t ip, mask, gw, dns;                /* from DHCP; 0 while not configured */
     uint8_t mac[6]; uint16_t mtu;
     int64_t time;                              /* now, in seconds since 1970 (UTC) */
     uint64_t rx_packets, tx_packets, rx_bytes, tx_bytes;
     int32_t up, sockets;                       /* up: a network card is present */
+    int32_t iface, link;                       /* the interface in use (NET_IF_..., -1: none), its
+                                                  link (1 up, 0 down, -1 not known: virtio) */
 } net_info_t;
 /* Network errors (POSIX numbers). */
 #ifndef ENETUNREACH

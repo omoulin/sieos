@@ -9,6 +9,11 @@ Usage: nettest.py <cpus> <host tools dir> <disk image> <qemu command line...>
 (see make net-test). Needs the host's internet access for the HTTPS part
 (skipped with NET_OFFLINE=1).
 
+NET_NIC=CARD (QEMU's -device, e.g. e1000) replaces the command line's
+network card, NET_MACHINE=q35 adds "-M q35" (x86-64), and NET_QUICK=1 checks
+only the essentials on it: the card found, DHCP, ping, DNS, HTTP, HTTPS
+(make net-nic-test runs it on each kind of card).
+
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import hashlib, http.server, os, re, select, shutil, socket, subprocess, sys, tempfile, threading, time
@@ -19,6 +24,9 @@ cpus, tools, image, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.ar
 copy = image + ".net"
 shutil.copyfile(image, copy)
 cmdline = [a.replace(image, copy) if a.startswith("file=") else a for a in cmdline]
+NIC, QUICK = os.environ.get("NET_NIC"), os.environ.get("NET_QUICK")
+if NIC: cmdline = [NIC + ",netdev=n0" if "netdev=n0" in a else a for a in cmdline]
+if os.environ.get("NET_MACHINE"): cmdline[1:1] = ["-M", os.environ["NET_MACHINE"]]
 
 # A web server on the host (QEMU's user network shows the host as 10.0.2.2),
 # and a forwarded port to reach a listening socket inside SIEOS.
@@ -38,8 +46,26 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 wport = srv.server_address[1]
-s = socket.socket(); s.bind(("127.0.0.1", 0)); fport = s.getsockname()[1]; s.close()
-cmdline = [a.replace("user,id=n0", f"user,id=n0,hostfwd=tcp:127.0.0.1:{fport}-:8080") for a in cmdline]
+def free_port(kind=socket.SOCK_STREAM):
+    s = socket.socket(socket.AF_INET, kind); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close()
+    return p
+fport, nport, uport = free_port(), free_port(), free_port(socket.SOCK_DGRAM)
+cmdline = [a.replace("user,id=n0", f"user,id=n0,hostfwd=tcp:127.0.0.1:{fport}-:8080,"
+                     f"hostfwd=tcp:127.0.0.1:{nport}-:9000,hostfwd=udp:127.0.0.1:{uport}-:9001") for a in cmdline]
+
+# For nc: a TCP and a UDP server on the host that answer in capitals.
+def tcp_upper(ls):
+    while True:
+        c, _ = ls.accept()
+        with c:
+            while (d := c.recv(4096)): c.sendall(d.upper())
+tls_ = socket.socket(); tls_.bind(("127.0.0.1", 0)); tls_.listen(4); eport = tls_.getsockname()[1]
+threading.Thread(target=tcp_upper, args=(tls_,), daemon=True).start()
+def udp_upper(us):
+    while True:
+        d, a = us.recvfrom(4096); us.sendto(d.upper(), a)
+us_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); us_.bind(("127.0.0.1", 0)); ueport = us_.getsockname()[1]
+threading.Thread(target=udp_upper, args=(us_,), daemon=True).start()
 
 
 # TLS 1.3 servers on the host (openssl s_server), with certificates from a
@@ -136,6 +162,22 @@ expect("login: "); send("root"); expect("Password: "); send("rootpass1"); expect
 print("ok: logged in")
 
 check("fetch -i", "address 10.0.2.15/255.255.255.0", "gateway 10.0.2.2", "DNS 10.0.2.3")
+card = re.search(r"vnet: card [^\r\n]*", b"".join(log).decode(errors="replace"))
+print("   " + (card.group(0) if card else "vnet: (no card line)"))
+if QUICK:
+    check("fetch -p 10.0.2.2 3", "reply in")
+    check(f"fetch http://10.0.2.2:{wport}/small.txt", "hello from the host")
+    seen = check(f"fetch -o /tmp/big.bin http://10.0.2.2:{wport}/big.bin", "bytes in", timeout=120)
+    print("   " + re.search(r"\d+ bytes in .*", seen).group(0).strip())
+    if not os.environ.get("NET_OFFLINE"):
+        check("host example.com", "example.com has address ")
+        check("fetch -v https://example.com/", "HTTP 200", "cipher: TLS_", "Example Domain", timeout=60)
+    check(f"fetch -v https://10.0.2.2:{tls_port['rsa']}/", "HTTP 200", "s_server", timeout=60)
+    send("poweroff"); qemu.wait(SLOW * 10)
+    srv.shutdown()
+    for p in servers: p.kill()
+    print(f"PASS ({NIC or 'default card'})")
+    sys.exit(0)
 check("fetch -p 10.0.2.2 3", "reply in")
 check("fetch -r localhost", "127.0.0.1")
 check(f"fetch http://10.0.2.2:{wport}/small.txt", "hello from the host")
@@ -144,8 +186,9 @@ m = re.search(r"(\d+) bytes in (\d+) ms \((\d+) KB/s\)", seen)
 print(f"   download: {m.group(1)} bytes in {m.group(2)} ms = {int(m.group(3)) / 1024:.1f} MB/s")
 check(f"fetch http://10.0.2.2:{wport}/missing", "404")
 
-# a listening socket inside SIEOS, reached from the host
-send("fetch -l 8080"); expect("listening on port 8080")
+# a listening socket inside SIEOS (seen by netstat), reached from the host
+send("fetch -l 8080 &"); expect("listening on port 8080")
+check("netstat", "proto", "8080", "listen")
 c = socket.create_connection(("127.0.0.1", fport), timeout=10)
 c.sendall(b"GET / HTTP/1.1\r\nHost: sieos\r\n\r\n")
 resp = b""
@@ -155,11 +198,50 @@ while True:
     resp += d
 c.close()
 if b"hello from SIEOS" not in resp: sys.exit(f"FAIL: listen: {resp!r}")
-expect("answered"); expect(prompt)
+expect("answered")
 print("ok: fetch -l 8080, reached from the host")
 
+# the network's commands: links to /bin/fetch
+check("help", "ping", "ifconfig")
+check("ifconfig", "nic0: the cable, link ", "address 10.0.2.15/255.255.255.0", "gateway 10.0.2.2", "DNS 10.0.2.3", "received ")
+check("ping 10.0.2.2 -c 2", "10.0.2.2: reply in", "2 sent, 2 received")
+check("host localhost", "localhost has address 127.0.0.1")
+check("nslookup 10.0.2.3", "10.0.2.3 has address 10.0.2.3")
+check("traceroute 10.0.2.2", " 1  10.0.2.2  ")
+check("cd /tmp")
+check(f"wget http://10.0.2.2:{wport}/small.txt", "bytes in")
+check("cat small.txt", "hello from the host")
+check(f"curl -o c.txt http://10.0.2.2:{wport}/small.txt", "bytes in")
+check("cat c.txt", "hello from the host")
+check("cd")
+def ctrl_d(): qemu.stdin.write(b"\x04"); qemu.stdin.flush()
+send(f"nc 10.0.2.2 {eport}"); time.sleep(SLOW * 0.5)
+send("hello over tcp"); expect("HELLO OVER TCP")
+ctrl_d(); expect(prompt)
+print("ok: nc to a host's TCP server")
+send(f"nc -u 10.0.2.2 {ueport}"); time.sleep(SLOW * 0.5)
+send("hello over udp"); expect("HELLO OVER UDP")
+ctrl_d(); expect(prompt)
+print("ok: nc -u to a host's UDP server")
+send("nc -l 9000"); time.sleep(SLOW * 1)
+c = socket.create_connection(("127.0.0.1", nport), timeout=10)
+c.sendall(b"from the host\n"); expect("from the host")
+send("from sieos")
+got = b""
+while b"\n" not in got: got += c.recv(100)
+if got != b"from sieos\n": sys.exit(f"FAIL: nc -l: the host got {got!r}")
+c.close(); expect("the other side closed"); send(""); expect(prompt)
+print("ok: nc -l 9000, from the host and back")
+send("nc -l -u 9001"); time.sleep(SLOW * 1)
+u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.settimeout(10)
+u.sendto(b"datagram from the host\n", ("127.0.0.1", uport)); expect("datagram from the host")
+send("datagram back")
+if u.recvfrom(100)[0] != b"datagram back\n": sys.exit("FAIL: nc -l -u: no answer")
+ctrl_d(); expect(prompt)
+print("ok: nc -l -u 9001, from the host and back")
+
 if not os.environ.get("NET_OFFLINE"):
-    check("fetch -r example.com", "example.com: ")
+    check("host example.com", "example.com has address ")
     seen = check("fetch -v https://example.com/", "HTTP 200", "cipher: TLS_", "Example Domain", timeout=60)
     print("   " + re.search(r"cipher: (\S+)", seen).group(0))
     check("fetch -v -o /tmp/hf.html https://huggingface.co/", "HTTP 200", "bytes in", timeout=60)
