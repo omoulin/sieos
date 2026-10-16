@@ -402,6 +402,9 @@ enum {
     AUDIO_READ,       /* w[1] = rbuf's size; recording starts, and runs while someone
                          reads -> bytes in rbuf (waits for some)                 */
     AUDIO_VOL,        /* w[1] = volume 0-100, | AUDIO_MUTE; AUDIO_ASK: no change -> the same */
+    AUDIO_OUT,        /* w[1] = output (0 speakers, 1... HDMI/DP monitors with sound), or
+                         AUDIO_ASK -> w[0] the one playing, w[1] how many; rbuf: their
+                         names, one a line                                        */
 };
 #define AUDIO_MUTE 0x100
 #define AUDIO_ASK  0x200

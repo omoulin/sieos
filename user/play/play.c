@@ -4,6 +4,8 @@
  *   rec FILE.wav [SECONDS]    records that long (5 s if not said) from the
  *                             microphone or line in, in that format
  *   vol [0-100|mute]          shows or sets the volume (a number unmutes)
+ *   vol out [N]               lists the outputs (speakers, monitors with
+ *                             sound), or plays to output N
  * through the audio server (port "audio", /bin/audiod; started when first
  * needed). Ctrl-C stops play and rec.
  *
@@ -77,6 +79,15 @@ static int rec(const char *path, long secs)
 int main(int argc, char **argv)
 {
     const char *me = argc ? argv[0] : "play";
+    if (!strcmp(me, "vol") && argc > 1 && !strcmp(argv[1], "out")) {   /* the outputs; one chosen */
+        char *p = (char *)buf, *n;
+        msg_t m = { .w = { AUDIO_OUT, argc > 2 ? (uint64_t)strnum(argv[2]) : AUDIO_ASK }, .rbuf = buf, .rlen = 256 };
+        long v = call(&m);
+        if (v < 0) return fail("vol", v);
+        buf[m.rlen] = 0;
+        for (int i = 0; (n = strchr(p, '\n')); i++, p = n + 1) { *n = 0; printf("%c %d %s\n", i == v ? '*' : ' ', i, p); }
+        return 0;
+    }
     if (!strcmp(me, "vol")) {
         msg_t m = { .w = { AUDIO_VOL, AUDIO_ASK } };
         long v = call(&m);
@@ -88,6 +99,6 @@ int main(int argc, char **argv)
         printf("volume %ld%%%s\n", v & 0xFF, v & AUDIO_MUTE ? ", muted" : "");
         return 0;
     }
-    if (argc < 2) { printf("usage: play FILE.wav | rec FILE.wav [SECONDS] | vol [0-100|mute]\n"); return 1; }
+    if (argc < 2) { printf("usage: play FILE.wav | rec FILE.wav [SECONDS] | vol [0-100|mute|out [N]]\n"); return 1; }
     return !strcmp(me, "rec") ? rec(argv[1], argc > 2 ? strnum(argv[2]) : 5) : play(argv[1]);
 }

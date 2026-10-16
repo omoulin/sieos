@@ -31,7 +31,7 @@
 #define TOP 48                           /* the window's title strip */
 #define ROW 54                           /* a row of buttons or a field */
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
-       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130,
+       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130, S_OUT = 140,
        S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET,
        S_BPOW = 260, S_BSCAN = 262, S_BPAIR, S_BFORGET, S_BYES, S_BNO, S_BDEV = 270 };
 enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
@@ -49,6 +49,9 @@ static long port;
 static int scroll, field = -1, remote, key_set;
 static char fields[NF][200], msg[100];
 static int msg_err, vol = -1;           /* vol: AUDIO_VOL's answer; -1: not asked yet, -2: no sound card */
+static int nouts, osel;                  /* the sound outputs (AUDIO_OUT), the one playing */
+static char onames[96];
+static const char *outs[5];
 static struct { int on, w, h; } back;    /* a new size not kept yet: the old one */
 static volatile unsigned gen;            /* (which countdown is the current one) */
 
@@ -92,14 +95,21 @@ static void bt_ticker(void *a)                           /* twice a second while
 static void bt_follow(void) { bt_refresh(); if (!bt_ticking) { bt_ticking = 1; thread_start(bt_ticker, 0, 4096); } }
 int settings_bt_tick(void) { bt_refresh(); return 1; }
 
-/* The audio server's volume (it starts when first used). */
-static long audio_vol(uint64_t v)
+/* The audio server (it starts when first used): its volume; its outputs
+ * (names, one a line). */
+static long audio_call(uint64_t op, uint64_t v)
 {
     static long ap;
-    msg_t m = { .w = { AUDIO_VOL, v } };
+    msg_t m = { .w = { op, v }, .rbuf = onames, .rlen = sizeof onames - 1 };
     long e = call_named(&ap, "audio", &m, 1);
+    if (e >= 0 && op == AUDIO_OUT && (long)m.w[0] >= 0) {
+        osel = (int)m.w[0]; nouts = 0;
+        onames[m.rlen] = 0;
+        for (char *p = onames, *n; nouts < 5 && (n = strchr(p, '\n')); p = n + 1) { *n = 0; outs[nouts++] = p; }
+    }
     return e < 0 ? -2 : (long)m.w[0];
 }
+static long audio_vol(uint64_t v) { return audio_call(AUDIO_VOL, v); }
 
 /* Ask the Wi-Fi server for its status (if one is running). */
 static void wifi_refresh(void)
@@ -147,6 +157,7 @@ void settings_open(void)
     bt_sel = -1;
     bt_refresh();
     if (vol != -2) vol = port_find("audio") > 0 ? audio_vol(AUDIO_ASK) : -1;   /* (not started just for this) */
+    if (vol >= 0) audio_call(AUDIO_OUT, AUDIO_ASK);
     field = -1; scroll = 0; msg[0] = 0;
     say("atlas: settings open (wifi %s)\n", wifi_have ? "present" : "none");
 }
@@ -500,6 +511,7 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
     } else {
         static const char *vn[5] = { "Mute", "25%", "50%", "75%", "100%" };
         choices("Volume", vn, 5, vol < 0 ? -1 : vol & AUDIO_MUTE ? 0 : ((vol & 0xFF) + 12) / 25, S_VOL);
+        if (nouts > 1) choices("Output", outs, nouts, osel, S_OUT);   /* (a monitor with sound) */
     }
 
     heading("NETWORK");
@@ -628,6 +640,7 @@ int settings_click(int kind, int arg)
     else if (arg >= S_LOOK && arg < S_LOOK + NLOOK) atlas_look(arg - S_LOOK);
     else if (arg >= S_ZOOM && arg < S_ZOOM + NZOOM) atlas_zoom(zooms[arg - S_ZOOM]);
     else if (arg >= S_VOL && arg < S_VOL + 5) vol = audio_vol(arg > S_VOL ? 25 * (arg - S_VOL) : AUDIO_MUTE | (vol < 0 ? 80 : vol & 0xFF));
+    else if (arg >= S_OUT && arg < S_OUT + nouts) audio_call(AUDIO_OUT, arg - S_OUT);
     else if (arg >= S_SIA && arg < S_SIA + 2) { remote = arg - S_SIA; msg[0] = 0; }
     else if (arg >= S_FIELD && arg < S_FIELD + NF) field = arg - S_FIELD;
     else if (arg == S_WSCAN) wifi_scan();
