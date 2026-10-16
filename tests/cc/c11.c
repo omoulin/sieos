@@ -16,6 +16,9 @@ static _Alignas(32) char buf32[5];
 static inline int sq(int v) { return v * v; }
 static int sum(const int *restrict a, int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }
 noreturn static void stop(int c) { exit(c); }
+/* statics named like AArch64 registers (the assembler took "v12.18" for a vector) */
+static int v7 = 7, d2 = 2;
+static int vnames(void) { static const int v12[] = { 12, 13 }, q1 = 1; return v12[1] + q1 + v7 + d2; }
 int main(void)
 {
     printf("%s %s %s %s %s\n", TYPENAME(1), TYPENAME(2L), TYPENAME(1.5), TYPENAME("s"), TYPENAME((char)1));
@@ -37,6 +40,7 @@ int main(void)
     struct { int a; struct { int b, c; }; } an = { 1, { 2, 3 } };
     printf("%d %d %d\n", an.a, an.b, an.c);
     printf("%d\n", (int)_Generic(&p, struct P *: 1, default: 0));
+    printf("%d\n", vnames());
     if (arr[0]) stop(1);
     return 0;
 }

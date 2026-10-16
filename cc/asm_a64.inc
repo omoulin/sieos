@@ -43,7 +43,7 @@ static int a64_vreg(const char *s, AOp *o)
     if (*p != '.' || n > 31) return 0;
     for (p++; *p >= '0' && *p <= '9'; p++) lanes = lanes * 10 + *p - '0';
     int c = *p | 0x20, es = c == 'b' ? 1 : c == 'h' ? 2 : c == 's' ? 4 : c == 'd' ? 8 : c == 'q' ? 16 : 0;
-    if (!es) aerr("bad vector arrangement in '%s'", s);
+    if (!es) return 0;                                  /* "v12.18": a symbol (a static named v12) */
     o->kind = 'V'; o->reg = n; o->es = es; o->lanes = lanes; o->lane = -1; o->w = lanes * es;
     if (*++p == '[') {
         o->lane = 0;
