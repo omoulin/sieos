@@ -603,7 +603,7 @@ $(B)/siefs-fs/%.o: %.c $(SIEFS_H)
 # ---- the crypto library (lib/blake2b.c, chacha20.c, argon2.c, sha1.c, zlib.c;
 # SSH's ed25519.c and Poly1305): official test vectors, BLAKE2b and zlib
 # against independent implementations, Argon2id timing.
-CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/sha1.c lib/zlib.c lib/string.c
+CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/sha1.c lib/zlib.c lib/string.c lib/pubkey.c lib/btcrypt.c
 $(B)/host/crypto-test: tests/crypto/test.c $(CRYPTO_SRC) include/mk/crypto.h include/mk/zlib.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/crypto/test.c $(CRYPTO_SRC)

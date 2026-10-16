@@ -182,7 +182,7 @@ static uint32_t subword(uint32_t w)
            (uint32_t)SBOX[w >> 8 & 255] << 8 | SBOX[w & 255];
 }
 
-static void aes_expand(uint32_t rk[60], const uint8_t *key, int nk)
+void aes_expand(uint32_t rk[60], const uint8_t *key, int nk)
 {
     static const uint8_t rcon[10] = { 1, 2, 4, 8, 16, 32, 64, 128, 0x1b, 0x36 };
     for (int i = 0; i < nk; i++)
@@ -197,7 +197,7 @@ static void aes_expand(uint32_t rk[60], const uint8_t *key, int nk)
 
 static uint8_t xt(uint8_t b) { return (uint8_t)(b << 1 ^ ((b >> 7) * 0x1b)); }   /* times 2 */
 
-static void aes_encrypt(const uint32_t *rk, int nr, const uint8_t in[16], uint8_t out[16])
+void aes_encrypt(const uint32_t *rk, int nr, const uint8_t in[16], uint8_t out[16])
 {
     uint8_t s[16], t[16];
     for (int i = 0; i < 16; i++) s[i] = in[i] ^ (uint8_t)(rk[i / 4] >> (24 - 8 * (i % 4)));

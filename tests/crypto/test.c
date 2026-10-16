@@ -3,7 +3,8 @@
  * ed25519.c and Poly1305 from aead.c) against the official test vectors of
  * RFC 7693, RFC 8439, RFC 9106 and RFC 8032, plus a timing of Argon2id at
  * the parameters SIEOS uses; SHA-1 (FIPS 180's examples), CRC-32's check
- * value, and zlib streams made by the reference zlib (stored, fixed and
+ * value, Bluetooth pairing's functions (lib/btcrypt.c: the spec's sample
+ * data; the P-256 key exchange, pubkey.c), and zlib streams made by the reference zlib (stored, fixed and
  * dynamic blocks) inflated (lib/sha1.c, zlib.c).
  * With "-x": print BLAKE2b digests of a fixed pattern, for check.py to
  * compare with an independent implementation; "-z" / "-u": deflate /
@@ -166,6 +167,62 @@ int main(int argc, char **argv)
     snprintf(more, sizeof more, " (%zu -> %zu bytes; zlib -9: 157)", tl, zn);
     check("deflate, inflated again", zinflate(zs, zn, zo, sizeof zo, &used) == (long)tl && used == zn && !memcmp(zo, text, tl), more);
 
+
+    printf("Bluetooth pairing (Core spec Vol 3 Part H D.1-D.7, Vol 2 Part G 7.1; SMP's byte order)\n");
+    {
+        uint8_t u[32], v[32], x[16], y[16], w[32], n1[16], n2[16], a1[7], a2[7], r[16], mk[16], ltk[16], k0[16] = { 0 };
+        uint8_t pa[32], pb[32], qa[64], qb[64], dh[32], ia[6], ra[6], preq[7], pres[7], io[3];
+        unhex(u, "e69d350e480103ccdbfdf4ac1191f4efb9a5f9e9a7832c5e2cbe97f2d203b020");
+        unhex(v, "fdc57ff449dd4f6bfb7c9df1c29acb592ae7d4eefbfc0a909abbf6323d8b1855");
+        unhex(x, "abae2b71ecb2ffff3e7377d15484cbd5");
+        unhex(y, "cfc43dfff78365216e5fa725cce7e8a6");
+        bt_f4(out, u, v, x, 0);
+        expect("f4", out, 16, "2d8774a9bea1edf11cbda907f116c9f2");
+        unhex(w, "98a6bf73f3348d86f166f8b4136b79999b7d390aa610103405adc857a33402ec");
+        unhex(a1, "cebf3737125600"); unhex(a2, "c1cf2d7013a700");
+        bt_f5(mk, ltk, w, x, y, a1, a2);
+        expect("f5 MacKey", mk, 16, "206e63ce206a3ffd024a08a176f16529");
+        expect("f5 LTK", ltk, 16, "380a7594b522059823cdd76911798669");
+        unhex(r, "c80f2d0cd242da0854bb53b43b34a312"); unhex(io, "020101");
+        bt_f6(out, mk, x, y, r, io, a1, a2);
+        expect("f6", out, 16, "618f95da090b6cd2c5e8d09c9873c4e3");
+        check("g2", bt_g2(u, v, x, y) == 0x2f9ed5ba % 1000000, "");
+        unhex(r, "e02e70c64e2788630e6fad5621d58357");
+        unhex(preq, "01010000100707"); unhex(pres, "02030000080005");
+        unhex(ia, "a6a5a4a3a2a1"); unhex(ra, "b6b5b4b3b2b1");
+        bt_c1(out, k0, r, preq, pres, 1, ia, 0, ra);
+        expect("c1", out, 16, "863bf1bec54da7d2ea888987ef3f1e1e");
+        memset(x, 0, 16); memset(y, 0, 16);
+        unhex(x, "8877665544332211"); unhex(y, "00ffeeddccbbaa99");
+        bt_s1(out, k0, x, y);
+        expect("s1", out, 16, "62a06d79ae16425b9bf4b0e8f0e11f9a");
+        static const char *vec[2][5] = {
+            { "bd1a3ccda6b8995899b740eb7b60ff4a503f10d2e3b3c974385fc5a3d4f6493f",
+              "fdc57ff449dd4f6bfb7c9df1c29acb592ae7d4eefbfc0a909abbf6323d8b1855",
+              "e69d350e480103ccdbfdf4ac1191f4efb9a5f9e9a7832c5e2cbe97f2d203b020"
+              "8bd28915d08e1c742430ed8fc24563765c15525abf9a32636deb2a65499c80dc",
+              "90a1aa2fb27790559fa61586fd8ab547004c9ef184225909961daf1ff0f0a11e"
+              "4a21b115f9af895f76368ee230112d476051b89a3a70567337ad9d423ef3554c",
+              "98a6bf73f3348d86f166f8b4136b79999b7d390aa610103405adc857a33402ec" },
+            { "637645d0f773acb7ffdd0372b97285b441b65d0c5d5484601aa39a3c6916a506",
+              "ba30555019a2caa3a52908c6b503887e032b5073d42e509764cd720d67a09a52",
+              "dd785c74039b7e98cb94874aadfaf8d5433e5cafeab54cf49e8079577ba4312c"
+              "4f5d71437743f8ead43ebd17911021d01f87438e40e252cdbedf983818129591",
+              "cc0065e1f56c0dcfec96472066c9db848175a84dc0dfc79d1b3f3df23fe465f4"
+              "79b2ecd8ca55a1a8434d6bca10b0c201c2334e1624c4efee99d8bbbc48d00102",
+              "69eb2132f2c605416019cd5e94e1e65f3307e3384b68e5623f886d2f3a8485ab" } };
+        for (int t = 0; t < 2; t++) {
+            unhex(pa, vec[t][0]); unhex(pb, vec[t][1]); unhex(qb, vec[t][3]);
+            check(t ? "P-256 public key A (set 2)" : "P-256 public key A (set 1)", !bt_p256_public(qa, pa), "");
+            expect("  matches", qa, 64, vec[t][2]);
+            check("P-256 DHKey from A", !bt_p256_dh(dh, pa, qb), "");
+            expect("  matches", dh, 32, vec[t][4]);
+            check("P-256 DHKey from B", !bt_p256_dh(dh, pb, qa), "");
+            expect("  matches", dh, 32, vec[t][4]);
+        }
+        qb[5] ^= 1;
+        check("P-256 point off the curve refused", bt_p256_dh(dh, pa, qb) == -1, "");
+    }
     printf("Argon2 (RFC 9106, 5.1-5.3: m=32 KiB, t=3, p=4, 32-byte tag)\n");
     uint8_t pwd[32], salt[16], secret[8], ad[12];
     memset(pwd, 1, 32); memset(salt, 2, 16); memset(secret, 3, 8); memset(ad, 4, 12);

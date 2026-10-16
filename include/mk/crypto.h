@@ -80,6 +80,10 @@ void aead_seal(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t 
                const void *in, size_t n, uint8_t *out);
 int  aead_open(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t adlen,
                const void *in, size_t n, uint8_t *out);
+/* The AES block cipher alone (FIPS 197): the round keys of a 4- or 8-word
+ * key (nk), then one 16-byte block (nr = 6 + nk rounds). */
+void aes_expand(uint32_t rk[60], const uint8_t *key, int nk);
+void aes_encrypt(const uint32_t *rk, int nr, const uint8_t in[16], uint8_t out[16]);
 
 /* The pieces of ChaCha20-Poly1305 on their own, for SSH's variant
  * (chacha20-poly1305@openssh.com: user/lib/ssh.c): the keystream from block
@@ -116,3 +120,23 @@ int rsa_verify_pkcs1(const uint8_t *n, size_t nlen, const uint8_t *e, size_t ele
                      int alg, const uint8_t *hash, const uint8_t *sig, size_t slen);
 int rsa_verify_pss(const uint8_t *n, size_t nlen, const uint8_t *e, size_t elen,
                    int alg, const uint8_t *hash, const uint8_t *sig, size_t slen);
+
+/* ---- Bluetooth pairing (btcrypt.c; Core spec Vol 3 Part H 2.2): the
+ * functions the host computes, every value little-endian as SMP sends it.
+ * LE Secure Connections: f4 (confirm values), f5 (MacKey and LTK), f6
+ * (DHKey checks), g2 (the 6-digit number to compare) on AES-CMAC; legacy
+ * pairing: c1 (confirm) and s1 (STK) on AES-128; the P-256 key exchange
+ * (public keys: X then Y, 32 bytes each). The p256 calls return 0, or -1
+ * for a point off the curve. */
+void bt_cmac(uint8_t mac[16], const uint8_t key[16], const uint8_t *m, int n);
+void bt_f4(uint8_t out[16], const uint8_t u[32], const uint8_t v[32], const uint8_t x[16], uint8_t z);
+void bt_f5(uint8_t mackey[16], uint8_t ltk[16], const uint8_t w[32], const uint8_t n1[16], const uint8_t n2[16],
+           const uint8_t a1[7], const uint8_t a2[7]);
+void bt_f6(uint8_t out[16], const uint8_t w[16], const uint8_t n1[16], const uint8_t n2[16], const uint8_t r[16],
+           const uint8_t io[3], const uint8_t a1[7], const uint8_t a2[7]);
+uint32_t bt_g2(const uint8_t u[32], const uint8_t v[32], const uint8_t x[16], const uint8_t y[16]);
+void bt_c1(uint8_t out[16], const uint8_t k[16], const uint8_t r[16], const uint8_t preq[7], const uint8_t pres[7],
+           uint8_t iat, const uint8_t ia[6], uint8_t rat, const uint8_t ra[6]);
+void bt_s1(uint8_t out[16], const uint8_t k[16], const uint8_t r1[16], const uint8_t r2[16]);
+int  bt_p256_public(uint8_t pub[64], const uint8_t priv[32]);
+int  bt_p256_dh(uint8_t dh[32], const uint8_t priv[32], const uint8_t peer[64]);
