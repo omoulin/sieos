@@ -128,6 +128,8 @@ What a window can be:
   each step (simulated pins elsewhere). Every step is numbered (the
   beats, 1, 5, 9..., brighter) and the playhead lights its column. See
   [gpio.md](gpio.md).
+- **Git** (`repo.c`, the Git app): a repository's changes, diffs and
+  history; [below](#git).
 - **Settings** (`settings.c`): below.
 
 ![Files](screens/files.png)
@@ -256,6 +258,32 @@ when the size (or the screen's) changes.
 
 ![Settings](screens/settings.png)
 
+## Git
+
+The Git app (`/etc/apps/git.app`, kind `git`; the strip finds it as
+"git") opens a window on a repository: the Files window's folder if it is
+in one (open the folder in Files, then the app), else the last one opened
+(kept in `~/.gitrepo`), else the first folder of your home that holds one.
+
+- The top: the branch, the folder, **Refresh**, **Pull**, **Push**.
+- **Changes**, as `git status -s` shows them (`M ` staged, ` M` not yet,
+  `??` new); a click shows the file's diff on the right (the staged one
+  when it has only that).
+- **Stage** / **Unstage** the chosen file (`git add`, `git reset`).
+- A message field and **Commit** (Enter in the field commits too).
+- **History**: `git log --oneline` (40 commits).
+- Below: what the last action said; its whole output is on the right.
+
+The window does not link git's code: it runs `/bin/git -C DIR ...` as you,
+one command at a time, with a channel of atlas as its console, and reads
+what it prints ([git.md](git.md)); when it ends (atlas reaps it), the next
+one starts and the window is drawn again. That costs atlas 8.7 KB, where
+linking git would have cost over 60 KB plus the network and TLS library.
+git cannot ask for a password there: for HTTPS remotes that want one, set
+`git config credential.token TOKEN` first.
+
+![the Git window: changes, a diff, the history](screens/git.png)
+
 ## Apps
 
 An app is a small text file of our own format, ending in `.app`:
@@ -273,10 +301,10 @@ kind=terminal
 | `name` | what the strip and the menus show |
 | `run` | the program (absolute path) |
 | `args` | its arguments (one line) |
-| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings |
+| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `git`: the Git window |
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
-  Settings, Services, Hello, Fetch a web page, Disk benchmark. Yours are
+  Settings, Services, Hello, Fetch a web page, Disk benchmark, Git. Yours are
   any `.app` file in your home folder (the strip and Files find them).
 - Starting an app opens a terminal **as you**; its shell runs the app's
   command when it first asks for a line. When the app ends, the shell
@@ -366,7 +394,10 @@ and back, minimized by a double-click on its tab and brought back by the
 Deskbar, sent to workspace 2 from its tab's menu, closed by its close box;
 history, copy and paste (the pasted command runs); Files (a double-click
 opens a file in the editor, which saves it; a second file from the
-editor's tree in a second tab, tabs shown and closed; Up; the path's / part); the sia strip (a file, an
+editor's tree in a second tab, tabs shown and closed; Up; the path's / part); Git (a
+repository made in the user's terminal, chosen in Files: its 3 changes, a
+diff, two files staged, a commit made as the user, Push refused without a
+remote); the sia strip (a file, an
 app, Esc, a question to the stand-in sia; the answer's buttons; Stop);
 Settings: pointer speed and left-handed buttons (kept in `~/.mouse`), the
 looks (Amber 1984, Glass, Phosphor again: checked on the screen's pixels,
