@@ -413,6 +413,7 @@ enum {
                          Intel's bootloader commands); sbuf = the packet          -> 0 */
     BTH_RECV,         /* rbuf <- what came, records of {endpoint: 0 interrupt (events),
                          1 bulk IN; length (16 bits, LE); bytes}; waits for some -> bytes */
+    BTH_INFO,         /*                                     -> vendor << 16 | product */
 };
 /* The Bluetooth server, port "bt" (/bin/btd; the command: /bin/bt; Settings).
  * Reply: w[0] = result or -error. Addresses: 6 bytes, least significant first. */

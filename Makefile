@@ -34,7 +34,7 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
+ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey btcrypt net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
 BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git mail audiod play   # programs on the disk, in /bin
@@ -46,6 +46,7 @@ SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
 BINS    += $(if $(filter x86_64,$(ARCH)),i2chid)    # laptops' I2C touchpads (ACPI)
 BINS    += python                       # MicroPython (user/python/python.mk)
+BINS    += btd bt                       # Bluetooth: the server and the command
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
 all: $(B)/kernel.bin $(PROGS:%=$(B)/%.elf) $(KARCH_EXTRA) $(B)/disk.img
@@ -136,6 +137,15 @@ $(B)/i2chid.elf: $(B)/user/i2chid/i2chid.o $(B)/user/i2chid/aml.o $(UCORE:%=$(B)
 $(B)/user/i2chid/%.o: user/i2chid/%.c user/i2chid/aml.h user/lib/mk.h user/lib/hidrep.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) $(if $(filter %/aml.o,$@),-Os) -c $< -o $@   # (AML runs once, at start: small beats fast)
+
+# Bluetooth (user/btd, docs/bluetooth.md): the server (its stack: hci, l2cap, smp, input; the Pis'
+# UART: uart.c) and the command (user/bt).
+BTD     := btd hci l2cap smp input uart
+$(B)/btd.elf: $(BTD:%=$(B)/user/btd/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(BTD:%=$(B)/user/btd/%.o) $(ULIB)
+$(B)/user/btd/%.o: user/btd/%.c user/btd/btd.h user/lib/hidrep.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # Mail (user/mail): the protocols (mail.c) and the message decoding (mime.c).
 $(B)/mail.elf: $(B)/user/mail/mail.o $(B)/user/mail/mime.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
@@ -631,6 +641,18 @@ crypto-test: $(B)/host/crypto-test
 	$(B)/host/crypto-test
 	python3 tests/crypto/check.py $(B)/host/crypto-test
 .PHONY: crypto-test
+
+# ---- Bluetooth (docs/bluetooth.md): btd's stack on the host, driven by
+# scripted HCI traces (tests/bt/hcitest.c: classic pairing and HID, LE SMP
+# and HID over GATT); hidrep.c and the stand-in mk.h copied beside it.
+BT_STACK := user/btd/hci.c user/btd/l2cap.c user/btd/smp.c user/btd/input.c
+$(B)/host/bt-test: tests/bt/hcitest.c tests/bt/btmk.h $(BT_STACK) user/btd/btd.h user/lib/hidrep.c user/lib/hidrep.h lib/btcrypt.c lib/aead.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c include/mk/*.h
+	@mkdir -p $(B)/host/bt
+	cp user/lib/hidrep.c user/lib/hidrep.h $(B)/host/bt/ && cp tests/bt/btmk.h $(B)/host/bt/mk.h
+	gcc $(HOSTCFLAGS) -I$(B)/host/bt -Iuser/btd -o $@ tests/bt/hcitest.c $(BT_STACK) $(B)/host/bt/hidrep.c lib/btcrypt.c lib/aead.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c
+bt-test: $(B)/host/bt-test
+	$(B)/host/bt-test
+.PHONY: bt-test
 
 # ---- the AML reader (user/i2chid/aml.c) on the host: tables made with iasl
 # from tests/aml/*.asl (laptop patterns: Intel's reference firmware as on

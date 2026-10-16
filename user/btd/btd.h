@@ -18,7 +18,7 @@
 #pragma once
 #include "mk.h"
 #include "mk/crypto.h"
-#include "../usb/hidrep.h"
+#include "hidrep.h"
 
 enum { H4_CMD = 1, H4_ACL = 2, H4_EVT = 4 };    /* HCI packet types (the UART's H4 framing) */
 #define L2_MTU   1017                           /* what our channels take (an ACL buffer, less headers) */
@@ -38,13 +38,13 @@ typedef struct {
     uint16_t ediv;
     uint8_t keysize, named, psrm, _pad;         /* named: a name was asked for; psrm, clkoff: */
     uint16_t clkoff;                            /* where to page it (the inquiry said) */
-} dev_t;
+} btdev_t;
 
 typedef struct l2ch l2ch_t;
 typedef struct conn {
     uint16_t handle;
     uint8_t le, out, enc, master, peer_io;      /* out: we connected; peer_io: its IO capability */
-    dev_t *dev;
+    btdev_t *dev;
     int inflight;                               /* its ACL packets the controller still holds */
     int rxn;
     uint8_t rx[L2_MTU + 8];                     /* an L2CAP frame being put together */
@@ -62,9 +62,9 @@ extern struct bt {
     int scan_left, inquiring, le_busy;          /* le_busy: 1 auto-connecting, 2 connecting to pdev */
     int pair, pair_left;                        /* BTP_*; seconds before it gives up */
     uint32_t code;
-    dev_t *pdev;                                /* the device being paired */
+    btdev_t *pdev;                                /* the device being paired */
     char chip[48], why[64];
-    dev_t dev[BT_MAXDEV];
+    btdev_t dev[BT_MAXDEV];
     int ndev;
     conn_t conn[MAXCONN];
 } bt;
@@ -84,7 +84,7 @@ void cmd(int op, const void *p, int n);         /* an HCI command (queued while 
 void acl_send(conn_t *c, int cid, const void *p, int n);   /* an L2CAP frame on channel cid */
 void le_encrypt(conn_t *c, const uint8_t *ltk, const uint8_t *rand, int ediv);
 void pair_end(int ok, const char *why);         /* the pairing in progress succeeded or failed */
-dev_t *dev_add(const uint8_t *addr, int type);
+btdev_t *dev_add(const uint8_t *addr, int type);
 void bt_disconnect(conn_t *c, int reason);
 
 /* l2cap.c. A channel: open() when both sides have configured it, recv()

@@ -108,14 +108,14 @@ static void acl_rx(const uint8_t *p, int n)
 }
 
 /* ---- Devices. */
-static dev_t *dev_find(const uint8_t *addr)
+static btdev_t *dev_find(const uint8_t *addr)
 {
     for (int i = 0; i < bt.ndev; i++) if (!memcmp(bt.dev[i].d.addr, addr, 6)) return &bt.dev[i];
     return 0;
 }
-dev_t *dev_add(const uint8_t *addr, int type)
+btdev_t *dev_add(const uint8_t *addr, int type)
 {
-    dev_t *d = dev_find(addr);
+    btdev_t *d = dev_find(addr);
     if (!d && bt.ndev < BT_MAXDEV) {
         d = &bt.dev[bt.ndev++];
         memset(d, 0, sizeof *d);
@@ -124,7 +124,8 @@ dev_t *dev_add(const uint8_t *addr, int type)
     }
     return d;
 }
-static conn_t *conn_dev(dev_t *d)
+static int pairing(btdev_t *d) { return d && d == bt.pdev && (bt.pair == BTP_BUSY || bt.pair == BTP_CONFIRM || bt.pair == BTP_PASSKEY); }
+static conn_t *conn_dev(btdev_t *d)
 {
     for (int i = 0; i < MAXCONN; i++) if (bt.conn[i].dev == d) return &bt.conn[i];
     return 0;
@@ -137,7 +138,7 @@ static int cod_kind(const uint8_t *c)
 }
 /* Advertising data or an extended inquiry response: the name, what it is.
  * -> its flags (LE: discoverable, 1 or 2), -1 if it gave none. */
-static int ad(dev_t *d, const uint8_t *p, int n)
+static int ad(btdev_t *d, const uint8_t *p, int n)
 {
     int flags = -1;
     for (int i = 0; i + 1 < n && p[i] && i + 1 + p[i] <= n; i += 1 + p[i]) {
@@ -156,7 +157,7 @@ static int ad(dev_t *d, const uint8_t *p, int n)
 }
 
 /* ---- Connections. */
-static conn_t *conn_new(int handle, dev_t *d, int le)
+static conn_t *conn_new(int handle, btdev_t *d, int le)
 {
     for (int i = 0; i < MAXCONN; i++)
         if (!bt.conn[i].dev) {
@@ -183,7 +184,7 @@ void le_encrypt(conn_t *c, const uint8_t *ltk, const uint8_t *rand, int ediv)
     cmd(0x2019, p, 28);
 }
 /* LE Create Connection: to d, or (0) to whichever device of the accept list advertises. */
-static void le_create(dev_t *d)
+static void le_create(btdev_t *d)
 {
     uint8_t p[25] = { 0x60, 0, 0x30, 0, (uint8_t)!d, (uint8_t)(d ? d->d.type - 1 : 0) };
     if (d) memcpy(p + 6, d->d.addr, 6);
@@ -196,17 +197,16 @@ static void le_create(dev_t *d)
 static void le_auto(void)
 {
     if (!bt.on || bt.le_busy || bt.state != BTS_ON) return;
-    int n = 0;
-    cmd(0x2010, 0, 0);
-    for (int i = 0; i < bt.ndev; i++) {
-        dev_t *d = &bt.dev[i];
+    for (int i = 0, n = 0; i < bt.ndev; i++) {
+        btdev_t *d = &bt.dev[i];
         if (d->d.type == BTT_CLASSIC || !(d->d.flags & BTF_BONDED) || (d->d.flags & BTF_CONNECTED)) continue;
         uint8_t a[7] = { (uint8_t)(d->d.type - 1) };
         memcpy(a + 1, d->d.addr, 6);
+        if (!n++) cmd(0x2010, 0, 0);                      /* (cleared first) */
         cmd(0x2011, a, 7);
-        n++;
+        bt.le_busy = 1;
     }
-    if (n) { le_create(0); bt.le_busy = 1; }
+    if (bt.le_busy) le_create(0);
 }
 
 void pair_end(int ok, const char *why)
@@ -227,7 +227,7 @@ static void scan_stop(void)
 static void names(void)
 {
     for (int i = 0; i < bt.ndev; i++) {
-        dev_t *d = &bt.dev[i];
+        btdev_t *d = &bt.dev[i];
         if (d->d.type != BTT_CLASSIC || d->d.name[0] || d->named) continue;
         uint8_t p[10];
         memcpy(p, d->d.addr, 6); p[6] = d->psrm; p[7] = 0; p16(p + 8, d->clkoff | 0x8000);
@@ -239,7 +239,7 @@ static void names(void)
 
 static void inquiry_result(const uint8_t *e, int ext)
 {
-    dev_t *d = dev_add(e + 1, BTT_CLASSIC);
+    btdev_t *d = dev_add(e + 1, BTT_CLASSIC);
     if (!d) return;
     d->psrm = e[7];
     d->d.kind = (uint8_t)cod_kind(e + (ext ? 9 : 10));
@@ -254,9 +254,9 @@ static void adv_report(const uint8_t *e, int len)
     for (int k = 0; k < e[0] && p + 10 <= e + len; k++) {
         int type = p[0], at = p[1], n = p[8];
         if (p + 10 + n > e + len) return;
-        dev_t *d = dev_find(p + 2);
+        btdev_t *d = dev_find(p + 2);
         if (type <= 1 && !d && at <= 1) {                 /* connectable: listed if discoverable */
-            dev_t t = { .d = { .type = (uint8_t)(at + 1) } };
+            btdev_t t = { .d = { .type = (uint8_t)(at + 1) } };
             if (ad(&t, p + 9, n) > 0 && (d = dev_add(p + 2, at + 1))) { memcpy(d->d.name, t.d.name, 32); d->d.kind = t.d.kind; }
         } else if (d && d->d.type != BTT_CLASSIC) ad(d, p + 9, n);
         if (d && d->d.type != BTT_CLASSIC) d->d.rssi = (int8_t)p[9 + n];
@@ -267,7 +267,7 @@ static void adv_report(const uint8_t *e, int len)
 static void le_conn(const uint8_t *e)
 {
     int st = e[1], h = g16(e + 2);
-    dev_t *d = dev_find(e + 6);
+    btdev_t *d = dev_find(e + 6);
     int was = bt.le_busy;
     bt.le_busy = 0;
     if (st) {
@@ -296,7 +296,7 @@ static void le_meta(const uint8_t *e, int len)
 
 static void conn_complete(const uint8_t *e)
 {
-    dev_t *d = dev_find(e + 3);
+    btdev_t *d = dev_find(e + 3);
     if (e[0]) {
         if (d && d == bt.pdev) pair_end(0, "the device did not answer");
         return;
@@ -315,13 +315,13 @@ static void disconnected(const uint8_t *e)
 {
     conn_t *c = conn_of(g16(e + 1));
     if (!c) return;
-    dev_t *d = c->dev;
+    btdev_t *d = c->dev;
     bt_log("bt: %s disconnected (reason %02x)\n", hex6(d->d.addr), e[3]);
     if (c->le && bt.le_mtu) bt.le_free += c->inflight; else bt.acl_free += c->inflight;
     l2_gone(c);
     input_gone(c);
     smp_end(c);
-    if (d == bt.pdev) pair_end(0, "the device disconnected");
+    if (pairing(d)) pair_end(0, "the device disconnected");
     d->d.flags &= ~(BTF_CONNECTED | BTF_INPUT);
     c->dev = 0;
     acl_flush();                                          /* (its queued packets go) */
@@ -330,7 +330,7 @@ static void disconnected(const uint8_t *e)
 
 static void link_key(const uint8_t *e, int note)
 {
-    dev_t *d = dev_find(e);
+    btdev_t *d = dev_find(e);
     if (note) {                                           /* Link Key Notification: a new bond */
         if (!d) return;
         memcpy(d->key, e + 6, 16);
@@ -339,7 +339,7 @@ static void link_key(const uint8_t *e, int note)
         bonds_save();
         return;
     }
-    if (d && (d->d.flags & BTF_BONDED) && d != bt.pdev) {
+    if (d && (d->d.flags & BTF_BONDED) && !pairing(d)) {
         uint8_t p[22];
         memcpy(p, e, 6); memcpy(p + 6, d->key, 16);
         cmd(0x040B, p, 22);
@@ -350,9 +350,9 @@ static void link_key(const uint8_t *e, int note)
 static void ssp(int code, const uint8_t *e)
 {
     if (code == 0x36) e++;                                /* (after its status) */
-    dev_t *d = dev_find(e);
+    btdev_t *d = dev_find(e);
     conn_t *c = d ? conn_dev(d) : 0;
-    int ours = d && d == bt.pdev && c;
+    int ours = pairing(d) && c;
     switch (code) {
     case 0x31:                                            /* IO Capability Request */
         if (ours) { uint8_t p[9]; memcpy(p, e, 6); p[6] = 1; p[7] = 0; p[8] = 3; cmd(0x042B, p, 9); }   /* display yes/no, MITM, dedicated bonding */
@@ -412,14 +412,14 @@ void bt_rx(int type, const uint8_t *p, int n)
     case 0x22: if (e[0]) inquiry_result(e, 1); break;
     case 0x2F: inquiry_result(e, 2); break;
     case 0x07: {                                          /* Remote Name Request Complete */
-        dev_t *d = dev_find(e + 1);
+        btdev_t *d = dev_find(e + 1);
         if (d && !e[0]) { memcpy(d->d.name, e + 7, 31); d->d.name[31] = 0; }
         names();
         break;
     }
     case 0x03: conn_complete(e); break;
     case 0x04: {                                          /* Connection Request: bonded devices only */
-        dev_t *d = dev_find(e);
+        btdev_t *d = dev_find(e);
         if (bt.on && d && (d->d.flags & BTF_BONDED) && e[9] == 1) { uint8_t q[7]; memcpy(q, e, 6); q[6] = 0; cmd(0x0409, q, 7); }
         else { uint8_t q[7]; memcpy(q, e, 6); q[6] = 0x0F; cmd(0x040A, q, 7); }
         break;
@@ -496,7 +496,7 @@ int bt_scan(void)
 
 int bt_pair(const bt_dev_t *want)
 {
-    dev_t *d = dev_find(want->addr);
+    btdev_t *d = dev_find(want->addr);
     if (bt.state != BTS_ON || !bt.on) return -EAGAIN;
     if (!d) return -ENOENT;
     if (bt.pair == BTP_BUSY || bt.pair == BTP_CONFIRM || bt.pair == BTP_PASSKEY) return -EBUSY;
@@ -517,7 +517,7 @@ int bt_pair(const bt_dev_t *want)
 
 int bt_confirm(int ok)
 {
-    dev_t *d = bt.pdev;
+    btdev_t *d = bt.pdev;
     conn_t *c = d ? conn_dev(d) : 0;
     if (bt.pair != BTP_CONFIRM || !c) return -EINVAL;
     bt_log("bt: %s: the user says the code %s\n", hex6(d->d.addr), ok ? "matches" : "does not match");
@@ -529,7 +529,7 @@ int bt_confirm(int ok)
 
 int bt_forget(const bt_dev_t *want)
 {
-    dev_t *d = dev_find(want->addr);
+    btdev_t *d = dev_find(want->addr);
     if (!d || !(d->d.flags & BTF_BONDED)) return -ENOENT;
     conn_t *c = conn_dev(d);
     if (c) bt_disconnect(c, 0x13);
