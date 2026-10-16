@@ -90,7 +90,9 @@ int clear_halt(usbdev_t *d, int ep)
 }
 
 /* ---- Endpoints: "configure endpoint" with their descriptors (and the
- * SuperSpeed companion right after each, for its burst size). */
+ * SuperSpeed companion right after each, for its burst size; a high-speed
+ * periodic endpoint's is in its packet size, bits 11-12). Isochronous
+ * ones: no error retries, their interval a power of two. */
 int configure(usbdev_t *d, const uint8_t **eps, int neps)
 {
     int cs = ctx_size();
@@ -104,21 +106,22 @@ int configure(usbdev_t *d, const uint8_t **eps, int neps)
     for (int k = 0; k < neps; k++) {
         const uint8_t *e = eps[k];
         int addr = e[2], kind = e[3] & 3, mps = e[4] | e[5] << 8, dci = dci_of(addr), ival = e[6];
-        if (kind == 0 || kind == 1) continue;          /* (no isochronous) */
-        int burst = e[0] + 1 < 64 && e[e[0] + 1] == 0x30 ? e[e[0] + 2] : 0;   /* the companion, if next */
-        if (ring_init(&d->ep[dci], kind == 2 ? 64 : 16)) return -ENOMEM;
-        int type = (addr & 0x80 ? 4 : 0) + kind;       /* 2 bulk out, 3 int out, 6 bulk in, 7 int in */
-        int interval = 0;
+        if (kind == 0) continue;
+        int burst = e[0] + 1 < 64 && e[e[0] + 1] == 0x30 ? e[e[0] + 2] : d->speed == 3 && kind & 1 ? mps >> 11 & 3 : 0;
+        if (ring_init(&d->ep[dci], kind == 3 ? 16 : 64)) return -ENOMEM;
+        int type = (addr & 0x80 ? 4 : 0) + kind;       /* 1 isoch out, 2 bulk out, 3 int out, 5 isoch in, 6 bulk in, 7 int in */
+        int interval = 0, esit = (mps & 0x7FF) * (burst + 1);
+        if (kind == 1) interval = (ival ? ival - 1 : 0) + (d->speed < 3 ? 3 : 0);
         if (kind == 3) {
             if (d->speed >= 3) interval = ival ? ival - 1 : 0;
             else for (interval = 3; interval < 10 && (1 << (interval + 1)) <= ival * 8; interval++) ;
         }
         uint32_t *ep = (uint32_t *)(d->in + cs * (dci + 1));
         ep[0] = interval << 16;
-        ep[1] = 3 << 1 | type << 3 | burst << 8 | (mps & 0x7FF) << 16;
+        ep[1] = (kind == 1 ? 0 : 3 << 1) | type << 3 | burst << 8 | (mps & 0x7FF) << 16;
         ep[2] = (uint32_t)d->ep[dci].bus | 1;
         ep[3] = (uint32_t)(d->ep[dci].bus >> 32);
-        ep[4] = (kind == 2 ? 1024 : mps) | (kind == 3 ? (mps & 0x7FF) * (burst + 1) << 16 : 0);
+        ep[4] = (kind == 2 ? 1024 : kind == 1 ? esit : mps) | (kind & 1 ? esit << 16 : 0);
         icc[1] |= 1u << dci;
         if (dci > last) last = dci;
     }
@@ -128,6 +131,20 @@ int configure(usbdev_t *d, const uint8_t **eps, int neps)
     dsync(d->in, cs * 33);
     int c = xhci_cmd((uint32_t)d->in_bus, (uint32_t)(d->in_bus >> 32), 0, 12 << 10 | d->slot << 24, 0);
     return c == CC_SUCCESS ? 0 : -EIO;
+}
+
+/* Endpoint dci removed ("configure endpoint", its drop flag). */
+int ep_drop(usbdev_t *d, int dci)
+{
+    int cs = ctx_size();
+    memset(d->in, 0, cs * 2);
+    dsync(d->ctx, cs);
+    memcpy(d->in + cs, d->ctx, cs);
+    ((uint32_t *)d->in)[0] = 1u << dci;
+    ((uint32_t *)d->in)[1] = 1;
+    ((uint32_t *)d->in)[cs / 4 + 3] = 0;
+    dsync(d->in, cs * 2);
+    return xhci_cmd((uint32_t)d->in_bus, (uint32_t)(d->in_bus >> 32), 0, 12 << 10 | d->slot << 24, 0) == CC_SUCCESS ? 0 : -EIO;
 }
 
 /* A string descriptor, as plain ASCII (other characters: '?'). */
@@ -220,7 +237,9 @@ static usbdev_t *attach(usbdev_t *hub, int port, int speed)
         int end = i + f[0];
         while (end + 1 < d->cfglen && d->cfg[end] && d->cfg[end + 1] != 4) end += d->cfg[end];
         int len = end - i, cls = f[5];
+        if (cls == 3 && !kbl_attach(d, f, len)) what = "keyboard light";
         if (cls == 9 && !hub_attach(d, f, len)) what = "hub";
+        else if (cls == 14 && f[6] == 1 && !uvc_attach(d, f, len)) what = "camera";
         else if (cls == 8 && !msc_attach(d, f, len)) what = "disk";
         else if (cls == 3 && !hid_attach(d, f, len)) what = "keyboard/mouse";
     }

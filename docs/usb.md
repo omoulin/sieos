@@ -142,6 +142,13 @@ Untested on the real drives: the controllers' reset timing, their MDTS and
 LBA formats as read, a SieFS partition on one (no tool makes it yet: copy
 `mkfs.siefs`'s image into a GPT partition of that type from Linux).
 
+## The laptop's camera and keyboard light
+
+The USB server also drives the Lenovo's camera (port `camera`: the Camera
+window, [desktop.md](desktop.md#camera)) and its keyboard light (port
+`kblight`: Settings and `/bin/kblight`); how, and what is tested without
+the laptop, in [usb-stack.md](usb-stack.md#cameras).
+
 ## Limits
 
 - Secure Boot: not supported yet (the loader is not signed).

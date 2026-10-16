@@ -45,6 +45,9 @@ static const char *const maps[I_N][12] = {
     [I_MAIL] = {
         "............", "kkkkkkkkkkkk", "kkppppppppkk", "kpkppppppkpk", "kppkppppkppk", "kpppkppkpppk",
         "kppppkkppppk", "kppppppppppk", "kppppppppppk", "kkkkkkkkkkkk", "............", "............" },
+    [I_CAM] = {
+        "............", "....kkkk....", "kkkkkkkkkkkk", "kddddddddddk", "kdddaaaaddgk", "kddaAAAAaddk",
+        "kddaAbAAaddk", "kddaAAAAaddk", "kdddaaaadddk", "kddddddddddk", "kkkkkkkkkkkk", "............" },
     [I_WINDOW] = {
         "............", "aaaaaa......", "aAAAAa......", "kkkkkkkkkkk.", "kGGGGGGGGGk.", "kGGGGGGGGGk.",
         "kGGGGGGGGGk.", "kGGGGGGGGGk.", "kGGGGGGGGGk.", "kkkkkkkkkkk.", "............", "............" },

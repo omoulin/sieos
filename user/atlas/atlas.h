@@ -49,7 +49,7 @@ void redraw_box(int x0, int y0, int x1, int y1);
 /* ---- Click boxes: what a click at (x, y) means; searched from the last. */
 enum { H_BTN = 1, H_WIN, H_STRIP, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,
        H_PANEL, H_PIN, H_PSEND, H_PSTOP, H_PSUG, H_PACT, H_PCLOSE, H_PMODE, H_SETUP,
-       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL };
+       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL, H_CAM };
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg);
 int  pill(int x, int y, const char *s, int on, int kind, int arg);   /* -> its right edge */
 void label(int x, int y, const char *s, int k, uint32_t c);
@@ -169,6 +169,18 @@ void mail_wheel(int arg, int w);
 int  mail_console(long from, msg_t *m, const char *data);   /* CON_* from the helper -> 1: draw again */
 void mail_ended(int pid);                             /* a child of atlas ended */
 
+/* ---- Camera (cam.c): the USB camera's picture, snapshots to ~/Pictures; a .ppm shown. */
+#define ATLAS_CAM 106                                 /* message: its thread -> atlas, w[1] = 1: a new frame */
+void cam_init(long atlas_port);
+void cam_open(void);                                  /* the camera, live */
+void cam_close(void);                                 /* the window closed: the camera too */
+int  cam_show(const char *path);                      /* a .ppm instead: 0, or -error */
+int  cam_tick(int frame);                             /* ATLAS_CAM -> 1: draw the picture again */
+void cam_box(int *x0, int *y0, int *x1, int *y1);     /* where the picture was drawn */
+void cam_info(char *t, size_t cap);
+void cam_draw(int x0, int y0, int x1, int y1, int focused);
+int  cam_click(int kind, int arg);
+
 /* ---- Files (files.c): a folder's contents, a window. */
 void files_open(const char *dir);
 const char *files_dir(void);
@@ -178,15 +190,15 @@ int  files_key(int c);
 void files_wheel(int w);
 
 /* ---- Icons (icons.c): 12 x 12 pixel maps; the SIEOS cube, 16 x 16. */
-enum { I_TERM, I_SIA, I_FOLDER, I_FILE, I_SETTINGS, I_APP, I_WINDOW, I_PINS, I_GIT, I_MAIL, I_N };
+enum { I_TERM, I_SIA, I_FOLDER, I_FILE, I_SETTINGS, I_APP, I_WINDOW, I_PINS, I_GIT, I_MAIL, I_CAM, I_N };
 void icon(int kind, int x, int y, int scale);
 void icon_ink(int kind, int x, int y, int scale);     /* its outline only, in C_BG (on the accent: a tab) */
 void logo(int x, int y, int scale);
 
 /* ---- The windows (wm.c): a title tab as wide as the title (close, zoom),
  * moved by its tab, resized by its grip or edges; 4 workspaces. Window ids
- * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files, 12 Pins, 13 Git, 14 Mail. */
-#define WM_MAX 15
+ * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files, 12 Pins, 13 Git, 14 Mail, 15 Camera. */
+#define WM_MAX 16
 #define WM_EDIT 8                                     /* (atlas's W_EDIT: opens bigger) */
 #define WM_SIA 9
 #define WM_SET 10
@@ -194,6 +206,7 @@ void logo(int x, int y, int scale);
 #define WM_PINS 12                                    /* (atlas's W_PINS: opens bigger) */
 #define WM_REPO 13                                    /* (atlas's W_REPO: opens bigger) */
 #define WM_MAIL 14                                    /* (atlas's W_MAIL: opens bigger) */
+#define WM_CAM 15
 #define WM_NWS 4                                      /* workspaces */
 #define TAB_H 34                                      /* a window's tab */
 #define WM_STRIP TAB_H                                /* the strip at a window's top (title when its tab sank) */

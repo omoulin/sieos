@@ -58,8 +58,9 @@
 #define W_PINS (MAXTERM + 4)
 #define W_REPO (MAXTERM + 5)
 #define W_MAIL (MAXTERM + 6)
-#define NWIN (MAXTERM + 7)
-_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES && W_REPO == WM_REPO && W_MAIL == WM_MAIL, "wm.c knows the window ids");
+#define W_CAM (MAXTERM + 7)
+#define NWIN (MAXTERM + 8)
+_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES && W_REPO == WM_REPO && W_MAIL == WM_MAIL && W_CAM == WM_CAM, "wm.c knows the window ids");
 #define TBAR 48                     /* the insides of a window start this far below their top */
 
 typedef struct { char name[48], path[160]; int app; } item_t;
@@ -79,7 +80,7 @@ static struct { char name[48], path[96]; int kind; } apps[MAXAPP];   /* the syst
 static int nitems, napps, next_chan = 1;
 static int focus = -1;              /* the window with the keys, or -1 */
 static int strip_on;                /* the sia strip has the keys */
-static int sia_on, set_on, files_on, pins_on, repo_on;   /* those windows exist */
+static int sia_on, set_on, files_on, pins_on, repo_on, cam_on;   /* those windows exist */
 static int last_term = -1;          /* the terminal used last (the Deskbar shows it) */
 static char toast[96];              /* a short message under the strip (until the next action) */
 int atlas_debug;                     /* /tmp/atlas.debug exists: log places (tests) */
@@ -319,7 +320,7 @@ static void rescan(void)
 static int win_used(int w)
 {
     return w >= 0 && w < MAXTERM ? terms[w].used : w == W_EDIT ? edit_active() : w == W_SIA ? sia_on :
-           w == W_SET ? set_on : w == W_FILES ? files_on : w == W_PINS ? pins_on : w == W_REPO ? repo_on : w == W_MAIL ? mail_on() : 0;
+           w == W_SET ? set_on : w == W_FILES ? files_on : w == W_PINS ? pins_on : w == W_REPO ? repo_on : w == W_MAIL ? mail_on() : w == W_CAM ? cam_on : 0;
 }
 static void win_title(int w, char *t, size_t cap)
 {
@@ -330,10 +331,11 @@ static void win_title(int w, char *t, size_t cap)
     else if (w == W_PINS) strlcpy(t, "Pins", cap);
     else if (w == W_REPO) strlcpy(t, "Git", cap);
     else if (w == W_MAIL) strlcpy(t, "Mail", cap);
+    else if (w == W_CAM) strlcpy(t, "Camera", cap);
     else strlcpy(t, "Files", cap);
     if (w < MAXTERM && terms[w].back) { size_t n = strlen(t); n += strlcpy(t + n, " [history -", 16); t[n + num(t + n, terms[w].back)] = 0; strlcpy(t + strlen(t), "]", 2); }
 }
-static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : w == W_REPO ? I_GIT : w == W_MAIL ? I_MAIL : I_FOLDER; }
+static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : w == W_REPO ? I_GIT : w == W_MAIL ? I_MAIL : w == W_CAM ? I_CAM : I_FOLDER; }
 int wm_icon(int w) { return win_icon(w); }
 
 /* wm.c asks: is it there, its title, draw its inside. */
@@ -352,6 +354,7 @@ void wm_info(int w, char *t, size_t cap)                 /* the strip's right si
     else if (w == W_PINS) strlcpy(t, "GPIO", cap);
     else if (w == W_REPO) strlcpy(t, repo_dir(), cap);
     else if (w == W_MAIL) mail_info(t, cap);
+    else if (w == W_CAM) cam_info(t, cap);
 }
 void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
 {
@@ -362,6 +365,7 @@ void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
     else if (w == W_PINS) pins_draw(x0, y0, x1, y1, keys);
     else if (w == W_REPO) repo_draw(x0, y0, x1, y1, keys);
     else if (w == W_MAIL) mail_draw(x0, y0, x1, y1, keys);
+    else if (w == W_CAM) cam_draw(x0, y0, x1, y1, keys);
     else files_draw(x0, y0, x1, y1, keys);
 }
 
@@ -979,6 +983,7 @@ static void close_win(int w)
     if (w == W_PINS) { pins_on = 0; pins_close(); say("atlas: pins closed\n"); }
     if (w == W_REPO) { repo_on = 0; repo_close(); say("atlas: git closed\n"); }
     if (w == W_MAIL) { mail_close(); say("atlas: mail closed\n"); }
+    if (w == W_CAM) { cam_on = 0; cam_close(); say("atlas: camera closed\n"); }
     wm_gone(w);
     if (focus == w) focus = wm_top();
     settle();
@@ -988,8 +993,9 @@ static void logout(void)
 {
     for (int t = 0; t < MAXTERM; t++) if (terms[t].used) { tty_hangup(&terms[t].tty); sys_kill(terms[t].pid); close_term(&terms[t]); }
     edit_close();
-    sia_on = set_on = files_on = pins_on = repo_on = 0;
+    sia_on = set_on = files_on = pins_on = repo_on = cam_on = 0;
     repo_close();
+    cam_close();
     pins_logout();
     settings_close();
     mail_close();
@@ -1024,7 +1030,7 @@ void greeter_login(const char *name, const char *pw)
 }
 
 /* The system's launchers (/etc/apps), for the strip and the menu. */
-enum { K_TERMINAL, K_EDITOR, K_SETTINGS, K_GIT, K_MAIL };
+enum { K_TERMINAL, K_EDITOR, K_SETTINGS, K_GIT, K_MAIL, K_CAMERA };
 static void scan_apps(void)
 {
     napps = 0;
@@ -1044,7 +1050,7 @@ static void scan_apps(void)
             char *f = file_get(apps[napps].path, &len), kind[16];
             app_field(f, "kind", kind, sizeof kind);
             free(f);
-            apps[napps].kind = !strcmp(kind, "editor") ? K_EDITOR : !strcmp(kind, "settings") ? K_SETTINGS : !strcmp(kind, "git") ? K_GIT : !strcmp(kind, "mail") ? K_MAIL : K_TERMINAL;
+            apps[napps].kind = !strcmp(kind, "editor") ? K_EDITOR : !strcmp(kind, "settings") ? K_SETTINGS : !strcmp(kind, "git") ? K_GIT : !strcmp(kind, "mail") ? K_MAIL : !strcmp(kind, "camera") ? K_CAMERA : K_TERMINAL;
             app_name(apps[napps].path, apps[napps].name, sizeof apps[0].name);
             napps++;
         }
@@ -1080,8 +1086,10 @@ static void login(void)
 }
 
 /* ---- Files and apps: opening them. */
-static int open_file(const char *path)                   /* in the editor */
+static int open_file(const char *path)                   /* in the editor (a .ppm: in the Camera window) */
 {
+    size_t pl = strlen(path);
+    if (pl > 4 && !strcmp(path + pl - 4, ".ppm") && atlas_may(path, 0) && !cam_show(path)) { cam_on = 1; show_win(W_CAM); settle(); return 0; }
     if (!atlas_may(path, 0) || edit_open(path) < 0) { strlcpy(toast, "Cannot open that file.", sizeof toast); settle(); return -EACCES; }
     show_win(W_EDIT);
     settle();
@@ -1147,6 +1155,7 @@ static void app_start(const char *path)
     if (!strcmp(kind, "settings")) { open_settings(); return; }
     if (!strcmp(kind, "git")) { repo_open(); repo_on = 1; show_win(W_REPO); settle(); return; }
     if (!strcmp(kind, "mail")) { mail_open(); show_win(W_MAIL); settle(); return; }
+    if (!strcmp(kind, "camera")) { cam_open(); cam_on = 1; show_win(W_CAM); settle(); return; }
     if (rn[0] != '/') { say("atlas: app %s: no program\n", nm); settle(); return; }
     long t = open_term(0);
     if (t < 0) { settle(); return; }
@@ -1260,7 +1269,7 @@ static void main_menu(void)                              /* the Deskbar's: start
     for (int i = 0; i < napps; i++) {
         if (apps[i].kind == K_EDITOR || apps[i].kind == K_SETTINGS || !strcmp(base_name(apps[i].path), "shell.app")) continue;
         if (!sep++) menu_add("", A_SEP, 0, -1);
-        menu_add(apps[i].name, A_RUNAPP, apps[i].path, apps[i].kind == K_GIT ? I_GIT : apps[i].kind == K_MAIL ? I_MAIL : I_APP);
+        menu_add(apps[i].name, A_RUNAPP, apps[i].path, apps[i].kind == K_GIT ? I_GIT : apps[i].kind == K_MAIL ? I_MAIL : apps[i].kind == K_CAMERA ? I_CAM : I_APP);
     }
     sep = 0;
     for (int w = 0; w < NWIN; w++) {
@@ -1468,6 +1477,7 @@ static void click(int x, int y)
     case H_PINS:  focus_win(W_PINS); pins_click(k, a); redraw(); return;
     case H_REPO:  focus_win(W_REPO); repo_click(k, a); redraw(); return;
     case H_MAIL:  focus_win(W_MAIL); mail_click(k, a); settle(); return;
+    case H_CAM:   focus_win(W_CAM); cam_click(k, a); redraw(); return;
     case H_DESK:  if (strip_on) { strip_on = 0; redraw(); } return;
     }
 }
@@ -1528,6 +1538,7 @@ static void key(int c)
     if (focus == W_PINS) { if (pins_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
     if (focus == W_REPO) { if (repo_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
     if (focus == W_MAIL) { if (mail_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
+    if (focus == W_CAM) { if (c == 27) { focus = -1; redraw(); } return; }
     term_t *t = &terms[focus];                           /* the focused terminal */
     int x0, x1, y0, y1;
     if (!win_box(focus, &x0, &y0, &x1, &y1)) x0 = x1 = y0 = y1 = 0;
@@ -1732,6 +1743,7 @@ int main(int argc, char **argv)
     panel_init(port);
     settings_init(port);
     pins_init(port);
+    cam_init(port);
     wm_init(port);
     mouse_apply();
 
@@ -1782,6 +1794,15 @@ int main(int argc, char **argv)
             reply_val(from, 0);
             int a0, b0, c0, d0;
             if (mode == SESSION && pins_on && pins_tick() && win_box(W_PINS, &a0, &b0, &c0, &d0)) redraw_box(a0, b0 + TBAR - 40, c0, d0);
+            continue;
+        }
+        if (m.pid == self && m.w[0] == ATLAS_CAM) {      /* the Camera window: a new frame (drawn before the answer) */
+            int a0, b0, c0, d0;
+            if (cam_tick((int)m.w[1]) && mode == SESSION && cam_on) {
+                cam_box(&a0, &b0, &c0, &d0);
+                if (m.w[1] && c0 > a0) redraw_box(a0, b0, c0, d0); else settle();
+            }
+            reply_val(from, 0);
             continue;
         }
         if (m.pid == self && m.w[0] == ATLAS_ANIM) {     /* the next frame of the tabs that move */

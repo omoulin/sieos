@@ -14,6 +14,8 @@
  *   Mouse      the pointer's speed, left- or right-handed buttons, the
  *              wheel's direction: the user's own (~/.mouse), applied at login.
  *   Sound      the volume, or mute (the audio server's, docs/audio.md).
+ *   Keyboard   its light, when it has one the USB server drives (the
+ *              Legion's): off, low, high, and a colour; kept by the server.
  *   Assistant  sia's model: the local one, or an online one with an
  *              OpenAI-compatible API (server URL, model name, API key). A
  *              system setting: root's password is asked unless root is
@@ -28,7 +30,7 @@
 #define TOP 48                           /* the window's title strip */
 #define ROW 54                           /* a row of buttons or a field */
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
-       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130,
+       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130, S_KBL = 140, S_KBLC = 150,
        S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET };
 enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
 
@@ -45,6 +47,8 @@ static long port;
 static int scroll, field = -1, remote, key_set;
 static char fields[NF][200], msg[100];
 static int msg_err, vol = -1;           /* vol: AUDIO_VOL's answer; -1: not asked yet, -2: no sound card */
+static int kbl = -1, kbl_rgb;           /* the keyboard light's level (-1: none), its colour */
+static const struct { const char *name; int rgb; } kcol[KBL_NCOL] = KBL_COLOURS;
 static struct { int on, w, h; } back;    /* a new size not kept yet: the old one */
 static volatile unsigned gen;            /* (which countdown is the current one) */
 
@@ -62,6 +66,21 @@ static long audio_vol(uint64_t v)
     msg_t m = { .w = { AUDIO_VOL, v } };
     long e = call_named(&ap, "audio", &m, 1);
     return e < 0 ? -2 : (long)m.w[0];
+}
+
+/* The keyboard light (port "kblight", only if there is one). -> the level, or -error. */
+static long kbl_call(uint64_t op, int lv, int rgb)
+{
+    long p = port_find("kblight");
+    msg_t m = { .w = { op, (uint64_t)lv, (uint64_t)rgb } };
+    long e = p <= 0 ? -ENOENT : ipc_call(p, &m);
+    if (e >= 0 && (long)m.w[0] >= 0) kbl_rgb = (int)m.w[1];
+    return e < 0 ? e : (long)m.w[0];
+}
+static void kbl_set(int lv, int rgb)
+{
+    if (kbl_call(KBL_SET, lv, rgb) >= 0) kbl = lv;
+    say("atlas: settings: keyboard light %d %06x\n", lv, rgb);
 }
 
 /* Ask the Wi-Fi server for its status (if one is running). */
@@ -108,6 +127,7 @@ void settings_open(void)
     wifi_sel = -1; wifi_n = 0;
     wifi_refresh();
     if (vol != -2) vol = port_find("audio") > 0 ? audio_vol(AUDIO_ASK) : -1;   /* (not started just for this) */
+    kbl = (int)kbl_call(KBL_GET, 0, 0);
     field = -1; scroll = 0; msg[0] = 0;
     say("atlas: settings open (wifi %s)\n", wifi_have ? "present" : "none");
 }
@@ -450,6 +470,16 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
         choices("Volume", vn, 5, vol < 0 ? -1 : vol & AUDIO_MUTE ? 0 : ((vol & 0xFF) + 12) / 25, S_VOL);
     }
 
+    if (kbl >= 0) {
+        heading("KEYBOARD");
+        static const char *ln[3] = { "Off", "Low", "High" };
+        const char *cn[KBL_NCOL];
+        int ck = -1;
+        for (int i = 0; i < KBL_NCOL; i++) { cn[i] = kcol[i].name; if (kcol[i].rgb == kbl_rgb) ck = i; }
+        choices("Light", ln, 3, kbl, S_KBL);
+        choices("Colour", cn, KBL_NCOL, ck, S_KBLC);
+    }
+
     heading("NETWORK");
     if (!wifi_have) {
         row_label("Wi-Fi");
@@ -525,6 +555,8 @@ int settings_click(int kind, int arg)
     else if (arg >= S_LOOK && arg < S_LOOK + NLOOK) atlas_look(arg - S_LOOK);
     else if (arg >= S_ZOOM && arg < S_ZOOM + NZOOM) atlas_zoom(zooms[arg - S_ZOOM]);
     else if (arg >= S_VOL && arg < S_VOL + 5) vol = audio_vol(arg > S_VOL ? 25 * (arg - S_VOL) : AUDIO_MUTE | (vol < 0 ? 80 : vol & 0xFF));
+    else if (arg >= S_KBL && arg < S_KBL + 3) kbl_set(arg - S_KBL, kbl_rgb);
+    else if (arg >= S_KBLC && arg < S_KBLC + KBL_NCOL) kbl_set(kbl > 0 ? kbl : KBL_HIGH, kcol[arg - S_KBLC].rgb);
     else if (arg >= S_SIA && arg < S_SIA + 2) { remote = arg - S_SIA; msg[0] = 0; }
     else if (arg >= S_FIELD && arg < S_FIELD + NF) field = arg - S_FIELD;
     else if (arg == S_WSCAN) wifi_scan();

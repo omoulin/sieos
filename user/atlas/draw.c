@@ -50,7 +50,7 @@ static const struct { int scale, w, h; const uint8_t *px; } natives[] = {
 #define MAXP  4096                  /* display list entries (more are dropped) */
 #define ARENA (32 << 10)            /* the display list's text */
 
-enum { P_GRID, P_RECT, P_FRAME, P_TEXT, P_PIXMAP, P_SHADE };
+enum { P_GRID, P_RECT, P_FRAME, P_TEXT, P_PIXMAP, P_SHADE, P_IMAGE };
 typedef struct {
     uint8_t type;
     uint16_t r, t, len;
@@ -60,7 +60,7 @@ typedef struct {
     uint32_t c, c2, text;           /* colours; text: where its characters are in the arena */
     const char *const *rows;        /* a pixmap: its rows, ... */
     const char *keys;               /* ... the characters of its palette, ... */
-    const uint32_t *cols;           /* ... their colours ('.' and ' ': none) */
+    const uint32_t *cols;           /* ... their colours ('.' and ' ': none); an image: its pixels */
 } prim_t;
 
 static uint32_t *fb;                /* video memory */
@@ -210,6 +210,13 @@ void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *
     if (p) { p->rows = rows; p->keys = keys; p->cols = cols; p->scale = s; p->r = w; p->t = h; }
 }
 
+void dl_image(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h)
+{
+    box(&x0, &y0, &x1, &y1);
+    prim_t *p = add(P_IMAGE, x0, y0, x1, y1, 0);
+    if (p) { p->cols = px; p->r = w; p->scale = (int)(((int64_t)w << 16) / (x1 - x0)); p->c2 = (uint32_t)(((int64_t)h << 16) / (y1 - y0)); }
+}
+
 static int isqrt(int v) { int r = 0; while ((r + 1) * (r + 1) <= v) r++; return r; }
 
 /* How far row y of a box [y0, y1) with corner radius r starts inside. */
@@ -298,6 +305,16 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
             }
         }
         break;
+    case P_IMAGE: {                  /* each screen pixel: the nearest image pixel */
+        int a = p->x0 > lo ? p->x0 : lo, b = p->x1 < hi ? p->x1 : hi;
+        for (int y = ya; y < yb; y++) {
+            const uint32_t *s = p->cols + ((uint64_t)(y - p->y0) * p->c2 >> 16) * p->r;
+            uint32_t *d = strip + (y - sy) * PW;
+            uint64_t u = (uint64_t)(a - p->x0) * p->scale;
+            for (int x = a; x < b; x++, u += p->scale) d[x] = s[u >> 16];
+        }
+        break;
+    }
     case P_TEXT: {                   /* each screen pixel: how much of it the font's pixels cover */
         int s = p->scale, cl = p->x0 > lo ? p->x0 : lo, cr = p->x1 < hi ? p->x1 : hi;
         int glow = look == LOOK_PHOSPHOR || look == LOOK_AMBER;

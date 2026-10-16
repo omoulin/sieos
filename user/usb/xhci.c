@@ -60,7 +60,8 @@ void slot_dev(int slot, usbdev_t *d) { slots[slot & 255] = d; }
 /* ---- Rings. The last TRB is a link back to the first ("toggle cycle"). */
 int ring_init(ring_t *r, int n)
 {
-    if (!(r->t = dmem(n * sizeof(trb_t), &r->bus))) return -1;
+    if (!r->t && !(r->t = dmem(n * sizeof(trb_t), &r->bus))) return -1;   /* (an endpoint added again: its ring, emptied) */
+    memset(r->t, 0, n * sizeof(trb_t));
     r->n = n; r->i = 0; r->cyc = 1;
     r->t[n - 1] = (trb_t){ (uint32_t)r->bus, (uint32_t)(r->bus >> 32), 0, 6 << 10 | 2 };
     dsync(r->t, n * sizeof(trb_t));
@@ -132,7 +133,9 @@ static void disarm(wait_t *w)
 }
 
 /* One event. A completion: the waiter whose TRB it names, else the
- * device's async function. A port change: the enumeration thread's news. */
+ * device's async function (async_trb: that TRB). A port change: the
+ * enumeration thread's news. */
+uint64_t async_trb;
 static void event(uint64_t ptr, uint32_t st, uint32_t ctl)
 {
     int type = ctl >> 10 & 63, code = st >> 24;
@@ -162,7 +165,7 @@ static void event(uint64_t ptr, uint32_t st, uint32_t ctl)
     if (type == 32) {
         usbdev_t *d = slots[ctl >> 24];
         int dci = ctl >> 16 & 31;
-        if (d && d->async[dci]) d->async[dci](d, dci, code, st & 0xFFFFFF);
+        if (d && d->async[dci]) { async_trb = ptr; d->async[dci](d, dci, code, st & 0xFFFFFF); }
     }
 }
 
@@ -227,8 +230,9 @@ static void watch_thread(void *a)
         trb_t *e = &ev[ev_i];
         dsync(e, 16);
         if ((int)(__atomic_load_n(&e->ctl, __ATOMIC_ACQUIRE) & 1) != ev_cyc) continue;
+        int i0 = ev_i;
         sys_sleep(20000000);                       /* (an interrupt on its way: give it time) */
-        if (!events()) continue;
+        if (ev_i != i0 || !events()) continue;     /* (read meanwhile: interrupts work, events are only many) */
         if (!found++) log_line("usb: events the controller did not announce: read by the watch\n");
         if (found >= 3) start_polling("interrupts are being lost");
     }
@@ -343,13 +347,20 @@ int xfer(usbdev_t *d, int dci, int in, const uint64_t *bus, const uint32_t *len,
     return ring_td(d, dci, td, n, done, ns);
 }
 
-int xfer_async(usbdev_t *d, int dci, uint64_t bus, uint32_t len)
+/* nb TRBs queued (the cycle bit added here), no waiting: their completions
+ * go to the device's async function. */
+int td_queue(usbdev_t *d, int dci, const trb_t *td, int nb)
 {
     ring_t *r = &d->ep[dci];
     if (d->gone || !r->t) return -1;
-    put(r, (uint32_t)bus, (uint32_t)(bus >> 32), len, 1 << 10 | 1 << 2 | 1 << 5);
+    for (int k = 0; k < nb; k++) put(r, td[k].p0, td[k].p1, td[k].st, td[k].ctl);
     ring_db(d->slot, dci);
     return 0;
+}
+int xfer_async(usbdev_t *d, int dci, uint64_t bus, uint32_t len)
+{
+    trb_t t = { (uint32_t)bus, (uint32_t)(bus >> 32), len, 1 << 10 | 1 << 2 | 1 << 5 };
+    return td_queue(d, dci, &t, 1);
 }
 
 /* ---- Taking the controller from the firmware, and starting it. */

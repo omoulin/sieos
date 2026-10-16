@@ -201,6 +201,7 @@ one filled), wrapped onto more rows when the window is narrow:
 | Look | **Phosphor** (the default: a green monitor, with scanlines and glowing text), **Amber 1984** (amber, square corners, a grid of dots), **Glass** (the desktop's own colours) or **BeOS** (BeOS R5's colours: the blue desk, grey windows and panels, the yellow tab, black text, white fields and lists); the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% | `~/.look`, applied at your login (the login screen: Phosphor, 100%) |
 | Mouse | pointer speed (Slow, Normal, Fast, Faster), right- or left-handed buttons, the wheel normal or reversed | `~/.mouse`, applied at your login |
 | Sound | the volume: Mute, 25%, 50%, 75%, 100% ([audio.md](audio.md)) | the audio server, until a reboot |
+| Keyboard | shown only where the USB server drives a keyboard light (the Legion's, [usb-stack.md](usb-stack.md#the-keyboard-light)): Off, Low, High, and a colour (White, Red, Orange, Green, Cyan, Blue, Purple; a colour picked while off turns it on) | `/etc/kblight`, given to the keyboard at each start |
 | Network | Wi-Fi (the Raspberry Pis' CYW43455): the connection's state, **Scan** for networks in range, pick one, type the passphrase (WPA2) and **Join**, or **Forget**. A system setting: root's password is asked unless root is logged in. Where there is no Wi-Fi chip (every machine but a real Pi, QEMU included) it shows "No Wi-Fi on this machine." | `/etc/wifi.conf` (root only) |
 | Assistant | sia's model: the one on this computer, or **online**, any service with an OpenAI-compatible API (server URL, model name, API key). A system setting: root's password is asked unless root is logged in. | `/etc/sia.conf`, the key in `/etc/sia.key` (root only) |
 
@@ -304,10 +305,10 @@ kind=terminal
 | `name` | what the strip and the menus show |
 | `run` | the program (absolute path) |
 | `args` | its arguments (one line) |
-| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `git`: the Git window; `mail`: opens Mail |
+| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `git`: the Git window; `mail`: opens Mail; `camera`: the Camera window |
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
-  Settings, Mail, Services, Hello, Fetch a web page, Disk benchmark, Git. Yours are
+  Settings, Mail, Camera, Services, Hello, Fetch a web page, Disk benchmark, Git. Yours are
   any `.app` file in your home folder (the strip and Files find them).
 - Starting an app opens a terminal **as you**; its shell runs the app's
   command when it first asks for a line. When the app ends, the shell
@@ -379,6 +380,25 @@ The same program is a command, on a terminal:
 | `mail read ID [FOLDER]` | a message as text (and marked read) |
 | `mail delete ID [FOLDER]` | deleted |
 | `mail send FILE` | a draft: `To:`, `Cc:`, `Subject:` lines, a blank line, the text |
+
+## Camera
+
+*Camera* (the menu, or "camera" in the strip; `/etc/apps/camera.app`)
+shows the USB camera's live picture, fitted to the window (its shape
+kept), and **Snapshot** saves it as `~/Pictures/camera-N.ppm` (the first
+free number; P6: a short header, then RGB bytes), yours. A .ppm opened
+from Files or the strip shows in the same window; **Live** goes back to
+the camera. Without a camera it says "No camera."; with one another
+program uses, "The camera is in use."
+
+The window's thread asks the USB server for frames (port `camera`,
+[usb-stack.md](usb-stack.md#cameras): 640 x 480, already 0x00RRGGBB) into
+a back buffer, then tells atlas, which swaps the buffers and draws only
+the picture's box before answering, so a frame is never shown half
+written. The picture is a display-list item of its own (`dl_image`: each
+screen pixel takes the nearest image pixel, through the look like
+everything else). Closing the window closes the camera, which powers
+down. atlas: +6.4 KB of code.
 
 ## How it works
 
@@ -482,6 +502,8 @@ repository made in the user's terminal, chosen in Files: its 3 changes, a
 diff, two files staged, a commit made as the user, Push refused without a
 remote); the sia strip (a file, an
 app, Esc, a question to the stand-in sia; the answer's buttons; Stop);
+Camera ("No camera." under QEMU; a .ppm made in the terminal, opened from
+the strip, its pixels checked on the screen);
 Settings: pointer speed and left-handed buttons (kept in `~/.mouse`), the
 looks (Amber 1984, Glass, Phosphor again: checked on the screen's pixels,
 scanlines included; kept in `~/.look`), everything at 200% and back (a
