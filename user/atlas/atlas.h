@@ -1,7 +1,7 @@
 /*
  * atlas.h - What the desktop's files share: colours, the drawing helpers
  * and click boxes (atlas.c), the windows (wm.c), the assistant (panel.c),
- * the file editor (edit.c), Files (files.c), Settings (settings.c), the
+ * the file editor (edit.c), Files (files.c), Settings (settings.c), Git (repo.c), the
  * icons (icons.c) and the first start (setup.c). The desktop is laid out
  * as BeOS was (title tabs, the Deskbar, workspaces) in SIEOS's colours
  * (docs/desktop.md); the program is /bin/atlas.
@@ -49,7 +49,7 @@ void redraw_box(int x0, int y0, int x1, int y1);
 /* ---- Click boxes: what a click at (x, y) means; searched from the last. */
 enum { H_BTN = 1, H_WIN, H_STRIP, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,
        H_PANEL, H_PIN, H_PSEND, H_PSTOP, H_PSUG, H_PACT, H_PCLOSE, H_PMODE, H_SETUP,
-       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS };
+       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO };
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg);
 int  pill(int x, int y, const char *s, int on, int kind, int arg);   /* -> its right edge */
 void label(int x, int y, const char *s, int k, uint32_t c);
@@ -120,6 +120,19 @@ int  pins_key(int c);
 void pins_wheel(int w);
 int  pins_tick(void);                                 /* ATLAS_PINS: 1 if the window must be drawn again */
 
+/* ---- Git (repo.c): a repository's changes, diffs, history; it runs /bin/git on console "atlas#REPO_CHAN". */
+#define REPO_CHAN 9999
+void repo_open(void);                                 /* (Files' folder, the last one, or one at home) */
+void repo_close(void);
+const char *repo_dir(void);
+void repo_draw(int x0, int y0, int x1, int y1, int focused);
+int  repo_click(int kind, int arg);
+int  repo_key(int c);
+void repo_wheel(int w);
+int  repo_con(long from, msg_t *m, const char *data); /* 1 if it was git's console request */
+int  repo_ended(long pid, int status);                /* 1 if it was git (the window: drawn again) */
+void atlas_user(int *uid, int *gid, mk_groups_t *g);  /* (atlas.c) the logged-in user */
+
 /* ---- Settings (settings.c): a window of the desktop: the screen's size,
  * the mouse, the assistant's model. */
 #define ATLAS_REVERT 104                              /* message: a new screen size was not kept */
@@ -151,20 +164,21 @@ int  files_key(int c);
 void files_wheel(int w);
 
 /* ---- Icons (icons.c): 12 x 12 pixel maps; the SIEOS cube, 16 x 16. */
-enum { I_TERM, I_SIA, I_FOLDER, I_FILE, I_SETTINGS, I_APP, I_WINDOW, I_PINS, I_N };
+enum { I_TERM, I_SIA, I_FOLDER, I_FILE, I_SETTINGS, I_APP, I_WINDOW, I_PINS, I_GIT, I_N };
 void icon(int kind, int x, int y, int scale);
 void icon_ink(int kind, int x, int y, int scale);     /* its outline only, in C_BG (on the accent: a tab) */
 void logo(int x, int y, int scale);
 
 /* ---- The windows (wm.c): a title tab as wide as the title (close, zoom),
  * moved by its tab, resized by its grip or edges; 4 workspaces. Window ids
- * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files. */
-#define WM_MAX 13
+ * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files, 12 Pins, 13 Git. */
+#define WM_MAX 14
 #define WM_EDIT 8                                     /* (atlas's W_EDIT: opens bigger) */
 #define WM_SIA 9
 #define WM_SET 10
 #define WM_FILES 11                                   /* (atlas's W_FILES: a list, opens smaller) */
 #define WM_PINS 12                                    /* (atlas's W_PINS: opens bigger) */
+#define WM_REPO 13                                    /* (atlas's W_REPO: opens bigger) */
 #define WM_NWS 4                                      /* workspaces */
 #define TAB_H 34                                      /* a window's tab */
 #define WM_STRIP TAB_H                                /* the strip at a window's top (title when its tab sank) */

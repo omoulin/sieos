@@ -400,7 +400,11 @@ static const char *branch_name(void)             /* "main", or 0: detached */
 /* ---- status */
 static int cmd_status(int ac, char **av)
 {
-    int shrt = ac > 1 && (!strcmp(av[1], "-s") || !strcmp(av[1], "--short") || !strcmp(av[1], "--porcelain"));
+    int shrt = 0, br = 0;
+    for (int i = 1; i < ac; i++) {
+        shrt |= !strcmp(av[i], "-s") || !strcmp(av[i], "--short") || !strcmp(av[i], "--porcelain");
+        br |= !strcmp(av[i], "-b") || !strcmp(av[i], "--branch");
+    }
     if (load(1)) return 1;
     ents_t c = { 0 };                                /* each changed path: mode = X << 8 | Y */
     for (int i = 0; i < I.n; i++) {
@@ -411,6 +415,7 @@ static int cmd_status(int ac, char **av)
     for (int i = 0; i < W.n; i++) if (!ents_find(&I, W.e[i].path)) ents_put(&c, W.e[i].path)->mode = '?' << 8 | '?';
     if (refreshed) index_write(&I);
     if (shrt) {
+        if (br) outf("## %s\n", branch_name() ? branch_name() : "HEAD (no branch)");
         for (int i = 0; i < c.n; i++) outf("%c%c %s\n", c.e[i].mode >> 8, c.e[i].mode & 255, c.e[i].path);
         return 0;
     }

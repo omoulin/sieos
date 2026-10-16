@@ -132,7 +132,7 @@ $(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/mk.h include/mk/*.h $(TO
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The desktop has several files; its font is drawn in tools/mkfont.py.
-ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen wm settings files icons pins
+ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen wm settings files icons pins repo
 $(B)/atlas.elf: $(ATLAS:%=$(B)/user/atlas/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(ATLAS:%=$(B)/user/atlas/%.o) $(ULIB)
 $(B)/user/atlas/%.o: user/atlas/%.c user/atlas/draw.h user/atlas/atlas.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
