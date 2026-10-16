@@ -35,6 +35,10 @@ const char *net_strerror(long e);                                        /* a fe
 typedef struct tls tls_t;
 enum { TLS_INSECURE = 1 };
 tls_t *tls_connect(long sock, const char *host, int flags, long *err);
+/* pin: a certificate's SHA-256 (a self-signed server's, accepted once):
+ * all zeros, the usual check; else that certificate only, whoever signed it.
+ * Refused: pin <- the server's (to show it). */
+tls_t *tls_open(long sock, const char *host, int flags, uint8_t *pin, long *err);
 long tls_write(tls_t *t, const void *buf, size_t n);
 long tls_read(tls_t *t, void *buf, size_t n, unsigned timeout_ms);       /* 0: closed */
 void tls_close(tls_t *t);                                                /* also closes the socket */

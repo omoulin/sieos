@@ -3,14 +3,16 @@
 and SMTP submission, the subset SIEOS's mail program uses, over TLS (at
 once, or after STARTTLS / STLS), with one test account.
 
-  IMAP  CAPABILITY LOGIN LIST SELECT FETCH (UID FLAGS BODY.PEEK[HEADER.FIELDS])
-        UID FETCH BODY[] (sets \\Seen) UID STORE +FLAGS EXPUNGE NOOP LOGOUT
+  IMAP  CAPABILITY LOGIN LIST (SPECIAL-USE flags) SELECT STATUS (UNSEEN) FETCH (UID
+        FLAGS BODY.PEEK[HEADER.FIELDS]) UID FETCH BODY[] (sets \\Seen) BODY.PEEK[]
+        UID STORE +FLAGS UID COPY APPEND EXPUNGE NOOP LOGOUT
   POP3  USER PASS STAT LIST UIDL RETR TOP DELE NOOP RSET QUIT
   SMTP  EHLO AUTH PLAIN/LOGIN MAIL RCPT DATA RSET NOOP QUIT (TLS and a login
         required before MAIL)
 
-start(ctx, user, password, messages) -> a server: .port(kind, tls) makes a
-listening port; .imap / .pop are the mailboxes; .sent what came by SMTP.
+start(ctx, user, password, messages, folders) -> a server: .port(kind, tls)
+makes a listening port; .imap / .pop are the mailboxes; .sent what came by
+SMTP; folders: {name: special-use flag or ""} besides INBOX; .ctx can change.
 `python3 mailserver.py relay PORT` copies its stdin and stdout to
 127.0.0.1:PORT (for QEMU's guestfwd=...-cmd:, one per connection).
 
@@ -21,16 +23,25 @@ import base64, os, re, select, socket, sys, threading
 
 class Conn:
     """Lines in and out of a socket that may become TLS on the way."""
-    def __init__(self, sock, ctx, tls):
-        self.s, self.ctx, self.buf = sock, ctx, b""
+    def __init__(self, sock, srv, tls):
+        self.s, self.srv, self.buf = sock, srv, b""
         if tls:
             self.starttls()
 
     def starttls(self):
-        self.s = self.ctx.wrap_socket(self.s, server_side=True)
+        self.s = self.srv.ctx.wrap_socket(self.s, server_side=True)
         self.tls = True
 
     tls = False
+
+    def read(self, n):
+        while len(self.buf) < n:
+            d = self.s.recv(65536)
+            if not d:
+                raise EOFError
+            self.buf += d
+        d, self.buf = self.buf[:n], self.buf[n:]
+        return d
 
     def line(self):
         while b"\r\n" not in self.buf:
@@ -46,9 +57,9 @@ class Conn:
 
 
 class Server:
-    def __init__(self, ctx, user, password, messages):
-        self.ctx, self.user, self.password = ctx, user, password
-        self.imap = {"INBOX": [], "Sent": [], "Trash": []}
+    def __init__(self, ctx, user, password, messages, folders):
+        self.ctx, self.user, self.password, self.flags = ctx, user, password, folders
+        self.imap = {"INBOX": [], **{f: [] for f in folders}}
         self.uidnext = 1
         for data, seen in messages:
             self.imap["INBOX"].append({"uid": self.uidnext, "flags": {"\\Seen"} if seen else set(), "data": data})
@@ -70,7 +81,7 @@ class Server:
 
     def serve(self, kind, sock, tls):
         try:
-            c = Conn(sock, self.ctx, tls)
+            c = Conn(sock, self, tls)
             getattr(self, kind)(c)
         except (EOFError, OSError) as e:
             self.log.append(f"{kind}: {e!r}")
@@ -114,8 +125,21 @@ class Server:
             elif cmd == "LIST":
                 c.send('* LIST (\\Noselect \\HasChildren) "/" "[Archive]"\r\n')
                 for name in self.imap:
-                    c.send(f'* LIST (\\HasNoChildren) "/" "{name}"\r\n')
+                    c.send(f'* LIST (\\HasNoChildren{" " + self.flags[name] if self.flags.get(name) else ""}) "/" "{name}"\r\n')
                 ok()
+            elif cmd == "STATUS":
+                name = re.match(r'"((?:[^"\\]|\\.)*)"|(\S+)', args)
+                name = name.group(1) if name.group(1) is not None else name.group(2)
+                if name not in self.imap:
+                    c.send(f"{tag} NO no such folder\r\n"); continue
+                n = sum("\\Seen" not in m["flags"] for m in self.imap[name])
+                c.send(f"* STATUS \"{name}\" (UNSEEN {n})\r\n"); ok()
+            elif cmd == "APPEND":
+                name, n = re.match(r'"([^"]*)"', args).group(1), int(re.search(r"\{(\d+)\}$", args).group(1))
+                c.send("+ go ahead\r\n")
+                data = c.read(n); c.line()
+                self.imap[name].append({"uid": self.uidnext, "flags": set(re.findall(r"\\\w+", args)), "data": data})
+                self.uidnext += 1; ok("[APPENDUID 7 1] appended")
             elif cmd == "SELECT":
                 name = args.strip().strip('"')
                 if name not in self.imap:
@@ -129,6 +153,13 @@ class Server:
                 seqs, _, items = args.partition(" ")
                 for i, m in self.pick(box, seqs, uid):
                     c.send(self.fetch(i, m, items))
+                ok()
+            elif cmd == "COPY":
+                seqs, _, dest = args.partition(" ")
+                dest = dest.strip().strip('"')
+                for i, m in self.pick(box, seqs, uid):
+                    self.imap[dest].append({"uid": self.uidnext, "flags": set(m["flags"]), "data": m["data"]})
+                    self.uidnext += 1
                 ok()
             elif cmd == "STORE":
                 seqs, _, what = args.partition(" ")
@@ -187,8 +218,8 @@ class Server:
                 if on: keep.append(line)
             data = b"\r\n".join(keep) + b"\r\n\r\n"
             parts.append(f"BODY[HEADER.FIELDS ({h.group(2).upper()})] {{{len(data)}}}\r\n".encode() + data)
-        elif re.search(r"BODY\[\]", items, re.I):
-            m["flags"].add("\\Seen")
+        elif re.search(r"BODY(\.PEEK)?\[\]", items, re.I):
+            if not re.search(r"PEEK", items, re.I): m["flags"].add("\\Seen")
             parts.append(f"BODY[] {{{len(m['data'])}}}\r\n".encode() + m["data"])
         if "FLAGS" in u:
             parts.append(f"FLAGS ({' '.join(sorted(m['flags']))})".encode())
@@ -311,8 +342,8 @@ class Server:
                 c.send("500 unknown command\r\n")
 
 
-def start(ctx, user, password, messages):
-    return Server(ctx, user, password, messages)
+def start(ctx, user, password, messages, folders={"Sent": "\\Sent", "Trash": "\\Trash"}):
+    return Server(ctx, user, password, messages, folders)
 
 
 if __name__ == "__main__" and sys.argv[1:2] == ["relay"]:

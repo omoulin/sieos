@@ -1129,6 +1129,12 @@ static void open_files(void)
     show_win(W_FILES);
     settle();
 }
+void atlas_show(int w)
+{
+    if (w == W_FILES) { open_files(); return; }
+    show_win(w);
+    settle();
+}
 
 /* Start an app: a terminal (a shell as the logged-in user, never root)
  * which runs the app's command when it first asks for a line. */
@@ -1474,6 +1480,8 @@ static void click(int x, int y)
 
 static void key(int c)
 {
+    if (focus != W_MAIL || strip_on || mode != SESSION)  /* (Ctrl+Enter, Ctrl+Shift+letter: Mail's only) */
+        c = c == KEY_CRET ? '\n' : c >= KEY_CSA ? c - KEY_CSA + 1 : c;
     if (mode == GREETER) {
         if (first_start) { setup_key(c); redraw(); return; }
         char *f = gfield ? gpw : gname;
@@ -1512,6 +1520,7 @@ static void key(int c)
         size_t n = strlen(query);
         if (c == 27) { query[0] = 0; nres = nfound = 0; strip_on = 0; redraw(); return; }
         strip_on = 1;
+        if (c == '\n' && !memcmp(query, "mailto:", 7)) { mail_mailto(query); query[0] = 0; nres = nfound = 0; strip_on = 0; atlas_show(W_MAIL); return; }
         if (c == '\n') { if (nres) open_result(0); return; }
         if (c == '\t') { for (int i = 0; i < nres; i++) if (res[i].kind == R_ASK) { open_result(i); return; } return; }
         if (c == '\b') { if (n) query[n - 1] = 0; }

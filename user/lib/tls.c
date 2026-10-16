@@ -52,6 +52,7 @@ static const struct suite { uint16_t id; uint8_t aead, hash; const char *name; }
 struct tls {
     long sock;
     int flags, eof, aead_alg, v12, both;       /* v12: TLS 1.2; both: th384 kept too */
+    uint8_t *pin;                              /* tls_open's: the certificate's SHA-256 */
     size_t ex;                                 /* 1.2 GCM: 8 bytes of the nonce in each record */
     const struct suite *cs;
     size_t keylen;
@@ -350,11 +351,16 @@ static long certificates(struct tls *t, const char *host, const uint8_t *b, size
         if (v13) i += 2 + get16(c + i);         /* the entry's extensions */
     }
     if (!n) return -EPROTO;
-    if (!(t->flags & TLS_INSECURE)) {
+    if (!(t->flags & TLS_INSECURE)) {           /* pinned: that certificate only; else a chain to our roots */
         net_info_t ni;
-        const char *why;
+        const char *why = "not the certificate pinned";
+        static const uint8_t z[32];
+        uint8_t h[32];
+        int pinned = t->pin && !ct_equal(t->pin, z, 32);
         if (net_info(&ni) < 0) ni.time = 0;
-        if (x509_verify_chain(certs, clens, n, host, ni.time, "/etc/ssl/roots", &why)) {
+        if (t->pin) sha(SHA256, h, certs[0], clens[0]);
+        if (pinned ? !ct_equal(h, t->pin, 32) : x509_verify_chain(certs, clens, n, host, ni.time, "/etc/ssl/roots", &why)) {
+            if (t->pin) memcpy(t->pin, h, 32);
             printf("tls: %s: %s\n", host, why);
             return -EIO;
         }
@@ -464,12 +470,13 @@ out:
     return e < 0 ? e : 0;
 }
 
-tls_t *tls_connect(long sock, const char *host, int flags, long *err)
+tls_t *tls_connect(long sock, const char *host, int flags, long *err) { return tls_open(sock, host, flags, 0, err); }
+tls_t *tls_open(long sock, const char *host, int flags, uint8_t *pin, long *err)
 {
     struct tls *t = malloc(sizeof *t);
     if (!t) { *err = -ENOMEM; net_close(sock); return 0; }
     memset(t, 0, sizeof *t);
-    t->sock = sock; t->flags = flags; t->timeout = 20000;
+    t->sock = sock; t->flags = flags; t->timeout = 20000; t->pin = pin;
     sha_init(&t->th, SHA256);
     sha_init(&t->th384, SHA384);
     t->both = 1;
