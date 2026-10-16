@@ -181,6 +181,7 @@ keys goes to the strip too.
 | Ctrl+1 .. Ctrl+4 | a workspace |
 | Ctrl+S | save (editor) |
 | Ctrl+V, middle button | paste (terminal, editor, assistant, strip, Settings) |
+| Ctrl+C (terminal) | stop the program running there (SIGINT); closing the window hangs it up (SIGHUP) |
 | PgUp / PgDn, the wheel | a terminal's history |
 | Esc | back: closes the strip's results, a menu or a name box; in the editor, closes the tab (twice if not saved); in the assistant, stops an answer |
 

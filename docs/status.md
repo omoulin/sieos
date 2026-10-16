@@ -21,7 +21,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test` (both
+`kernel-test`, `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -116,3 +116,14 @@ checklist in [raspberrypi.md](raspberrypi.md).
   words decoded. The window runs `mail -S` as the user on a console of its
   own, so the desktop links no TLS; `make mail-test` against a mail server
   on the host (`tools/mailserver.py`).
+- **2026-10-16.** Signals ([kernel.md](kernel.md#signals-ctrl-c)): Ctrl-C
+  stops the running program, on the console, in the desktop's terminals
+  and over SSH, and the shell gives a new prompt. `SYS_KILL` takes a signal
+  and a process group, `SYS_SIGNAL` sets a function (or ignores), and
+  `SYS_SIGRETURN` ends it; a caught signal wakes its thread from any wait
+  with `-EINTR`, its registers (vector ones too) kept in the kernel
+  meanwhile; reply tokens count calls, so an interrupted call's late answer
+  goes nowhere. Each shell job is a process group the terminal knows
+  (`CON_FG`); a closed window or SSH connection sends `SIGHUP`; `kill -INT
+  /-TERM/-KILL/-HUP`. Python raises `KeyboardInterrupt`. The kernel grew by
+  1.9 KB (x86-64), the IPC round trip did not move; `make sig-test`.

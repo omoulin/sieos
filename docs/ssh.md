@@ -139,9 +139,16 @@ the console server and the desktop's terminals answer `CON_WRITE`,
   is a terminal; input typed ahead waits in a 4 KiB queue until the shell
   reads (the editing holds one finished line). After the client's EOF, a
   read gets what is left, then 0, then `-EIO` (sh ends).
+- Ctrl-C (the byte 3 in the channel) is taken at once, ahead of what was
+  typed before it (dropped): `SIGINT` to the job the session's shell runs
+  ([kernel.md](kernel.md#signals-ctrl-c)), which ends (or catches it); the
+  shell gives a new prompt. The SSH "signal" request (`INT`, `TERM`, `HUP`,
+  `KILL`) goes to the same group. SIEOS's own `ssh` keeps the console raw,
+  so Ctrl-C typed there goes through to the remote side.
 - auth starts the shell as sshd's child, on that terminal; a thread learns
   of its end from the kernel (`SYS_CHILD_PORT`) and sends `exit-status`,
-  EOF and CLOSE. A connection that ends first ends its shell.
+  EOF and CLOSE. A connection that ends first ends its session: `SIGHUP`
+  to the job running and to the shell (which then gets `SIGKILL` too).
 
 On the client's side, **`CON_RAW`** (a third value for `CON_ECHO`, in
 `tty.c`, so the console and the desktop's terminals both have it): keys
@@ -194,9 +201,9 @@ against the host's OpenSSH (10.0p2):
   after 1 GiB each way, and the connection then ends.
 - Ed25519 keys only (no RSA or ECDSA), unencrypted key files only; no
   `authorized_keys` options, no `sshd_config` settings yet.
-- The remote terminal is 80 × 24 whatever the window; SIEOS has no signals,
-  so Ctrl-C on SIEOS's sshd drops the line being typed but does not stop a
-  running program; lines are at most 255 characters; input sent faster than
-  the shell reads, beyond 4 KiB, is lost.
+- The remote terminal is 80 × 24 whatever the window; lines are at most
+  255 characters; input sent faster than the shell reads, beyond 4 KiB, is
+  lost. No `exit-signal` message: a session ended by a signal reports
+  status 255.
 - No `SSH_ASKPASS`-like non-interactive password: the client asks on the
   console.

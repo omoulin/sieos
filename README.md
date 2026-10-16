@@ -131,7 +131,8 @@ tour, file by file, with the crash and on-demand mechanisms:
   path lock-light), a scheduler that tells P-cores from E-cores (speed
   first: background work on E-cores), tickless time, threads,
   floating-point and vector state saved only for threads that use it,
-  thread-local storage, memory quotas, processor features reported to
+  thread-local storage, signals (Ctrl-C stops the running program; programs
+  may catch it, Python as `KeyboardInterrupt`), memory quotas, processor features reported to
   programs, interrupts on any CPU (shared lines), pages zeroed on
   allocation, W^X.
 - **SieFS** ([docs/siefs.md](docs/siefs.md)): copy-on-write B+tree, two
@@ -220,6 +221,7 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make gui-test` | the desktop through QEMU's monitor: first start, windows (move, resize, zoom, minimize, workspaces), Files, editor, the sia strip, apps, assistant (a stand-in), Settings |
 | `make gui-test-real` | the same with the real assistant and the 1.7B model |
 | `make kernel-test` | floating point and vector state, thread-local variables, quotas, P-core/E-core placement (`pcores=N`) |
+| `make sig-test` | signals: caught, ignored, process groups, interrupted waits; Ctrl-C on the console and in Python; `kill` |
 | `make ipc-bench` | the IPC round trip and 40 clients calling one server (`SMP=1, 4, 8, 16`) |
 | `make demand-test` | servers started on demand, stopped when idle, calls racing a stop |
 | `make sia-test` | the assistant: answers, two conversations, restart (`CPU64=max` on arm64: `sdot`) |

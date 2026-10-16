@@ -8,14 +8,14 @@ each file does. The architecture interface (x86-64, AArch64) is in
 
 ## The idea: a microkernel
 
-The kernel (about 2,700 lines of portable core, plus 1,600-1,900 per
-processor architecture; 56 KB on x86-64, 86 KB on AArch64) does only what
+The kernel (about 2,900 lines of portable core, plus 1,700-2,000 per
+processor architecture; 58 KB on x86-64, 88 KB on AArch64) does only what
 nothing else can do:
 
 | The kernel does | Programs ("servers") do |
 |---|---|
 | memory, address spaces, processors | the console (`con`): screen, keyboard, serial |
-| processes, threads, scheduling, time | the disk (`vblk`), files (`fs`), network (`vnet`, `netd`) |
+| processes, threads, scheduling, time, signals | the disk (`vblk`), files (`fs`), network (`vnet`, `netd`) |
 | message passing (IPC) | users (`auth`, `login`), the desktop (`atlas`) |
 | interrupts delivered as messages | the assistant (`siad`), the supervisor (`init`) |
 
@@ -76,8 +76,8 @@ The kernel is a portable core (`kernel/*.c`) and one processor's part
    the scheduler: a round-robin run queue per CPU (a waiting thread costs
    no CPU time; an idle CPU takes waiting threads from busy ones, polls a
    moment, then sleeps), P-cores and E-cores (below), the tickless timer's
-   decisions, sleeping, ending and waiting for processes, and loading ELF
-   programs (`SYS_SPAWN`).
+   decisions, sleeping, ending and waiting for processes, signals
+   (below), and loading ELF programs (`SYS_SPAWN`).
 7. **`kernel/ipc.c`**: ports, `call` / `recv` / `reply` (and `reply_recv`,
    the server's fast path), interrupts as messages (several drivers may
    share a line), and on-demand names. **The heart of the microkernel.**
@@ -179,6 +179,97 @@ Every arrow is a message; the kernel copies the data once per arrow:
   (`svc idle NAME SECONDS`; 0: never).
 - **Measured:** after boot and a login, 3.1 MiB of RAM in use, instead of
   1 GiB when the assistant's 1.7B model was loaded at boot.
+
+## Signals: Ctrl-C
+
+```
+   you press Ctrl-C ──► con / a desktop terminal / sshd (user/lib/tty.c)
+                          the job the shell runs now: group 42 (CON_FG)
+                          └──SYS_KILL(-42, SIGINT)──► kernel
+   no function for SIGINT: each process of group 42 ends at once (status EXIT_SIGNAL(2))
+   a function (python): the thread that set it is woken (its wait returns -EINTR)
+                        and runs it on its way out of the kernel; SYS_SIGRETURN
+                        puts it back where it was, every register as it was
+   sh: wait() returns, prints nothing for ^C, shows a fresh prompt
+```
+
+What the kernel keeps is only what nothing else can: which signals wait
+for a thread, what each one does to a process, and the registers of a
+thread whose function runs. Who gets Ctrl-C, and when a terminal goes
+away, is the terminals' business, in the one place they share (`tty.c`).
+
+- **Calls:** `SYS_KILL(pid, sig)` sends (pid < 0: every process of group
+  -pid; sig 0 only checks); the old `sys_kill(pid)` is `SIGKILL`. Root may
+  signal any process but init, others only their own. `SYS_SIGNAL(sig,
+  entry)`: `SIG_DFL` (the process ends), `SIG_IGN`, or a function.
+  `SYS_SIGRETURN` ends that function. The library has `signal()`,
+  `raise()` and `kill()` (`user/lib/sig.c`, `mk.h`), also for programs
+  built by `/bin/cc` on SIEOS.
+- **Signals:** any number 1-31; the named ones are `SIGHUP` (the terminal
+  went away), `SIGINT` (Ctrl-C), `SIGKILL` (cannot be caught or ignored),
+  `SIGUSR1`, `SIGUSR2`, `SIGTERM` (the shell's `kill` without an option).
+  A process a signal ends has the status `EXIT_SIGNAL(n)` = -4096 - n:
+  outside the -errno range, so the shell tells "ended by a signal" from
+  "could not start" (`EXIT_SIGNO(status)` gives n back).
+- **Not caught: the sender ends it.** As `SYS_KILL` always did (the
+  process need not run, nor even be scheduled): a busy loop, a sleeper, a
+  program stuck in a call all end the same way. Ignored: nothing happens.
+- **Caught: pending on one thread**, the one that set the function (the
+  last to: Python's interpreter thread, not its idle main thread). The
+  sender marks the signal (`sigpend`), then does what ending a process
+  does (below): a shootdown, so a thread going to sleep on another CPU
+  sees the mark, and one running in user mode comes into the kernel; then
+  it wakes the thread if it waits. Every wait is interruptible: `SYS_SLEEP`,
+  `SYS_WAIT`, `SYS_RECV`, `SYS_PORT_LOOKUP`, and `SYS_CALL` both queued and
+  waiting for the reply; the call returns `-EINTR`.
+- **The function runs on the thread's own stack**, below where it was
+  (x86-64: past the 128-byte red zone), entered on the thread's way out
+  of the kernel (`kernel_exit`, every way out: a system call, a timer, an
+  interrupt from another CPU). Its registers stay in the kernel
+  meanwhile (a 184-byte, on AArch64 280-byte, block), and so do its
+  floating-point and vector registers: their area is handed over, and the
+  function starts with none (a clean set on its first use, only if it uses
+  them). `SYS_SIGRETURN` puts both back (x86-64 leaves by `iretq` then, so
+  rcx and r11 come back too). Nothing is written to the user's stack, so
+  there is nothing to check on the way back and nothing a program could
+  forge, and the size of the vector state (AVX-512: 2.7 KiB) is not part
+  of the ABI. The price: one function at a time per thread (signals that
+  come meanwhile wait for its end), and it must return, not jump out.
+- **An interrupted call:** the server still holds the token and answers
+  later. A token is the client thread's id and, in its high half, the
+  thread's count of finished calls; the count moves on when a call ends
+  (answered, interrupted, or the server gone), so the late answer goes
+  nowhere (`-ESRCH` for the server), even if the client has meanwhile
+  called the same server again. The work the server did stands (a read
+  from the network has taken the data).
+- **Process groups:** each process has one (`pgid`), its parent's unless
+  started with `SPAWN_PGROUP` (it then leads a group of its own number).
+  auth starts each session's shell so; the shell starts each job so.
+- **Terminals** (`tty.c`, used by `con`, the desktop's terminals, `sshd`):
+  the shell tells which group runs (`CON_FG`): the job while it runs,
+  else its own. Ctrl-C (in the usual line mode; in raw mode, ssh's,
+  the key goes to the program) sends that group `SIGINT`, drops the typed
+  line and shows `^C`. The terminal accepts `CON_FG` only for a group whose
+  leader runs as the sender's user (or from root): nobody aims a console's
+  Ctrl-C at someone else's programs. A closed terminal window, an SSH
+  connection gone, send `SIGHUP`. sshd also takes the SSH "signal" request
+  (`INT`, `TERM`, `HUP`, `KILL`) for the terminal's group.
+- **The shell** catches `SIGINT` (Ctrl-C at the prompt or in the built-in
+  `sleep` interrupts only that); `kill [-INT|-TERM|-KILL|-HUP] PID`; it
+  says "killed", "terminated", "hung up", nothing for Ctrl-C. `sh -c` (make's
+  recipes) keeps its programs in its own group: Ctrl-C reaches all of them.
+- **Cost:** the kernel grew by 1.9 KB on x86-64 (code: 52.7 to 54.6 KB) and
+  2.2 KB on AArch64; programs that use no signal, not a byte (the
+  functions are a library member of their own). On the IPC fast path: one
+  more test (the signal mark) where a call waits, and the reply token
+  carries the count: the round trip stays at 0.45 µs, 40 clients on 4 CPUs
+  at 0.74 µs per call (`make ipc-bench`).
+- **Not done (on purpose, for size):** no signal masks (`sigprocmask`),
+  no `sigaction` flags (an interrupted call is not made again: it returns
+  `-EINTR`, the library passes it on), no information beyond the number,
+  no queued repeats (a signal sent twice before it is taken counts once),
+  no stop/continue (`SIGSTOP`, job control in the background). A program
+  started by another begins with every signal at its default.
 
 ## Several processors, time, floating point
 
