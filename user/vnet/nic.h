@@ -4,11 +4,12 @@
  * backend in turn and keeps the first that finds its card:
  *   virtio  (vnet.c)   QEMU, on both architectures;
  *   e1000   (e1000.c)  x86-64: Intel's 82540EM and 82574L (QEMU's default cards);
+ *   rtl8168 (rtl8168.c) x86-64: Realtek's RTL8168h/8111h (the target laptop's);
  *   genet   (genet.c)  the Raspberry Pi 4's own Ethernet (BCM2711 GENET v5);
  *   gem     (gem.c)    the Raspberry Pi 5's Ethernet, in its RP1 chip.
  *
  * Receiving runs in vnet's second thread: rx_wait sleeps until frames may
- * have come (an interrupt, or a short sleep for a card polled), then rx_take
+ * have come (an interrupt; a card without rx_wait is polled), then rx_take
  * packs what arrived into one batch for the network server ("net",
  * NET_FRAMES): each frame a 16-bit length, then the frame.
  *
@@ -27,8 +28,8 @@ typedef struct {
     uint8_t *(*txbuf)(void);
     /* Send the frames now in txbuf (len bytes, NIC_SEND's layout). */
     long (*send)(size_t len);
-    /* Receiving thread: wait, then take what arrived (at most cap bytes;
-     * the rest stays for the next call). */
+    /* Receiving thread: wait (NULL: polled, vnet sleeps 0.2 to 10 ms), then
+     * take what arrived (at most cap bytes; the rest stays for the next call). */
     void (*rx_wait)(void);
     size_t (*rx_take)(uint8_t *batch, size_t cap);
     /* The cable: 1 up, 0 down; NULL for cards without one (virtio). */
@@ -37,7 +38,7 @@ typedef struct {
     void (*stop)(void);
 } nic_t;
 
-extern const nic_t nic_virtio, nic_e1000, nic_genet, nic_gem;
+extern const nic_t nic_virtio, nic_e1000, nic_rtl8168, nic_genet, nic_gem;
 
 /* printf into a buffer (vnet.c). */
 void nic_fmt(char *out, size_t cap, const char *fmt, ...);
@@ -61,7 +62,8 @@ int phy_addr_dt(const void *fdt, int mac_node, int dflt);
  * or all zeros), try every address 0-31 and keep the first that answers
  * (*addr is the variable m's calls use). 0 if a PHY answered. */
 int phy_probe(const mdio_t *m, int *addr, int *id1, int *id2);
-/* Start auto-negotiation (10/100/1000, full and half duplex). */
+/* Start auto-negotiation (10/100/1000, full and half duplex); x86-64 too
+ * (rtl8168.c). */
 void phy_start(const mdio_t *m);
 /* The RGMII clock delays, which the PHY (the Pis' BCM54213PE) adds as the
  * MAC's device tree node says ("phy-mode": "rgmii-id" both, "rgmii-rxid"

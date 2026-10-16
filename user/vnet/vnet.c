@@ -3,6 +3,7 @@
  * tries its backends in turn (nic.h) and serves with the first that finds a
  * card: virtio (QEMU's virtio-net, on PCI, legacy or modern, or on arm64's
  * MMIO), Intel's e1000 and e1000e (e1000.c: QEMU's default cards on x86-64),
+ * Realtek's RTL8168h (rtl8168.c: the target laptop's),
  * the Raspberry Pi 4's GENET (genet.c), the Raspberry Pi 5's RP1 Ethernet
  * (gem.c).
  *
@@ -191,6 +192,14 @@ static void v_stop(void) { vdev_status(&dev, 0); }   /* reset: no more DMA into 
 
 const nic_t nic_virtio = { "virtio", v_setup, v_txbuf, v_send, v_rx_wait, v_rx_take, 0, v_stop };
 
+/* Auto-negotiation: advertise everything, restart it (and wake the PHY). */
+void phy_start(const mdio_t *m)
+{
+    m->wr(PHY_ADV, 0x01E1);                      /* 100 and 10, full and half, IEEE 802.3 */
+    m->wr(PHY_CTRL1000, 0x0300);                 /* 1000 full and half */
+    m->wr(PHY_BMCR, 0x1200);                     /* enable and restart auto-negotiation */
+}
+
 /* ---- The date from the clock chip, as seconds since 1970 (UTC). */
 #if defined(__x86_64__)
 static int cmos(int r) { outb(0x70, r); return inb(0x71); }
@@ -271,14 +280,6 @@ int phy_probe(const mdio_t *m, int *addr, int *id1, int *id2)
     return -1;
 }
 
-/* Auto-negotiation: advertise everything, restart it. */
-void phy_start(const mdio_t *m)
-{
-    m->wr(PHY_ADV, 0x01E1);                      /* 100 and 10, full and half, IEEE 802.3 */
-    m->wr(PHY_CTRL1000, 0x0300);                 /* 1000 full and half */
-    m->wr(PHY_BMCR, 0x1200);                     /* enable and restart auto-negotiation */
-}
-
 /* BCM54213PE: receive delay = "RGMII skew" in its misc control (auxiliary
  * register 0x18, shadow 7); transmit delay = "GTXCLK delay" in shadow
  * register 0x1C, page 3. Each read selects the shadow, then reads it back. */
@@ -337,7 +338,7 @@ static int64_t rtc_now(void)
 #if defined(__aarch64__)
 static const nic_t *const cards[] = { &nic_virtio, &nic_genet, &nic_gem };
 #else
-static const nic_t *const cards[] = { &nic_virtio, &nic_e1000 };
+static const nic_t *const cards[] = { &nic_virtio, &nic_e1000, &nic_rtl8168 };
 #endif
 static const nic_t *card;
 static nic_info_t info;
@@ -360,13 +361,18 @@ static void receiver(void *arg)
     (void)arg;
     static uint8_t batch[NET_MAX];
     long net = 0;
+    unsigned idle = 0;                           /* polled cards: looks without frames, up to 10 */
     for (;;) {
-        card->rx_wait();
+        if (card->rx_wait) card->rx_wait();
+        else sys_sleep(idle ? idle * 1000000UL : 200000UL);   /* 0.2 ms after traffic, up to 10 ms */
         size_t n;
+        int got = 0;
         while ((n = card->rx_take(batch, sizeof batch)) > 0) {
             msg_t f = { .w = { NET_FRAMES }, .sbuf = batch, .slen = n };
             to_net(&net, &f);
+            got = 1;
         }
+        idle = got ? 0 : idle + (idle < 10);
     }
 }
 

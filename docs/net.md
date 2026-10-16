@@ -16,7 +16,8 @@ SIEOS's network is three programs and a library, all written for SIEOS:
   wifid (port "wifi")           the Wi-Fi chip (the Raspberry Pis) ┘  used at a time
         │                       ▲
         ▼
-  virtio-net, Intel e1000/e1000e (QEMU), GENET (Pi 4), RP1's GEM (Pi 5);
+  virtio-net, Intel e1000/e1000e (QEMU), Realtek RTL8168h (the laptop),
+  GENET (Pi 4), RP1's GEM (Pi 5);
   the CYW43455 on SDIO (both Pis)
 ```
 
@@ -37,6 +38,7 @@ One program serves "nic0" whatever the card: it tries its backends in turn
 |---|---|---|---|
 | `vnet.c` | virtio-net (QEMU, both architectures): legacy or virtio 1.0, on PCI or (arm64) MMIO | interrupt | tested |
 | `e1000.c` | x86-64: Intel 82540EM (QEMU's `e1000`, the default card of the `pc` machine), 82545EM, 82574L (`e1000e`, the default of `q35`) | interrupt | tested (QEMU) |
+| `rtl8168.c` | x86-64: Realtek RTL8168h/8111h (PCI 10ec:8168, revision 0x15: the target laptop's) | polled, as `gem.c` (the laptop's interrupt routing is in ACPI, which SIEOS does not read) | **untested on hardware** (QEMU has no RTL8168) |
 | `genet.c` | Raspberry Pi 4: BCM2711 GENET v5, PHY BCM54213PE | interrupt (status bit 13) | **untested on hardware** (QEMU has no GENET) |
 | `gem.c` | Raspberry Pi 5: RP1's Cadence GEM over PCIe, PHY BCM54213PE | polled: 0.2 ms after traffic, up to 10 ms when quiet (RP1's interrupts need MSI-X, not routed yet) | **untested on hardware** (no Pi 5 emulator) |
 
@@ -99,6 +101,25 @@ thread, and the line is acknowledged once every frame is taken, as with
 virtio. Frames to send are one descriptor each, at most 255 at a time; the
 reply waits for the last one's "done" bit. The cable: `STATUS`, read once a
 second like the Pis' PHYs.
+
+The RTL8168h backend (x86-64), after Linux's `r8169` (`rtl_hw_init_8168g`,
+`rtl_hw_start_8168h_1`) without what only tunes: the PHY's firmware patch
+(`rtl8168h-2.fw`, which Linux also runs without) and analog settings, the
+PCIe PHY's settings, EEE and power saving. The chip is named by the XID in
+`TxConfig` (`(TxConfig >> 20) & 0xFCF`, 0x540/0x541 for the 8168h); any
+other 10ec:8168 is logged and left alone. Setup: ASPM off in the card's
+PCIe Link Control (as Linux does: L1 hangs these chips); the chip taken
+back from its out-of-band firmware (receive path gated, FIFOs drained, "now
+is OOB" off, MAC OCP 0xE8DE); reset; the MAC from the eFuse (ERI 0xE0/0xE4,
+else the ID registers), written back to the ID registers; Linux's FIFO
+sizes; the packet filter reset; rings of 64 receive buffers of 2 KiB and
+256 transmit descriptors (16 bytes: "own" bit, ring end, first/last
+segment, length; address); our address and broadcasts accepted. The PHY is
+inside the chip, on the OCP bus (standard register r at 0xA400 + 2r):
+auto-negotiation with `phy_start` (nic.h). The cable: `PHYstatus`, once a
+second; vnet logs the link's speed and duplex when it changes. Polled: a
+card without `rx_wait` is polled by vnet's receiving thread itself (0.2 ms
+after traffic, up to 10 ms when quiet; `gem.c` too).
 
 **PCI** (`user/lib/pci.c`, shared with the USB server and the disk's SD
 controllers): x86-64 reads configuration space through the kernel and
@@ -360,7 +381,7 @@ takes `NET_NIC=CARD` (QEMU's `-device`), `NET_MACHINE=q35` and
 | HTTPS (ChaCha20-Poly1305), crypto alone on the host | 400 MB/s (AES-128-GCM: 31 MB/s, AES-256-GCM: 25 MB/s) |
 | Signature checks (host) | ECDSA ~2.2 ms, RSA ~1.7 ms |
 | Memory | vnet ~420-440 KiB (192 KiB of it DMA buffers; the device tree is dropped after setup), netd ~300 KiB plus 320 KiB per TCP connection |
-| Code (text, 2026-10-16) | netd 36 KB, vnet 21 KB (x86-64, with e1000) / 47 KB (arm64, with the two Pi backends), fetch 69 KB (with TLS 1.3 and 1.2 and the commands; TLS 1.2 added 5 KB to tls.o, 12.9 KB in all) |
+| Code (text, 2026-10-16) | netd 36 KB, vnet 24 KB (x86-64, with e1000 and RTL8168h: +3.3 KB) / 47 KB (arm64, with the two Pi backends), fetch 69 KB (with TLS 1.3 and 1.2 and the commands; TLS 1.2 added 5 KB to tls.o, 12.9 KB in all) |
 
 ## Limits
 
@@ -385,7 +406,7 @@ takes `NET_NIC=CARD` (QEMU's `-device`), `NET_MACHINE=q35` and
 - The card sits in PCI slot 5 in QEMU (line 10, apart from the disk's); the
   kernel now lets up to 4 drivers share a line, so this is no longer needed,
   only kept.
-- Cards: e1000 only on x86-64 (arm64 has virtio, the Pis their own); the
+- Cards: e1000 and the RTL8168h (untested on hardware) only on x86-64 (arm64 has virtio, the Pis their own); the
   e1000e is slower in QEMU (33 MB/s). On arm64's `virt`, virtio on PCI is
   virtio 1.0 only (a legacy-only card, `disable-modern=on`, is not found:
   its I/O ports would need the bridge's I/O window), on bus 0, with INTx

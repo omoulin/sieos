@@ -14,7 +14,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Users, login, permissions | yes | yes | yes (serial) | untested |
 | Supervisor, on-demand servers | yes | yes | yes | untested |
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
-| Network, TLS | yes: virtio (legacy, 1.0), e1000, e1000e | yes: virtio (MMIO, PCIe) | no driver yet | no driver yet |
+| Network, TLS | yes: virtio (legacy, 1.0), e1000, e1000e; RTL8168h written, untested on the laptop | yes: virtio (MMIO, PCIe) | no driver yet | no driver yet |
 | SSH client and server | yes | yes | needs the network | needs the network |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
@@ -32,7 +32,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
 - The assistant's memory: history across sessions and restarts, with
   compaction ([sia.md](sia.md)).
 - The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
-  Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
+  Realtek network card (written: try it there), then NVIDIA compute
+  ([ai-plan.md](ai-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
   written but untested there, [raspberrypi.md](raspberrypi.md)).
 
@@ -92,6 +93,10 @@ checklist in [raspberrypi.md](raspberrypi.md).
   by sicc on AArch64); in the desktop's menu; `make py-test`
   ([python.md](python.md)). sicc: `#include MACRO` inside an `#if` group,
   and static flexible array members with initializers (pointers included).
+- **2026-10-16.** A driver for the target laptop's wired card, Realtek's
+  RTL8168h/8111h (`user/vnet/rtl8168.c`, after Linux's `r8169`, polled;
+  +3.3 KB to vnet); untested (QEMU has no model of it): vnet logs the chip's
+  XID, the MAC, the PHY's id and the link ([net.md](net.md)).
 - **2026-10-16.** The network on QEMU's other cards: Intel's e1000 and
   e1000e (the default cards of x86-64's `pc` and `q35`), and virtio 1.0 on
   PCI, also for the disk (arm64's `virt` with a plain `-nic user`); one PCI
