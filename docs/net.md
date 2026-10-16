@@ -146,21 +146,28 @@ network costs no CPU.
 
 The protocol is in `include/mk/proto.h` (`NET_*`, `NIC_*`).
 
-## Wi-Fi: wifid (the Raspberry Pis)
+## Wi-Fi: wifid
 
-`wifid` (`user/wifi`, arm64 only, started at boot on the Pis) drives the
-**CYW43455** on both the Pi 4 and the Pi 5, over SDIO, as a second network
-interface (port `wifi`). Open and WPA2-PSK networks. **Untested on
-hardware**: QEMU emulates neither the SDIO controller's card side nor the
-chip; it was written from the controllers' register layout, the device
-trees and Linux's `brcmfmac` and Plan 9's `ether4330`. What to check on a
-real board, and what the log lines mean, is in
-[raspberrypi.md](raspberrypi.md).
+`wifid` (`user/wifi`, started at boot) is the Wi-Fi server: it serves the
+port `wifi` as a second network interface for netd, keeps the chosen
+network and joins it again at every start (`wifid.c`, one thread, the same
+shape on both architectures). One chip driver per architecture does the
+radio: `bcm.c` the Raspberry Pis' CYW43455 (below), `iwl.c` a PC's Intel
+AX210 (further down). Open and WPA2-PSK networks, one at a time. On a
+machine with neither chip, `wifid` ends at once and init does not start it
+again. **Both drivers are untested on hardware** (QEMU has neither chip).
 
 ```
-  wifi (/bin/wifi), Settings ──WIFI_*──► wifid ──SDIO──► the CYW43455
-                      netd ◄──NET_FRAMES / NET_LINK──┘
+  wifi (/bin/wifi), Settings ──WIFI_*──► wifid ──► bcm.c (SDIO)  the CYW43455
+                      netd ◄──NET_FRAMES / NET_LINK─┴─► iwl.c (PCIe) the AX210
 ```
+
+### The Raspberry Pis' CYW43455 (`bcm.c`, arm64)
+
+A FullMAC chip over SDIO: its own firmware scans, joins and runs the WPA2
+handshake. Written from the controllers' register layout, the device trees
+and Linux's `brcmfmac` and Plan 9's `ether4330`. What to check on a real
+board, and what the log lines mean, is in [raspberrypi.md](raspberrypi.md).
 
 - **The SDIO host** (`sdio.c`): an SDHCI controller (the same register
   layout as the disk's `sd.c`) driven as an SDIO host — CMD5 brings the
@@ -172,7 +179,7 @@ real board, and what the log lines mean, is in
   function through the BCM2712 pin controller) and powers the chip (WL_ON:
   the Pi 4's firmware GPIO expander by the mailbox, the Pi 5's always-on
   GPIO block). No 1.8 V switch and no card detection: the chip is fixed.
-- **The driver** (`wifid.c`): over SDIO function 1 it reaches the chip's
+- **The driver** (`bcm.c`): over SDIO function 1 it reaches the chip's
   backplane (a 32 KiB sliding window onto its cores and RAM): it scans the
   cores, resets the ARM and the 802.11 core, downloads the firmware and the
   nvram into chip RAM, takes the ARM core out of reset, waits for the chip's
@@ -207,6 +214,65 @@ The exact URLs are pinned in the `Makefile`
 (<https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/c91cd2804cf7463aab913e7247c176049f16bbd6/>...).
 The **"standard"** Cypress build is used, not "minimal": it has the internal
 supplicant (`idsup`/`sup_wpa`) that WPA2 needs. Version 7.45.265 (2023).
+
+### The laptop's Intel AX210 (`iwl.c`, x86-64)
+
+`iwl.c` drives Intel's **Wi-Fi 6E AX210** ("Typhoon Peak", PCI `8086:2725`),
+on PCIe. Unlike the Pi's FullMAC chip, the AX210's firmware is "softMAC":
+the firmware scans, picks rates and does CCMP in hardware with keys we give
+it, but the **host** does the MLME (authentication, association) and the
+WPA2 4-way handshake. Written from Linux's `iwlwifi` (the `pcie/` gen2
+transport with the v2 context info and "peripheral scratch", `fw/` for the
+firmware file and the PNVM, and the `mvm/` commands as Linux sends them to
+this firmware — the "MLD" ones this firmware wants). Station mode, one
+network, 2.4 and 5 GHz, HT at 20 MHz; no power save, no aggregation
+(block-ack requests are declined), WPA2-PSK and open only (no WPA3). The AP
+is enumerated on **PCI bus `0x12` behind a root port**; `lib/pci.c`'s x86-64
+scan already walks every bus behind the bridges, so nothing there changed.
+
+```
+  Settings/wifi ─WIFI_*─► wifid ─► iwl.c ──TFD rings / RX buffers (PCIe DMA)──► AX210
+          netd ◄─NET_FRAMES / NET_LINK─┘        firmware: scan, rates, CCMP
+```
+
+- **Bring-up**: take the device from the platform (and the management
+  engine) — `prepare`, a software reset, the "APM" clocks — then build, in
+  DMA memory, the **context info** and **peripheral scratch** that point the
+  device at the firmware's sections, the PNVM, the RX queue and the command
+  queue; load the image loader, kick the ROM and wait for the firmware's
+  `ALIVE`. The firmware's `.ucode` (TLV sections: CPU1, CPU2, paging) and
+  the matching `.pnvm` (the section for our SKU, from `ALIVE`, and hardware)
+  come from `linux-firmware`. Then the firmware's own init (`NVM_ACCESS`),
+  and the MAC address is read from the device's `MAC_STRAP`/`MAC_OTP`
+  registers.
+- **Transport, no interrupts**: PCI interrupt lines need ACPI routing and
+  MSI needs the kernel, so one thread **polls** the RX queue (128 buffers of
+  4 KiB, a free ring and a completion ring; the device writes how many it
+  filled) — 50 µs after traffic, up to 4 ms when quiet, like the Pi 5's
+  Ethernet. TX queues are 128 "TFDs" (256 bytes, buffer pointers): the
+  command queue, and two the firmware allocates for the AP's station
+  (management, TID 15; data, TID 0). Data frames go into the TX slot with
+  **no copy of the payload** (netd's bytes and the SNAP header straight in).
+- **Joining** (`iwl.c`'s manager thread): a passive scan (beacons arrive as
+  received frames), then — for the strongest match — a PHY context, a link,
+  the AP as a station, Open System authentication and an association request
+  (built from the beacon's rates, HT and WMM elements), all as 802.11
+  management frames we send and receive. For WPA2 the **4-way handshake runs
+  on the host** (`wpa.c`): EAPOL-Key frames carried as data frames, the
+  pairwise key from the passphrase (PBKDF2) and the nonces, the group key
+  unwrapped; the pairwise (CCMP) and group keys are then installed in the
+  chip (`SEC_KEY`), and from there the firmware encrypts and decrypts. Link
+  loss (missed beacons, a deauth) is logged and the network rejoined.
+- **The handshake crypto** (`wpa.c`, shared-nothing with the Pi path since
+  that chip does its own): `lib/sha1.c` gained **HMAC-SHA-1** and
+  **PBKDF2**, `lib/aead.c` gained **AES key unwrap** (RFC 3394; its inverse
+  cipher). All host-testable — see the tests below.
+
+**The firmware** is Intel's, not part of SIEOS (its own licence). `make usb`
+fetches it once (pinned in the `Makefile`, `linux-firmware` commit
+`38c1a70`) and copies it onto the USB key, into `/lib/firmware/`:
+`iwlwifi-ty-a0-gf-a0-89.ucode` and `iwlwifi-ty-a0-gf-a0.pnvm` (API version
+89). If they are missing, `wifid` says so and the radio stays off.
 
 ## The library: sockets, HTTP, TLS
 
@@ -316,11 +382,17 @@ line to one driver only (see Limits).
 
 ## Tests and measurements
 
-`make net-crypto-test`: 140 checks: FIPS 180-4, RFC 4231, 5869, 8439, 7748
+`make net-crypto-test`: 160 checks: FIPS 180-4, RFC 4231, 5869, 8439, 7748
 and GCM test vectors (AES-128 and AES-256), P-256 and P-384 key exchange,
 and 54 signatures made by the host's openssl (ECDSA P-256/P-384 with
 SHA-256/384, RSA 2048/3072/4096 PKCS #1 v1.5 and PSS with SHA-256/384/512),
-each also damaged and refused. Then `tls.c` and `x509.c` themselves, built
+each also damaged and refused. It also checks the AX210 Wi-Fi's handshake
+crypto (`user/wifi/wpa.c` and the new `lib/` pieces): HMAC-SHA-1 and PBKDF2
+(RFC 2202, 6070), the IEEE 802.11 passphrase vector, AES key unwrap (RFC
+3394), and a whole 4-way and group handshake against EAPOL frames an access
+point makes apart (`tests/net/wpagen.py`: hashlib and openssl's AES), each
+answer compared byte for byte and damaged or replayed frames refused. Then
+`tls.c` and `x509.c` themselves, built
 on the host (`tests/net/tlsclient.c`, `tests/net/tlsmk.h` standing in for
 `mk.h`), against `openssl s_server` with a test CA (`tests/net/tls.py`, 27
 cases): TLS 1.2 with each suite, RSA and ECDSA P-256/P-384 certificates,
@@ -360,7 +432,7 @@ takes `NET_NIC=CARD` (QEMU's `-device`), `NET_MACHINE=q35` and
 | HTTPS (ChaCha20-Poly1305), crypto alone on the host | 400 MB/s (AES-128-GCM: 31 MB/s, AES-256-GCM: 25 MB/s) |
 | Signature checks (host) | ECDSA ~2.2 ms, RSA ~1.7 ms |
 | Memory | vnet ~420-440 KiB (192 KiB of it DMA buffers; the device tree is dropped after setup), netd ~300 KiB plus 320 KiB per TCP connection |
-| Code (text, 2026-10-16) | netd 36 KB, vnet 21 KB (x86-64, with e1000) / 47 KB (arm64, with the two Pi backends), fetch 69 KB (with TLS 1.3 and 1.2 and the commands; TLS 1.2 added 5 KB to tls.o, 12.9 KB in all) |
+| Code (text, 2026-10-16) | netd 36 KB, vnet 21 KB (x86-64, with e1000) / 47 KB (arm64, with the two Pi backends), fetch 69 KB (with TLS 1.3 and 1.2 and the commands; TLS 1.2 added 5 KB to tls.o, 12.9 KB in all); wifid 52 KB on x86-64 (iwl.c 21 KB, wpa.c 2.2 KB) / 44 KB on arm64 (bcm.c 12 KB, sdio.c 6.5 KB) |
 
 ## Limits
 
@@ -376,12 +448,16 @@ takes `NET_NIC=CARD` (QEMU's `-device`), `NET_MACHINE=q35` and
   Raspberry Pis have no clock chip: the date is unknown there, and TLS then
   skips the certificates' validity dates (everything else is checked).
 - Raspberry Pi Ethernet and Wi-Fi are untested on hardware (see
-  [raspberrypi.md](raspberrypi.md)); the Pi 5's Ethernet is polled.
+  [raspberrypi.md](raspberrypi.md)); the Pi 5's Ethernet is polled. The
+  AX210 Wi-Fi is untested too (QEMU has no AX210): what to check on the
+  laptop is above.
 - Wi-Fi: open and WPA2-PSK only (no WPA3, no enterprise, no WEP); 2.4 and
   5 GHz as the firmware's regulatory blob allows; one network at a time; no
-  access-point mode. The host runs no supplicant: the chip's firmware does
-  the handshake. A scan blocks the caller (and the desktop) for a few
-  seconds.
+  access-point mode. On the Pis the chip's firmware runs the handshake; on
+  the AX210 the host does (`wpa.c`). The AX210 is station mode only, HT at
+  20 MHz, no power save and no aggregation, and it polls its queues (no PCI
+  interrupt routed yet), so throughput is modest. A scan blocks the caller
+  (and the desktop) for a few seconds.
 - The card sits in PCI slot 5 in QEMU (line 10, apart from the disk's); the
   kernel now lets up to 4 drivers share a line, so this is no longer needed,
   only kept.

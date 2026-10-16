@@ -32,7 +32,10 @@ checklist in [raspberrypi.md](raspberrypi.md).
 - The assistant's memory: history across sessions and restarts, with
   compaction ([sia.md](sia.md)).
 - The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
-  Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
+  Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)). Its
+  Intel AX210 Wi-Fi now has a driver (`user/wifi/iwl.c`, the host does the
+  MLME and WPA2 handshake), **untested on hardware** — QEMU has no AX210, so
+  it runs only on the laptop ([net.md](net.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
   written but untested there, [raspberrypi.md](raspberrypi.md)).
 
