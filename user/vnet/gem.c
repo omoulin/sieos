@@ -20,9 +20,9 @@
  * queues at a descriptor marked "used", so they never move data.
  *
  * Polled: RP1's interrupts arrive as PCIe MSI-X messages, which SIEOS does
- * not route yet. rx_wait sleeps 0.2 ms after traffic, growing to 10 ms when
- * the line is quiet: up to ~10 ms more latency on the first frame of a
- * burst, ~100 short wake-ups a second when idle.
+ * not route yet. vnet's receiver sleeps 0.2 ms after traffic, growing to
+ * 10 ms when the line is quiet: up to ~10 ms more latency on the first
+ * frame of a burst, ~100 short wake-ups a second when idle.
  *
  * Caches: whether the PCIe path sees the CPU's caches depends on the board;
  * we assume it does not. A cache line (64 bytes) holds four descriptors, so
@@ -81,7 +81,7 @@ static volatile desc_t *rxd, *txd;       /* descriptor rings (DMA memory) */
 static uint8_t *rxbuf, *txmem, *pad;
 static uint64_t rxdbus, txdbus, rxbus, txbus, padbus;
 static int64_t bus_off;                  /* RAM as RP1 sees it = physical + bus_off */
-static int rx_next, tx_next, phy_addr = 1, cur_mbps, cur_full, idle_ms;
+static int rx_next, tx_next, phy_addr = 1, cur_mbps, cur_full;
 static volatile uint32_t *rp1;           /* RP1's first MiB of registers (clocks, GPIO) */
 
 static uint32_t rp1_rd(uint32_t o)             { return rp1[o / 4]; }
@@ -252,12 +252,6 @@ static int setup(nic_info_t *info, char *what, size_t cap)
     return 0;
 }
 
-static void rx_wait(void)
-{
-    sys_sleep(idle_ms ? (uint64_t)idle_ms * 1000000UL : 200000UL);
-    if (idle_ms < 10) idle_ms++;
-}
-
 static size_t rx_take(uint8_t *batch, size_t cap)
 {
     size_t n = 0;
@@ -281,7 +275,6 @@ static size_t rx_take(uint8_t *batch, size_t cap)
         }
         rx_next = (rx_next + 1) % NRX;
     }
-    if (n) idle_ms = 0;
     return n;
 }
 
@@ -342,4 +335,4 @@ static int link(void)
 
 static void stop(void) { wr(NCR, 0); wr(IDR, 0xFFFFFFFF); }
 
-const nic_t nic_gem = { "gem", setup, txbuf, send, rx_wait, rx_take, link, stop };
+const nic_t nic_gem = { "gem", setup, txbuf, send, 0, rx_take, link, stop };

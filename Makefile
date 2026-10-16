@@ -106,9 +106,9 @@ $(B)/user/vblk/%.o: user/vblk/%.c user/vblk/*.h user/lib/mk.h include/mk/*.h $(T
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
-# The network card server: virtio; on x86-64 also Intel e1000 (e1000.c), on arm64 the Raspberry Pis' own
+# The network card server: virtio; on x86-64 also Intel e1000 (e1000.c) and Realtek RTL8168h (rtl8168.c), on arm64 the Raspberry Pis' own
 # Ethernet (genet.c: Pi 4; gem.c: Pi 5's RP1).
-VNET_X  := $(if $(filter arm64,$(ARCH)),$(B)/user/vnet/genet.o $(B)/user/vnet/gem.o,$(B)/user/vnet/e1000.o)
+VNET_X  := $(if $(filter arm64,$(ARCH)),$(B)/user/vnet/genet.o $(B)/user/vnet/gem.o,$(B)/user/vnet/e1000.o $(B)/user/vnet/rtl8168.o)
 $(B)/vnet.elf: $(B)/user/vnet.o $(VNET_X) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(VNET_X) $(ULIB)
 $(B)/user/vnet.o: user/vnet/nic.h
