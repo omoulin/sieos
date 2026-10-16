@@ -57,8 +57,9 @@
 #define W_FILES (MAXTERM + 3)
 #define W_PINS (MAXTERM + 4)
 #define W_REPO (MAXTERM + 5)
-#define NWIN (MAXTERM + 6)
-_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES && W_REPO == WM_REPO, "wm.c knows the window ids");
+#define W_MAIL (MAXTERM + 6)
+#define NWIN (MAXTERM + 7)
+_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES && W_REPO == WM_REPO && W_MAIL == WM_MAIL, "wm.c knows the window ids");
 #define TBAR 48                     /* the insides of a window start this far below their top */
 
 typedef struct { char name[48], path[160]; int app; } item_t;
@@ -318,7 +319,7 @@ static void rescan(void)
 static int win_used(int w)
 {
     return w >= 0 && w < MAXTERM ? terms[w].used : w == W_EDIT ? edit_active() : w == W_SIA ? sia_on :
-           w == W_SET ? set_on : w == W_FILES ? files_on : w == W_PINS ? pins_on : w == W_REPO ? repo_on : 0;
+           w == W_SET ? set_on : w == W_FILES ? files_on : w == W_PINS ? pins_on : w == W_REPO ? repo_on : w == W_MAIL ? mail_on() : 0;
 }
 static void win_title(int w, char *t, size_t cap)
 {
@@ -328,10 +329,11 @@ static void win_title(int w, char *t, size_t cap)
     else if (w == W_SET) strlcpy(t, "Settings", cap);
     else if (w == W_PINS) strlcpy(t, "Pins", cap);
     else if (w == W_REPO) strlcpy(t, "Git", cap);
+    else if (w == W_MAIL) strlcpy(t, "Mail", cap);
     else strlcpy(t, "Files", cap);
     if (w < MAXTERM && terms[w].back) { size_t n = strlen(t); n += strlcpy(t + n, " [history -", 16); t[n + num(t + n, terms[w].back)] = 0; strlcpy(t + strlen(t), "]", 2); }
 }
-static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : w == W_REPO ? I_GIT : I_FOLDER; }
+static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : w == W_REPO ? I_GIT : w == W_MAIL ? I_MAIL : I_FOLDER; }
 int wm_icon(int w) { return win_icon(w); }
 
 /* wm.c asks: is it there, its title, draw its inside. */
@@ -349,6 +351,7 @@ void wm_info(int w, char *t, size_t cap)                 /* the strip's right si
     else if (w == W_FILES) strlcpy(t, files_dir(), cap);
     else if (w == W_PINS) strlcpy(t, "GPIO", cap);
     else if (w == W_REPO) strlcpy(t, repo_dir(), cap);
+    else if (w == W_MAIL) mail_info(t, cap);
 }
 void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
 {
@@ -358,6 +361,7 @@ void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
     else if (w == W_SET) settings_draw(x0, y0, x1, y1, keys);
     else if (w == W_PINS) pins_draw(x0, y0, x1, y1, keys);
     else if (w == W_REPO) repo_draw(x0, y0, x1, y1, keys);
+    else if (w == W_MAIL) mail_draw(x0, y0, x1, y1, keys);
     else files_draw(x0, y0, x1, y1, keys);
 }
 
@@ -932,7 +936,7 @@ static long open_term(const char *pw)
     long pid = atlas_auth(&m);
     wipe(req, sizeof req);
     if (pid < 0) { free(ring); return pid; }
-    next_chan++;
+    if (++next_chan == MAIL_CHAN) next_chan++;           /* (that one is Mail's) */
     term_t *w = &terms[t];
     memset(w, 0, sizeof *w);
     w->ring = ring;
@@ -974,6 +978,7 @@ static void close_win(int w)
     if (w == W_FILES) { files_on = 0; say("atlas: files closed\n"); }
     if (w == W_PINS) { pins_on = 0; pins_close(); say("atlas: pins closed\n"); }
     if (w == W_REPO) { repo_on = 0; repo_close(); say("atlas: git closed\n"); }
+    if (w == W_MAIL) { mail_close(); say("atlas: mail closed\n"); }
     wm_gone(w);
     if (focus == w) focus = wm_top();
     settle();
@@ -987,6 +992,7 @@ static void logout(void)
     repo_close();
     pins_logout();
     settings_close();
+    mail_close();
     nitems = 0;
     mode = GREETER;
     uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = home[0] = 0; gfield = 0;
@@ -1018,7 +1024,7 @@ void greeter_login(const char *name, const char *pw)
 }
 
 /* The system's launchers (/etc/apps), for the strip and the menu. */
-enum { K_TERMINAL, K_EDITOR, K_SETTINGS, K_GIT };
+enum { K_TERMINAL, K_EDITOR, K_SETTINGS, K_GIT, K_MAIL };
 static void scan_apps(void)
 {
     napps = 0;
@@ -1038,7 +1044,7 @@ static void scan_apps(void)
             char *f = file_get(apps[napps].path, &len), kind[16];
             app_field(f, "kind", kind, sizeof kind);
             free(f);
-            apps[napps].kind = !strcmp(kind, "editor") ? K_EDITOR : !strcmp(kind, "settings") ? K_SETTINGS : !strcmp(kind, "git") ? K_GIT : K_TERMINAL;
+            apps[napps].kind = !strcmp(kind, "editor") ? K_EDITOR : !strcmp(kind, "settings") ? K_SETTINGS : !strcmp(kind, "git") ? K_GIT : !strcmp(kind, "mail") ? K_MAIL : K_TERMINAL;
             app_name(apps[napps].path, apps[napps].name, sizeof apps[0].name);
             napps++;
         }
@@ -1140,6 +1146,7 @@ static void app_start(const char *path)
     if (!strcmp(kind, "editor")) { open_editor(); return; }
     if (!strcmp(kind, "settings")) { open_settings(); return; }
     if (!strcmp(kind, "git")) { repo_open(); repo_on = 1; show_win(W_REPO); settle(); return; }
+    if (!strcmp(kind, "mail")) { mail_open(); show_win(W_MAIL); settle(); return; }
     if (rn[0] != '/') { say("atlas: app %s: no program\n", nm); settle(); return; }
     long t = open_term(0);
     if (t < 0) { settle(); return; }
@@ -1251,9 +1258,9 @@ static void main_menu(void)                              /* the Deskbar's: start
     menu_starters();
     int sep = 0;
     for (int i = 0; i < napps; i++) {
-        if ((apps[i].kind != K_TERMINAL && apps[i].kind != K_GIT) || !strcmp(base_name(apps[i].path), "shell.app")) continue;
+        if (apps[i].kind == K_EDITOR || apps[i].kind == K_SETTINGS || !strcmp(base_name(apps[i].path), "shell.app")) continue;
         if (!sep++) menu_add("", A_SEP, 0, -1);
-        menu_add(apps[i].name, A_RUNAPP, apps[i].path, apps[i].kind == K_GIT ? I_GIT : I_APP);
+        menu_add(apps[i].name, A_RUNAPP, apps[i].path, apps[i].kind == K_GIT ? I_GIT : apps[i].kind == K_MAIL ? I_MAIL : I_APP);
     }
     sep = 0;
     for (int w = 0; w < NWIN; w++) {
@@ -1381,6 +1388,7 @@ static void paste(void)
     if (focus == W_EDIT) { for (int i = 0; i < clip_n; i++) edit_key((uint8_t)clip[i]); redraw(); return; }
     if (focus == W_SET) { for (int i = 0; i < clip_n; i++) if (clip[i] >= 32) settings_key((uint8_t)clip[i]); redraw(); return; }
     if (focus == W_REPO) { for (int i = 0; i < clip_n; i++) if (clip[i] >= 32) repo_key((uint8_t)clip[i]); redraw(); return; }
+    if (focus == W_MAIL) { for (int i = 0; i < clip_n; i++) mail_key((uint8_t)clip[i]); redraw(); return; }
     if (focus >= MAXTERM) return;
     term_t *t = &terms[focus];
     for (int i = 0; i < clip_n; i++) tty_input(&t->tty, clip[i]);
@@ -1459,6 +1467,7 @@ static void click(int x, int y)
     case H_FILE:  focus_win(W_FILES); files_click(k, a); settle(); return;
     case H_PINS:  focus_win(W_PINS); pins_click(k, a); redraw(); return;
     case H_REPO:  focus_win(W_REPO); repo_click(k, a); redraw(); return;
+    case H_MAIL:  focus_win(W_MAIL); mail_click(k, a); settle(); return;
     case H_DESK:  if (strip_on) { strip_on = 0; redraw(); } return;
     }
 }
@@ -1518,6 +1527,7 @@ static void key(int c)
     if (focus == W_FILES) { if (files_key(c)) settle(); return; }
     if (focus == W_PINS) { if (pins_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
     if (focus == W_REPO) { if (repo_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
+    if (focus == W_MAIL) { if (mail_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
     term_t *t = &terms[focus];                           /* the focused terminal */
     int x0, x1, y0, y1;
     if (!win_box(focus, &x0, &y0, &x1, &y1)) x0 = x1 = y0 = y1 = 0;
@@ -1581,14 +1591,15 @@ static void mouse(const con_event_t *e)
     if (e->code && mode == SESSION) {                    /* the wheel */
         int16_t w = m_rev ? -(int16_t)e->code : (int16_t)e->code;
         int i = hit_at(x, y);
-        if (i >= 0 && (hit[i].kind == H_WIN || hit[i].kind == H_ED || hit[i].kind == H_PANEL || hit[i].kind == H_SET || hit[i].kind == H_FILE || hit[i].kind == H_PINS || hit[i].kind == H_REPO)) {
+        if (i >= 0 && (hit[i].kind == H_WIN || hit[i].kind == H_ED || hit[i].kind == H_PANEL || hit[i].kind == H_SET || hit[i].kind == H_FILE || hit[i].kind == H_PINS || hit[i].kind == H_REPO || hit[i].kind == H_MAIL)) {
             int a = hit[i].kind == H_ED ? W_EDIT : hit[i].kind == H_PANEL ? W_SIA : hit[i].kind == H_SET ? W_SET :
-                    hit[i].kind == H_FILE ? W_FILES : hit[i].kind == H_PINS ? W_PINS : hit[i].kind == H_REPO ? W_REPO : hit[i].arg;
+                    hit[i].kind == H_FILE ? W_FILES : hit[i].kind == H_PINS ? W_PINS : hit[i].kind == H_REPO ? W_REPO : hit[i].kind == H_MAIL ? W_MAIL : hit[i].arg;
             if (a == W_EDIT) edit_wheel(hit[i].arg, w);
             else if (a == W_SET) settings_wheel(w);
             else if (a == W_FILES) files_wheel(w);
             else if (a == W_PINS) pins_wheel(w);
             else if (a == W_REPO) repo_wheel(w);
+            else if (a == W_MAIL) mail_wheel(hit[i].arg, w);
             else if (a == W_SIA) panel_wheel(w);
             else if (a < MAXTERM) {
                 term_t *t = &terms[a];
@@ -1737,6 +1748,7 @@ int main(int argc, char **argv)
                 for (int t = 0; t < MAXTERM; t++)
                     if (terms[t].used && terms[t].pid == pid) { close_term(&terms[t]); closed = 1; }
                 if (repo_ended(pid, st) && mode == SESSION && repo_on) redraw();
+                mail_ended(pid);                         /* (or Mail's helper) */
             }
             if (closed && mode == SESSION) { rescan(); settle(); }
             continue;
@@ -1780,6 +1792,10 @@ int main(int argc, char **argv)
             reply_val(from, 0);
             if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
             if (mode == SESSION && wm_top() < 0) { int x0, y0, x1, y1; rest_box(&x0, &y0, &x1, &y1); redraw_box(x0, y0, x1, y1); }   /* (the resting clock) */
+            continue;
+        }
+        if (m.w[3] == MAIL_CHAN) {                       /* Mail's helper, as the user */
+            if (m.uid == uid && mode == SESSION) { if (mail_console(from, &m, buf)) settle(); } else reply_val(from, -EIO);
             continue;
         }
         /* a terminal's shell: CON_WRITE / CON_READ / CON_ECHO, its window in w[3] */

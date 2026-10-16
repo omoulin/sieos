@@ -37,7 +37,7 @@ UCORE   := crt0 lib                     # in every program
 ULIBOBJ := fs date acct tty fmt string fdt pci virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
-BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git   # programs on the disk, in /bin
+BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git mail   # programs on the disk, in /bin
 LINKS   := acct/passwd acct/su acct/useradd acct/userdel ssh/ssh-keygen   # other names of programs (symbolic links)
 NETLINKS := ping host nslookup ifconfig netstat traceroute nc curl wget   # other names of /bin/fetch (docs/net.md)
 LINKS   += $(NETLINKS:%=fetch/%)
@@ -126,6 +126,13 @@ $(B)/user/wifi/%.o: user/wifi/%.c user/wifi/wifi.h user/lib/mk.h include/mk/*.h 
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
+# Mail (user/mail): the protocols (mail.c) and the message decoding (mime.c).
+$(B)/mail.elf: $(B)/user/mail/mail.o $(B)/user/mail/mime.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(B)/user/mail/mail.o $(B)/user/mail/mime.o $(ULIB)
+$(B)/user/mail/%.o: user/mail/%.c user/mail/mail.h user/lib/net.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(UCFLAGS) -c $< -o $@
+
 # The USB server (user/usb): the xHCI controller, hubs, disks, keyboards and mice.
 USBSRV  := usb xhci pci msc hid
 $(B)/usb.elf: $(USBSRV:%=$(B)/user/usb/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
@@ -135,7 +142,7 @@ $(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/mk.h include/mk/*.h $(TO
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The desktop has several files; its font is drawn in tools/mkfont.py.
-ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen wm settings files icons pins repo
+ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen wm settings files icons pins repo mail
 $(B)/atlas.elf: $(ATLAS:%=$(B)/user/atlas/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(ATLAS:%=$(B)/user/atlas/%.o) $(ULIB)
 $(B)/user/atlas/%.o: user/atlas/%.c user/atlas/draw.h user/atlas/atlas.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
@@ -711,3 +718,10 @@ ssh-test: all
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/sshtest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 .PHONY: ssh-test
+
+# mail-test: Mail (the window and /bin/mail) against a mail server on the host
+# (tools/mailserver.py: IMAP, POP3, SMTP over TLS; a test CA on the test disk only)
+mail-test: all $(B)/host/fsck.siefs
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	python3 tools/mailtest.py $(SMP) $(B)/screens $(B)/test.img $(B)/host $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) $(SCREEN) -display none -serial stdio
+.PHONY: mail-test

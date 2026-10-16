@@ -49,7 +49,7 @@ void redraw_box(int x0, int y0, int x1, int y1);
 /* ---- Click boxes: what a click at (x, y) means; searched from the last. */
 enum { H_BTN = 1, H_WIN, H_STRIP, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,
        H_PANEL, H_PIN, H_PSEND, H_PSTOP, H_PSUG, H_PACT, H_PCLOSE, H_PMODE, H_SETUP,
-       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO };
+       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL };
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg);
 int  pill(int x, int y, const char *s, int on, int kind, int arg);   /* -> its right edge */
 void label(int x, int y, const char *s, int k, uint32_t c);
@@ -155,6 +155,20 @@ void atlas_zoom(int pct);                             /* the size of everything:
 int  atlas_zoom_get(void);
 int  atlas_uid(void);                                 /* the logged-in user */
 
+/* ---- Mail (mail.c): a window; /bin/mail -S, started as the user on the
+ * console "atlas#MAIL_CHAN", does the talking to the servers. */
+#define MAIL_CHAN 1000
+void mail_open(void);
+void mail_close(void);                                /* the window closed (or logout): the helper ends */
+int  mail_on(void);
+void mail_info(char *t, size_t cap);
+void mail_draw(int x0, int y0, int x1, int y1, int focused);
+int  mail_click(int kind, int arg);                   /* 1 if it was the window's */
+int  mail_key(int c);                                 /* 1 if taken */
+void mail_wheel(int arg, int w);
+int  mail_console(long from, msg_t *m, const char *data);   /* CON_* from the helper -> 1: draw again */
+void mail_ended(int pid);                             /* a child of atlas ended */
+
 /* ---- Files (files.c): a folder's contents, a window. */
 void files_open(const char *dir);
 const char *files_dir(void);
@@ -164,21 +178,22 @@ int  files_key(int c);
 void files_wheel(int w);
 
 /* ---- Icons (icons.c): 12 x 12 pixel maps; the SIEOS cube, 16 x 16. */
-enum { I_TERM, I_SIA, I_FOLDER, I_FILE, I_SETTINGS, I_APP, I_WINDOW, I_PINS, I_GIT, I_N };
+enum { I_TERM, I_SIA, I_FOLDER, I_FILE, I_SETTINGS, I_APP, I_WINDOW, I_PINS, I_GIT, I_MAIL, I_N };
 void icon(int kind, int x, int y, int scale);
 void icon_ink(int kind, int x, int y, int scale);     /* its outline only, in C_BG (on the accent: a tab) */
 void logo(int x, int y, int scale);
 
 /* ---- The windows (wm.c): a title tab as wide as the title (close, zoom),
  * moved by its tab, resized by its grip or edges; 4 workspaces. Window ids
- * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files, 12 Pins, 13 Git. */
-#define WM_MAX 14
+ * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files, 12 Pins, 13 Git, 14 Mail. */
+#define WM_MAX 15
 #define WM_EDIT 8                                     /* (atlas's W_EDIT: opens bigger) */
 #define WM_SIA 9
 #define WM_SET 10
 #define WM_FILES 11                                   /* (atlas's W_FILES: a list, opens smaller) */
 #define WM_PINS 12                                    /* (atlas's W_PINS: opens bigger) */
 #define WM_REPO 13                                    /* (atlas's W_REPO: opens bigger) */
+#define WM_MAIL 14                                    /* (atlas's W_MAIL: opens bigger) */
 #define WM_NWS 4                                      /* workspaces */
 #define TAB_H 34                                      /* a window's tab */
 #define WM_STRIP TAB_H                                /* the strip at a window's top (title when its tab sank) */

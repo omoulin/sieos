@@ -147,7 +147,7 @@ tour, file by file, with the crash and on-demand mechanisms:
   kernel stamps on every message; `passwd`, `su`, `useradd`, `userdel`.
 - **The desktop** ([docs/desktop.md](docs/desktop.md)): laid out as
   BeOS's was, in SIEOS's colours: windows with title tabs (terminals as
-  you, an editor, Files, the assistant, Settings), the Deskbar (menu, apps,
+  you, an editor, Files, the assistant, Settings, Mail), the Deskbar (menu, apps,
   clock), 4 workspaces, and the sia strip (Ctrl+Space) to find a file,
   start an app or ask sia. One process, no redraw when nothing happens.
 - **Network** ([docs/net.md](docs/net.md)): TCP/IP, DHCP, DNS, HTTP, TLS 1.3
@@ -156,6 +156,7 @@ tour, file by file, with the crash and on-demand mechanisms:
   Intel e1000/e1000e (any QEMU `-nic user` works).
 - **SSH** ([docs/ssh.md](docs/ssh.md)): `ssh`, `ssh-keygen` and `sshd`,
   interoperable with OpenSSH (Ed25519 keys, chacha20-poly1305).
+- **Mail**: IMAP, POP3 and SMTP over TLS: the Mail window and `mail`.
 - **sia, the assistant** ([docs/sia.md](docs/sia.md)): below.
 - **sicc, the C compiler** ([docs/cc.md](docs/cc.md)): below.
 - **make** ([docs/make.md](docs/make.md)): `/bin/make` builds C projects on
@@ -226,6 +227,7 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make net-test` / `net-crypto-test` | the network end to end / its crypto against official vectors |
 | `make ssh-test` | ssh and sshd against OpenSSH, both ways |
 | `make py-test` | `/bin/python`: `-c`, scripts, files, modules, the prompt, sockets and TLS |
+| `make mail-test` | Mail (the window and `/bin/mail`) against IMAP, POP3 and SMTP servers on the host, over TLS |
 | `make pi4-test` | (ARCH=arm64) the boot and crash test on QEMU's Pi 4 |
 | `make pi4-sdbench`, `make sdhci-bench` | (ARCH=arm64) SD card speed: on QEMU's Pi 4, and on a PCI SD controller with DMA (`SDCAPS`, `SDBSIZE`, `SDMIB`) |
 | `make siefs-tools` / `siefs-test` / `siefs-freestanding` | SieFS host tools / its tests / a freestanding build check |

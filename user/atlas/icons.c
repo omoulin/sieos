@@ -42,6 +42,9 @@ static const char *const maps[I_N][12] = {
     [I_GIT] = {                                         /* (a branch leaving the main line) */
         "............", "..aa....aa..", ".aaaa..aaaa.", "..aa....aa..", "..g.....g...", "..g....g....",
         "..g...g.....", "..g..g......", "..g.g.......", "..aa........", ".aaaa.......", "..aa........" },
+    [I_MAIL] = {
+        "............", "kkkkkkkkkkkk", "kkppppppppkk", "kpkppppppkpk", "kppkppppkppk", "kpppkppkpppk",
+        "kppppkkppppk", "kppppppppppk", "kppppppppppk", "kkkkkkkkkkkk", "............", "............" },
     [I_WINDOW] = {
         "............", "aaaaaa......", "aAAAAa......", "kkkkkkkkkkk.", "kGGGGGGGGGk.", "kGGGGGGGGGk.",
         "kGGGGGGGGGk.", "kGGGGGGGGGk.", "kGGGGGGGGGk.", "kkkkkkkkkkk.", "............", "............" },
