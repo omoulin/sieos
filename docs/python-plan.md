@@ -57,6 +57,15 @@ tests pass on x86-64 and AArch64, and a script blinks a Pi's pin.
 
 ## Phase 2: the POSIX layer (about 4 to 6 weeks)
 
+**Shared with the browser, and built that way:** [webkit-plan.md](webkit-plan.md)
+(its phases 1-3) builds this layer as `libposix`: musl's C library from
+its release over a *Linux personality* (each Linux system call done
+with SIEOS's own), so ported code such as CPython builds on its Linux
+paths, and the kernel additions below (lazy anonymous memory, futexes,
+thread ids, a wall clock) are the same ones. The list that follows is
+what CPython needs from it.
+
+
 CPython's needs, built as a library every program may use
 (`libposix.a`, beside `libsieos.a`), with its own tests in C (each
 function against the same test on Linux, as `tests/cc` does for sicc):

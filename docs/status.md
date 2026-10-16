@@ -38,6 +38,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
   (passes in QEMU, [audio.md](audio.md)), the touchpad
   ([touchpad.md](touchpad.md)); then NVIDIA compute
   ([gpu-plan.md](gpu-plan.md)).
+- A web browser: WPE WebKit on a musl-based POSIX layer, phase by phase
+  ([webkit-plan.md](webkit-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
   written but untested there, [raspberrypi.md](raspberrypi.md)).
 
