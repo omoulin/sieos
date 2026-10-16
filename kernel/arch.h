@@ -75,7 +75,7 @@ void fpu_attach(struct cpu *c, struct task *t, void *area);  /* ... and back: t'
 /* ---- Interrupt lines of devices: an "irq" is a line number (ISA 0-15 or
  * a global line 16+ on x86-64). Masked until the drivers have handled it. */
 int  irq_route(int irq, int cpu);
-void irq_set_level(int irq);
+void irq_set_level(int irq, int low);   /* level-triggered (IRQ_LEVEL), active low (IRQ_LOW: x86-64) */
 void irq_mask(int irq);
 void irq_unmask(int irq);
 
@@ -107,3 +107,4 @@ int  arch_hw_random(uint64_t *v);          /* 1 if v got 64 random bits */
 uint32_t arch_hwcap(void);                 /* HWCAP_* (mk/abi.h): features programs may use */
 long arch_fdt(uint64_t ubuf, uint64_t size);   /* SYS_FDT: copy the device tree to the caller (-ENOSYS: none) */
 long arch_screen(uint64_t ubuf);               /* SYS_SCREEN: the firmware's frame buffer (-ENOSYS: none) */
+long arch_acpi(uint64_t ubuf, uint64_t size);  /* SYS_ACPI: copy the DSDT and SSDTs to the caller (-ENOSYS: none) */

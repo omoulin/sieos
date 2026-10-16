@@ -23,7 +23,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
 `kernel-test`, `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
-`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
+`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `aml-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
 
@@ -32,6 +32,7 @@ checklist in [raspberrypi.md](raspberrypi.md).
 - The assistant's memory: history across sessions and restarts, with
   compaction ([sia.md](sia.md)).
 - The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
+  touchpad on the hardware (written, [touchpad.md](touchpad.md)), the
   Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
   written but untested there, [raspberrypi.md](raspberrypi.md)).
@@ -140,3 +141,16 @@ checklist in [raspberrypi.md](raspberrypi.md).
   (`CON_FG`); a closed window or SSH connection sends `SIGHUP`; `kill -INT
   /-TERM/-KILL/-HUP`. Python raises `KeyboardInterrupt`. The kernel's code
   grew by 1.6 KB (x86-64), the IPC round trip by 1% at most; `make sig-test`.
+- **2026-10-16, later.** Laptop touchpads ([touchpad.md](touchpad.md)):
+  `/bin/i2chid` finds an I2C HID device in the ACPI tables (`SYS_ACPI`: the
+  DSDT and SSDTs; a small AML interpreter, since Intel's reference firmware
+  computes the touchpad's address, controller and pin in methods), drives
+  the LPSS DesignWare I2C controller, speaks HID over I2C, switches a
+  precision touchpad to its finger mode (one finger moves, two scroll, tap
+  or press clicks), its reports interrupt-driven through the GPIO
+  controller (`IRQ_LOW`). The report parser is shared with USB mice
+  (`user/lib/hidrep.c`). Checked on the host against real tables (the
+  target's platform: `ELAN06FA` at 0x15 on 00:19.1, pin 8, as Linux sees it)
+  and the target's real report descriptor; `make aml-test`. Untested on the
+  laptop itself. Sizes: i2chid 36 KB of code (the AML reader 13.5 KB,
+  `-Os`), the kernel +0.5 KB, the USB server +2 KB (touchpad gestures).

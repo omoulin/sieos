@@ -343,6 +343,7 @@ void syscall(regs_t *r)
     case SYS_SET_FS:        ret = set_fs(a); break;
     case SYS_FDT:           ret = arch_fdt(a, b); break;
     case SYS_SCREEN:        ret = arch_screen(a); break;
+    case SYS_ACPI:          ret = cur->proc->driver ? arch_acpi(a, b) : -EPERM; break;
     case SYS_PCI:           ret = pci_cfg(a, b, c); break;
     case SYS_LOG:           ret = sys_log(a, b, c); break;
     case SYS_PLACE:         ret = place((int)a, (int)b); break;

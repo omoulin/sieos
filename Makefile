@@ -34,7 +34,7 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
+ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
 BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git mail   # programs on the disk, in /bin
@@ -44,6 +44,7 @@ LINKS   += $(NETLINKS:%=fetch/%)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
 BINS    += $(if $(filter arm64,$(ARCH)),wifi wifid)   # the Raspberry Pis' Wi-Fi: the command and its server
+BINS    += $(if $(filter x86_64,$(ARCH)),i2chid)    # laptops' I2C touchpads (ACPI)
 BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
@@ -125,6 +126,13 @@ $(B)/wifi.elf: $(B)/user/wifi/wifi.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/u
 $(B)/user/wifi/%.o: user/wifi/%.c user/wifi/wifi.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
+
+# I2C touchpads (x86-64 only): the AML reader (aml.c) and the driver (i2chid.c).
+$(B)/i2chid.elf: $(B)/user/i2chid/i2chid.o $(B)/user/i2chid/aml.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(B)/user/i2chid/i2chid.o $(B)/user/i2chid/aml.o $(ULIB)
+$(B)/user/i2chid/%.o: user/i2chid/%.c user/i2chid/aml.h user/lib/mk.h user/lib/hidrep.h include/mk/*.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(UCFLAGS) $(if $(filter %/aml.o,$@),-Os) -c $< -o $@   # (AML runs once, at start: small beats fast)
 
 # Mail (user/mail): the protocols (mail.c) and the message decoding (mime.c).
 $(B)/mail.elf: $(B)/user/mail/mail.o $(B)/user/mail/mime.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
@@ -596,6 +604,16 @@ crypto-test: $(B)/host/crypto-test
 	$(B)/host/crypto-test
 	python3 tests/crypto/check.py $(B)/host/crypto-test
 .PHONY: crypto-test
+
+# ---- the AML reader (user/i2chid/aml.c) on the host: tables made with iasl
+# from tests/aml/*.asl (laptop patterns: Intel's reference firmware as on
+# Lenovo's Legion, constants, methods), and QEMU's own DSDT.
+$(B)/host/aml-test: tests/aml/test.c user/i2chid/aml.c user/i2chid/aml.h
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -DAML_HOST -Iuser/i2chid -o $@ tests/aml/test.c user/i2chid/aml.c
+aml-test: $(B)/host/aml-test
+	sh tests/aml/check.sh $(B)/host/aml-test
+.PHONY: aml-test
 
 # ---- sicc, the SIEOS C compiler (cc/, docs/cc.md): compiler, assembler and
 # linker in one program, written for SIEOS.

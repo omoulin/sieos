@@ -13,6 +13,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [gpio.md](gpio.md) | the Raspberry Pi's pins (Pi 4; Pi 5 through RP1): the GPIO server, the C library (`gpio.h`), `/bin/gpio`, patterns, the self-check |
 | [usb.md](usb.md) | a PC from a USB key: the UEFI loader, the key image, writing it safely, the key as SIEOS's disk |
 | [usb-stack.md](usb-stack.md) | the USB stack: xHCI, hubs, USB disks (SCSI), keyboards and mice, hotplug, the Pi glue still to check |
+| [touchpad.md](touchpad.md) | laptop touchpads: HID over I2C, the ACPI (AML) reader, the LPSS I2C controller, gestures, what to check on the laptop |
 | [siefs.md](siefs.md) | SieFS, the file system: disk layout, commits, checksums, attributes, volumes, snapshots, encryption |
 | [accounts.md](accounts.md) | users, logins, the first start, Argon2id, account files |
 | [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, Git, apps, the assistant |
