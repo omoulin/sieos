@@ -147,8 +147,16 @@ long maystop_answer(const msg_t *m, uint64_t count, uint64_t *seen, int busy);
 long con_write(const void *buf, size_t n);
 long con_read(void *buf, size_t n);
 long con_echo(int on);
-long con_fg(int pgid);                 /* CON_FG: the shell's job (Ctrl-C goes to its group) */
-/* Signals (mk/abi.h). signal(): SIG_DFL, SIG_IGN, or a function, which
+long con_call(msg_t *m);               /* any request to the terminal -> its w[0] */
+static inline long con_fg(int pgid)    /* CON_FG: the job that runs (Ctrl-C goes to its group) */
+{ msg_t m = { .w = { CON_FG, (uint64_t)pgid } }; return con_call(&m); }
+int  printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void *malloc(size_t n);
+void *realloc(void *p, size_t n);
+void  free(void *p);
+long thread_start(void (*fn)(void *), void *arg, size_t stack);   /* -> thread id */
+
+/* sig.c: signals (mk/abi.h). signal(): SIG_DFL, SIG_IGN, or a function, which
  * the calling thread runs when the signal comes (any thread may be the one,
  * the last to set a function; its call that waited returns -EINTR first).
  * The function must return (not jump out): further signals wait until then.
@@ -158,11 +166,6 @@ typedef int sig_atomic_t;
 #define SIG_ERR ((sighandler_t)-1)
 sighandler_t signal(int sig, sighandler_t fn);
 int  raise(int sig);                   /* the signal to this process */
-int  printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-void *malloc(size_t n);
-void *realloc(void *p, size_t n);
-void  free(void *p);
-long thread_start(void (*fn)(void *), void *arg, size_t stack);   /* -> thread id */
 
 /* tty.c: typed lines, for servers that are terminals (con, atlas, sshd). */
 typedef struct tty {

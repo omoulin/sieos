@@ -72,12 +72,15 @@ proc_t *proc_find(int pid)
  * -EPIPE (the caller takes it off the queue again); nor if a signal it
  * catches came: -EINTR. No barrier is needed between the two (proc_stop,
  * sig_post): no CPU answers a shootdown between them. */
+__attribute__((cold)) static int unblocked(task_t *t)
+{
+    t->state = TS_RUN;
+    return t->proc->exiting ? -EPIPE : -EINTR;
+}
 int blocked(task_t *t, int state)
 {
     __atomic_store_n(&t->state, state, __ATOMIC_RELEASE);
-    if (!t->proc->exiting && !sig_due(t)) return 0;
-    t->state = TS_RUN;
-    return t->proc->exiting ? -EPIPE : -EINTR;
+    return t->proc->exiting || sig_due(t) ? unblocked(t) : 0;
 }
 
 /* ---- The run queues. */
@@ -617,7 +620,7 @@ long thread_create(uint64_t entry, uint64_t stack, uint64_t arg)
  * never two. A caller a server has just taken off its queue (TS_SEND)
  * may be waiting for the reply by now: tried too (if the server has not
  * got so far, it sees why itself: ipc.c). */
-static void stop_thread(task_t *t, long ret)
+__attribute__((cold)) static void stop_thread(task_t *t, long ret)
 {
     int s = __atomic_load_n(&t->state, __ATOMIC_ACQUIRE), got = 0;
     if (s == TS_SLEEP) {
@@ -743,7 +746,7 @@ void proc_exit(int code)
  * in proc_stop, a shootdown first: a thread of p about to wait on another
  * CPU then sees sigpend; one running in user mode comes into the kernel,
  * and leaves through kernel_exit. */
-static int sig_post(proc_t *p, int sig)
+__attribute__((cold)) static int sig_post(proc_t *p, int sig)
 {
     uint32_t bit = 1u << sig;
     if (sig == SIGKILL || !(p->sigcatch & bit)) {
@@ -769,7 +772,7 @@ static int sig_post(proc_t *p, int sig)
 /* SYS_KILL: to process pid, or (pid < 0) to each of group -pid. Root may
  * signal any process but the supervisor; others only their own. sig 0:
  * nothing is sent (is there one it could go to?). */
-long proc_kill(long pid, int sig)
+__attribute__((cold)) long proc_kill(long pid, int sig)
 {
     proc_t *me = cur->proc;
     long r = -ESRCH;
@@ -789,7 +792,7 @@ long proc_kill(long pid, int sig)
 
 /* SYS_SIGNAL: what sig does to this process (SIG_DFL, SIG_IGN, or entry:
  * a function, run by the calling thread). */
-long sig_set(int sig, uint64_t entry)
+__attribute__((cold)) long sig_set(int sig, uint64_t entry)
 {
     proc_t *p = cur->proc;
     uint32_t bit = 1u << sig;
@@ -806,7 +809,7 @@ long sig_set(int sig, uint64_t entry)
 /* On t's way out of the kernel (kernel_exit): its first waiting signal.
  * Caught (still), it now runs the function; else it ends or is dropped
  * (SYS_SIGNAL changed it since). */
-void sig_deliver(task_t *t)
+__attribute__((cold)) void sig_deliver(task_t *t)
 {
     proc_t *p = t->proc;
     int sig = __builtin_ctz(t->sigpend);
@@ -823,7 +826,7 @@ void sig_deliver(task_t *t)
 }
 
 /* SYS_SIGRETURN: the function is done; r: the registers to leave with. */
-long sig_return(regs_t *r)
+__attribute__((cold)) long sig_return(regs_t *r)
 {
     task_t *t = cur;
     sigctx_t *x = t->sigctx;
