@@ -150,7 +150,9 @@ tour, file by file, with the crash and on-demand mechanisms:
   clock), 4 workspaces, and the sia strip (Ctrl+Space) to find a file,
   start an app or ask sia. One process, no redraw when nothing happens.
 - **Network** ([docs/net.md](docs/net.md)): TCP/IP, DHCP, DNS, HTTP, TLS 1.3
-  with certificate checking; `fetch URL`.
+  with certificate checking; `fetch URL` (also `curl`, `wget`), `ping`,
+  `host`, `ifconfig`, `netstat`, `traceroute`, `nc`. The cards: virtio,
+  Intel e1000/e1000e (any QEMU `-nic user` works).
 - **sia, the assistant** ([docs/sia.md](docs/sia.md)): below.
 - **sicc, the C compiler** ([docs/cc.md](docs/cc.md)): below.
 - **make** ([docs/make.md](docs/make.md)): `/bin/make` builds C projects on
