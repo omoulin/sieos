@@ -110,8 +110,17 @@ static void poly_final(poly_t *p, uint8_t tag[16])
     wipe(p, sizeof *p);
 }
 
+/* Poly1305 on its own (SSH's chacha20-poly1305@openssh.com, user/lib/ssh.c). */
+void poly1305(uint8_t tag[16], const uint8_t key[32], const void *m, size_t n)
+{
+    poly_t p;
+    poly_init(&p, key);
+    poly_update(&p, m, n);
+    poly_final(&p, tag);
+}
+
 /* ---- ChaCha20 keystream from block counter `ctr`, xor-ed into data. */
-static void chacha_xor(const uint8_t key[32], const uint8_t nonce[12], uint32_t ctr,
+void chacha20_xor(const uint8_t key[32], const uint8_t nonce[12], uint32_t ctr,
                        const uint8_t *in, uint8_t *out, size_t n)
 {
     uint32_t k[8], no[3];
@@ -275,7 +284,7 @@ void aead_seal(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t 
                const void *in, size_t n, uint8_t *out)
 {
     if (a->alg == AEAD_CHACHA20_POLY1305) {
-        chacha_xor(a->key, nonce, 1, in, out, n);
+        chacha20_xor(a->key, nonce, 1, in, out, n);
         cp_tag(a->key, nonce, ad, adlen, out, n, out + n);
     } else {
         gcm_ctr(a, nonce, 2, in, out, n);
@@ -293,7 +302,7 @@ int aead_open(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t a
     if (a->alg == AEAD_CHACHA20_POLY1305) cp_tag(a->key, nonce, ad, adlen, c, n, tag);
     else gcm_tag(a, nonce, ad, adlen, c, n, tag);
     if (!ct_equal(tag, c + n, 16)) return -1;                 /* forged or damaged */
-    if (a->alg == AEAD_CHACHA20_POLY1305) chacha_xor(a->key, nonce, 1, c, out, n);
+    if (a->alg == AEAD_CHACHA20_POLY1305) chacha20_xor(a->key, nonce, 1, c, out, n);
     else gcm_ctr(a, nonce, 2, c, out, n);
     return 0;
 }

@@ -34,11 +34,11 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs date acct tty fmt string fdt virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 pubkey net http tls x509   # the library: a program gets only what it uses
+ULIBOBJ := fs date acct tty fmt string fdt virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
-BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make   # programs on the disk, in /bin
-LINKS   := passwd su useradd userdel    # other names of /bin/acct (symbolic links)
+BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd   # programs on the disk, in /bin
+LINKS   := acct/passwd acct/su acct/useradd acct/userdel ssh/ssh-keygen   # other names of programs (symbolic links)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
 BINS    += $(if $(filter arm64,$(ARCH)),wifi wifid)   # the Raspberry Pis' Wi-Fi: the command and its server
@@ -76,13 +76,13 @@ $(ULIB): $(ULIBOBJ:%=$(B)/user/lib/%.o) | $(TOOLDEP)
 $(B)/user/%.o: user/$$*/$$*.c user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
-$(B)/user/lib/%.o: user/lib/%.c user/lib/mk.h include/mk/*.h $(TOOLDEP)
+$(B)/user/lib/%.o: user/lib/%.c user/lib/*.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 $(B)/user/lib/%.o: user/lib/%.S $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
-$(B)/user/lib/%.o: lib/%.c include/mk/*.h $(TOOLDEP)
+$(B)/user/lib/%.o: lib/%.c lib/*.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
@@ -208,7 +208,7 @@ $(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atla
 	    cp include/mk/*.h $(B)/rootfs/lib/sicc/include/mk/ && cp $(SICC_LIB) $(B)/rootfs/lib/sicc/
 	for p in $(BINS); do cp $(B)/$$p.elf $(B)/rootfs/bin/$$p; done
 	$(if $(filter atlas,$(KARCH_NOBINS)),cp $(B)/noscreen.elf $(B)/rootfs/bin/atlas)
-	for l in $(LINKS); do ln -s acct $(B)/rootfs/bin/$$l; done
+	for l in $(LINKS); do ln -s $${l%/*} $(B)/rootfs/bin/$${l#*/}; done
 	chmod -R u=rwX,go=rX $(B)/rootfs && chmod 755 $(B)/rootfs/bin/* && chmod 1777 $(B)/rootfs/tmp
 	touch $@
 $(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs
@@ -221,7 +221,7 @@ $(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs
 	    for f in $$(find . -type f -newer ../disk.img); do \
 	        ../host/siefs ../disk.img put $$f /$${f#./} && \
 	        case $$f in ./bin/*) ../host/siefs ../disk.img chmod 755 /$${f#./};; esac; done; \
-	    for l in $(LINKS); do ../host/siefs ../disk.img symlink acct /bin/$$l 2>/dev/null; done; \
+	    for l in $(LINKS); do ../host/siefs ../disk.img symlink $${l%/*} /bin/$${l#*/} 2>/dev/null; done; \
 	    cd ../.. && touch $@; \
 	fi
 # The default model for sia (models/, docs/llm.md) goes in /models once
@@ -546,9 +546,10 @@ $(B)/siefs-fs/%.o: %.c $(SIEFS_H)
 
 .PHONY: siefs-tools siefs-test siefs-freestanding
 
-# ---- the crypto library (lib/blake2b.c, chacha20.c, argon2.c): official test
-# vectors, BLAKE2b against an independent implementation, Argon2id timing.
-CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/string.c
+# ---- the crypto library (lib/blake2b.c, chacha20.c, argon2.c; SSH's ed25519.c
+# and Poly1305): official test vectors, BLAKE2b against an independent
+# implementation, Argon2id timing.
+CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/string.c
 $(B)/host/crypto-test: tests/crypto/test.c $(CRYPTO_SRC) include/mk/crypto.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/crypto/test.c $(CRYPTO_SRC)
@@ -667,3 +668,8 @@ net-test: all $(B)/host/fsck.siefs net-crypto-test
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/nettest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 .PHONY: net-crypto-test net-test
+# ssh-test: sshd and ssh against OpenSSH, both ways (docs/ssh.md, tools/sshtest.py)
+ssh-test: all
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	python3 tools/sshtest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+.PHONY: ssh-test

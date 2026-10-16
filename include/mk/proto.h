@@ -11,7 +11,8 @@
 enum {
     CON_WRITE = 1,  /* sbuf/slen: text to print.             -> bytes written  */
     CON_READ,       /* w[1] = max size; data comes in rbuf.  -> bytes (0: EOF) */
-    CON_ECHO,       /* w[1] = 1: show typed characters, 0: hide (passwords)   */
+    CON_ECHO,       /* w[1] = 1: show typed characters, 0: hide (passwords),
+                       CON_RAW: each key as it comes, unedited, unshown (ssh) */
     CON_INPUT,      /* (root) become the owner of the keyboard and mouse: their
                        events go to the caller (the desktop) instead of the text
                        console (the serial line stays a text console). The reply
@@ -24,6 +25,7 @@ enum {
                        (25..400, 100: about a pixel per count), w[2], w[3] = the screen's
                        width and height in pixels -> 0 */
 };
+#define CON_RAW 2
 /* What CON_INJECT carries. INJ_KEY: sc is one byte of a set-1 scancode
  * (0xE0 then the key for the extended ones, +0x80 when released), as a PS/2
  * keyboard sends; INJ_REL: a mouse moved by dx, dy (its own units, about a
@@ -144,10 +146,11 @@ enum {
     AUTH_SETUP,     /* "rootpw\0name\0full name\0userpw[\0name\0full\0pw]..." (up to
                        AUTH_SETUP_MAX users): the first start only, by its owner only
                        (the screen's greeter if one said so, else the terminal) -> 0 */
-    AUTH_LOGIN,     /* "name\0password[\0terminal]"; w[1] = AUTH_NOPW (root only: no password
-                       needed). Starts the user's shell as a child of the caller, on that
-                       terminal (mk_ident_t.console; default: the caller's) -> its pid
-                       (the caller waits for it with SYS_WAIT) */
+    AUTH_LOGIN,     /* "name\0password[\0terminal[\0command]]"; w[1] = AUTH_NOPW (root only:
+                       no password needed). Starts the user's shell as a child of the caller,
+                       on that terminal (mk_ident_t.console; default: the caller's), running
+                       the command if one is given (sh -c) -> its pid (the caller waits for
+                       it with SYS_WAIT) */
     AUTH_PASSWD,    /* "name\0old\0new": one's own (with the old one), or root: anyone's -> 0 */
     AUTH_USERADD,   /* "name\0full name\0password" (root)       -> the new uid */
     AUTH_USERDEL,   /* "name" (root; the home folder is kept)   -> 0 */

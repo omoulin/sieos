@@ -1517,9 +1517,9 @@ static void key(int c)
         redraw_box(x0, y0 - TAB_H, x1, y1);
         return;
     }
-    if (c < 0x100) {
+    if (c < 0x100 || t->tty.echo == CON_RAW) {
         t->back = 0;
-        tty_input(&t->tty, c);
+        tty_key(&t->tty, c);
         redraw_box(x0, y0, x1, y1);
     }
 }
@@ -1793,7 +1793,7 @@ int main(int argc, char **argv)
             }
             if (tty_read(&t->tty, from, m.w[1]) < 0) reply_val(from, -EBUSY);
             break;
-        case CON_ECHO: t->tty.echo = m.w[1]; reply_val(from, 0); break;
+        case CON_ECHO: tty_mode(&t->tty, (int)m.w[1]); reply_val(from, 0); break;
         default: reply_val(from, -ENOSYS);
         }
     }

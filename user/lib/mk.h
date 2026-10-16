@@ -166,6 +166,8 @@ void tty_init(tty_t *t, void (*out)(tty_t *, const char *, size_t), void *ctx);
 void tty_input(tty_t *t, char c);
 long tty_read(tty_t *t, long from, size_t want);   /* 0, or -EBUSY */
 void tty_deliver(tty_t *t);
+void tty_key(tty_t *t, int code);                  /* a character or a KEY_... */
+void tty_mode(tty_t *t, int mode);                 /* CON_ECHO: 0, 1 or CON_RAW */
 
 /* date.c */
 void date_str(int64_t ns, char *s);    /* ns since 1970 -> "YYYY-MM-DD HH:MM" (17 bytes) */

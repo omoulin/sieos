@@ -282,8 +282,9 @@ static int user_create(const char *name, const char *full, const char *pw, int u
 }
 
 /* Start name's shell as a child of process `parent` (the caller, which
- * waits for it) -> its pid. console: its terminal ("" : the caller's). */
-static long login(const char *name, const char *pw, int nopw, int parent, const char *console)
+ * waits for it) -> its pid. console: its terminal ("" : the caller's);
+ * cmd: a command line for the shell to run (sshd's "exec"), or "". */
+static long login(const char *name, const char *pw, int nopw, int parent, const char *console, const char *cmd)
 {
     acct_user_t u;
     uint64_t t0 = sys_clock();
@@ -306,10 +307,13 @@ static long login(const char *name, const char *pw, int nopw, int parent, const 
     if (*console) { o.flags |= SPAWN_CONSOLE; strlcpy(o.console, console, sizeof o.console); }
     const char *base = u.shell + strlen(u.shell);
     while (base > u.shell && base[-1] != '/') base--;
-    char args[80];
-    strlcpy(args, base, sizeof args - 4);
-    strlcpy(args + strlen(args), " -l", 4);
+    char args[256];
+    strlcpy(args, base, 64);
+    strlcpy(args + strlen(args), *cmd ? " -c " : " -l", 5);
+    strlcpy(args + strlen(args), cmd, sizeof args - strlen(args));
+    if (*cmd) fs_chdir(u.home);                         /* a command runs at home (a shell goes there) */
     long pid = spawn_file(u.shell, args, u.uid, u.gid, &o);
+    if (*cmd) fs_chdir("/");
     if (pid < 0) return pid;
     note("auth: %s logged in (uid %d, pid %ld, password check %lu ms)\n", name, u.uid, pid,
          nopw ? 0 : (sys_clock() - t0) / 1000000);
@@ -407,11 +411,10 @@ static long serve(msg_t *m, long token)
     case AUTH_SETUP:
         if (!root || accounts_exist() || !screen || (owner && m->pid != owner)) return -EPERM;
         return setup(s, split_all(s, 1 + 3 * AUTH_SETUP_MAX, m->rlen));
-    case AUTH_LOGIN: {                          /* "name\0password[\0console]" */
-        if (split(s, 2, m->rlen)) return -EINVAL;
-        const char *console = s[1] + strlen(s[1]) + 1;
-        if (console >= req + (m->rlen < sizeof req ? m->rlen : sizeof req - 1)) console = "";
-        return login(s[0], s[1], root && (m->w[1] & AUTH_NOPW), m->pid, console);
+    case AUTH_LOGIN: {                          /* "name\0password[\0console[\0command]]" */
+        int k = split_all(s, 4, m->rlen);
+        if (k < 2) return -EINVAL;
+        return login(s[0], s[1], root && (m->w[1] & AUTH_NOPW), m->pid, k > 2 ? s[2] : "", k > 3 ? s[3] : "");
     }
     case AUTH_PASSWD: {
         acct_user_t u;

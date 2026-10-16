@@ -116,6 +116,10 @@ static svc_t svc[MAXSVC] = {
     { .i = { "wifi",  0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/wifid", "wifid", .watch = "wifi" },
 #endif
     { .i = { "netd",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "net", 10 * MIN },  "/bin/netd", "netd" },
+    /* the SSH server (docs/ssh.md): only where /etc/ssh/sshd_config exists, else it
+     * ends with 0 at once and is not started again; it listens, so it starts the
+     * network at boot */
+    { .i = { "sshd",  0, 0, 0, 0, SVC_ON_FAILURE, 0 }, "/bin/sshd", "sshd" },
     /* the assistant: loading the model takes seconds, then it holds 1+ GiB */
     { .i = { "sia",   0, 0, 0, 0, SVC_ALWAYS, 0, 0, "sia", 15 * MIN },  "/bin/siad", "siad",
       .quota = 4608UL << 20 },      /* the model may use 4 GiB, plus the server: 4.5 GiB at most */

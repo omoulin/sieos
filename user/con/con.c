@@ -58,7 +58,7 @@ static void event(int type, int code, int buttons, int x, int y)
         mk_ident_t id;
         if (sys_ident(owner, &id) < 0) { owner = 0; nq = 0; }
     }
-    if (!owner) { if (type == EV_KEY && code < 0x100) tty_input(&tty, code); return; }
+    if (!owner) { if (type == EV_KEY) tty_key(&tty, code); return; }
     con_event_t *l = nq ? &q[nq - 1] : 0;
     if (type == EV_MOUSE && !code && l && l->type == EV_MOUSE && !l->code && l->buttons == buttons) {
         l->x = x; l->y = y;                  /* merge with the previous move */
@@ -484,7 +484,7 @@ int main(int argc, char **argv)
             reply = 0;                        /* answered by the tty, now or when a line is typed */
             if (tty_read(&tty, from, m.w[1]) < 0) { answer = -EBUSY; reply = 1; }
             break;
-        case CON_ECHO:  tty.echo = m.w[1]; answer = 0; break;
+        case CON_ECHO:  tty_mode(&tty, (int)m.w[1]); answer = 0; break;
         case CON_HASINPUT: answer = has_input() || usb_input; break;
         case CON_INJECT:
             if (m.uid) { answer = -EPERM; break; }
