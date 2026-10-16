@@ -44,6 +44,7 @@ LINKS   += $(NETLINKS:%=fetch/%)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
+BINS    += kblight                     # a keyboard's light (the USB server's kbl.c)
 BINS    += $(if $(filter x86_64,$(ARCH)),i2chid)    # laptops' I2C touchpads (ACPI)
 BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    += btd bt                       # Bluetooth: the server and the command
@@ -155,7 +156,7 @@ $(B)/user/mail/%.o: user/mail/%.c user/mail/mail.h user/lib/net.h user/lib/mk.h 
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The USB server (user/usb): the xHCI controller, hubs, disks, keyboards and mice.
-USBSRV  := usb xhci pci msc hid btusb
+USBSRV  := usb xhci pci msc hid btusb uvc kbl
 $(B)/usb.elf: $(USBSRV:%=$(B)/user/usb/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(USBSRV:%=$(B)/user/usb/%.o) $(ULIB)
 $(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/hidrep.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
@@ -163,7 +164,7 @@ $(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/hidrep.h user/lib/mk.h i
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The desktop has several files; its font is drawn in tools/mkfont.py.
-ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen igfx wm settings files icons pins repo mail
+ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen igfx wm settings files icons pins repo mail cam
 $(B)/atlas.elf: $(ATLAS:%=$(B)/user/atlas/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(ATLAS:%=$(B)/user/atlas/%.o) $(ULIB)
 $(B)/user/atlas/igfx.o: user/lib/eld.h
@@ -688,6 +689,16 @@ hdmi-test: $(B)/host/hdmi-test
 aml-test: $(B)/host/aml-test
 	sh tests/aml/check.sh $(B)/host/aml-test
 .PHONY: aml-test
+
+# ---- USB cameras and the keyboard light (user/usb/uvc.c, kbl.c) on the host:
+# QEMU has no USB camera, so the laptop's own descriptors (tests/camera) and
+# synthetic packets: parsing, frame assembly, YUY2 -> RGB, the light's check.
+$(B)/host/camera-test: tests/camera/test.c user/usb/uvc.c user/usb/kbl.c
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -DUSB_HOST -o $@ tests/camera/test.c
+camera-test: $(B)/host/camera-test
+	$(B)/host/camera-test tests/camera
+.PHONY: camera-test
 
 # ---- sicc, the SIEOS C compiler (cc/, docs/cc.md): compiler, assembler and
 # linker in one program, written for SIEOS.

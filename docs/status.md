@@ -25,7 +25,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
 `kernel-test`, `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
-`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`,
+`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
 
@@ -37,7 +37,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
   the USB key: the Intel display (full modeset), NVMe (passes in QEMU), the
   Realtek network card, the AX210 Wi-Fi ([net.md](net.md)), HD Audio
   (passes in QEMU, [audio.md](audio.md)), the touchpad
-  ([touchpad.md](touchpad.md)); then NVIDIA compute
+  ([touchpad.md](touchpad.md)), the camera and the keyboard light
+  ([usb-stack.md](usb-stack.md#cameras)); then NVIDIA compute
   ([gpu-plan.md](gpu-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
   written but untested there, [raspberrypi.md](raspberrypi.md)).
@@ -216,3 +217,18 @@ checklist in [raspberrypi.md](raspberrypi.md).
   (x86-64, text + data): btd 82 KB (its own code 38 KB, crypto 21 KB),
   bt 15 KB, the USB server +3 KB, Atlas +4 KB, wifid -5 KB on x86-64 (AES apart),
   i2chid +2 KB (keyboards in hidrep).
+- **2026-10-16, later.** The laptop's camera and keyboard light, in the
+  USB server ([usb-stack.md](usb-stack.md#cameras)). xHCI isochronous IN
+  transfers (40 queued, an interrupt per 8); USB video class: the YUY2
+  format at 640 x 480, probe and commit, the smallest alternate setting
+  that fits, frames assembled from payload headers, converted to RGB on
+  request; port `camera`, the camera powered only while open. The Camera
+  window in Atlas (live picture, snapshots to `~/Pictures` as .ppm, a .ppm
+  from Files shown). The Legion's ITE 8258 keyboard light (OpenRGB's
+  protocol: feature report 7): off, low, high and a colour, from Settings
+  or `/bin/kblight`, kept in `/etc/kblight` and restored at start; nothing
+  sent unless the device and its report descriptor match exactly. QEMU has
+  no camera: `make camera-test` checks the code on the host with the
+  laptop's real descriptors. Untested on the laptop itself. Sizes: the USB
+  server +11.2 KB of code (uvc.o 6.0 KB, kbl.o 2.4 KB, the file calls 2.5 KB, the isochronous core 0.3 KB), atlas +6.4 KB (cam.o 4.4 KB),
+  `/bin/kblight` 13 KB.

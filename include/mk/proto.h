@@ -80,6 +80,28 @@ typedef struct {
     char name[38];                     /* the device's product name, if it has one */
 } usb_disk_t;
 
+/* A USB camera (the USB server's uvc.c), port "camera" while one is
+ * plugged in: one client at a time, the camera streaming only while open
+ * (and stopped by itself after 3 s without a request). Frames come
+ * converted: 0x00RRGGBB pixels, rows one after the other. Reply: w[0]. */
+enum {
+    CAM_OPEN = 1,   /* -> 0; reply w[1] = width, w[2] = height (-EBUSY: another client's) */
+    CAM_FRAME,      /* rbuf <- the next frame (waits for it, up to 1 s) -> bytes */
+    CAM_CLOSE,      /* the camera stops                                 -> 0 */
+};
+/* A keyboard's light (the USB server's kbl.c: the Legion laptops' ITE 8258,
+ * 048d:c195), port "kblight" while one is there. The setting is kept in
+ * /etc/kblight and given to the keyboard again at each start. */
+enum {
+    KBL_SET = 1,    /* w[1] = KBL_OFF / KBL_LOW / KBL_HIGH, w[2] = colour 0xRRGGBB -> 0 */
+    KBL_GET,        /* -> the level; reply w[1] = the colour */
+};
+enum { KBL_OFF, KBL_LOW, KBL_HIGH };
+/* The colours offered (Settings, /bin/kblight; any 0xRRGGBB may be set). */
+#define KBL_NCOL 7
+#define KBL_COLOURS { { "White", 0xFFFFFF }, { "Red", 0xFF0000 }, { "Orange", 0xFF6000 }, { "Green", 0x00FF00 }, \
+                      { "Cyan", 0x00FFFF }, { "Blue", 0x0000FF }, { "Purple", 0xA000FF } }
+
 /* File server, port "fs" (SieFS). Paths are absolute ("/a/b"), sent in
  * sbuf; two paths ("from\0to") or a path and a name are separated by a 0.
  * Open files are named by a handle, valid only for the process that opened

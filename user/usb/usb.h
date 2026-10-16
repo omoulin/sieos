@@ -76,6 +76,8 @@ void ep_halted(usbdev_t *d, int dci);          /* a stalled endpoint: reset it, 
  * the bytes moved. */
 int  xfer(usbdev_t *d, int dci, int in, const uint64_t *bus, const uint32_t *len, int nb, uint32_t *done, int64_t ns);
 int  xfer_async(usbdev_t *d, int dci, uint64_t bus, uint32_t len);   /* queue one, no waiting */
+int  td_queue(usbdev_t *d, int dci, const trb_t *td, int nb);       /* queue TRBs, no waiting */
+extern uint64_t async_trb;                     /* in an async function: the TRB its completion names */
 /* nb TRBs (control transfers: setup, data, status) on endpoint dci, waited for. */
 int  ring_td(usbdev_t *d, int dci, const trb_t *td, int nb, uint32_t *done, int64_t ns);
 extern uint64_t *hc_dcbaa;                    /* the device context array: [slot] = its context */
@@ -91,6 +93,7 @@ extern __thread long self_tid;
 int  control(usbdev_t *d, int type, int req, int value, int index, void *data, int len);   /* -> bytes or -error */
 int  clear_halt(usbdev_t *d, int ep_addr);
 int  configure(usbdev_t *d, const uint8_t **eps, int neps);           /* add endpoints (their descriptors) */
+int  ep_drop(usbdev_t *d, int dci);                                   /* remove one (an alternate setting left) */
 int  dci_of(int ep_addr);
 void log_line(const char *fmt, ...);
 void sfmt(char *out, int cap, const char *fmt, ...);   /* printf into out */
@@ -106,3 +109,5 @@ void hid_detach(usbdev_t *d);
 int  hid_count(void);
 int  btusb_attach(usbdev_t *d, const uint8_t *iface, int len);
 void btusb_detach(usbdev_t *d);
+int  uvc_attach(usbdev_t *d, const uint8_t *iface, int len);          /* a camera (uvc.c) */
+int  kbl_attach(usbdev_t *d, const uint8_t *iface, int len);          /* a keyboard's light (kbl.c): 0 if it is one */
