@@ -1,24 +1,34 @@
 /*
- * wifi.h - What the Wi-Fi server (user/wifi) is made of: the SDIO host
- * (sdio.c: an SDHCI controller driven as an SDIO host, CMD52/CMD53) and the
- * FullMAC driver (wifi.c: the CYW43455 on the Raspberry Pi 4 and 5).
- *
- * The chip is reached over SDIO: function 1 is a window onto the chip's
- * backplane (its cores and RAM), function 2 carries data and control frames.
- * sdio.c brings the controller and the card up and offers byte and block
- * reads and writes to a function; wifi.c downloads the firmware, starts the
- * chip's ARM core, speaks the BCDC/SDPCM protocol, scans, joins and plumbs
- * data frames into netd as a second interface (port "wifi").
- *
- * UNTESTED ON HARDWARE: QEMU emulates neither the SDIO controller's card
- * side nor the chip; written from the controllers' register layout, the
- * device trees, and Linux's brcmfmac and Plan 9's ether4330. What to check
- * on a real board is in docs/raspberrypi.md.
+ * wifi.h - What the Wi-Fi server (user/wifi) is made of: the server itself
+ * (wifid.c: the port "wifi", netd's second interface, the chosen network)
+ * and one chip driver per architecture:
+ *   bcm.c  the Raspberry Pis' CYW43455 (arm64), FullMAC, on SDIO (sdio.c:
+ *          an SDHCI controller driven as an SDIO host, CMD52/CMD53);
+ *   iwl.c  Intel's Wi-Fi 6E AX210 (x86-64), on PCIe: the firmware scans,
+ *          picks rates and encrypts; the host joins and runs WPA2's
+ *          handshake (wpa.c).
+ * Both are UNTESTED ON HARDWARE (QEMU has neither chip): what to check is in
+ * docs/raspberrypi.md and docs/net.md.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
 #include "mk.h"
+
+/* ---- The chip driver (bcm.c or iwl.c), called by wifid.c's main thread. */
+int  chip_up(void);                     /* 0 up (wifi_desc, wifi_mac set); 1 no such chip here; -1 failed */
+int  chip_scan(wifi_net_t *list);       /* the networks in range (WIFI_MAXNET at most; a few seconds) */
+void chip_join(const char *ssid, const char *pass);   /* start joining ("": open); wifi_link() says when up */
+void chip_leave(void);
+long chip_send(uint8_t *frames, size_t len);          /* NIC_SEND's layout -> 0 or -error */
+
+/* ---- wifid.c, for the driver. */
+extern volatile int wifi_state;         /* WIFI_IDLE, WIFI_JOINING, WIFI_UP, WIFI_FAILED ... */
+extern char wifi_why[63], wifi_desc[64];   /* the last failure, in words; the chip and its firmware */
+extern uint8_t wifi_mac[6], wifi_bssid[6];
+extern int wifi_chan, wifi_rssi;
+void wifi_link(int up);                 /* the link came up or went down: the state, netd told */
+void wifi_frames(const void *batch, size_t n);   /* frames received, NET_FRAMES' layout, to netd */
 
 /* ---- The SDIO host (sdio.c). All return 0, or -1 on a bus error. */
 /* Find the Wi-Fi SDIO controller (the one with a "brcm,bcm4329-fmac" child
@@ -39,9 +49,8 @@ int  sdio_enable_f2(void);
 void sdio_irq_wait(void);
 void sdio_irq_ack(void);
 
-/* The device tree (wifi.c loads it once), a printf into a buffer, and a
- * short busy wait: shared with sdio.c. */
+/* The device tree (bcm.c loads it once) and a printf into a buffer:
+ * shared with sdio.c. */
 const void *wifi_fdt(void);
 void wifi_fmt(char *out, size_t cap, const char *fmt, ...);
 
-/* ---- The driver (wifi.c): see user/wifi/wifi.c. */
