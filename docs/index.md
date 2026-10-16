@@ -15,7 +15,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [usb-stack.md](usb-stack.md) | the USB stack: xHCI, hubs, USB disks (SCSI), keyboards and mice, hotplug, the Pi glue still to check |
 | [siefs.md](siefs.md) | SieFS, the file system: disk layout, commits, checksums, attributes, volumes, snapshots, encryption |
 | [accounts.md](accounts.md) | users, logins, the first start, Argon2id, account files |
-| [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, apps, the assistant |
+| [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, Git, apps, the assistant |
 | [net.md](net.md) | the network: drivers, TCP/IP, DHCP, DNS, HTTP, TLS 1.3, `fetch` |
 | [ssh.md](ssh.md) | SSH: `ssh`, `ssh-keygen`, `sshd`; the transport, Ed25519, how a remote shell gets its terminal, tests |
 | [sia.md](sia.md) | the assistant: siad, backends (local, OpenAI-compatible), memory |
@@ -25,3 +25,4 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [python-plan.md](python-plan.md) | the Python plan: MicroPython first, then the POSIX layer and CPython |
 | [cc.md](cc.md) | sicc, the C compiler: x86-64 and AArch64, optimizer, assembler, linker, tests |
 | [make.md](make.md) | `/bin/make` on SIEOS: what it supports, the demo projects, `sh -c`, tests |
+| [git.md](git.md) | `/bin/git`: commands, git:// and smart HTTP(S), the repository format, SHA-1 and zlib, the Git window, tests |

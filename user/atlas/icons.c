@@ -39,6 +39,9 @@ static const char *const maps[I_N][12] = {
     [I_PINS] = {
         "............", ".gggg..gggg.", ".g..g..g..g.", ".g..g..g..g.", ".g..g..g..g.", "gg..gggg..gg",
         "............", "kkkkkkkkkkkk", "kddddddddddk", "kkkkkkkkkkkk", "k.k.k.k.k.k.", "............" },
+    [I_GIT] = {                                         /* (a branch leaving the main line) */
+        "............", "..aa....aa..", ".aaaa..aaaa.", "..aa....aa..", "..g.....g...", "..g....g....",
+        "..g...g.....", "..g..g......", "..g.g.......", "..aa........", ".aaaa.......", "..aa........" },
     [I_WINDOW] = {
         "............", "aaaaaa......", "aAAAAa......", "kkkkkkkkkkk.", "kGGGGGGGGGk.", "kGGGGGGGGGk.",
         "kGGGGGGGGGk.", "kGGGGGGGGGk.", "kGGGGGGGGGk.", "kkkkkkkkkkk.", "............", "............" },

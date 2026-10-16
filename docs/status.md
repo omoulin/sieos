@@ -21,7 +21,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test` (both
+`kernel-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -99,3 +99,12 @@ checklist in [raspberrypi.md](raspberrypi.md).
   commands as names of `/bin/fetch`: `ping`, `host`/`nslookup`,
   `ifconfig`, `netstat`, `traceroute`, `nc`, `wget`, `curl`
   ([net.md](net.md#programs)); `make net-nic-test`.
+- **2026-10-16.** git ([git.md](git.md)): `/bin/git`, written for SIEOS
+  in git's own formats (loose objects, packs and .idx v2 with deltas, thin
+  packs completed, refs, index v2): init, clone, status, add, rm, reset,
+  commit, log, show, diff, branch, checkout/switch, fetch, pull
+  (fast-forward, or a merge when no file changed on both sides), push,
+  remote, config; over git:// and smart HTTP(S) with credentials. SHA-1
+  and zlib (inflate, a small deflate) in `lib/`. Host git fsck accepts what
+  SIEOS pushes and the repositories it makes (`make git-test`). The Git
+  window on the desktop drives `/bin/git` ([desktop.md](desktop.md#git)).

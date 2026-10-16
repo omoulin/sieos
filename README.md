@@ -97,7 +97,7 @@ crash takes down alone: init starts it again in about a millisecond, and
 its clients carry on by themselves.
 
 ```
- programs   sh, fetch, ssh, sia, svc, hello, bench ...      (any user)
+ programs   sh, fetch, ssh, git, python, make, cc ...   (any user)
                │ messages (the kernel copies them, stamped with the sender's identity)
  servers    init  con  vblk  fs  auth  login  atlas  netd  vnet  wifid  siad
                │
@@ -164,6 +164,9 @@ tour, file by file, with the crash and on-demand mechanisms:
 - **Python** ([docs/python.md](docs/python.md)): `/bin/python` is
   MicroPython (the prompt, scripts, files and `os`, sockets and TLS,
   json, re, hashlib...), also in the desktop's menu.
+- **git** ([docs/git.md](docs/git.md)): `/bin/git`, written for SIEOS in
+  git's own formats (clone, commit, diff, log, branches, pull, push over
+  git:// and HTTPS), and a Git window on the desktop.
 
 ## The assistant: sia
 
@@ -226,10 +229,11 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make pi4-test` | (ARCH=arm64) the boot and crash test on QEMU's Pi 4 |
 | `make pi4-sdbench`, `make sdhci-bench` | (ARCH=arm64) SD card speed: on QEMU's Pi 4, and on a PCI SD controller with DMA (`SDCAPS`, `SDBSIZE`, `SDMIB`) |
 | `make siefs-tools` / `siefs-test` / `siefs-freestanding` | SieFS host tools / its tests / a freestanding build check |
-| `make crypto-test` | BLAKE2b, ChaCha20, Argon2, Poly1305, Ed25519 against official vectors |
+| `make crypto-test` | BLAKE2b, ChaCha20, Argon2, Poly1305, Ed25519, SHA-1 against official vectors; zlib against the host's |
 | `make cc` / `cc-test` / `cc-bootstrap` / `cc-bench` | sicc / its tests / self-compilation / speed vs gcc |
 | `make cc-sieos` | all of SIEOS (x86-64) built by sicc, then the boot and crash tests |
 | `make cc-sieos-test` / `make-test` | `/bin/cc` on SIEOS / `/bin/make` there, with SIEOS's own programs |
+| `make git-test` | `/bin/git` against host git (git daemon, http-backend): clone, commit, push, pull, merge; host `git fsck` of SIEOS's repositories |
 | `make cc-a64-test` / `cc-a64-bootstrap` | sicc's AArch64 tests / self-compilation, emulated |
 | `make llm` / `llm-test` / `llm-neon-test` / `llm-bench` / `llm-freestanding` | the engine's host tools / tests / NEON tests / speed / freestanding check |
 

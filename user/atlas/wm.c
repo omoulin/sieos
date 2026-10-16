@@ -153,7 +153,7 @@ static void place(int w)
     int aw = AX1 - AX0, ah = AY1 - AY0, top = wm_top();
     int ww_ = aw * 56 / 100, hh = ah * 70 / 100;
     if (w == WM_SIA) { v->x1 = AX1; v->x0 = v->x1 - aw * 42 / 100; v->y0 = AY0; v->y1 = v->y0 + ah * 86 / 100; }
-    else if (w == WM_EDIT) { v->x0 = AX0 + 20; v->y0 = AY0; v->x1 = v->x0 + aw * 76 / 100; v->y1 = v->y0 + ah * 88 / 100; }
+    else if (w == WM_EDIT || w == WM_REPO) { v->x0 = AX0 + 20; v->y0 = AY0; v->x1 = v->x0 + aw * 76 / 100; v->y1 = v->y0 + ah * 88 / 100; }
     else if (w == WM_PINS) { v->x0 = AX0 + 20; v->y0 = AY0; v->x1 = v->x0 + aw * 76 / 100; v->y1 = v->y0 + ah * 60 / 100; }   /* (its tracks, room for more) */
     else if (w == WM_SET) { v->x0 = AX0 + 60; v->x1 = v->x0 + aw * 54 / 100; v->y0 = AY0; v->y1 = AY1; }   /* (Settings: all its rows) */
     else {

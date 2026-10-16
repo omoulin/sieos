@@ -34,10 +34,10 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs date acct tty fmt string fdt pci virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh   # the library: a program gets only what it uses
+ULIBOBJ := fs date acct tty fmt string fdt pci virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
-BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd   # programs on the disk, in /bin
+BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git   # programs on the disk, in /bin
 LINKS   := acct/passwd acct/su acct/useradd acct/userdel ssh/ssh-keygen   # other names of programs (symbolic links)
 NETLINKS := ping host nslookup ifconfig netstat traceroute nc curl wget   # other names of /bin/fetch (docs/net.md)
 LINKS   += $(NETLINKS:%=fetch/%)
@@ -135,7 +135,7 @@ $(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/mk.h include/mk/*.h $(TO
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The desktop has several files; its font is drawn in tools/mkfont.py.
-ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen wm settings files icons pins
+ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen wm settings files icons pins repo
 $(B)/atlas.elf: $(ATLAS:%=$(B)/user/atlas/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(ATLAS:%=$(B)/user/atlas/%.o) $(ULIB)
 $(B)/user/atlas/%.o: user/atlas/%.c user/atlas/draw.h user/atlas/atlas.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
@@ -143,6 +143,14 @@ $(B)/user/atlas/%.o: user/atlas/%.c user/atlas/draw.h user/atlas/atlas.h user/li
 	$(TCC) $(UCFLAGS) -c $< -o $@
 user/atlas/font.c: tools/mkfont.py
 	python3 tools/mkfont.py $@
+
+# git (user/git, docs/git.md): several files.
+GIT     := git odb diff proto
+$(B)/git.elf: $(GIT:%=$(B)/user/git/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(GIT:%=$(B)/user/git/%.o) $(ULIB)
+$(B)/user/git/%.o: user/git/%.c user/git/git.h user/lib/mk.h user/lib/net.h include/mk/*.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # ---- sicc on SIEOS: /bin/cc (docs/cc.md, "sicc on SIEOS"): the compiler as a
 # SIEOS program, with the C library it needs (cc/libc: sieos.c on SIEOS's
@@ -372,6 +380,12 @@ py-test: all
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	for f in tests/python/*.py; do $(B)/host/siefs $(B)/test.img put $$f /tmp/t/$$(basename $$f) || exit 1; done
 	python3 tools/pythontest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+# git-test: /bin/git against the host's git (git daemon, git http-backend):
+# clone, commit, push, pull, merge; SIEOS's repositories checked by git fsck (tools/gittest.py)
+git-test: all
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
+	python3 tools/gittest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 demand-test: all
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /models && $(B)/host/siefs $(B)/test.img put models/$(SIATEST_MODEL) /models/$(SIATEST_MODEL)
@@ -383,7 +397,7 @@ clean:
 distclean:
 	rm -rf $(B)
 
-.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test model clean distclean newdisk FORCE
+.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test git-test model clean distclean newdisk FORCE
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.
@@ -558,11 +572,11 @@ $(B)/siefs-fs/%.o: %.c $(SIEFS_H)
 
 .PHONY: siefs-tools siefs-test siefs-freestanding
 
-# ---- the crypto library (lib/blake2b.c, chacha20.c, argon2.c; SSH's ed25519.c
-# and Poly1305): official test vectors, BLAKE2b against an independent
-# implementation, Argon2id timing.
-CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/string.c
-$(B)/host/crypto-test: tests/crypto/test.c $(CRYPTO_SRC) include/mk/crypto.h
+# ---- the crypto library (lib/blake2b.c, chacha20.c, argon2.c, sha1.c, zlib.c;
+# SSH's ed25519.c and Poly1305): official test vectors, BLAKE2b and zlib
+# against independent implementations, Argon2id timing.
+CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/sha1.c lib/zlib.c lib/string.c
+$(B)/host/crypto-test: tests/crypto/test.c $(CRYPTO_SRC) include/mk/crypto.h include/mk/zlib.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/crypto/test.c $(CRYPTO_SRC)
 crypto-test: $(B)/host/crypto-test
