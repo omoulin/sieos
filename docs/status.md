@@ -119,6 +119,22 @@ checklist in [raspberrypi.md](raspberrypi.md).
   and zlib (inflate, a small deflate) in `lib/`. Host git fsck accepts what
   SIEOS pushes and the repositories it makes (`make git-test`). The Git
   window on the desktop drives `/bin/git` ([desktop.md](desktop.md#git)).
+- **2026-10-16.** Mail grows to what `../mailbox` (the Linux client in
+  Atlas's look) does ([desktop.md](desktop.md#mail)): several accounts
+  (`[account]` sections in `~/.mail`; a one-account file reads as
+  before), each with its folders, unread counts (STATUS) and connection,
+  a From choice when writing, an account editor (pick, new, remove);
+  self-signed certificates accepted per account, their SHA-256 shown and
+  pinned (`tls_open`: that certificate only, the key still proven; a
+  changed one refused); favorite folders at the top; the newest 300
+  messages; attachments saved (`~/Downloads`), files attached (picked in
+  Files; multipart/mixed, base64), forwarded with the message; Reply all;
+  Delete into the Trash (SPECIAL-USE `\Trash` or its usual names), for
+  good from it; a copy of what is sent in Sent (APPEND); `mailto:` links
+  (the sia strip, `mail mailto:`); Ctrl+N/R/Shift+R/L, F5, Ctrl+Enter (con
+  now tells Ctrl+Enter and Ctrl+Shift+letters apart). atlas.elf +8.8 KB
+  (the window: 31 KB of code), mail.elf +13 KB. `make mail-test` covers it
+  all against two host servers.
 - **2026-10-16.** Mail ([desktop.md](desktop.md#mail)): a window of the
   desktop (folders, messages, reading, writing, replying, forwarding,
   deleting, the account) and `/bin/mail`, which does the talking: IMAP or

@@ -169,6 +169,9 @@ int  mail_click(int kind, int arg);                   /* 1 if it was the window'
 int  mail_key(int c);                                 /* 1 if taken */
 void mail_wheel(int arg, int w);
 int  mail_console(long from, msg_t *m, const char *data);   /* CON_* from the helper -> 1: draw again */
+int  mail_pick(const char *path);                     /* Files' double-click: 1 if Mail was picking a file to attach */
+void mail_mailto(const char *url);                    /* a mailto: link: the window, writing to it */
+void atlas_show(int w);                               /* (atlas.c) a window (WM_MAIL, WM_FILES) in front, opened if need be */
 void mail_ended(int pid);                             /* a child of atlas ended */
 
 /* ---- Camera (cam.c): the USB camera's picture, snapshots to ~/Pictures; a .ppm shown. */
