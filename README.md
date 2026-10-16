@@ -111,7 +111,7 @@ its clients carry on by themselves.
 |---|---|---|
 | `init` | the supervisor: starts and restarts every server | by the kernel |
 | `con` | the console: serial port, keyboard, mouse | at boot |
-| `vblk` | the disk driver: virtio, or the Pi's SD card | at boot |
+| `vblk` | the disk driver: virtio, the Pi's SD card, NVMe, a USB key | at boot |
 | `fs` | the file server (SieFS), checks permissions | at boot |
 | `login`, `auth` | the text login; the accounts server (passwords) | at boot; auth on demand |
 | `atlas` | the desktop | at boot |

@@ -103,6 +103,45 @@ serves it and `vblk` takes its SieFS partition, exactly as on a real PC.
 `USBBUS=virtio` attaches it as a plain disk instead; the test passes both ways
 (over USB: the kernel at 0.87 s, the welcome screen at 1.48 s).
 
+## The PC's NVMe drives
+
+`vblk` also drives NVMe SSDs (`user/vblk/nvme.c`; the target laptop's
+Unionmemory and Samsung PM9A1 drives, behind PCIe root ports: the PCI scan
+follows the bridges). At boot, when there is no virtio disk, it lists each
+controller and namespace on the console and log, then takes the first
+namespace with a **SieFS partition** (GPT type above, or MBR `0x5E`) as
+SIEOS's disk, before any USB key; a drive without one is only read (its
+partition table), never written. In `make nvme-test`:
+
+```
+vblk: NVMe 00:06.0: QEMU NVMe Ctrl
+vblk: NVMe namespace 1: 64 MiB, 4096-byte sectors
+vblk: NVMe 00:07.0: QEMU NVMe Ctrl
+vblk: NVMe namespace 1: 258 MiB, 512-byte sectors
+vblk: NVMe disk, 256 MiB (SieFS partition)
+```
+
+How: controller reset and enable (admin queues of two entries), Identify
+controller and namespace, one I/O queue pair; read, write (128 KiB per
+command: two PRP entries, or a PRP list built once, the buffer never moves)
+and flush. One command at a time, as the file server sends them, and
+**polled** (a short spin, then yielding): the drive answers in
+microseconds, and its interrupts would need ACPI's routing or MSI-X, which
+SIEOS does not have yet. No copies: the data arrives by IPC in the buffer
+the drive reads. Sectors of 512 bytes or 4 KiB; partitions on 4 KiB
+boundaries. `vblk` grew by 2.4 KB of code (x86-64; arm64 3.6 KB).
+
+`make nvme-test` (both architectures; QEMU's `-device nvme`): a blank drive
+with 4 KiB sectors (listed, skipped), then a GPT drive whose SieFS
+partition starts at 1 MiB: first start, `bench`, a file written, power off,
+then `fsck.siefs` and the file read back on the host. Measured (`bench 64`,
+x86-64 KVM): writes 376-396 MiB/s, reads 557-629 MiB/s (virtio: 217 / 213);
+arm64 (emulated, `bench 16`): 152-166 / 252 MiB/s.
+
+Untested on the real drives: the controllers' reset timing, their MDTS and
+LBA formats as read, a SieFS partition on one (no tool makes it yet: copy
+`mkfs.siefs`'s image into a GPT partition of that type from Linux).
+
 ## Limits
 
 - Secure Boot: not supported yet (the loader is not signed).

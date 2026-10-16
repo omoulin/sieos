@@ -44,6 +44,7 @@ built and booted (UEFI loader, `make usb`) is in [usb.md](usb.md).
 - **Restart.** If `usb` crashes, init restarts it; `vblk` retries a failed
   call for up to 20 attempts, finds the port again and redoes the request.
 - **Root disk.** `vblk` uses virtio first, then the SD card, then the first
+  NVMe namespace with a SieFS partition ([usb.md](usb.md#the-pcs-nvme-drives)), then the first
   USB disk (waiting until enumeration settles). On that disk it takes the
   GPT partition of type `5E1E0500-51EF-4153-9E05-534945465331`, else an MBR
   partition of type `0x5E`, else the whole disk if it is raw SieFS.

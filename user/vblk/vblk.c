@@ -11,8 +11,8 @@
  *
  * Or a USB key (the USB server, user/usb, serves each USB disk on a port of
  * its own, "usbdisk0"...): when there is no virtio disk or SD card, the
- * first USB disk with a SieFS partition is SIEOS's disk (after NVMe). Partitions: a GUID
- * partition table (GPT, mk/gpt.h: the SieFS partition by its type) or an MBR
+ * first USB disk with a SieFS partition is SIEOS's disk (NVMe first).
+ * Partitions: a GUID partition table (GPT, mk/gpt.h: the SieFS partition by its type) or an MBR
  * (type 0x5E); a disk without either is SieFS whole if a superblock says so.
  *
  * Virtio is a simple standard for virtual devices. The driver and the device
@@ -145,8 +145,8 @@ static long request(uint32_t type, uint64_t blk, uint32_t bytes)
 }
 
 /* ---- The backends: virtio (requests above), an SD card (sd.c), NVMe
- * (nvme.c), or a USB disk (the USB server's port). All move whole 4 KiB blocks of the disk;
- * `first` is where SIEOS's part starts (the SieFS partition's first block). */
+ * (nvme.c), or a USB disk (the USB server's port). All move whole 4 KiB
+ * blocks of the disk; `first` is where SIEOS's part starts (the SieFS partition's first block). */
 enum { B_VIRTIO, B_SD, B_NVME, B_USB };
 static int backend;
 static uint64_t first;
@@ -235,7 +235,6 @@ static int nvme_disk(void)
             if (e) continue;
             backend = B_NVME;
             data = nvme_buffer();
-            first = 0;
             nblocks = n / (DISK_BS / sector);
             if (find_siefs()) return 1;
         }
@@ -282,13 +281,11 @@ int main(int argc, char **argv)
         backend = B_SD;
     }
 #endif
-    if (ok) find_siefs();                                /* (none found: the whole disk, as before) */
-    else {
-        ok = nvme_disk();
-        if (!ok) {
-            data = (uint8_t *)buf;
-            ok = usb_disk();
-        }
+    if (ok) {
+        find_siefs();                                    /* (none found: the whole disk, as before) */
+    } else if (!(ok = nvme_disk())) {
+        data = (uint8_t *)buf;
+        ok = usb_disk();
     }
     static const char *kind[] = { "virtio", "SD card", "NVMe", "USB" };
     if (!ok) printf("vblk: no disk (virtio, SD card, or an NVMe drive or USB key with SieFS)\n");

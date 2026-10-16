@@ -10,7 +10,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Area | x86-64 (QEMU, KVM) | AArch64: QEMU `virt` | Raspberry Pi 4 | Raspberry Pi 5 |
 |---|---|---|---|---|
 | Kernel: SMP, tickless, threads, quotas, FP/vector state | yes | yes (emulated) | QEMU `raspi4b`: yes | card image only, untested |
-| SieFS disk | virtio | virtio (MMIO) | SD card | SD card (untested) |
+| SieFS disk | virtio, NVMe, USB key | virtio (MMIO), NVMe (PCIe) | SD card | SD card (untested) |
 | Users, login, permissions | yes | yes | yes (serial) | untested |
 | Supervisor, on-demand servers | yes | yes | yes | untested |
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
@@ -21,7 +21,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test` (both
+`kernel-test`, `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -31,8 +31,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
 
 - The assistant's memory: history across sessions and restarts, with
   compaction ([sia.md](sia.md)).
-- The target laptop: UEFI boot from USB into RAM, NVMe, USB input, the
-  Realtek network card, then NVIDIA compute ([ai-plan.md](ai-plan.md)).
+- The target laptop: UEFI boot from USB into RAM, USB input, the
+  Realtek network card, its two NVMe drives (the driver passes in QEMU), then NVIDIA compute ([ai-plan.md](ai-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
   written but untested there, [raspberrypi.md](raspberrypi.md)).
 
@@ -140,3 +140,10 @@ checklist in [raspberrypi.md](raspberrypi.md).
   (`CON_FG`); a closed window or SSH connection sends `SIGHUP`; `kill -INT
   /-TERM/-KILL/-HUP`. Python raises `KeyboardInterrupt`. The kernel's code
   grew by 1.6 KB (x86-64), the IPC round trip by 1% at most; `make sig-test`.
+- **2026-10-16.** NVMe ([usb.md](usb.md#the-pcs-nvme-drives)): the disk
+  server drives NVMe SSDs (reset, Identify, one I/O queue pair; read,
+  write, flush with PRP lists; polled), on both architectures; it lists
+  every controller and namespace and takes the first SieFS partition found
+  on one, before a USB key, never writing a drive without one. `bench` on
+  QEMU's NVMe (KVM): 376-396 MiB/s written, 557-629 MiB/s read (virtio:
+  217 / 213). vblk: +2.4 KB of code (x86-64), +3.6 KB (arm64); `make nvme-test`.

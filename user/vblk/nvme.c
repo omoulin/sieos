@@ -101,13 +101,11 @@ static int start(int nth)
     r[CC] = 1 | 6 << 16 | 4 << 20;                       /* on: NVM commands, 4 KiB pages, 64 B SQ / 16 B CQ entries */
     nsid = dead = 0;
     if (wait_rdy(1, to) || admin(6, bus, 1, 0)) return -1;   /* identify the controller (CNS 1) */
-    char model[41];
-    memcpy(model, mem + 24, 40);
-    int n = 40;
-    while (n && (model[n - 1] == ' ' || !model[n - 1])) n--;
-    model[n] = 0;
-    nn = mem[516] | mem[517] << 8 | mem[518] << 16 | (uint32_t)mem[519] << 24;
-    printf("vblk: NVMe %02x:%02x.%x: %s\n", p.at >> 16 & 0xFF, p.at >> 11 & 31, p.at >> 8 & 7, model);
+    memcpy(&nn, mem + 516, 4);                           /* (both processors are little-endian, like NVMe) */
+    char m[41] = { 0 };                                  /* the model: 40 characters, space-padded */
+    memcpy(m, mem + 24, 40);
+    for (int n = 40; n && m[n - 1] == ' ';) m[--n] = 0;
+    printf("vblk: NVMe %02x:%02x.%x: %s\n", p.at >> 16 & 0xFF, p.at >> 11 & 31, p.at >> 8 & 7, m);
     if (mem[77] && mem[77] < 5) return -1;              /* MDTS (in 4 KiB pages, log2): 128 KiB transfers must be allowed */
     if (admin(5, qb + 3 * 4096, 1 << 16 | 1, 1) ||                    /* create I/O CQ 1 (contiguous, no interrupts) */
         admin(1, qb + 2 * 4096, 1 << 16 | 1, 1 << 16 | 1)) return -1;   /* create I/O SQ 1 -> CQ 1 */

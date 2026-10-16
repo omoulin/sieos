@@ -83,7 +83,7 @@ add, copy/convert, argmax/top-k.
 | Floating point and vector registers saved on task switches (lazy) | every backend | done (x86-64, AArch64) |
 | Per-thread storage | the engine | done; a fuller C library: not yet |
 | Per-process memory quota in the kernel | the 4 GB limit | done (siad: 4.5 GiB) |
-| SIEOS on the laptop: UEFI boot, NVMe (read), USB/touchpad | running there | not yet |
+| SIEOS on the laptop: UEFI boot, NVMe, USB/touchpad | running there | UEFI and USB boot, NVMe (read/write) done in QEMU; the laptop itself not yet |
 | IOMMU (VT-d): a device reaches only its own memory | the NVIDIA driver | not yet |
 | Network: virtio (QEMU) done; Realtek driver for the laptop, TCP/IP, DNS, TLS | the online backend | done in QEMU; Realtek not yet |
 | Scheduler aware of P-cores and E-cores | CPU inference speed | done: inference on P-cores, compaction on E-cores ([kernel.md](kernel.md)); tested in QEMU with `pcores=N` |

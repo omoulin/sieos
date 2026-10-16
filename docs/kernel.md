@@ -91,8 +91,9 @@ Then the servers, all ordinary programs:
    screen and the PS/2 keyboard and mouse (QEMU's absolute pointer); on
    AArch64 the PL011 serial port and virtio keyboard and tablet. Line
    editing is `user/lib/tty.c`, shared with the desktop's terminals.
-10. **`user/vblk`**: the disk driver: virtio (PCI on x86, MMIO on AArch64)
-    or, on the Raspberry Pi, the SD card (`sd.c`). It serves the port
+10. **`user/vblk`**: the disk driver: virtio (PCI on x86, MMIO on AArch64),
+    on the Raspberry Pi the SD card (`sd.c`), an NVMe drive (`nvme.c`,
+    [usb.md](usb.md#the-pcs-nvme-drives)) or a USB key (through `usb`). It serves the port
     "disk" (up to 128 KiB per message); data arrives by IPC straight into
     the buffer the device reads.
 11. **`user/fs`**: the file server: the SieFS library ([siefs.md](siefs.md))
