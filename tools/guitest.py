@@ -471,6 +471,25 @@ if int(got.split()[0]) != before + 1:
     fail(f"the pasted command did not make pasted.txt: {before} -> {got}")
 print(f"ok: history (PgUp went back {back} lines), selected {len(cmd)} bytes, pasted with Ctrl+V, it ran")
 
+# ---- Ctrl+C in a terminal: the program it runs ends, the shell takes the next command
+type_text("ktest hang spin\n")
+time.sleep(0.8)
+drain()
+k = full.rfind(b"atlas: files: ")
+before = int(full[k + 14:].split()[0])
+keys("ctrl", "c")
+time.sleep(0.3)
+type_text("touch ctrlc.txt\n")
+got = wait("atlas: files: ")
+while int(got.split()[0]) == before:
+    got = wait("atlas: files: ")
+send("ps")
+expect("NAME")
+drain(0.8)
+if " ktest" in full[pos["con"]:].decode(errors="replace"):
+    fail("ktest still runs after Ctrl+C")
+print("ok: Ctrl+C in a terminal ended its program; the shell ran the next command")
+
 # ---- Files and the editor
 click(*latest("dbapp", "Files"))
 wait("atlas: files /home/alice: ")

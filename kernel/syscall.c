@@ -198,6 +198,7 @@ static long spawn(uint64_t img, uint64_t len, uint64_t uargs, int uid, int gid, 
     if (!c) return e;
     memcpy(c->console, console, sizeof c->console);
     c->bg = p->bg || (o.flags & SPAWN_BACKGROUND);
+    c->pgid = o.flags & SPAWN_PGROUP ? c->pid : p->pgid;
     c->threads->bg = c->bg;
     return proc_start(c, ppid);
 }
@@ -335,7 +336,9 @@ void syscall(regs_t *r)
     case SYS_RANDOM:        ret = rand_get(a, b); break;
     case SYS_IDENT:         ret = ident((int)a, b); break;
     case SYS_CHILD_PORT:    ret = child_port(a); break;
-    case SYS_KILL:          ret = proc_kill((int)a); break;
+    case SYS_KILL:          ret = proc_kill((int)a, (int)b); break;
+    case SYS_SIGNAL:        ret = sig_set((int)a, b); break;
+    case SYS_SIGRETURN:     ret = sig_return(r); break;
     case SYS_MODULES:       ret = module_names(a, b); break;
     case SYS_SET_FS:        ret = set_fs(a); break;
     case SYS_FDT:           ret = arch_fdt(a, b); break;

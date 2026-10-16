@@ -21,8 +21,11 @@
  * their own). A message is copied with no lock held: the thread taken off
  * a queue is ours until we wake it. A client waiting for its reply is
  * woken by whoever sets its `server` to 0, under its bucket's lock in the
- * thread table (the server's reply, its death, the client's own end):
- * exactly one of them.
+ * thread table (the server's reply, its death, the client's own end, a
+ * signal): exactly one of them. A reply token names the client thread and
+ * its call (the thread's id, and in the high half a count of the calls it
+ * gave up): a call a signal interrupted is answered nowhere, never in a
+ * later call.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -272,10 +275,23 @@ static int unwait(task_t *t, proc_t *srv)
     t->server = 0;
     return 1;
 }
+/* The same, for a call given up before its reply (a signal, its process
+ * ending): its token is stale from now on, so the server's later reply
+ * goes nowhere, not into the thread's next call. */
+static int abandon(task_t *t, proc_t *srv)
+{
+    if (!unwait(t, srv)) return 0;
+    t->gen = (t->gen + 1) & 0x7FFFFFFF;
+    return 1;
+}
+static long call_token(task_t *t) { return t->tid | (long)t->gen << 32; }   /* (t's call: gen stays) */
+/* A call that must not wait for its reply: its process is ending (-EPIPE),
+ * or a signal came for the thread (-EINTR). */
+static long call_stop(task_t *t) { return may_stop(t) ? stop_why(t) : 0; }
 int ipc_unreply(task_t *t)          /* (proc_stop) */
 {
     task_t *x = task_lock(t->tid);  /* (0: it is ending, so not waiting) */
-    int got = x && unwait(x, 0);
+    int got = x && abandon(x, 0);
     if (x) task_unlock(x);
     return got;
 }
@@ -303,16 +319,16 @@ long ipc_call(long id, msg_t *um)
     proc_t *owner = p->owner;          /* a server thread waits: deliver now */
     port_put(p);
     long e = transfer(me, r);
-    r->ret = e ? e : me->tid;          /* ipc_recv returns the token: the client thread's id */
+    r->ret = e ? e : call_token(me);   /* ipc_recv returns the token, for the reply */
     if (e) { ready(r); return e; }
     ready_first(r);                    /* we wait now: the server gets this CPU at once ("handoff") */
     me->state = TS_REPLY;
     __atomic_store_n(&me->server, owner, __ATOMIC_RELEASE);   /* from now on its reply may come */
-    if (me->proc->exiting) {           /* we are ending: no waiting, unless a reply is coming */
+    if ((e = call_stop(me))) {         /* ending, or a signal: no waiting, unless a reply is coming */
         task_lock(me->tid);
-        int bail = unwait(me, owner);
+        int bail = abandon(me, owner);
         task_unlock(me);
-        if (bail) { me->state = TS_RUN; return -EPIPE; }   /* (r runs next all the same) */
+        if (bail) { me->state = TS_RUN; return e; }   /* (r runs next all the same) */
     }
     schedule();
     return me->ret;
@@ -341,14 +357,15 @@ static long recv_locked(port_t *p, msg_t *um)
          * no reply can take it before it is set, and it cannot end before
          * we have checked whether its process is ending (proc_stop may
          * have found it queued, then taken off: then we wake it). */
-        int tid = s->tid;
-        task_lock(tid);
+        long tok = call_token(s);
+        task_lock(s->tid);
         s->state = TS_REPLY;
         __atomic_store_n(&s->server, owner, __ATOMIC_RELEASE);
-        int stop = s->proc->exiting && unwait(s, owner);
+        long stop = call_stop(s);
+        if (stop && !abandon(s, owner)) stop = 0;
         task_unlock(s);
-        if (stop) { s->ret = -EPIPE; ready(s); }
-        return tid;
+        if (stop) { s->ret = stop; ready(s); }
+        return tok;
     }
     me->next = p->receivers;           /* nothing yet: sleep */
     p->receivers = me;
@@ -369,15 +386,15 @@ long ipc_recv(long id, msg_t *um)
     return recv_locked(p, um);
 }
 
-/* The client waiting for our reply (token: its thread id), now ours to
- * wake; 0 if there is none (a stale token: that client is gone, or was
- * answered). */
-static task_t *claim_client(long token)
+/* The client waiting for our reply (tok: its thread and call), now ours
+ * to wake; 0 if there is none (a stale token: that client is gone, or
+ * that call was answered or interrupted). */
+static task_t *claim_client(long tok)
 {
-    if (token <= 0 || token > 0x7FFFFFFF) return 0;
-    task_t *c = task_lock((int)token);
+    if (tok <= 0) return 0;
+    task_t *c = task_lock((int)(tok & 0x7FFFFFFF));
     if (!c) return 0;
-    int ok = unwait(c, cur->proc);
+    int ok = c->gen == (uint64_t)tok >> 32 && unwait(c, cur->proc);
     task_unlock(c);
     return ok ? c : 0;
 }

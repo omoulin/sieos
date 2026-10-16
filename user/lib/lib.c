@@ -92,7 +92,7 @@ static long con_chan;                       /* ... and the channel ("atlas#3": 3
 /* Console requests are all safe to repeat: a write prints again at worst
  * (the restarted console has cleared the screen anyway), a read waits for
  * a new line. */
-static long con_call(msg_t *m)
+long con_call(msg_t *m)
 {
     if (!con_name[0]) {                     /* first use: which terminal is ours? */
         mk_ident_t id;

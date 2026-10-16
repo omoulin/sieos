@@ -21,7 +21,7 @@ standard library, which needs a much fuller POSIX layer).
 | Processes: `fork`/`exec`, `posix_spawn`, `waitpid`, `getpid`, `kill`, pipes | `sys_spawn`, `spawn_file`, `sys_wait`, `sys_kill`; no fork | `posix_spawn` on top of `spawn_file` (Python's `subprocess` can use it), **pipes** (a pipe server or a kernel object) to connect a child's stdin/stdout |
 | Threads: `pthread_create`, mutexes, condition variables, TLS | `thread_start`, `_Thread_local`, `sys_sleep`/`sys_wake` | **pthreads**: create/join (an exit status), mutex and condvar on a kernel wait primitive (a futex-like `SYS_WAIT_ADDR`/`SYS_WAKE_ADDR`), `pthread_key_*`, `once` |
 | Memory: `malloc` (big), `mmap` (anonymous) | `malloc` over `sys_brk` | anonymous **`mmap`/`munmap`** (CPython's obmalloc arenas; can fall back to malloc) — a `SYS_MAP_ANON` would be cleaner |
-| Signals | none | stubs: `signal`, `sigaction`, `raise` (SIGINT from Ctrl+C would be nice later) |
+| Signals | `signal`, `raise`, `kill` (with signals and process groups; Ctrl-C sends SIGINT: [kernel.md](kernel.md#signals-ctrl-c)) | `sigaction` on top of `signal` (no flags, no masks) |
 | Environment | none | `environ`, `getenv`, `setenv`, passed through `spawn` (`PATH`, `HOME`, `PYTHONPATH`) |
 | Sockets (optional) | `netd` and `net.h` (TCP, UDP), TLS in `tls.c` | BSD socket names over `net.h`: `socket connect bind listen accept send recv getaddrinfo`; `select`/`poll` on sockets and the console |
 | Dynamic loading | none (static programs) | not needed: extension modules are linked in statically (`Modules/Setup.local`, `*static*`) |

@@ -115,4 +115,22 @@ void fpu_switch(cpu_t *c, task_t *prev, task_t *next)
     } else if (!c->a.ts) { stts(); c->a.ts = 1; }
 }
 
+/* A signal's function (task.c): the running thread's registers are saved
+ * and its area handed over; the function starts with none (TS set: its
+ * first use traps, for a clean area). And back: its own area again,
+ * loaded at its next use. */
+void *fpu_detach(cpu_t *c, task_t *t)
+{
+    void *a = t->fpu;
+    if (!c->a.ts) { if (a) save(a); stts(); c->a.ts = 1; }
+    t->fpu = 0;
+    return a;
+}
+void fpu_attach(cpu_t *c, task_t *t, void *a)
+{
+    if (!c->a.ts) { stts(); c->a.ts = 1; }
+    fpu_free(t);
+    t->fpu = a;
+}
+
 uint32_t fpu_area_size(void) { return area_size; }

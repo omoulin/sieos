@@ -45,6 +45,7 @@ static volatile uint64_t sleep_next = NEVER;   /* (ticks) the first one's wake-u
 static struct { spinlock_t lock; task_t *head; } tid_hash[NTID];
 static proc_t *pid_hash[NPID];       /* (under proc_lock) */
 static int next_id = 1;
+typedef struct sigctx { regs_t r; void *fpu; } sigctx_t;   /* in a signal's function (Signals, below) */
 
 /* The thread with id tid, its bucket locked: it cannot end until
  * task_unlock. */
@@ -68,14 +69,14 @@ proc_t *proc_find(int pid)
 
 /* t (the running thread) waits now, in state; its caller has just queued
  * it, under that queue's lock. If its process is ending it must not wait:
- * -EPIPE (the caller takes it off the queue again). No barrier is needed
- * between the two (proc_stop): no CPU answers a shootdown between them. */
+ * -EPIPE (the caller takes it off the queue again); nor if a signal it
+ * catches came: -EINTR. No barrier is needed between the two (proc_stop,
+ * sig_post): no CPU answers a shootdown between them. */
+static int unblocked(task_t *t);
 int blocked(task_t *t, int state)
 {
     __atomic_store_n(&t->state, state, __ATOMIC_RELEASE);
-    if (!t->proc->exiting) return 0;
-    t->state = TS_RUN;
-    return -EPIPE;
+    return may_stop(t) ? unblocked(t) : 0;
 }
 
 /* ---- The run queues. */
@@ -266,6 +267,8 @@ static int idle_kind(int type)
     return 0;
 }
 
+static void leaving(cpu_t *c, task_t *t);
+
 /* Leaving the kernel (entry.S): a thread of an ending process ends here
  * (every thread that runs again passes here: proc_stop relies on it);
  * otherwise set this CPU's timer. */
@@ -279,8 +282,9 @@ void kernel_exit(void)
         schedule();                      /* while one of its kind idles, which may sleep and not look: */
         c = this_cpu();                  /* it goes there (place_on claims it) */
     }
-    if (c->running && c->running->proc->exiting) thread_exit();
-    timer_update(c);
+    task_t *t = c->running;
+    if (t && may_stop(t)) leaving(c, t);
+    else timer_update(c);
 }
 
 /* Decide when this CPU's timer must fire next (called on the way out of
@@ -605,22 +609,25 @@ long thread_create(uint64_t entry, uint64_t stack, uint64_t arg)
     return tid;
 }
 
-/* Thread t of an ending process: wake it from whatever it waits in (it
- * then ends itself on its way out of the kernel). Under its process's
- * lock (TS_WAIT changes only under it); each other kind of wait is checked
+/* Wake thread t from whatever it waits in, its call returning ret: its
+ * process is ending (-EPIPE: it then ends itself on its way out of the
+ * kernel), or a signal came for it (-EINTR). Under its process's lock
+ * (TS_WAIT changes only under it); each other kind of wait is checked
  * again under its own lock: whoever takes a thread off a queue wakes it,
- * never two. */
-static void stop_thread(task_t *t)
+ * never two. A caller a server has just taken off its queue (TS_SEND)
+ * may be waiting for the reply by now: tried too (if the server has not
+ * got so far, it sees why itself: ipc.c). */
+__attribute__((cold)) static void stop_thread(task_t *t, long ret)
 {
     int s = __atomic_load_n(&t->state, __ATOMIC_ACQUIRE), got = 0;
     if (s == TS_SLEEP) {
         spin_lock(&sleep_lock);
         if ((got = t->state == TS_SLEEP)) { sleep_remove(t); t->state = TS_READY; }
         spin_unlock(&sleep_lock);
-    } else if (s == TS_REPLY) got = ipc_unreply(t);
-    else if (s == TS_WAIT) got = 1;
+    } else if (s == TS_WAIT) got = 1;
     else if (s == TS_SEND || s == TS_RECV || s == TS_LOOKUP) got = ipc_unblock(t, s);
-    if (got) { t->ret = -EPIPE; ready(t); }
+    if (!got && (s == TS_REPLY || s == TS_SEND)) got = ipc_unreply(t);
+    if (got) { t->ret = ret; ready(t); }
 }
 
 /* The last thread of p has ended (on this CPU): close its ports, free its
@@ -673,6 +680,7 @@ void thread_exit(void)
     int last = !--p->nthreads;
     spin_unlock(&p->lock);
     __atomic_fetch_sub(&nthreads, 1, __ATOMIC_RELAXED);
+    if (t->sigctx) { fpu_free(t); t->fpu = t->sigctx->fpu; kfree(t->sigctx); }   /* (in a signal's function) */
     fpu_free(t);                         /* (its registers are not saved: it is gone) */
 #ifdef STACKCHECK
     stack_note(t);
@@ -703,12 +711,14 @@ static void proc_stop(proc_t *p, int code)
     p->exiting = 1;
     int others = p->nthreads > (cur && cur->proc == p);
     spin_unlock(&p->lock);
-    if (code) kprintf("mk: %s (pid %d) %s %d\n", p->name, p->pid, code == EXIT_KILLED ? "killed, status" : "exited with", code);
+    int sig = EXIT_SIGNO(code);           /* (Ctrl-C and hang-ups are no news) */
+    if (code && sig != SIGINT && sig != SIGHUP)
+        kprintf("mk: %s (pid %d) %s %d\n", p->name, p->pid, sig ? "ended by signal" : "exited with", sig ? sig : code);
     if (!others) return;
     tlb_shootdown(p);
     spin_lock(&p->lock);
     for (task_t *t = p->threads; t; t = t->tnext)
-        if (t != cur) stop_thread(t);
+        if (t != cur) stop_thread(t, -EPIPE);
     spin_unlock(&p->lock);
 }
 
@@ -718,18 +728,127 @@ void proc_exit(int code)
     thread_exit();
 }
 
-/* SYS_KILL: root may end any process but the supervisor; others only their
- * own. (Under proc_lock: p cannot be freed meanwhile.) */
-long proc_kill(int pid)
+/* ---- Signals. One the process neither catches nor ignores ends it at
+ * once, from the sender (proc_stop: SIGKILL always). An ignored one is
+ * dropped. A caught one waits (sigpend) for the thread that set the
+ * function, which is woken if it waits (its call returns -EINTR), and runs
+ * the function on its way out of the kernel: sig_deliver. Its registers
+ * stay in the kernel meanwhile (a sigctx_t: the program cannot change
+ * them), its floating-point registers too (the function starts with fresh
+ * ones); SYS_SIGRETURN puts all back. One function at a time per thread:
+ * signals that come meanwhile wait for its end. */
+
+__attribute__((cold)) long stop_why(task_t *t) { return t->proc->exiting ? -EPIPE : sig_due(t) ? -EINTR : 0; }
+__attribute__((cold)) static int unblocked(task_t *t)   /* (blocked: it must not wait after all) */
+{
+    int e = (int)stop_why(t);
+    if (e) t->state = TS_RUN;
+    return e;
+}
+
+__attribute__((cold)) static void leaving(cpu_t *c, task_t *t)   /* (kernel_exit: its process ends, or a signal) */
+{
+    if (t->proc->exiting) thread_exit();
+    while (sig_due(t)) sig_deliver(t);
+    timer_update(c);
+}
+
+/* Send sig to p (under proc_lock: p cannot be freed meanwhile). -> 1 if
+ * it is the caller's own process, which must end (after unlocking). As
+ * in proc_stop, a shootdown first: a thread of p about to wait on another
+ * CPU then sees sigpend; one running in user mode comes into the kernel,
+ * and leaves through kernel_exit. */
+__attribute__((cold)) static int sig_post(proc_t *p, int sig)
+{
+    uint32_t bit = 1u << sig;
+    if (sig == SIGKILL || !(p->sigcatch & bit)) {
+        if (sig != SIGKILL && (p->sigign & bit)) return 0;
+        if (p == cur->proc) return 1;
+        proc_stop(p, EXIT_SIGNAL(sig));
+        return 0;
+    }
+    spin_lock(&p->lock);
+    task_t *t = p->threads;              /* its signal thread; if that one ended, any */
+    for (task_t *x = p->threads; x; x = x->tnext) if (x->tid == p->sigtid) t = x;
+    if (t) __atomic_or_fetch(&t->sigpend, bit, __ATOMIC_SEQ_CST);
+    spin_unlock(&p->lock);
+    if (!t || t == cur) return 0;        /* (the caller: on its way out of this call) */
+    tlb_shootdown(p);
+    spin_lock(&p->lock);
+    for (task_t *x = p->threads; x; x = x->tnext)
+        if (x == t && sig_due(t)) stop_thread(t, -EINTR);
+    spin_unlock(&p->lock);
+    return 0;
+}
+
+/* SYS_KILL: to process pid, or (pid < 0) to each of group -pid. Root may
+ * signal any process but the supervisor; others only their own. sig 0:
+ * nothing is sent (is there one it could go to?). */
+__attribute__((cold)) long proc_kill(long pid, int sig)
 {
     proc_t *me = cur->proc;
+    long r = -ESRCH;
+    int self = 0;
+    if (sig < 0 || sig >= NSIG || !pid) return -EINVAL;
     spin_lock(&proc_lock);
-    proc_t *p = proc_find(pid);
-    long r = !p || p->zombie || p->exiting ? -ESRCH : p == super || (me->uid && me->uid != p->uid) ? -EPERM : 0;
-    if (!r && p != me) proc_stop(p, EXIT_KILLED);
+    for (proc_t *p = pid > 0 ? proc_find((int)pid) : all_procs; p; p = pid > 0 ? 0 : p->anext) {
+        if ((pid < 0 && p->pgid != -pid) || p->zombie || p->exiting) continue;
+        if (p == super || (me->uid && me->uid != p->uid)) { if (r) r = -EPERM; continue; }
+        r = 0;
+        if (sig) self |= sig_post(p, sig);
+    }
     spin_unlock(&proc_lock);
-    if (!r && p == me) proc_exit(EXIT_KILLED);
+    if (self) proc_exit(EXIT_SIGNAL(sig));
     return r;
+}
+
+/* SYS_SIGNAL: what sig does to this process (SIG_DFL, SIG_IGN, or entry:
+ * a function, run by the calling thread). */
+__attribute__((cold)) long sig_set(int sig, uint64_t entry)
+{
+    proc_t *p = cur->proc;
+    uint32_t bit = 1u << sig;
+    if (sig <= 0 || sig >= NSIG || sig == SIGKILL || entry >= USER_TOP) return -EINVAL;
+    spin_lock(&p->lock);
+    uint64_t ign = (uint64_t)SIG_IGN;
+    p->sigign = entry == ign ? p->sigign | bit : p->sigign & ~bit;
+    p->sigcatch = entry > ign ? p->sigcatch | bit : p->sigcatch & ~bit;
+    if (entry > ign) { p->sigentry = entry; p->sigtid = cur->tid; }
+    spin_unlock(&p->lock);
+    return 0;
+}
+
+/* On t's way out of the kernel (kernel_exit): its first waiting signal.
+ * Caught (still), it now runs the function; else it ends or is dropped
+ * (SYS_SIGNAL changed it since). */
+__attribute__((cold)) void sig_deliver(task_t *t)
+{
+    proc_t *p = t->proc;
+    int sig = __builtin_ctz(t->sigpend);
+    uint32_t bit = 1u << sig;
+    __atomic_and_fetch(&t->sigpend, ~bit, __ATOMIC_RELAXED);
+    if (!(p->sigcatch & bit)) { if (p->sigign & bit) return; proc_exit(EXIT_SIGNAL(sig)); }
+    sigctx_t *x = kzalloc(sizeof *x);
+    if (!x) proc_exit(EXIT_SIGNAL(sig));
+    regs_t *r = (regs_t *)(t->kstack + KSTACK) - 1;     /* (its registers in user mode) */
+    x->r = *r;
+    x->fpu = fpu_detach(this_cpu(), t);
+    t->sigctx = x;
+    arch_sig_enter(r, p->sigentry, sig);
+}
+
+/* SYS_SIGRETURN: the function is done; r: the registers to leave with. */
+__attribute__((cold)) long sig_return(regs_t *r)
+{
+    task_t *t = cur;
+    sigctx_t *x = t->sigctx;
+    if (!x) return -EINVAL;
+    *r = x->r;
+    fpu_attach(this_cpu(), t, x->fpu);
+    t->sigctx = 0;
+    kfree(x);
+    arch_sig_return(r);
+    return SC_RET(r);                    /* (syscall() stores it there again) */
 }
 
 /* SYS_WAIT: collect an ended child (pid, or any if -1). A child that ends

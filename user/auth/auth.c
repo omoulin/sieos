@@ -302,7 +302,7 @@ static long login(const char *name, const char *pw, int nopw, int parent, const 
         if (e) note("auth: %s's home did not open (error %ld)\n", name, -e);
         wipe(&k, sizeof k);
     }
-    mk_spawn_t o = { .flags = SPAWN_GROUPS | SPAWN_PARENT, .parent = parent };
+    mk_spawn_t o = { .flags = SPAWN_GROUPS | SPAWN_PARENT | SPAWN_PGROUP, .parent = parent };   /* (a session: a group) */
     acct_groups(name, &o.groups);
     if (*console) { o.flags |= SPAWN_CONSOLE; strlcpy(o.console, console, sizeof o.console); }
     const char *base = u.shell + strlen(u.shell);

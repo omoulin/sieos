@@ -24,6 +24,9 @@ enum {
     CON_MOUSE,      /* (root: the desktop) how far a mouse's move goes: w[1] = speed in %
                        (25..400, 100: about a pixel per count), w[2], w[3] = the screen's
                        width and height in pixels -> 0 */
+    CON_FG,         /* w[1] = the process group of the job the shell runs now (0: none,
+                       the shell reads again), for Ctrl-C: SIGINT to that group. Only
+                       the group's user (or root) may set it -> 0 */
 };
 #define CON_RAW 2
 /* What CON_INJECT carries. INJ_KEY: sc is one byte of a set-1 scancode

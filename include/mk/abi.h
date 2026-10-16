@@ -55,8 +55,10 @@ enum {
     SYS_CHILD_PORT,    /* (port): when a child ends, the kernel sends a "token 0"
                           message on this port (w[1] has NOTE_CHILD), so a server learns
                           of it in its own ipc_recv loop (then SYS_WAIT with WAIT_NOHANG)*/
-    SYS_KILL,          /* (pid): end a process (its exit status: EXIT_KILLED). Root may end
-                          any but the supervisor; others only their own processes        */
+    SYS_KILL,          /* (pid, signal) -> 0: send a signal (below) to process pid, or
+                          to every process of group -pid (SPAWN_PGROUP). Root may signal
+                          any but the supervisor; others only their own processes.
+                          Signal 0: only check that it could be sent                     */
     SYS_MODULES,       /* (buf, size) -> bytes: the boot modules' names, "con\0vblk\0...",
                           in order (their numbers for SPAWN_MODULE); supervisor only     */
     SYS_SET_FS,        /* (address): this thread's thread pointer, for thread-local storage
@@ -90,6 +92,12 @@ enum {
                           moves at once); -1: the whole process, its later threads too;
                           another thread: from its next wake-up. No effect where all
                           cores are alike                                                */
+    SYS_SIGNAL,        /* (signal, entry) -> 0: what a signal does to this process: entry
+                          SIG_DFL (end it), SIG_IGN (nothing), or a function the calling
+                          thread runs when the signal comes (entry(signal), on its stack;
+                          it ends with SYS_SIGRETURN). Not SIGKILL                       */
+    SYS_SIGRETURN,     /* (): the end of a signal's function: the thread goes on where the
+                          signal found it, all its registers as they were                */
 };
 #define LOG_KEEP 32768
 enum { PLACE_NORMAL, PLACE_BACKGROUND };   /* SYS_PLACE: P-cores first (speed) / E-cores first */
@@ -97,7 +105,19 @@ enum { PLACE_NORMAL, PLACE_BACKGROUND };   /* SYS_PLACE: P-cores first (speed) /
  * memory, 1 = bytes B,G,R,x (0x00RRGGBB words). */
 typedef struct { uint64_t pa, size; uint32_t width, height, pitch, format; } mk_screen_t;
 #define LOOKUP_NOWAIT 1              /* SYS_PORT_LOOKUP: do not wait (and wake nobody) */
-#define EXIT_KILLED (-9)             /* the exit status of a process ended by SYS_KILL */
+/* Signals (SYS_KILL, SYS_SIGNAL). Ctrl-C on a terminal sends SIGINT to its
+ * foreground job (CON_FG); a terminal that goes away (a closed window, an
+ * SSH connection) sends SIGHUP. Unless caught or ignored, a signal ends the
+ * process, its exit status EXIT_SIGNAL(signal); SIGKILL always does. A
+ * caught signal goes to the thread that set its function: if it waits (a
+ * message, a reply, a sleep, a child), that call returns -EINTR first.
+ * While the function runs, further signals wait. */
+enum { SIGHUP = 1, SIGINT = 2, SIGKILL = 9, SIGUSR1 = 10, SIGUSR2 = 12, SIGTERM = 15, NSIG = 32 };
+#define SIG_DFL ((void (*)(int))0)   /* SYS_SIGNAL's entry: the default (the process ends) */
+#define SIG_IGN ((void (*)(int))1)   /* ... the signal is ignored */
+#define EXIT_SIGNAL(s) (-0x1000 - (s))       /* the exit status of a process a signal ended */
+#define EXIT_SIGNO(st) ((st) < -0x1000 && (st) > -0x1000 - NSIG ? -0x1000 - (st) : 0)  /* -> that signal, or 0 */
+#define EXIT_KILLED EXIT_SIGNAL(SIGKILL)
 #define WAIT_NOHANG 1
 /* A "token 0" message (from the kernel, not a client): w[0] = the interrupts
  * that occurred (one bit each), w[1] = other events: */
@@ -126,7 +146,7 @@ typedef struct { uint64_t pa, size; uint32_t width, height, pitch, format; } mk_
  * only when all of them have. */
 
 /* Errors (the POSIX numbers, returned negated). */
-enum { EPERM = 1, ENOENT = 2, ESRCH = 3, EIO = 5, EBADF = 9, ECHILD = 10, EAGAIN = 11, ENOMEM = 12, EACCES = 13,
+enum { EPERM = 1, ENOENT = 2, ESRCH = 3, EINTR = 4, EIO = 5, EBADF = 9, ECHILD = 10, EAGAIN = 11, ENOMEM = 12, EACCES = 13,
        EFAULT = 14, EBUSY = 16, EEXIST = 17, ENOTDIR = 20, EISDIR = 21, EINVAL = 22, EMFILE = 24,
        EXDEV = 18, ENOSPC = 28, EROFS = 30, EPIPE = 32, ENAMETOOLONG = 36, ENOSYS = 38, ENOTEMPTY = 39, ELOOP = 40 };
 
@@ -184,6 +204,9 @@ typedef struct {
                                         limit; nobody may give a child more than its own */
 #define SPAWN_BACKGROUND 64          /* background work: its threads prefer E-cores (SYS_PLACE);
                                         without it, a child is background if its parent is */
+#define SPAWN_PGROUP 128             /* the child leads a new process group (its pid), which its
+                                        own children join: a shell's job, for SYS_KILL -pid
+                                        (Ctrl-C). Without it, a child is in its parent's group */
 
 /* Thread states (and a process's: its most active thread's). */
 enum { TS_FREE, TS_READY, TS_RUN, TS_SEND, TS_RECV, TS_REPLY, TS_LOOKUP, TS_DEAD,

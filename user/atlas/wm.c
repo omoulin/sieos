@@ -142,7 +142,7 @@ static void damage(const wwin_t *v)                   /* redraw what a window co
 
 /* ---- The stacking order. */
 static void z_remove(int w) { for (int i = 0; i < nz; i++) if (z[i] == w) { memmove(z + i, z + i + 1, (nz - i - 1) * sizeof *z); nz--; i--; } }
-static void raise(int w) { z_remove(w); z[nz++] = w; }
+static void lift(int w) { z_remove(w); z[nz++] = w; }
 static int shown(int w) { return w >= 0 && w < WM_MAX && ww[w].known && !ww[w].min && ww[w].ws == cws && wm_state(w); }
 
 /* A new window: down and to the right of the front one (its tab stays in
@@ -176,7 +176,7 @@ void wm_show(int w)                      /* on the screen and in front (its work
     if (!v->known) place(w);
     if (v->ws != cws) wm_switch(v->ws);
     v->min = 0;
-    raise(w);
+    lift(w);
 }
 void wm_min(int w)
 {

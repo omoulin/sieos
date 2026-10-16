@@ -67,7 +67,8 @@ static inline void *dma_alloc(size_t size, uint64_t *pa) { return (void *)SYS(SY
 static inline long dma_free(void *va, size_t size)      { return SYS(SYS_DMA_FREE, va, size); }
 static inline long sys_spawn(const void *elf, size_t len, const char *args, int uid, int gid, const mk_spawn_t *o)
 { return syscall6(SYS_SPAWN, (long)elf, len, (long)args, uid, gid, (long)o); }
-static inline long sys_kill(int pid)                    { return SYS(SYS_KILL, pid, 0); }
+static inline long sys_kill(int pid)                    { return SYS(SYS_KILL, pid, SIGKILL); }
+static inline long kill(int pid, int sig)               { return SYS(SYS_KILL, pid, sig); }   /* pid < 0: group -pid */
 static inline long sys_modules(char *buf, size_t size)  { return SYS(SYS_MODULES, buf, size); }
 static inline long sys_want(const char *name, long err) { return SYS(SYS_WANT, name, err); }
 static inline long sys_wanted(char *buf, size_t size)   { return SYS(SYS_WANTED, buf, size); }
@@ -146,17 +147,33 @@ long maystop_answer(const msg_t *m, uint64_t count, uint64_t *seen, int busy);
 long con_write(const void *buf, size_t n);
 long con_read(void *buf, size_t n);
 long con_echo(int on);
+long con_call(msg_t *m);               /* any request to the terminal -> its w[0] */
+static inline long con_fg(int pgid)    /* CON_FG: the job that runs (Ctrl-C goes to its group) */
+{ msg_t m = { .w = { CON_FG, (uint64_t)pgid } }; return con_call(&m); }
 int  printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void *malloc(size_t n);
 void *realloc(void *p, size_t n);
 void  free(void *p);
 long thread_start(void (*fn)(void *), void *arg, size_t stack);   /* -> thread id */
 
-/* tty.c: typed lines, for servers that are terminals (con, atlas). */
+/* sig.c: signals (mk/abi.h). signal(): SIG_DFL, SIG_IGN, or a function, which
+ * the calling thread runs when the signal comes (any thread may be the one,
+ * the last to set a function; its call that waited returns -EINTR first).
+ * The function must return (not jump out): further signals wait until then.
+ * -> the previous one, SIG_ERR if sig cannot be caught (SIGKILL). */
+typedef void (*sighandler_t)(int);
+typedef int sig_atomic_t;
+#define SIG_ERR ((sighandler_t)-1)
+sighandler_t signal(int sig, sighandler_t fn);
+int  raise(int sig);                   /* the signal to this process */
+
+/* tty.c: typed lines, for servers that are terminals (con, atlas, sshd). */
 typedef struct tty {
     char line[256], done[256];         /* the line being typed; a complete one, not yet read */
     int len, dlen, echo;               /* dlen -1: no complete line */
+    int fg;                            /* the foreground job's process group (CON_FG), 0: none */
     long reader;                       /* the client waiting in CON_READ */
+    int rpid;                          /* ... its process */
     size_t want;                       /* ... and how much it can take */
     unsigned lines;                    /* lines completed so far */
     void (*out)(struct tty *, const char *, size_t);   /* shows echoed characters */
@@ -164,10 +181,12 @@ typedef struct tty {
 } tty_t;
 void tty_init(tty_t *t, void (*out)(tty_t *, const char *, size_t), void *ctx);
 void tty_input(tty_t *t, char c);
-long tty_read(tty_t *t, long from, size_t want);   /* 0, or -EBUSY */
+long tty_read(tty_t *t, long from, size_t want, int pid);   /* 0, or -EBUSY */
 void tty_deliver(tty_t *t);
 void tty_key(tty_t *t, int code);                  /* a character or a KEY_... */
 void tty_mode(tty_t *t, int mode);                 /* CON_ECHO: 0, 1 or CON_RAW */
+long tty_fg(tty_t *t, const msg_t *m);             /* CON_FG -> 0 or -error */
+void tty_hangup(tty_t *t);                         /* the terminal goes away: SIGHUP to its job */
 
 /* date.c */
 void date_str(int64_t ns, char *s);    /* ns since 1970 -> "YYYY-MM-DD HH:MM" (17 bytes) */

@@ -159,6 +159,19 @@ void arch_thread_start(task_t *t, uint64_t pc, uint64_t sp, uint64_t arg)
     t->ksp = (uint64_t)(k - 6);          /* rbp, rbx, r12-r15: zero */
 }
 
+/* A signal's function (task.c): pc(arg) on the thread's stack, below the
+ * 128 bytes under rsp that the ABI lets code use without moving rsp (the
+ * "red zone"), aligned as just after a call; flags: interrupts on (and the
+ * direction flag clear, as the ABI wants). It never returns: it ends with
+ * SYS_SIGRETURN, which puts every register back (iretq, not sysretq: rcx
+ * and r11 too). */
+void arch_sig_enter(regs_t *r, uint64_t pc, long arg)
+{
+    r->rsp = ((r->rsp - 128) & ~15UL) - 8;
+    r->rip = pc; r->rdi = arg; r->rflags = 0x202;
+}
+void arch_sig_return(regs_t *r) { r->vec = 1; }   /* (syscall_entry: leave by iretq) */
+
 /* The running thread's TLS pointer: the FS base (an MSR). */
 void arch_set_tls(cpu_t *c, uint64_t base) { wrmsr(0xC0000100, c->a.fs_loaded = base); }
 

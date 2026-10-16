@@ -142,11 +142,12 @@ static void terminal(void *arg)
         case CON_READ:
             lock(c);
             if (c->eof && !c->inlen && !c->tty.len && c->tty.dlen < 0) reply_val(from, c->eof++ > 1 ? -EIO : 0);   /* the end, then: gone */
-            else if (tty_read(&c->tty, from, m.w[1]) < 0) reply_val(from, -EBUSY);
+            else if (tty_read(&c->tty, from, m.w[1], m.pid) < 0) reply_val(from, -EBUSY);
             else feed(c);
             unlock(c);
             break;
         case CON_ECHO: lock(c); tty_mode(&c->tty, (int)m.w[1]); unlock(c); reply_val(from, 0); break;
+        case CON_FG: lock(c); reply_val(from, tty_fg(&c->tty, &m)); unlock(c); break;
         default: reply_val(from, -ENOSYS);
         }
     }
@@ -334,6 +335,15 @@ static void serve(conn_t *c)
             d = ssh_str(&r, &n);
             want = ssh_u8(&r);
             if (n == 7 && !memcmp(d, "pty-req", 7)) ok = c->pty = 1;
+            else if (n == 6 && !memcmp(d, "signal", 6)) {   /* (RFC 4254 6.9: "INT", "TERM"...) */
+                static const char *names[NSIG] = { [SIGHUP] = "HUP", [SIGINT] = "INT", [SIGKILL] = "KILL", [SIGTERM] = "TERM" };
+                const uint8_t *x = ssh_str(&r, &n);
+                int sig = 0;
+                for (int k = 1; k < NSIG; k++) if (names[k] && strlen(names[k]) == n && !memcmp(x, names[k], n)) sig = k;
+                lock(c);                          /* to the terminal's group: the job running, or the session */
+                if (sig && !r.bad && (c->tty.fg || c->pid)) ok = kill(-(c->tty.fg ? c->tty.fg : c->pid), sig) == 0;
+                unlock(c);
+            }
             else if ((n == 5 && !memcmp(d, "shell", 5)) || (n == 4 && !memcmp(d, "exec", 4))) {
                 char cmd[512] = "";
                 int bad = 0;
@@ -352,6 +362,9 @@ static void serve(conn_t *c)
             d = ssh_str(&r, &n);
             lwin -= n < lwin ? n : lwin;
             lock(c);
+            uint32_t k = n;                       /* Ctrl-C: at once, what was typed ahead dropped */
+            while (k && d[k - 1] != 3) k--;
+            if (k && c->tty.echo != CON_RAW) { c->inlen = 0; tty_input(&c->tty, 3); d += k; n -= k; }
             if (n > sizeof c->in - c->inlen) n = (uint32_t)(sizeof c->in - c->inlen);   /* (more: lost) */
             memcpy(c->in + c->inlen, d, n);
             c->inlen += n;
@@ -402,7 +415,7 @@ static void slot_main(void *arg)
         c->pid = 0;
         c->closed = 1;                            /* (a terminal write waiting for room gives up) */
         unlock(c);
-        if (pid) { int st; sys_kill(pid); sys_wait(pid, &st, 0); }   /* the session ends with its connection */
+        if (pid) { int st; tty_hangup(&c->tty); kill(pid, SIGHUP); sys_kill(pid); sys_wait(pid, &st, 0); }   /* the session ends with its connection */
         net_close(c->sock);
         wipe(c->pw, sizeof c->pw);
         wipe(c->s, sizeof *c->s);

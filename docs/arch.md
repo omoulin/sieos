@@ -54,12 +54,12 @@ same C for every processor.
 | Boot | its boot code fills `boot_info_t` (RAM ranges, boot-loader data to free later, reserved ranges, kernel image, already-mapped RAM, boot modules, the kernel's command line) and calls `kernel_main` |
 | Memory layout | `P2V`/`V2P` (direct map), `USER_TOP`, `STACK_TOP`, `MMIO_BASE`, `PAGE` |
 | Page tables | `vm_new`, `vm_map` (flags `VM_W VM_U VM_NX VM_UC VM_DEV VM_DMA`), `arch_vm_unmap`, `arch_vm_free` (each leaf to the core, which frees or quarantines), `arch_uaddr`, `arch_mem_init` (map all RAM, switch to `kernel_as`), `kmap`, `arch_as_load`, `tlb_shootdown`/`tlb_ack` (every other CPU forgets the pages and is done copying to or from them; also how a process's end reaches every CPU) |
-| Threads | `regs_t` + `SC_NR/SC_ARGn/SC_RET`, `switch_to`, `arch_thread_start`, `arch_set_kstack`, `arch_set_tls`/`arch_tls_switch` |
+| Threads | `regs_t` + `SC_NR/SC_ARGn/SC_RET`, `switch_to`, `arch_thread_start`, `arch_set_kstack`, `arch_set_tls`/`arch_tls_switch`; signals: `arch_sig_enter` (call a function on the thread's stack), `arch_sig_return` (leave with every register: x86-64's `iretq`) |
 | Traps | the architecture's handler decodes the event and calls core functions: `irq_raise`, `core_tick`, `proc_exit` (faults), `syscall`, `fpu_first_use`, `kernel_exit` on the way out |
 | Interrupt controller | `irq_route`, `irq_set_level`, `irq_mask`, `irq_unmask`, `arch_kick` (wake/reschedule another CPU), `halt_others` |
 | Time | `ticks()` (fast counter), `ns_to_ticks`, `now_ns`, `arch_timer_set` (one-shot deadline; `NEVER` = off) |
 | CPUs | `cpu_init` (cpus[0]), `smp_init`, `smp_start`, `this_cpu()`, `arch_cpu_t` first in `cpu_t`; `cpu_setup` sets each CPU's kind (`CPU_P`, `CPU_E`: x86-64 CPUID leaves 7 and 0x1A, AArch64 MIDR_EL1) |
-| Floating point | `fpu_first_use`, `fpu_switch`, `fpu_free` |
+| Floating point | `fpu_first_use`, `fpu_switch`, `fpu_free`; `fpu_detach`/`fpu_attach` (a signal's function starts with fresh registers, then the thread gets its own back) |
 | Platform | `arch_putc` (log), `arch_power`, `arch_hw_random_init`/`arch_hw_random`, `arch_phys_forbidden`, `arch_phys_screen`, `arch_dma_clean`, `arch_fdt`, `arch_screen` (the frame buffer a UEFI loader left, `SYS_SCREEN`; x86-64) |
 | Processor features | `arch_hwcap`: what programs may use, in `SYS_INFO`'s `hwcap` (`HWCAP_AVX2`, `HWCAP_FMA`, `HWCAP_AVXVNNI` on x86-64; `HWCAP_DOTPROD`, `HWCAP_LSE` on AArch64, from `ID_AA64ISAR0_EL1`, which programs cannot read) |
 | Spinning, idle | `arch_relax`, `arch_wait_irq`, `arch_irq_window` (idle polling), `arch_halt_forever`, `arch_lock_wait` (answers shootdowns while spinning); optionally `smp_mb`/`store_mb` (x86-64: a locked instruction, `xchg`) |

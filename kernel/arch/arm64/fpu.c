@@ -46,6 +46,24 @@ int fpu_first_use(task_t *t)
     return 1;
 }
 
+/* A signal's function (task.c): the running thread's registers are saved
+ * and its area handed over; the function starts with none (EL0 traps:
+ * its first use gets a clean area). And back: its own area again, loaded
+ * at its next use. */
+void *fpu_detach(cpu_t *c, task_t *t)
+{
+    void *a = t->fpu;
+    if (c->a.fpen) { if (a) fpu_save(a); fpen(c, 0); }
+    t->fpu = 0;
+    return a;
+}
+void fpu_attach(cpu_t *c, task_t *t, void *a)
+{
+    if (c->a.fpen) fpen(c, 0);
+    fpu_free(t);
+    t->fpu = a;
+}
+
 /* A CPU leaves prev (may be 0: idle, or a thread that just ended) for next. */
 void fpu_switch(cpu_t *c, task_t *prev, task_t *next)
 {

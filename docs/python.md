@@ -91,6 +91,14 @@ program's command line (with its folder) has room for 256 bytes.
 - **The console:** output is buffered until a newline (or before reading
   and sleeping); input comes a typed line at a time from the terminal
   (`tty.c` does the editing), so the prompt has no history or completion.
+- **Ctrl-C:** the terminal sends SIGINT to the job ([kernel.md](kernel.md#signals-ctrl-c));
+  the interpreter's thread catches it and schedules a `KeyboardInterrupt`
+  (`MICROPY_KBD_EXCEPTION`), which the interpreter raises at its next
+  check: `while True: pass` stops at once. A wait it interrupts returns
+  `-EINTR` and raises it there: `time.sleep`, `input()`, a socket. At the
+  prompt it says `KeyboardInterrupt` and gives a new one; `try: ...
+  except KeyboardInterrupt:` cleans up; uncaught, a script ends with its
+  traceback (status 1).
 - **Floats as text:** MicroPython's own conversion is exact only where
   `long double` is wider than `double`, which it is not on SIEOS's AArch64
   (sicc: 64 bits); `formatfloat.c` uses SIEOS's exact one on both, and
@@ -103,8 +111,8 @@ certificate code included. A script starts with about 2 MiB of memory
 
 ## What is missing
 
-- Ctrl-C does not interrupt a running script (the terminal sends no
-  signal): close the window or `kill` it.
+- No `signal` module: Python code cannot catch other signals (SIGTERM
+  ends python, as any program without a function for it).
 - No `os.path`, `os.environ`, `subprocess`, `threading`/`_thread`,
   `select`, `zlib`/`deflate`, `datetime`, `cmath`, `binascii.crc32`; no
   `-m module`. No `.mpy` precompiled modules, no frozen modules.
@@ -127,3 +135,5 @@ and exit status; `sys.exit(3)`; the prompt with a function and a loop
 typed on several lines, an exception, `input()`, Ctrl-D; HTTP from a
 server on the host, TLS 1.3 to `openssl s_server`, and a listening socket
 the host connects to (`net.py`). 19 checks, on both architectures.
+Ctrl-C (a loop, `time.sleep`, `input()`, the prompt, `try`/`except`,
+`python -c`) is in `make sig-test`.

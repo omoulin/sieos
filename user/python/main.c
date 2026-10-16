@@ -11,6 +11,11 @@
  * when it is full. Here also: the console (output buffered until a newline,
  * input a typed line at a time), clocks, and reading .py files for import.
  *
+ * Ctrl-C: SIGINT, caught by the interpreter's thread, schedules a
+ * KeyboardInterrupt, which the interpreter raises at its next check (a
+ * loop's jump, a call). A wait it interrupts (a typed line, a sleep, the
+ * network) returns -EINTR at once and raises it there.
+ *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "py/builtin.h"
@@ -53,25 +58,29 @@ void mp_hal_stdout_tx_str(const char *s) { mp_hal_stdout_tx_strn(s, strlen(s)); 
 uintptr_t mp_hal_stdio_poll(uintptr_t flags) { (void)flags; return 0; }
 
 /* A character typed: lines come whole from the terminal; at its end
- * (Ctrl-D on an empty line, or a closed window) CHAR_CTRL_D. */
+ * (Ctrl-D on an empty line, or a closed window) CHAR_CTRL_D; Ctrl-C while
+ * waiting for a line: CHAR_CTRL_C (KeyboardInterrupt, raised by the caller). */
 int mp_hal_stdin_rx_chr(void)
 {
     if (ipos == ilen) {
         sieos_flush();
         long n = con_read(ibuf, sizeof ibuf);
+        if (n == -EINTR) { MP_STATE_MAIN_THREAD(mp_pending_exception) = MP_OBJ_NULL; return CHAR_CTRL_C; }
         if (n <= 0) return CHAR_CTRL_D;
         ipos = 0, ilen = (size_t)n;
     }
     return (unsigned char)ibuf[ipos++];
 }
 
-/* A line for input() and the prompt, without its newline -> 0, or CHAR_CTRL_D at the end. */
+/* A line for input() and the prompt, without its newline -> 0, CHAR_CTRL_D
+ * at the end, CHAR_CTRL_C for Ctrl-C. */
 int sieos_readline(vstr_t *line, const char *prompt)
 {
     mp_hal_stdout_tx_str(prompt);
     sieos_flush();
     for (;;) {
         int c = mp_hal_stdin_rx_chr();
+        if (c == CHAR_CTRL_C) return c;
         if (c == CHAR_CTRL_D) return line->len ? 0 : CHAR_CTRL_D;
         if (c == '\n') return 0;
         vstr_add_byte(line, (byte)c);
@@ -82,8 +91,10 @@ int sieos_readline(vstr_t *line, const char *prompt)
 mp_uint_t mp_hal_ticks_ms(void)  { return (mp_uint_t)(sys_clock() / 1000000); }
 mp_uint_t mp_hal_ticks_us(void)  { return (mp_uint_t)(sys_clock() / 1000); }
 mp_uint_t mp_hal_ticks_cpu(void) { return (mp_uint_t)sys_clock(); }
-void mp_hal_delay_ms(mp_uint_t ms) { sieos_flush(); sys_sleep((uint64_t)ms * 1000000); }
-void mp_hal_delay_us(mp_uint_t us) { sieos_flush(); sys_sleep((uint64_t)us * 1000); }
+/* (a sleep Ctrl-C ends: -EINTR, its KeyboardInterrupt raised now) */
+static void delay_ns(uint64_t ns) { sieos_flush(); if (sys_sleep(ns) < 0) mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS); }
+void mp_hal_delay_ms(mp_uint_t ms) { delay_ns((uint64_t)ms * 1000000); }
+void mp_hal_delay_us(mp_uint_t us) { delay_ns((uint64_t)us * 1000); }
 
 /* The date: SIEOS keeps it in the network server (from the clock chip),
  * asked once; then the time since boot is added. */
@@ -190,12 +201,14 @@ static int repl(void)
     for (;;) {
         vstr_t line;
         vstr_init(&line, 64);
-        if (sieos_readline(&line, mp_repl_get_ps1()) == CHAR_CTRL_D) { mp_hal_stdout_tx_str("\n"); return 0; }
-        while (mp_repl_continue_with_input(vstr_null_terminated_str(&line))) {
+        int c = sieos_readline(&line, mp_repl_get_ps1());
+        if (c == CHAR_CTRL_D) { mp_hal_stdout_tx_str("\n"); return 0; }
+        while (c != CHAR_CTRL_C && mp_repl_continue_with_input(vstr_null_terminated_str(&line))) {
             vstr_add_byte(&line, '\n');
             size_t at = line.len;
-            if (sieos_readline(&line, mp_repl_get_ps2()) == CHAR_CTRL_D || line.len == at) break;
+            if ((c = sieos_readline(&line, mp_repl_get_ps2())) == CHAR_CTRL_D || line.len == at) break;
         }
+        if (c == CHAR_CTRL_C) { mp_hal_stdout_tx_str("KeyboardInterrupt\n"); vstr_clear(&line); continue; }
         int r = execute(vstr_null_terminated_str(&line), 0, MP_PARSE_SINGLE_INPUT);
         vstr_clear(&line);
         if (r & EXITED) return r & 255;
@@ -204,6 +217,8 @@ static int repl(void)
 
 static int ac;
 static char **av;
+
+static void on_sigint(int sig) { (void)sig; mp_sched_keyboard_interrupt(); }
 
 static void python(void *arg)
 {
@@ -215,6 +230,7 @@ static void python(void *arg)
     gc_init(heap, heap + HEAP);
     mp_pystack_init(pystack, pystack + PYSTACK);
     mp_init();
+    signal(SIGINT, on_sigint);              /* (this thread takes it: its waits end at once) */
 
     const char *a1 = ac > 1 ? av[1] : "";
     int c = !strcmp(a1, "-c"), r;

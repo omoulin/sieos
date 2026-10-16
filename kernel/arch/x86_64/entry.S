@@ -11,8 +11,9 @@
  * the two with SWAPGS, and exchange them back on the way out.
  *
  * The way out: kernel_exit() (task.c), just before the registers are
- * restored (a thread of an ending process ends there; the CPU's timer is
- * set). trap() returns 0 when it is not needed: NMIs.
+ * restored (a thread of an ending process ends there; a signal's function
+ * is called; the CPU's timer is set). trap() returns 0 when it is not
+ * needed: NMIs.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -52,11 +53,12 @@ isr_common:
     mov  %rsp, %rdi                     /* trap(regs_t *) */
     call trap
     test %eax, %eax                     /* leave through kernel_exit? */
-    jz   3f
+    jz   iret_out
     .global trap_return
 trap_return:                            /* new threads also start here (task.c) */
     call kernel_exit
-3:  POPALL
+iret_out:                               /* (also syscall_entry's, after SYS_SIGRETURN) */
+    POPALL
     add  $16, %rsp                      /* vector and error code */
     testb $3, 8(%rsp)                   /* going back to user mode? */
     jz   2f
@@ -84,6 +86,8 @@ syscall_entry:
     mov  %rsp, %rdi                     /* syscall(regs_t *) */
     call syscall
     call kernel_exit
+    cmpq $0, 120(%rsp)                  /* the vector, 1 after SYS_SIGRETURN: every register as */
+    jne  iret_out                       /* it was, rcx and r11 too, so leave as an interrupt does */
     POPALL
     add  $16, %rsp
     pop  %rcx                           /* rip, for SYSRET */

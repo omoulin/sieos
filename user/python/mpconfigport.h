@@ -35,7 +35,7 @@
 #define MICROPY_HELPER_REPL               (1)
 #define MICROPY_REPL_AUTO_INDENT          (0)     /* (lines come typed whole, from the terminal) */
 #define MICROPY_REPL_EMACS_KEYS           (0)
-#define MICROPY_KBD_EXCEPTION             (0)
+#define MICROPY_KBD_EXCEPTION             (1)     /* (Ctrl-C: SIGINT -> KeyboardInterrupt, main.c) */
 #define MICROPY_ENABLE_SCHEDULER          (0)
 
 /* sys */

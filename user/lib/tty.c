@@ -8,6 +8,11 @@
  * waits in `done` for the next CON_READ. Ctrl-C drops the line, Ctrl-D
  * sends what is there (nothing: end of input).
  *
+ * Ctrl-C while a job runs (the shell said which: CON_FG) also sends
+ * SIGINT to the job's process group: the program ends, or its handler runs
+ * (its waiting CON_READ is interrupted: the empty line it is then given
+ * goes nowhere). When the terminal goes away, its job gets SIGHUP.
+ *
  * Raw mode (CON_ECHO with CON_RAW: ssh's interactive sessions): no editing,
  * no echo; each key goes to the reader as it comes, as a terminal sends
  * it (Enter is CR, Backspace DEL, arrows ESC [ A..D), for the program on
@@ -58,7 +63,15 @@ void tty_input(tty_t *t, char c)
     if (c == '\r') c = '\n';
     if (c == 0x7F) c = '\b';                  /* a serial terminal's backspace */
     if (c == '\b') { if (t->len) { t->len--; if (t->echo) t->out(t, "\b \b", 3); } return; }
-    if (c == 3)  { t->out(t, "^C\n", 3); t->len = 0; t->line[t->len++] = '\n'; finish(t); return; }
+    if (c == 3) {
+        t->out(t, "^C\n", 3);
+        t->len = 0;
+        if (t->fg) kill(-t->fg, SIGINT);
+        if (t->fg && !t->reader) return;          /* (no empty line left for the shell's next read) */
+        t->line[t->len++] = '\n';
+        finish(t);
+        return;
+    }
     if (c == 4)  { finish(t); return; }
     if (t->len >= (int)sizeof t->line - 1 && c != '\n') return;
     t->line[t->len++] = c;
@@ -66,12 +79,16 @@ void tty_input(tty_t *t, char c)
     if (c == '\n') finish(t);
 }
 
-/* A CON_READ from `from`: answered now if a line is ready, else later.
- * Returns -EBUSY if another program is already waiting. */
-long tty_read(tty_t *t, long from, size_t want)
+/* A CON_READ from `from` (process pid): answered now if a line is ready,
+ * else later. Returns -EBUSY if another program is already waiting. The
+ * same one again: its first read was interrupted (a signal), and its
+ * answer would go nowhere: this one takes its place. */
+long tty_read(tty_t *t, long from, size_t want, int pid)
 {
-    if (t->reader) return -EBUSY;
+    if (t->reader && pid != t->rpid) return -EBUSY;
+    if (t->reader) reply_val(t->reader, -EBUSY);
     t->reader = from;
+    t->rpid = pid;
     t->want = want;
     if (t->echo == CON_RAW && t->len && t->dlen < 0) finish(t);
     tty_deliver(t);
@@ -87,6 +104,25 @@ void tty_key(tty_t *t, int code)
     else if (t->echo == CON_RAW && code >= KEY_UP && code <= KEY_END && seq[code - KEY_UP]) {
         tty_input(t, 27); tty_input(t, '['); tty_input(t, seq[code - KEY_UP]);
     }
+}
+
+/* CON_FG from a client (m): its job's process group (0: none). The group
+ * must be the client's own: its leader runs as the client's user, unless
+ * the client is root. */
+long tty_fg(tty_t *t, const msg_t *m)
+{
+    int g = (int)m->w[1];
+    mk_ident_t id;
+    if (g < 0) return -EINVAL;
+    if (g && m->uid && (sys_ident(g, &id) || id.uid != m->uid)) return -EPERM;
+    t->fg = g;
+    return 0;
+}
+
+void tty_hangup(tty_t *t)
+{
+    if (t->fg) kill(-t->fg, SIGHUP);
+    t->fg = 0;
 }
 
 /* CON_ECHO: show, hide (passwords) or raw. Leaving raw mode answers a
