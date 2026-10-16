@@ -1,26 +1,32 @@
 /*
- * aml.c - A small reader of the firmware's ACPI tables: just enough AML to
- * find the I2C HID devices (touchpads, "PNP0C50") and what reaching them
- * takes: address, speed, controller, interrupt pin, HID descriptor register.
+ * aml.c - A small interpreter of the firmware's ACPI tables, for the drivers
+ * that need them: the touchpad (user/i2chid: address, speed, controller,
+ * interrupt pin, HID descriptor register) and the ACPI server (user/acpid:
+ * sleep types, _PTS/_WAK, the embedded controller's queries, battery, AC,
+ * lid, buttons).
  *
  * The DSDT and SSDTs hold byte code ("AML"): a tree of named objects
- * (scopes, devices, names, methods, fields of memory). Laptops rarely
- * write a touchpad's resources as constants: Intel's reference firmware
- * (Lenovo's included) picks the model, its address and the controller in
- * methods (_INI, _CRS, _DSM) from values in memory the firmware filled in.
- * So this is a small interpreter rather than a pattern matcher:
+ * (scopes, devices, names, methods, fields of regions). Firmware rarely
+ * writes what we need as constants: Intel's reference code (Lenovo's
+ * included) computes it in methods from values in memory, and batteries
+ * are read through the embedded controller. So this is an interpreter:
  *   load:  every table is walked once; named objects go in a flat table
  *          (parent, 4-letter name; a hash finds children), statements in
  *          scopes are skipped (parsed without effects: "dry");
- *   run:   for each device whose _HID/_CID says PNP0C50 and whose _STA says
- *          present: its controller's _INI, its own statements and _INI,
- *          then _CRS (I2cSerialBus, GpioInt) and _DSM (descriptor register).
- * What it runs: integers, strings, buffers, packages; names, locals, args;
- * method calls; If/Else/While/Break/Return; arithmetic, logic, Index,
- * DerefOf, SizeOf, buffer fields, ConcatenateResTemplate; fields in memory
- * regions (read through aml_mem32; writes are kept here, never done to
- * memory). Anything else stops that evaluation, with a line in the log.
- * We answer _OSI like Windows, as Linux does: OSYS starts at Windows 2015.
+ *   run:   a method or object on demand (aml_eval), the I2C HID devices
+ *          (aml_hid), the devices of a kind (aml_devs).
+ * What it runs: integers, strings, buffers, packages (stored as arrays:
+ * their elements can be changed); names, locals, args; method calls;
+ * If/Else/While/Break/Return; arithmetic, logic, Index, DerefOf, SizeOf,
+ * Divide, Concatenate, ToString, ToBuffer, Mid, buffer fields,
+ * ConcatenateResTemplate, Notify (to aml_notify), Acquire/Release, Sleep,
+ * events; fields of regions in memory, I/O ports and the embedded
+ * controller (read and written through aml_io, in the access widths the
+ * fields ask for). Anything else stops that evaluation, with a line in
+ * the log. We answer _OSI like Windows, as Linux does: OSYS starts at
+ * Windows 2015.
+ * Memory: what an evaluation makes lives in an arena, emptied when the next
+ * one starts; values stored in the tables' own names are copied out of it.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -28,30 +34,55 @@
 
 enum { N_SCOPE, N_DEV, N_METHOD, N_NAME, N_REGION, N_FIELD, N_BFIELD, N_ALIAS, N_EXT, N_OTHER };
 enum { V_INT, V_STR, V_BUF, V_PKG, V_NONE };
-/* A value. A string or buffer: b, n bytes; a package: its elements' AML
- * from b to e, n of them, names in it seen from node i. */
-typedef struct { uint8_t t; uint32_t n; int64_t i; uint8_t *b; const uint8_t *e; } val_t;
+/* A value. A string or buffer: b, n bytes (and a 0 after them); a package:
+ * n elements (val_t) at b; a buffer field: its buffer, i = offset << 8 | bits. */
+typedef struct { uint8_t t; uint32_t n; int64_t i; uint8_t *b; } val_t;
 typedef struct {
     uint32_t seg; int up, next, val;        /* name, parent, hash chain, its value (vals[], -1: not yet) */
-    uint8_t kind, argc, space;              /* a method's arguments; a region's space (0: memory) */
+    uint8_t kind, argc, space;              /* a method's arguments, a field's access type; a region's space */
     union { const uint8_t *p; int reg; };   /* its AML (method body, data, definition); a field: its region */
     union { const uint8_t *e; struct { uint32_t off, bits; }; };   /* a method's end; a field's bits */
 } node_t;
 typedef struct { int scope, ret, brk; val_t a[7], l[8], rv; } frame_t;
 typedef struct { int root, ups, n; uint32_t s[8]; } name_t;
 
+void (*aml_notify)(int dev, int64_t value);
 static node_t *nd;
-static int nn, ncap, hh[4096];
+static int nn, ncap, hh[4096], nn0 = 1 << 30;   /* nodes below nn0 outlive the evaluation */
 static val_t *vals;
 static int nv, vcap;
 static int err, dry, depth;
 static const uint8_t *base, *cur;           /* the tables (offsets in the log are from here); the term being evaluated */
+static uint8_t arena[32768] __attribute__((aligned(16)));
+static uint32_t used;
 
 static void fail(const char *why, const uint8_t *at)
 {
     if (!err && !dry) log_line("aml: %s at 0x%lx\n", why, (long)((at ? at : cur) - base));
     err = 1;
 }
+
+/* ---- Memory: the arena (an evaluation's values), malloc for kept ones. */
+static void *alloc(uint32_t n)
+{
+    n = (n + 15) & ~15u;
+    if (used + n <= sizeof arena) { used += n; return arena + used - n; }
+    void *p = malloc(n);                    /* (an evaluation that big: rare; kept) */
+    if (!p) abort();
+    return p;
+}
+static int temp(const void *p) { return (const uint8_t *)p >= arena && (const uint8_t *)p < arena + sizeof arena; }
+static void keep(val_t *v)                  /* a value stored in a name of the tables: out of the arena */
+{
+    if (!temp(v->b)) return;
+    uint32_t n = v->t == V_PKG ? v->n * sizeof(val_t) : v->n + 1;
+    uint8_t *b = malloc(n ? n : 1);
+    if (!b) abort();
+    memcpy(b, v->b, n);
+    v->b = b;
+    if (v->t == V_PKG) for (uint32_t i = 0; i < v->n; i++) keep((val_t *)b + i);
+}
+static void top(void) { used = 0; nn0 = nn; err = 0; }    /* a new evaluation */
 
 /* ---- The names. */
 static unsigned hash(int up, uint32_t seg) { return (seg * 2654435761u ^ (unsigned)up * 40503u) >> 20; }
@@ -75,7 +106,11 @@ static int add(int up, uint32_t seg, int kind)
 }
 static void pop(int mark)                           /* a method's own names, at its end */
 {
-    for (; nn > mark; nn--) hh[hash(nd[nn - 1].up, nd[nn - 1].seg)] = nd[nn - 1].next;
+    for (; nn > mark; nn--) {
+        node_t *x = &nd[nn - 1];
+        hh[hash(x->up, x->seg)] = x->next;
+        if (x->val >= 0 && x->val == nv - 1) nv--;
+    }
 }
 static int isname(uint8_t c) { return c == '\\' || c == '^' || c == '_' || (c >= 'A' && c <= 'Z') || c == 0x2E || c == 0x2F; }
 static const uint8_t *getname(const uint8_t *p, name_t *m)
@@ -141,14 +176,20 @@ static int64_t num(const val_t *v)
     }
     return x;
 }
-static void mkbuf(val_t *o, uint32_t n, const void *a, uint32_t an, const void *b, uint32_t bn)
+static void mkbuf(val_t *o, int t, uint32_t n, const void *a, uint32_t an, const void *b, uint32_t bn)
 {
-    *o = (val_t){ .t = V_BUF, .n = n };
+    *o = (val_t){ .t = (uint8_t)t, .n = n };
     if (dry) return;
-    if (!(o->b = malloc(n + 1))) abort();               /* (never freed: a few evaluations at start) */
+    o->b = alloc(n + 1);
     memset(o->b, 0, n + 1);
     memcpy(o->b, a, an < n ? an : n);
     if (bn && an < n) memcpy(o->b + an, b, bn < n - an ? bn : n - an);
+}
+static void bytes(const val_t *v, val_t *o)         /* as a buffer (an integer: its 8 bytes) */
+{
+    if (v->t == V_BUF || v->t == V_STR) { *o = *v; o->t = V_BUF; return; }
+    int64_t x = num(v);
+    mkbuf(o, V_BUF, 8, &x, 8, 0, 0);
 }
 static int cmp(const val_t *a, const val_t *b)
 {
@@ -206,15 +247,62 @@ static int bfield(int k, frame_t *f)
     return 0;
 }
 
-/* A field of a memory region, up to 64 bits (as dwords: device registers want them). */
-static uint64_t memfield(uint64_t a, int64_t off, int bits)
+static void get(int k, val_t *o);
+static uint32_t sg(const char *s) { uint32_t x; memcpy(&x, s, 4); return x; }
+/* The PCI address (bus << 16 | device << 11 | function << 8) of the device
+ * holding node k: its _ADR; its bus: the secondary bus of the bridge it is
+ * behind (a device with _ADR and no _HID), else the host bridge's _BBN. */
+static int64_t pciaddr(int k)
 {
-    if (bits > 32) return memfield(a, off, 32) | memfield(a, off + 32, bits - 32) << 32;
-    a += off / 8;
-    int sh = (int)(a & 3) * 8 + (int)(off % 8);
-    uint64_t v = aml_mem32(a & ~3ULL);
-    if (sh + bits > 32) v |= (uint64_t)aml_mem32((a & ~3ULL) + 4) << 32;
-    return v >> sh & ((1ULL << bits) - 1);
+    int a, up, b;
+    val_t v, u = { .t = V_INT };
+    uint64_t x = 0;
+    for (; k > 0 && nd[k].kind != N_DEV; k = nd[k].up) ;
+    if (k <= 0 || (a = child(k, sg("_ADR"))) < 0 || depth > 16) return -1;
+    get(a, &v);
+    for (up = nd[k].up; up > 0 && nd[up].kind != N_DEV; up = nd[up].up) ;
+    if (up > 0 && child(up, sg("_HID")) < 0 && child(up, sg("_ADR")) >= 0) {
+        depth++;
+        int64_t p = pciaddr(up);
+        depth--;
+        if (p < 0 || aml_io(2, (uint64_t)p | 0x18, 4, &x, 0)) return -1;
+        u.i = (int64_t)(x >> 8 & 0xFF);
+    } else if (up > 0 && (b = child(up, sg("_BBN"))) >= 0) get(b, &u);
+    return err ? -1 : num(&u) << 16 | (num(&v) >> 16 & 31) << 11 | (num(&v) & 7) << 8;
+}
+
+/* A field of a region: its bits to or from b, in units of the field's
+ * access width (read-modify-write for a unit it covers in part) -> 0. */
+static int fieldio(int k, uint8_t *b, int write)
+{
+    node_t *n = &nd[k];
+    int r = n->reg, sp = nd[r].space, t = n->argc & 15, w = t >= 1 && t <= 4 ? 1 << (t - 1) : 1;
+    if (nd[r].val < 0) {                                /* the region's address, once */
+        frame_t f = { .scope = nd[r].up };
+        val_t v;
+        ev(nd[r].p, &f, &v);
+        if (err) return -1;
+        setval(r, &v);
+    }
+    uint64_t a = (uint64_t)num(&vals[nd[r].val]);
+    int64_t pci = sp == 2 ? pciaddr(nd[r].up) : 0;      /* PCI: the device's configuration (256 bytes through 0xCF8) */
+    if (pci < 0) return -1;
+    if (sp == 3) w = 1;                                 /* the embedded controller: bytes */
+    else if (!t) {                         /* AnyAcc: the smallest unit holding it all */
+        for (w = 1; w < 8 && n->off % (8 * w) + n->bits > 8u * w; w *= 2) ;
+        if (n->off % (8 * w) + n->bits > 8u * w) w = sp ? 1 : 4;
+    }
+    for (uint32_t done = 0; done < n->bits; ) {
+        uint32_t at = (n->off + done) / 8 / w * w, sh = n->off + done - at * 8, c = n->bits - done;
+        if (c > 8 * w - sh) c = 8 * w - sh;
+        uint64_t u = 0, m = c < 64 ? (1ULL << c) - 1 : ~0ULL, ua = a + at;
+        if (sp == 2 && (ua + w > 256 || (ua += (uint64_t)pci, 0))) return -1;
+        if ((!write || c < 8u * w) && aml_io(sp, ua, w, &u, 0)) return -1;
+        if (write) { u = (u & ~(m << sh)) | getbits(b, done, (int)c) << sh; if (aml_io(sp, ua, w, &u, 1)) return -1; }
+        else putbits(b, done, (int)c, u >> sh & m);
+        done += c;
+    }
+    return 0;
 }
 
 /* A named object's value (a method: called without arguments). */
@@ -226,16 +314,18 @@ static void get(int k, val_t *o)
     if (n->val >= 0 && n->kind != N_BFIELD && n->kind != N_REGION) { *o = vals[n->val]; return; }
     frame_t f = { .scope = n->up };
     val_t v;
+    uint8_t b[256];
     switch (n->kind) {
-    case N_NAME: ev(n->p, &f, &v); if (!err) setval(k, &v), *o = v; return;
+    case N_NAME: ev(n->p, &f, &v); if (!err) { if (k < nn0) keep(&v); setval(k, &v); *o = v; } return;
     case N_METHOD: call(k, f.a, o); return;
     case N_BFIELD:
         if (!bfield(k, 0)) *o = (val_t){ .t = V_INT, .i = (int64_t)getbits(vals[nd[k].val].b, vals[nd[k].val].i >> 8, vals[nd[k].val].i & 255) };
         return;
     case N_FIELD:
-        if (n->reg < 0 || nd[n->reg].space || n->bits > 64) { fail("field not in memory", 0); return; }
-        if (nd[n->reg].val < 0) { f.scope = nd[n->reg].up; ev(nd[n->reg].p, &f, &v); if (err) return; setval(n->reg, &v); }
-        *o = (val_t){ .t = V_INT, .i = (int64_t)memfield((uint64_t)num(&vals[nd[nd[k].reg].val]), nd[k].off, (int)nd[k].bits) };
+        memset(b, 0, sizeof b);
+        if (n->reg < 0 || n->bits > 8 * sizeof b || fieldio(k, b, 0)) { fail("field not readable", 0); return; }
+        if (n->bits > 64) mkbuf(o, V_BUF, (n->bits + 7) / 8, b, (n->bits + 7) / 8, 0, 0);
+        else *o = (val_t){ .t = V_INT, .i = (int64_t)getbits(b, 0, (int)n->bits) };
         return;
     case N_EXT: fail("external name not defined", 0); return;
     }
@@ -243,34 +333,39 @@ static void get(int k, val_t *o)
 static void put(int k, const val_t *v)
 {
     if (k < 0) { fail("unknown name", 0); return; }
-    if (nd[k].kind == N_NAME) setval(k, v);
-    else if (nd[k].kind == N_FIELD) setval(k, &(val_t){ .t = V_INT, .i = num(v) });   /* ours only: memory is not written */
-    else if (nd[k].kind == N_BFIELD && !bfield(k, 0)) putbits(vals[nd[k].val].b, vals[nd[k].val].i >> 8, vals[nd[k].val].i & 255, (uint64_t)num(v));
+    node_t *n = &nd[k];
+    val_t x = *v, y;
+    if (n->kind == N_NAME) { if (k < nn0) keep(&x); setval(k, &x); }
+    else if (n->kind == N_FIELD && n->bits <= 2048) {
+        uint8_t b[256] = { 0 };
+        bytes(v, &y);
+        memcpy(b, y.b, y.n < sizeof b ? y.n : sizeof b);
+        if (fieldio(k, b, 1) && n->bits <= 64) setval(k, &(val_t){ .t = V_INT, .i = num(v) });   /* not written: ours only */
+    }
+    else if (n->kind == N_BFIELD && !bfield(k, 0)) putbits(vals[n->val].b, vals[n->val].i >> 8, vals[n->val].i & 255, (uint64_t)num(v));
 }
 
-/* A package's element i (names in packages are references, not calls). */
+/* A package's element (names in packages: their values; a method or a
+ * device: nothing, no error). */
 static const uint8_t *element(const uint8_t *p, int scope, val_t *o)
 {
     name_t m;
     if (!isname(*p)) { frame_t f = { .scope = scope }; return ev(p, &f, o); }
     p = getname(p, &m);
-    if (!dry) get(find(scope, &m), o);
+    int k = find(scope, &m);
+    *o = (val_t){ .t = V_NONE };
+    if (!dry && k >= 0 && nd[k].kind != N_METHOD && nd[k].kind != N_DEV && nd[k].kind != N_SCOPE) get(k, o);
     return p;
 }
 static void index_of(const val_t *a, int64_t i, val_t *o)
 {
     *o = (val_t){ .t = V_INT };
-    if (a->t == V_BUF || a->t == V_STR) { if (i >= 0 && i < a->n) o->i = a->b[i]; else fail("index", 0); return; }
-    if (a->t != V_PKG || i < 0 || i >= a->n) { fail("index", 0); return; }
-    const uint8_t *p = a->b;
-    int was = dry;
-    dry = 1;
-    for (int64_t k = 0; k < i && p < a->e; k++) p = element(p, (int)a->i, o);
-    dry = was;
-    if (p < a->e) element(p, (int)a->i, o); else *o = (val_t){ .t = V_INT };
+    if ((a->t == V_BUF || a->t == V_STR) && i >= 0 && i < a->n) o->i = a->b[i];
+    else if (a->t == V_PKG && i >= 0 && i < a->n) *o = ((val_t *)a->b)[i];
+    else fail("index", 0);
 }
 
-/* Where a result goes (a "target"): nowhere, a local, an argument, a name, a byte of a buffer. */
+/* Where a result goes (a "target"): nowhere, a local, an argument, a name, an element. */
 static const uint8_t *store(const uint8_t *p, frame_t *f, const val_t *v)
 {
     uint8_t op = *p;
@@ -279,11 +374,14 @@ static const uint8_t *store(const uint8_t *p, frame_t *f, const val_t *v)
     if (op >= 0x60 && op <= 0x67) { if (!dry) f->l[op - 0x60] = *v; return p + 1; }
     if (op >= 0x68 && op <= 0x6E) { if (!dry) f->a[op - 0x68] = *v; return p + 1; }
     if (op == 0x5B && p[1] == 0x31) return p + 2;                       /* Debug */
-    if (op == 0x88) {                                                   /* Index (buffer, i) */
-        val_t b, i, z = { .t = V_NONE };
+    if (op == 0x88) {                                                   /* Index (buffer or package, i) */
+        val_t b, i, z = { .t = V_NONE }, x = *v;
         p = store(ev(ev(p + 1, f, &b), f, &i), f, &z);
-        if (!dry && b.t == V_BUF && num(&i) >= 0 && num(&i) < b.n) b.b[num(&i)] = (uint8_t)num(v);
-        else if (!dry) fail("store to Index", p);
+        int64_t k = num(&i);
+        if (dry) return p;
+        if (b.t == V_BUF && k >= 0 && k < b.n) b.b[k] = (uint8_t)num(v);
+        else if (b.t == V_PKG && k >= 0 && k < b.n) { if (!temp(b.b)) keep(&x); ((val_t *)b.b)[k] = x; }
+        else fail("store to Index", p);
         return p;
     }
     if (isname(op)) { p = getname(p, &m); if (!dry) put(find(f->scope, &m), v); return p; }
@@ -296,7 +394,7 @@ static const uint8_t *ev(const uint8_t *p, frame_t *f, val_t *o)
 {
     const uint8_t *at = p, *e;
     uint8_t op = *p++;
-    val_t a, b;
+    val_t a, b, c;
     name_t m;
     int64_t x, y;
     *o = (val_t){ .t = V_INT };
@@ -314,16 +412,23 @@ static const uint8_t *ev(const uint8_t *p, frame_t *f, val_t *o)
     case 0x11:                                                          /* Buffer (size) { bytes } */
         p = ev(pkg(p, &e), f, &a);
         x = num(&a);
-        mkbuf(o, (uint32_t)(x > e - p ? x : e - p), p, (uint32_t)(e - p), 0, 0);
+        mkbuf(o, V_BUF, (uint32_t)(x > e - p ? x : e - p), p, (uint32_t)(e - p), 0, 0);
         return e;
-    case 0x12: case 0x13:                                               /* Package, VarPackage */
+    case 0x12: case 0x13:                                               /* Package, VarPackage: an array */
         p = pkg(p, &e);
         if (op == 0x12) x = *p++; else p = ev(p, f, &a), x = num(&a);
-        *o = (val_t){ .t = V_PKG, .n = (uint32_t)x, .i = f->scope, .b = (uint8_t *)p, .e = e };
+        if (dry || err || x < 0 || x > 4096) return e;
+        *o = (val_t){ .t = V_PKG, .n = (uint32_t)x, .b = alloc((uint32_t)x * sizeof(val_t) + 1) };
+        for (int64_t k = 0; k < x; k++) {
+            val_t *el = (val_t *)o->b + k;
+            *el = (val_t){ .t = V_INT };
+            if (p < e) p = element(p, f->scope, el);
+        }
         return e;
     case 0x60: case 0x61: case 0x62: case 0x63: case 0x64: case 0x65: case 0x66: case 0x67: *o = f->l[op - 0x60]; return p;
     case 0x68: case 0x69: case 0x6A: case 0x6B: case 0x6C: case 0x6D: case 0x6E: *o = f->a[op - 0x68]; return p;
-    case 0x70: p = ev(p, f, o); return store(p, f, o);                  /* Store (value, target) */
+    case 0x70: case 0x9D: p = ev(p, f, o); return store(p, f, o);      /* Store, CopyObject (value, target) */
+    case 0x71: return ev(p, f, o);                                      /* RefOf: the value will do */
     case 0x72: case 0x74: case 0x77: case 0x79: case 0x7A: case 0x7B: case 0x7C: case 0x7D: case 0x7E: case 0x7F: case 0x85:
         p = ev(ev(p, f, &a), f, &b);
         x = num(&a); y = num(&b);
@@ -331,18 +436,41 @@ static const uint8_t *ev(const uint8_t *p, frame_t *f, val_t *o)
                op == 0x7A ? (y < 64 ? (int64_t)((uint64_t)x >> y) : 0) : op == 0x7B ? x & y : op == 0x7C ? ~(x & y) :
                op == 0x7D ? x | y : op == 0x7E ? ~(x | y) : op == 0x7F ? x ^ y : y ? (int64_t)((uint64_t)x % (uint64_t)y) : 0;
         return store(p, f, o);
+    case 0x78:                                                          /* Divide (a, b, remainder, quotient) */
+        p = ev(ev(p, f, &a), f, &b);
+        x = num(&a); y = num(&b);
+        if (!y && !dry) { fail("divide by zero", at); return p; }
+        c = (val_t){ .t = V_INT, .i = y ? (int64_t)((uint64_t)x % (uint64_t)y) : 0 };
+        o->i = y ? (int64_t)((uint64_t)x / (uint64_t)y) : 0;
+        return store(store(p, f, &c), f, o);
+    case 0x73:                                                          /* Concatenate (a, b, target) */
+        p = ev(ev(p, f, &a), f, &b);
+        if (a.t == V_STR && b.t == V_STR) mkbuf(o, V_STR, a.n + b.n, a.b, a.n, b.b, b.n);
+        else { bytes(&a, &a); bytes(&b, &b); mkbuf(o, V_BUF, a.n + b.n, a.b, a.n, b.b, b.n); }
+        return store(p, f, o);
     case 0x75: case 0x76:                                               /* Increment, Decrement */
         e = ev(p, f, &a);
         *o = (val_t){ .t = V_INT, .i = num(&a) + (op == 0x75 ? 1 : -1) };
         store(p, f, o);
         return e;
     case 0x80: p = ev(p, f, &a); o->i = ~num(&a); return store(p, f, o);   /* Not */
+    case 0x81: case 0x82:                                               /* FindSetLeftBit, FindSetRightBit */
+        p = ev(p, f, &a);
+        x = num(&a);
+        for (int k = 0; x && k < 64; k++) if ((uint64_t)x >> k & 1) { o->i = k + 1; if (op == 0x82) break; }
+        return store(p, f, o);
     case 0x83: return ev(p, f, o);                                      /* DerefOf: Index gives values already */
+    case 0x86:                                                          /* Notify (object, value) */
+        e = getname(p, &m);
+        p = ev(e, f, &a);
+        if (!dry && aml_notify) aml_notify(find(f->scope, &m), num(&a));
+        return p;
     case 0x87: p = ev(p, f, &a); o->i = a.t == V_INT ? 8 : a.n; return p;  /* SizeOf */
     case 0x88:                                                          /* Index (source, i, target) */
         p = ev(ev(p, f, &a), f, &b);
         if (!dry) index_of(&a, num(&b), o);
         return store(p, f, o);
+    case 0x8E: p = ev(p, f, &a); o->i = a.t == V_NONE ? 0 : a.t + 1; return p;   /* ObjectType */
     case 0x90: p = ev(ev(p, f, &a), f, &b); o->i = num(&a) && num(&b) ? -1 : 0; return p;   /* LAnd */
     case 0x91: p = ev(ev(p, f, &a), f, &b); o->i = num(&a) || num(&b) ? -1 : 0; return p;   /* LOr */
     case 0x92: p = ev(p, f, &a); o->i = num(&a) ? 0 : -1; return p;    /* LNot (also LNotEqual...) */
@@ -351,11 +479,25 @@ static const uint8_t *ev(const uint8_t *p, frame_t *f, val_t *o)
         x = dry ? 0 : cmp(&a, &b);
         o->i = (op == 0x93 ? !x : op == 0x94 ? x > 0 : x < 0) ? -1 : 0;
         return p;
+    case 0x96: p = ev(p, f, &a); bytes(&a, o); return store(p, f, o);  /* ToBuffer */
     case 0x99: p = ev(p, f, &a); o->i = num(&a); return store(p, f, o);    /* ToInteger */
+    case 0x9C:                                                          /* ToString (buffer, length, target) */
+        p = ev(ev(p, f, &a), f, &b);
+        bytes(&a, &a);
+        for (y = 0; y < a.n && (uint64_t)y < (uint64_t)num(&b) && a.b[y]; y++) ;
+        mkbuf(o, V_STR, (uint32_t)y, a.b, (uint32_t)y, 0, 0);
+        return store(p, f, o);
+    case 0x9E:                                                          /* Mid (source, index, length, target) */
+        p = ev(ev(ev(p, f, &a), f, &b), f, &c);
+        x = num(&b); y = num(&c);
+        if (x > a.n || x < 0) x = a.n;
+        if (y < 0 || y > a.n - x) y = a.n - x;
+        mkbuf(o, a.t == V_STR ? V_STR : V_BUF, (uint32_t)y, a.b + x, (uint32_t)y, 0, 0);
+        return store(p, f, o);
     case 0x84:                                                          /* ConcatenateResTemplate */
         p = ev(ev(p, f, &a), f, &b);
         if (!dry && (a.t != V_BUF || b.t != V_BUF || a.n < 2)) { fail("ConcatenateResTemplate", at); return p; }
-        mkbuf(o, a.n - 2 + b.n, a.b, a.n - 2, b.b, b.n);         /* (without the first one's end tag) */
+        mkbuf(o, V_BUF, a.n - 2 + b.n, a.b, a.n - 2, b.b, b.n);         /* (without the first one's end tag) */
         return store(p, f, o);
     case 0x5B:
         switch (*p++) {
@@ -363,6 +505,28 @@ static const uint8_t *ev(const uint8_t *p, frame_t *f, val_t *o)
             if (isname(*p)) { p = getname(p, &m); o->i = !dry && find(f->scope, &m) >= 0 && nd[find(f->scope, &m)].kind != N_EXT ? -1 : 0; }
             else p = ev(p, f, &a), o->i = -1;
             return store(p, f, &(val_t){ .t = V_NONE });
+        case 0x21: case 0x22:                                           /* Stall (us), Sleep (ms) */
+            p = ev(p, f, &a);
+#ifndef AML_HOST
+            if (!dry) sys_sleep((uint64_t)num(&a) * (at[1] == 0x21 ? 1000 : 1000000));
+#endif
+            return p;
+        case 0x23: o->i = 0; return getname(p, &m) + 2;                 /* Acquire (mutex, timeout): ours */
+        case 0x24: case 0x26: case 0x27: return getname(p, &m);         /* Signal, Reset (event), Release (mutex) */
+        case 0x25: o->i = 0; return ev(getname(p, &m), f, &a);          /* Wait (event, timeout) */
+        case 0x28: case 0x29: {                                         /* FromBCD, ToBCD (value, target) */
+            p = ev(p, f, &a);
+            uint64_t u = (uint64_t)num(&a), r = 0, d = at[1] == 0x28 ? 16 : 10;
+            for (uint64_t m = 1; u; u /= d, m *= 26 - d) r += u % d * m;     /* (BCD digits in, decimal ones out, or back) */
+            o->i = (int64_t)r;
+            return store(p, f, o);
+        }
+        case 0x30: o->i = 2; return p;                                  /* Revision */
+        case 0x33:                                                      /* Timer: 100 ns units */
+#ifndef AML_HOST
+            o->i = sys_clock() / 100;
+#endif
+            return p;
         }
         break;
     default:
@@ -414,6 +578,7 @@ static void exec(const uint8_t *p, const uint8_t *end, frame_t *f)
             q = getname(p + 1, &m);
             k = declare(f->scope, &m, N_NAME);
             p = ev(q, f, &v);
+            if (k < nn0) keep(&v);
             setval(k, &v);
             continue;
         case 0x8A: case 0x8B: case 0x8C: case 0x8D: case 0x8F:          /* CreateDWordField... */
@@ -435,7 +600,7 @@ static void exec(const uint8_t *p, const uint8_t *end, frame_t *f)
             }
             if (p[1] == 0x81) {                                         /* Field */
                 q = getname(pkg(p + 2, &e), &m);
-                fields(q + 1, e, f->scope, find(f->scope, &m));
+                fields(q, e, f->scope, find(f->scope, &m));
                 p = e;
                 continue;
             }
@@ -447,20 +612,21 @@ static void exec(const uint8_t *p, const uint8_t *end, frame_t *f)
                 p = q;
                 continue;
             }
-            if (p[1] == 0x01) { p = getname(p + 2, &m) + 1; declare(f->scope, &m, N_OTHER); continue; }   /* Mutex */
+            if (p[1] == 0x01 || p[1] == 0x02) { p = getname(p + 2, &m) + (p[1] == 0x01); declare(f->scope, &m, N_OTHER); continue; }   /* Mutex, Event */
             /* fall through */
         default: p = ev(p, f, &v);
         }
     }
 }
 
-/* A Field's list: named runs of bits of a region, one after the other. */
+/* A Field's list (p: its flags): named runs of bits of a region, one after the other. */
 static void fields(const uint8_t *p, const uint8_t *e, int s, int reg)
 {
     uint32_t off = 0, n;
+    uint8_t acc = *p++ & 15;
     while (p < e) {
         if (!*p) { p = plen(p + 1, &n); off += n; }                     /* reserved bits */
-        else if (*p == 1) p += 3;                                       /* AccessField */
+        else if (*p == 1) acc = p[1] & 15, p += 3;                      /* AccessField */
         else if (*p == 3) p += 4;                                       /* ExtendedAccessField */
         else if (*p == 2) { name_t m; const uint8_t *q; p = p[1] == 0x11 ? (pkg(p + 2, &q), q) : getname(p + 1, &m); }   /* Connection */
         else {
@@ -468,7 +634,7 @@ static void fields(const uint8_t *p, const uint8_t *e, int s, int reg)
             memcpy(&seg, p, 4);
             p = plen(p + 4, &n);
             int k = add(s, seg, reg >= 0 && nd[reg].kind == N_REGION ? N_FIELD : N_OTHER);
-            nd[k].reg = reg; nd[k].off = off; nd[k].bits = n;
+            nd[k].reg = reg; nd[k].off = off; nd[k].bits = n; nd[k].argc = acc;
             off += n;
         }
     }
@@ -525,7 +691,7 @@ static void load(const uint8_t *p, const uint8_t *end, int s, int run)
             k = find(s, &m);
             if (op != 0x181) q = getname(q, &m), k = -1;
             if (op == 0x187) dry = 1, q = ev(q, &f, &v);
-            if (!run && e <= end) fields(q + 1, e, s, k);
+            if (!run && e <= end) fields(q, e, s, k);
             break;
         case 0x8A: case 0x8B: case 0x8C: case 0x8D: case 0x8F: case 0x113:   /* CreateDWordField...: made when used */
             dry = 1;
@@ -579,7 +745,7 @@ long aml_load(const uint8_t *t, long n)
     for (long o = 0; o + 36 <= n; ) {
         uint32_t len = t[o + 4] | t[o + 5] << 8 | t[o + 6] << 16 | (uint32_t)t[o + 7] << 24;
         if (len < 36 || o + len > n) break;
-        load(t + o + 36, t + o + len, 0, 0);
+        if (!memcmp(t + o, "DSDT", 4) || !memcmp(t + o, "SSDT", 4)) load(t + o + 36, t + o + len, 0, 0);
         o += len;
     }
     name_t m = { .n = 1 };
@@ -589,8 +755,8 @@ long aml_load(const uint8_t *t, long n)
     return nn;
 }
 
-/* ---- The I2C HID devices. */
-static void path(int k, char *s, int n)
+/* ---- Devices. */
+void aml_path(int k, char *s, int n)
 {
     int seg[16], d = 0, o = 0;
     for (; k > 0 && d < 16; k = nd[k].up) seg[d++] = k;
@@ -605,9 +771,9 @@ static int obj(int dev, const char *seg, val_t *a, val_t *o)    /* a device's ob
     int k = child(dev, sg);
     *o = (val_t){ .t = V_NONE };
     if (k < 0) return -1;
-    err = 0;
+    top();
     if (nd[k].kind == N_METHOD) call(k, a, o); else get(k, o);
-    if (err) { char p[48]; path(dev, p, sizeof p); log_line("aml: (in %s.%s)\n", p, seg); err = 0; o->t = V_NONE; }
+    if (err) { char p[48]; aml_path(dev, p, sizeof p); log_line("aml: (in %s.%s)\n", p, seg); err = 0; o->t = V_NONE; }
     return o->t == V_NONE ? -1 : 0;
 }
 static void id(const val_t *v, char *s)                                 /* a string, or a compressed EISA id */
@@ -619,13 +785,26 @@ static void id(const val_t *v, char *s)                                 /* a str
     for (int k = 0; k < 4; k++) s[3 + k] = hex[pr >> (12 - 4 * k) & 15];
     s[7] = 0;
 }
-static int hid_id(const val_t *v)
+static int is(const val_t *v, const char *a, const char *b)            /* an id (or a package of them) a or b? */
 {
     char s[12];
-    if (v->t == V_PKG) { for (uint32_t i = 0; i < v->n; i++) { val_t e; index_of(v, i, &e); if (hid_id(&e)) return 1; } return 0; }
+    if (v->t == V_PKG) { for (uint32_t i = 0; i < v->n; i++) if (is((val_t *)v->b + i, a, b)) return 1; return 0; }
     if (v->t != V_STR && v->t != V_INT) return 0;
     id(v, s);
-    return !strcmp(s, "PNP0C50") || !strcmp(s, "ACPI0C50");
+    return !strcmp(s, a) || (b && !strcmp(s, b));
+}
+static int has(int k, const char *a, const char *b)                     /* device k's _CID or _HID says so */
+{
+    val_t v, x[1];
+    return nd[k].kind == N_DEV && ((!obj(k, "_CID", x, &v) && is(&v, a, b)) || (!obj(k, "_HID", x, &v) && is(&v, a, b)));
+}
+int aml_devs(const char *hid, int *dev, int max)
+{
+    int found = 0;
+    val_t v, x[1];
+    for (int k = 1, n0 = nn; k < n0 && found < max; k++)
+        if (has(k, hid, 0) && (obj(k, "_STA", x, &v) || num(&v) & 1)) dev[found++] = k;
+    return found;
 }
 static void cstr(char *d, uint32_t dn, const uint8_t *s, uint32_t sn)   /* a string from a descriptor */
 {
@@ -635,6 +814,7 @@ static void cstr(char *d, uint32_t dn, const uint8_t *s, uint32_t sn)   /* a str
 }
 static void resources(aml_hid_t *d, const uint8_t *b, uint32_t n)
 {
+    int nio = 0;
     for (uint32_t i = 0, len, hdr; i < n; i += hdr + len) {
         const uint8_t *r = b + i;
         uint8_t t = r[0];
@@ -654,8 +834,10 @@ static void resources(aml_hid_t *d, const uint8_t *b, uint32_t n)
             if (sn < hdr + len) cstr(d->gpio, sizeof d->gpio, r + sn, hdr + len - sn);
         }
         if (t == 0x89 && d->irq < 0 && r[4]) d->irq = r[5] | r[6] << 8 | r[7] << 16;   /* Interrupt */
+        if (t == 0x40 && nio < 2) d->io[nio++] = r[2] | r[3] << 8;     /* IO (decode, min, max, align, length) */
     }
 }
+static void blank(aml_hid_t *d) { memset(d, 0, sizeof *d); d->addr = d->pin = d->irq = d->desc = d->io[0] = d->io[1] = -1; }
 
 int aml_hid(aml_hid_t *d, int max)
 {
@@ -663,11 +845,10 @@ int aml_hid(aml_hid_t *d, int max)
     int found = 0, n0 = nn;
     val_t v, a[4];
     for (int k = 1; k < n0 && found < max; k++) {
-        if (nd[k].kind != N_DEV || !((!obj(k, "_CID", a, &v) && hid_id(&v)) || (!obj(k, "_HID", a, &v) && hid_id(&v)))) continue;
+        if (!has(k, "PNP0C50", "ACPI0C50")) continue;
         aml_hid_t *h = &d[found];
-        memset(h, 0, sizeof *h);
-        h->addr = h->pin = h->irq = h->desc = -1;
-        path(k, h->path, sizeof h->path);
+        blank(h);
+        aml_path(k, h->path, sizeof h->path);
         obj(nd[k].up, "_INI", a, &v);                                /* its controller's _INI, its statements, */
         load(nd[k].p, nd[k].e, k, 1);
         err = 0;
@@ -686,37 +867,61 @@ int aml_hid(aml_hid_t *d, int max)
     return found;
 }
 
-static int eval(const char *s, int argc, const int64_t *arg, val_t *o)   /* "\_SB.GINF" (args...) */
+int aml_find(int dev, const char *s)                                    /* "\_SB.GINF", "_BST" (dev's own) */
 {
     name_t m = { .root = *s == '\\' };
-    val_t a[7];
     for (s += m.root; *s && m.n < 8; m.n++) {
         char seg[4] = { '_', '_', '_', '_' };
         for (int i = 0; *s && *s != '.'; s++) if (i < 4) seg[i++] = *s;
         memcpy(&m.s[m.n], seg, 4);
         if (*s == '.') s++;
     }
-    int k = find(0, &m);
+    return m.n == 1 && !m.root ? child(dev, m.s[0]) : find(dev, &m);
+}
+static int eval(int dev, const char *s, int argc, const int64_t *arg, val_t *o)   /* (s 0: dev itself) */
+{
+    val_t a[7];
+    int k = s ? aml_find(dev, s) : dev;
     if (k < 0) return -1;
     for (int i = 0; i < argc && i < 7; i++) a[i] = (val_t){ .t = V_INT, .i = arg[i] };
-    err = 0;
+    top();
     if (nd[k].kind == N_METHOD) call(k, a, o); else get(k, o);
+    if (err) { char p[48]; aml_path(k, p, sizeof p); log_line("aml: (in %s)\n", p); }
     if (err || o->t == V_NONE) { err = 0; return -1; }
     return 0;
 }
-int aml_int(const char *s, int argc, const int64_t *arg, int64_t *v)
+int aml_eval(int dev, const char *path, int argc, const int64_t *arg, int64_t *v, int max)
 {
     val_t o;
-    if (eval(s, argc, arg, &o)) return -1;
-    *v = num(&o);
-    return 0;
+    if (eval(dev, path, argc, arg, &o)) return -1;
+    if (o.t != V_PKG) { if (max > 0) *v = num(&o); return 1; }
+    int n = 0;
+    for (; n < (int)o.n && n < max; n++) v[n] = num((val_t *)o.b + n);
+    return n;
 }
-int aml_res(const char *s, aml_hid_t *d)
+/* PCI interrupt links ("PNP0C0F": the chipset's routing of the PCI lines
+ * to interrupts): their current setting (_CRS) kept, or given back (_SRS),
+ * which the sleep may lose (QEMU's PIIX does). -> how many */
+int aml_links(int back)
+{
+    static int dev[16], n;
+    static val_t crs[16];
+    val_t o;
+    if (!back) n = aml_devs("PNP0C0F", dev, 16);
+    for (int i = 0; i < n; i++) {
+        int k = child(dev[i], sg(back ? "_SRS" : "_CRS"));
+        top();
+        if (k >= 0 && back && crs[i].t == V_BUF) call(k, &crs[i], &o);
+        else if (k >= 0 && !back) { get(k, &o); if (!err && o.t == V_BUF) keep(&o), crs[i] = o; }
+        err = 0;
+    }
+    return n;
+}
+int aml_res(int dev, const char *path, aml_hid_t *d)
 {
     val_t o;
-    memset(d, 0, sizeof *d);
-    d->addr = d->pin = d->irq = d->desc = -1;
-    if (eval(s, 0, 0, &o) || o.t != V_BUF) return -1;
+    blank(d);
+    if (eval(dev, path, 0, 0, &o) || o.t != V_BUF) return -1;
     resources(d, o.b, o.n);
     return 0;
 }

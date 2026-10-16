@@ -44,7 +44,8 @@ LINKS   += $(NETLINKS:%=fetch/%)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
-BINS    += $(if $(filter x86_64,$(ARCH)),i2chid)    # laptops' I2C touchpads (ACPI)
+BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
+ULIBOBJ += $(if $(filter x86_64,$(ARCH)),aml)       # the AML interpreter they share
 BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
@@ -130,12 +131,8 @@ $(B)/user/wifi/%.o: user/wifi/%.c user/wifi/wifi.h user/wifi/wpa.h user/lib/mk.h
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
-# I2C touchpads (x86-64 only): the AML reader (aml.c) and the driver (i2chid.c).
-$(B)/i2chid.elf: $(B)/user/i2chid/i2chid.o $(B)/user/i2chid/aml.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
-	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(B)/user/i2chid/i2chid.o $(B)/user/i2chid/aml.o $(ULIB)
-$(B)/user/i2chid/%.o: user/i2chid/%.c user/i2chid/aml.h user/lib/mk.h user/lib/hidrep.h include/mk/*.h $(TOOLDEP)
-	@mkdir -p $(@D)
-	$(TCC) $(UCFLAGS) $(if $(filter %/aml.o,$@),-Os) -c $< -o $@   # (AML runs once, at start: small beats fast)
+# The AML interpreter (user/lib/aml.c, x86-64: the touchpad, the ACPI server): small beats fast.
+$(B)/user/lib/aml.o: UCFLAGS += -Os
 
 # Mail (user/mail): the protocols (mail.c) and the message decoding (mime.c).
 $(B)/mail.elf: $(B)/user/mail/mail.o $(B)/user/mail/mime.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
@@ -336,6 +333,11 @@ gui-test-real: all $(B)/host/fsck.siefs
 crash-test: all $(B)/host/fsck.siefs
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/crashtest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+# power-test (x86-64): ACPI in QEMU (tools/powertest.py, user/acpid): suspend to RAM and
+# waking up (twice: once while fsloop works), the network and files after; reboot; the power button
+power-test: all $(B)/host/fsck.siefs
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	python3 tools/powertest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # kernel-test: floating-point and AVX registers per thread, thread-local
 # variables (in programs built by gcc and by sicc), memory quotas (tools/ktest.py);
 # then booted again with pcores=SMP/2 (half the CPUs pretend to be E-cores): placement
@@ -428,7 +430,7 @@ clean:
 distclean:
 	rm -rf $(B)
 
-.PHONY: all run run-nox test crash-test audio-test gpio-test gui-test gui-test-real kernel-test sig-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test git-test model clean distclean newdisk FORCE
+.PHONY: all run run-nox test crash-test power-test audio-test gpio-test gui-test gui-test-real kernel-test sig-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test git-test model clean distclean newdisk FORCE
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.
@@ -632,12 +634,12 @@ crypto-test: $(B)/host/crypto-test
 	python3 tests/crypto/check.py $(B)/host/crypto-test
 .PHONY: crypto-test
 
-# ---- the AML reader (user/i2chid/aml.c) on the host: tables made with iasl
+# ---- the AML interpreter (user/lib/aml.c) on the host: tables made with iasl
 # from tests/aml/*.asl (laptop patterns: Intel's reference firmware as on
-# Lenovo's Legion, constants, methods), and QEMU's own DSDT.
-$(B)/host/aml-test: tests/aml/test.c user/i2chid/aml.c user/i2chid/aml.h
+# Lenovo's Legion, constants, methods; an embedded controller and battery).
+$(B)/host/aml-test: tests/aml/test.c user/lib/aml.c user/lib/aml.h
 	@mkdir -p $(@D)
-	gcc $(HOSTCFLAGS) -DAML_HOST -Iuser/i2chid -o $@ tests/aml/test.c user/i2chid/aml.c
+	gcc $(HOSTCFLAGS) -DAML_HOST -Iuser/lib -o $@ tests/aml/test.c user/lib/aml.c
 aml-test: $(B)/host/aml-test
 	sh tests/aml/check.sh $(B)/host/aml-test
 .PHONY: aml-test

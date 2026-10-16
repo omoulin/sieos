@@ -160,6 +160,16 @@ long fs_sync(void)
     synced_gen = fsgen;
     return r;
 }
+/* Power off, restart or suspend (POWER_*, root): the files committed, then
+ * through the ACPI server (it tells the firmware: _PTS), else the kernel
+ * directly -> 0 (after waking up), or -error. */
+long power(int how)
+{
+    fs_sync();
+    long p = port_find("acpi");
+    msg_t m = { .w = { ACPI_POWER, (uint64_t)how } };
+    return p <= 0 ? sys_power(how, 0) : ipc_call(p, &m) < 0 ? -EIO : (long)m.w[0];
+}
 
 long fs_symlink(const char *target, const char *path)   /* the target is kept as written */
 {

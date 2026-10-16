@@ -48,16 +48,23 @@ void log_line(const char *fmt, ...)
     va_end(ap);
 }
 
-/* AML's memory: a page mapped when first read (the firmware's variables, GPIO registers). */
-uint32_t aml_mem32(uint64_t pa)
+/* AML's memory: pages mapped when first read (the firmware's variables, GPIO
+ * registers); nothing else, and no writes (they stay in the interpreter). */
+int aml_io(int space, uint64_t pa, int w, uint64_t *v, int write)
 {
     static struct { uint64_t pa; volatile uint8_t *va; } m[16];
     static int n;
-    for (int i = 0; i < n; i++) if (m[i].pa == (pa & ~4095ULL)) return *(volatile uint32_t *)(m[i].va + (pa & 4095));
-    volatile uint8_t *va = n < 16 ? map_phys(pa & ~4095ULL, 4096) : (void *)-1L;
-    if ((long)va < 0) { log_line("cannot read memory at %lx\n", (long)pa); return 0; }
-    m[n].pa = pa & ~4095ULL; m[n++].va = va;
-    return *(volatile uint32_t *)(va + (pa & 4095));
+    int i = 0;
+    if (space || write) return -1;
+    while (i < n && m[i].pa != (pa & ~4095ULL)) i++;
+    if (i == n) {
+        volatile uint8_t *va = n < 16 ? map_phys(pa & ~4095ULL, 4096) : (void *)-1L;
+        if ((long)va < 0) { log_line("cannot read memory at %lx\n", (long)pa); return -1; }
+        m[n].pa = pa & ~4095ULL; m[n++].va = va;
+    }
+    volatile uint8_t *a = m[i].va + (pa & 4095);
+    *v = w == 1 ? *a : w == 2 ? *(volatile uint16_t *)a : w == 4 ? *(volatile uint32_t *)a : *(volatile uint64_t *)a;
+    return 0;
 }
 
 static const char *sub(const char *path, const char *seg)   /* "\\_SB.PC00.I2C5" + "_ADR" */
@@ -223,7 +230,7 @@ static int gpio_start(void)
 {
     int64_t g, n, first, at, off, sts, own;
     aml_hid_t c;
-    if (dev.pin < 0 || dev.pin_edge || aml_res(sub(dev.gpio, "_CRS"), &c) || c.irq < 0) {
+    if (dev.pin < 0 || dev.pin_edge || aml_res(0, sub(dev.gpio, "_CRS"), &c) || c.irq < 0) {
         log_line("no GPIO interrupt (pin %d on %s)\n", dev.pin, dev.gpio);
         return -1;
     }
@@ -283,7 +290,7 @@ int main(int argc, char **argv)
     uint8_t *t = n > 0 ? malloc(n) : 0;
     if (!t || sys_acpi(t, n) != n) { log_line("no ACPI tables\n"); return 0; }
     long objs = aml_load(t, n);
-    log_line("ACPI: %ld bytes of DSDT and SSDTs, %ld named objects\n", n, objs);
+    log_line("ACPI tables: %ld bytes, %ld named objects\n", n, objs);
     aml_hid_t d[4];
     int nd = aml_hid(d, 4), k;
     for (k = 0; k < nd; k++) {

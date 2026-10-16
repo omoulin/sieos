@@ -26,7 +26,7 @@ static void add(range_t *r, int *n, int max, uint64_t pa, uint64_t len)
 /* ---- The log: COM1, polled. This is the only device the kernel drives
  * itself, and only for output (the console server enables its interrupts). */
 #define COM1 0x3F8
-static void serial_init(void)
+void serial_init(void)
 {
     outb(COM1 + 1, 0);       /* no interrupts */
     outb(COM1 + 3, 0x80);    /* set the speed: divisor 1 = 115200 bit/s */
@@ -136,11 +136,73 @@ void kmain(uint32_t magic, uint32_t mbi_pa)
     kernel_main(&bi);
 }
 
-/* ---- Power. (The core has already stopped the other CPUs.) */
-void arch_power(int restart)
+/* ---- Power, through ACPI's fixed hardware, which the FADT describes:
+ * a sleep state is entered by writing its sleep type and SLP_EN to the PM1
+ * control registers (a and b). The types are in the AML (\_S5, \_S3):
+ * user/acpid reads them and gives them here (POWER_SET); until then S5's
+ * is 0, as on QEMU. Restarting: the FADT's reset register, then the
+ * keyboard controller, then a triple fault. */
+static uint16_t slp_typ[6];             /* per state: type a | type b << 8 | 0x8000 (given) */
+
+long arch_sleep_type(int state, int typ)
 {
-    if (restart) outb(0x64, 0xFE);      /* the keyboard controller resets the machine */
-    else { outw(0x604, 0x2000); outw(0xB004, 0x2000); }  /* ACPI off in QEMU (new and old) */
+    if (state != 3 && state != 5) return -EINVAL;
+    slp_typ[state] = (uint16_t)(typ | 0x8000);
+    return 0;
+}
+static uint32_t fadt32(const uint8_t *f, int off) { return off + 4 <= (int)((sdt_t *)f)->len ? *(uint32_t *)(f + off) : 0; }
+static uint16_t pm1(const uint8_t *f, int off, int xoff)    /* a PM1 block's port: the 32-bit one, else the extended one's */
+{
+    uint32_t p = fadt32(f, off);
+    return p ? p : fadt32(f, xoff + 4) && f[xoff] == 1 ? (uint16_t)fadt32(f, xoff + 4) : 0;
+}
+static void wait_ms(int ms) { for (uint64_t e = ticks() + ns_to_ticks(ms * 1000000UL); ticks() < e; ) arch_relax(); }
+/* Enter sleep state s (3, 5): for S3 the FACS gets the waking vector (the
+ * firmware jumps there in real mode), then WAK_STS cleared, caches written
+ * back, the type and SLP_EN in the PM1 control registers (a, then b).
+ * check: only whether it can -> 0, -ENOSYS; else -EIO: still awake after 1 s. */
+__attribute__((cold)) long acpi_sleep(int s, uint32_t vector, int check)
+{
+    const uint8_t *f = (const uint8_t *)acpi_find("FACP", 0);
+    uint64_t facs = !f ? 0 : fadt32(f, 132) ? *(uint64_t *)(f + 132) : fadt32(f, 36);
+    uint16_t ca = f ? pm1(f, 64, 172) : 0, cb = f ? pm1(f, 68, 184) : 0, ea = f ? pm1(f, 56, 148) : 0, eb = f ? pm1(f, 60, 160) : 0;
+    if (!ca || (s == 3 && (!facs || !(slp_typ[3] & 0x8000)))) return -ENOSYS;
+    if (check) return 0;
+    if (s == 3) {
+        uint8_t *fc = P2V(facs);                          /* (ACPI memory: in the direct map, as the tables) */
+        *(uint32_t *)(fc + 12) = vector;                  /* real mode; no 64-bit vector */
+        if (*(uint32_t *)(fc + 4) >= 32 && fc[32] >= 1) *(uint64_t *)(fc + 24) = 0;
+    }
+    kprintf("mk: ACPI S%d: PM1 control %x/%x, sleep type %x/%x\n", s, ca, cb, slp_typ[s] & 7, slp_typ[s] >> 8 & 7);
+    if (ea) outw(ea, 0x8000);
+    if (eb) outw(eb, 0x8000);
+    asm volatile("wbinvd" : : : "memory");
+    for (int en = 0; en < 2; en++) {
+        outw(ca, (inw(ca) & ~0x3C00) | (slp_typ[s] & 7) << 10 | en << 13);
+        if (cb) outw(cb, (inw(cb) & ~0x3C00) | (slp_typ[s] >> 8 & 7) << 10 | en << 13);
+    }
+    wait_ms(1000);
+    return -EIO;
+}
+
+/* (The core has already stopped the other CPUs.) */
+__attribute__((cold)) void arch_power(int restart)
+{
+    const uint8_t *f = (const uint8_t *)acpi_find("FACP", 0);
+    if (!restart) acpi_sleep(5, 0, 0);
+    if (f && restart && fadt32(f, 112) & 1 << 10 && f[116] <= 1 && fadt32(f, 120)) {   /* RESET_REG_SUP: memory or a port */
+        uint64_t a = *(uint64_t *)(f + 120);
+        kprintf("mk: reset register %lx = %x\n", a, f[128]);
+        if (f[116]) outb(a, f[128]); else *(volatile uint8_t *)kmap_dev(a, 1) = f[128];
+    }
+    if (restart) {
+        wait_ms(500);
+        outb(0x64, 0xFE);               /* the keyboard controller resets the machine */
+        wait_ms(500);
+        struct __attribute__((packed)) { uint16_t lim; uint64_t base; } none = { 0, 0 };
+        asm volatile("lidt %0; int3" : : "m"(none));   /* no IDT: a triple fault, a reset */
+    }
+    kprintf("mk: still on: halted\n");
     arch_halt_forever();
 }
 

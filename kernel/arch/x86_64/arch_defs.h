@@ -108,6 +108,7 @@ typedef struct {
     uint64_t fs_loaded;         /* the FS base this CPU holds now */
     uint64_t gdt[7];
     tss_t *tss;                 /* at the end of this cpu_t's page (cpu.c) */
+    uint64_t idle_stack;        /* its idle stack's top (smp.c: started again after a suspend) */
 } arch_cpu_t;
 
 static inline struct cpu *this_cpu(void)   /* volatile: re-read after a switch, the thread may have moved */
@@ -121,11 +122,13 @@ static inline struct cpu *this_cpu(void)   /* volatile: re-read after a switch, 
 static inline void outb(uint16_t p, uint8_t v)  { asm volatile("outb %0, %1" : : "a"(v), "Nd"(p)); }
 static inline void outw(uint16_t p, uint16_t v) { asm volatile("outw %0, %1" : : "a"(v), "Nd"(p)); }
 static inline uint8_t inb(uint16_t p) { uint8_t v; asm volatile("inb %1, %0" : "=a"(v) : "Nd"(p)); return v; }
+static inline uint16_t inw(uint16_t p) { uint16_t v; asm volatile("inw %1, %0" : "=a"(v) : "Nd"(p)); return v; }
 static inline void write_cr3(uint64_t v) { asm volatile("mov %0, %%cr3" : : "r"(v) : "memory"); }
 static inline void wrmsr(uint32_t msr, uint64_t v)
 {
     asm volatile("wrmsr" : : "c"(msr), "a"((uint32_t)v), "d"((uint32_t)(v >> 32)));
 }
+static inline uint64_t rdmsr(uint32_t msr) { uint32_t lo, hi; asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr)); return (uint64_t)hi << 32 | lo; }
 static inline uint64_t rdtsc(void) { uint32_t lo, hi; asm volatile("rdtsc" : "=a"(lo), "=d"(hi)); return (uint64_t)hi << 32 | lo; }
 static inline void cpuid(uint32_t leaf, uint32_t r[4])
 {
