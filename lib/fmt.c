@@ -1,6 +1,6 @@
 /*
  * fmt.c - printf-style formatting, shared by the kernel (kprintf) and user
- * programs (printf). Supports %c %s %d %i %u %x %p %%, the 'l' size, the
+ * programs (printf). Supports %c %s %d %i %u %x %o %p %%, the 'l' size, the
  * '-' (left-align) and '0' (zero-pad) flags and a width: "%-8s", "%08lx".
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -30,6 +30,7 @@ void vformat(void (*put)(void *, char), void *ctx, const char *f, va_list ap)
             v = neg ? -(uint64_t)x : (uint64_t)x;
             goto number;
         }
+        case 'o': base = 8; v = lng ? va_arg(ap, unsigned long) : va_arg(ap, unsigned); goto number;
         case 'p': lng = 1;                             /* fall through */
         case 'x': base = 16;                           /* fall through */
         case 'u': v = lng ? va_arg(ap, unsigned long) : va_arg(ap, unsigned);

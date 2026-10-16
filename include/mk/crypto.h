@@ -54,6 +54,12 @@ void   sha_update(sha_t *s, const void *in, size_t n);
 void   sha_final(sha_t *s, void *out);
 void   sha(int alg, void *out, const void *in, size_t n);
 size_t sha_len(int alg);
+/* SHA-1 (FIPS 180-4, sha1.c): only for git's object names and checksums. */
+typedef struct { uint32_t h[5]; uint8_t buf[64]; size_t fill; uint64_t total; } sha1_t;
+void sha1_init(sha1_t *s);
+void sha1_update(sha1_t *s, const void *in, size_t n);
+void sha1_final(sha1_t *s, uint8_t out[20]);
+void sha1(uint8_t out[20], const void *in, size_t n);
 /* HMAC (RFC 2104) and HKDF (RFC 5869) over those hashes. */
 typedef struct { sha_t inner, outer; } hmac_t;
 void hmac_init(hmac_t *h, int alg, const void *key, size_t klen);
