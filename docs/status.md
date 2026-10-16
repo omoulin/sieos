@@ -16,13 +16,14 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
 | Network, TLS | yes: virtio (legacy, 1.0), e1000, e1000e | yes: virtio (MMIO, PCIe) | no driver yet | no driver yet |
 | SSH client and server | yes | yes | needs the network | needs the network |
+| Sound (Intel HDA) | yes: intel-hda, ich9-intel-hda | no driver (no HDA there) | no | no |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
 `kernel-test`, `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test` (both
-architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
+architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
@@ -140,3 +141,12 @@ checklist in [raspberrypi.md](raspberrypi.md).
   (`CON_FG`); a closed window or SSH connection sends `SIGHUP`; `kill -INT
   /-TERM/-KILL/-HUP`. Python raises `KeyboardInterrupt`. The kernel's code
   grew by 1.6 KB (x86-64), the IPC round trip by 1% at most; `make sig-test`.
+- **2026-10-16.** Sound ([audio.md](audio.md)): `/bin/audiod` drives Intel
+  HD Audio (QEMU's intel-hda and ich9-intel-hda; Intel PCHs up to Raptor
+  Lake: TCSEL, snooping, clock gating as Linux sets them): CORB/RIRB, the
+  codec's widgets walked from pins to converters, one output and one input
+  stream (48 kHz, 16-bit, stereo) on DMA rings that clients' frames reach
+  by IPC with no copy of the server's own; volume and mute on the DACs, a
+  plugged headphone silences the speaker. `play`, `rec`, `vol`; a volume
+  choice in Settings; `make audio-test` checks the tone QEMU plays into a
+  WAV file. audiod.o: 6.4 KB of code. Not yet run on the laptop.
