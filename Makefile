@@ -98,8 +98,8 @@ $(B)/user/siefs/%.o: siefs/%.c siefs/*.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
-# The disk server: virtio, and on arm64 also SD cards (the Raspberry Pis: sd.c).
-VBLK_X  := $(if $(filter arm64,$(ARCH)),$(B)/user/vblk/sd.o $(B)/user/usb/pci.o)
+# The disk server: virtio, NVMe (nvme.c), and on arm64 also SD cards (the Raspberry Pis: sd.c).
+VBLK_X  := $(B)/user/vblk/nvme.o $(if $(filter arm64,$(ARCH)),$(B)/user/vblk/sd.o $(B)/user/usb/pci.o)
 $(B)/vblk.elf: $(B)/user/vblk.o $(VBLK_X) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(VBLK_X) $(ULIB)
 $(B)/user/vblk/%.o: user/vblk/%.c user/vblk/*.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
@@ -556,6 +556,15 @@ usb-dev-test: all $(B)/host/fsck.siefs $(if $(filter arm64,$(ARCH)),$(B)/modules
 	rm -f $(B)/usbdev.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/usbdev.img >/dev/null
 	python3 tools/usbdevtest.py $(SMP) $(B)/host $(B)/usbdev.img $(USBDEV_QEMU_$(ARCH)) -display none -serial stdio
 .PHONY: usb-dev-test
+
+# nvme-test: the NVMe driver (user/vblk/nvme.c) on QEMU's NVMe drives, both architectures:
+# a blank one skipped, SIEOS's disk the SieFS partition of a GPT on the second; bench
+# (NVMEMIB MiB), a file written, the partition checked on the host (tools/nvmetest.py)
+NVMEMIB ?= 64
+nvme-test: all $(B)/host/fsck.siefs $(B)/host/siefs $(if $(filter arm64,$(ARCH)),$(B)/modules.img)
+	rm -f $(B)/nvme-siefs.img && $(B)/host/mkfs.siefs -s 256M -L SIEOS -d $(B)/rootfs $(B)/nvme-siefs.img >/dev/null
+	python3 tools/nvmetest.py $(B)/host $(B)/nvme-siefs.img $(NVMEMIB) $(USBDEV_QEMU_$(ARCH)) -display none -serial stdio
+.PHONY: nvme-test
 
 # ---- SieFS, the file system (siefs/): host tools, tests, and a check that
 # the library also builds the way SIEOS programs are built.
