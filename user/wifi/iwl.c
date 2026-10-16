@@ -514,21 +514,25 @@ static int key_add(const uint8_t *k, int id, int group)
 }
 
 /* ---- Frames we send. A slot: command header (4), TX command (28), the
- * 802.11 header (padded to 4 bytes), the body. */
+ * 802.11 header (then 2 bytes of padding when it is not dword-aligned, which
+ * the firmware wants and marks), an optional SNAP, and the body. The body is
+ * not copied for data frames: it is netd's bytes straight into the slot. */
 static volatile int txlock;
-static int tx_frame(txq_t *q, const uint8_t *hdr, int hl, const uint8_t *body, int n, int host_rate)
+static int tx_frame(txq_t *q, const uint8_t *hdr, int hl, const uint8_t *snap, const uint8_t *body, int n, int host_rate)
 {
-    int pad = hl & 3 ? 4 - (hl & 3) : 0, flen = hl + n;
+    int pad = hl & 3 ? 4 - (hl & 3) : 0, sn = snap ? 8 : 0, flen = hl + sn + n;
     for (long e = now_ms() + 200; (uint16_t)(q->w - q->r) >= NTX - 2; sys_yield()) if (now_ms() > e) return -EAGAIN;
     uint8_t *b = slot(q);
     memset(b, 0, 32);
     b[0] = 0x1c; p16(b + 2, (q->id & 0x1f) << 8 | (q->w & 0xff));
     p16(b + 4, flen);
     p16(b + 6, host_rate ? 1 | 2 : 0);                               /* our rate, no encryption; else the firmware's */
-    p32(b + 8, (uint32_t)(hl / 2) << 8 | (pad ? 1u << 13 : 0));      /* the header's length (words), padded */
+    p32(b + 8, (uint32_t)(hl / 2) << 8 | (pad ? 1u << 13 : 0));      /* the 802.11 header's length (words), padded */
     if (host_rate) p32(b + 20, (bss.band24 ? 0 : 0x100) | 0x8000);   /* 1 Mb/s CCK or 6 Mb/s OFDM, antenna B */
-    memcpy(b + 32, hdr, hl); memset(b + 32 + hl, 0, pad); memcpy(b + 32 + hl + pad, body, n);
-    tfd_put(q, 32 + hl + pad + n, flen);
+    memcpy(b + 32, hdr, hl); memset(b + 32 + hl, 0, pad);
+    if (snap) memcpy(b + 32 + hl + pad, snap, 8);
+    memcpy(b + 32 + hl + pad + sn, body, n);
+    tfd_put(q, 32 + hl + pad + sn + n, flen);
     return 0;
 }
 static int tx_mgmt(int sub, const uint8_t *body, int n)
@@ -536,19 +540,17 @@ static int tx_mgmt(int sub, const uint8_t *body, int n)
     uint8_t h[24] = { (uint8_t)(sub << 4) };
     memcpy(h + 4, bss.bssid, 6); memcpy(h + 10, wifi_mac, 6); memcpy(h + 16, bss.bssid, 6);
     p16(h + 22, (uint32_t)(seq_m++ << 4));
-    return tx_frame(&mgq, h, 24, body, n, 1);
+    return tx_frame(&mgq, h, 24, 0, body, n, 1);
 }
-/* One data frame (QoS, TID 0) to dst: SNAP, the type, the payload. */
+/* One data frame (QoS, TID 0) to dst: the 802.11 header, SNAP, the payload. */
 static long tx_data(const uint8_t *dst, int type, const uint8_t *p, int n)
 {
-    static uint8_t body[8 + 1500];
     uint8_t h[26] = { 0x88, (uint8_t)(keys_on ? 0x41 : 0x01) };      /* QoS data to the AP (+ protected) */
+    uint8_t snap[8] = { 0xaa, 0xaa, 3, 0, 0, 0, (uint8_t)(type >> 8), (uint8_t)type };
     memcpy(h + 4, bss.bssid, 6); memcpy(h + 10, wifi_mac, 6); memcpy(h + 16, dst, 6);
     while (__atomic_exchange_n(&txlock, 1, __ATOMIC_ACQUIRE)) sys_yield();
     p16(h + 22, (uint32_t)(seq_d++ << 4));
-    memcpy(body, "\xaa\xaa\x03\0\0\0", 6); body[6] = (uint8_t)(type >> 8); body[7] = (uint8_t)type;
-    memcpy(body + 8, p, n);
-    long r = tx_frame(&dataq, h, 26, body, 8 + n, !keys_on);
+    long r = tx_frame(&dataq, h, 26, snap, p, n, !keys_on);
     __atomic_store_n(&txlock, 0, __ATOMIC_RELEASE);
     return r;
 }
