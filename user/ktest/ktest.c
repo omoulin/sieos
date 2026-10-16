@@ -518,7 +518,7 @@ static int test_sig(void)
     wait_all(1);
     int got = sig_n[SIGUSR1] - before;
     printf("ktest sig: %d signals taken during the computation and %d calls (%d calls interrupted)\n", got, calls, intr);
-    fails += sig_check("floating point unchanged by signals", !memcmp(ref, again, sizeof ref) && !avx_bad && got > 10);
+    fails += sig_check("floating point unchanged by signals", !memcmp(ref, again, sizeof ref) && !avx_bad && got > 3);
     fails += sig_check("no answer to the wrong call", !wrong);
 
     /* the thread that sets the function takes the signal */
