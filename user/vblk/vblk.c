@@ -5,9 +5,13 @@
  * the disk is the SieFS partition (type 0x5E): the Pis boot from the first
  * one, a FAT partition the firmware reads.
  *
+ * Or an NVMe drive (nvme.c): when there is no virtio disk or SD card, the
+ * first NVMe namespace with a SieFS partition (never a drive without one:
+ * a PC's own drives hold its other systems).
+ *
  * Or a USB key (the USB server, user/usb, serves each USB disk on a port of
  * its own, "usbdisk0"...): when there is no virtio disk or SD card, the
- * first USB disk with a SieFS partition is SIEOS's disk. Partitions: a GUID
+ * first USB disk with a SieFS partition is SIEOS's disk (after NVMe). Partitions: a GUID
  * partition table (GPT, mk/gpt.h: the SieFS partition by its type) or an MBR
  * (type 0x5E); a disk without either is SieFS whole if a superblock says so.
  *
@@ -34,6 +38,7 @@
 
 #include "virtio.h"
 #include "mk/gpt.h"
+#include "nvme.h"
 #if defined(__aarch64__)
 #include "sd.h"
 #endif
@@ -139,10 +144,10 @@ static long request(uint32_t type, uint64_t blk, uint32_t bytes)
     return *status ? -EIO : 0;
 }
 
-/* ---- The backends: virtio (requests above), an SD card (sd.c), or a USB
- * disk (the USB server's port). All move whole 4 KiB blocks of the disk;
+/* ---- The backends: virtio (requests above), an SD card (sd.c), NVMe
+ * (nvme.c), or a USB disk (the USB server's port). All move whole 4 KiB blocks of the disk;
  * `first` is where SIEOS's part starts (the SieFS partition's first block). */
-enum { B_VIRTIO, B_SD, B_USB };
+enum { B_VIRTIO, B_SD, B_NVME, B_USB };
 static int backend;
 static uint64_t first;
 static uint32_t sector = 512;                           /* the device's sector size */
@@ -153,6 +158,7 @@ static long io(int op, uint64_t blk, uint32_t bytes)
 #if defined(__aarch64__)
     if (backend == B_SD) return op == T_FLUSH ? 0 : sd_io(op == T_OUT, (first + blk) * (DISK_BS / 512), bytes / 512, data);
 #endif
+    if (backend == B_NVME) return nvme_io(op == T_IN ? 2 : op == T_OUT, (first + blk) * (DISK_BS / sector), bytes / sector);
     if (backend == B_USB) {
         /* The USB server restarted (it crashed or was killed): wait for the
          * new one and send again. Every request here is safe to repeat
@@ -216,7 +222,26 @@ static int find_siefs(void)
     return magic == 0x0031765346454953ULL;               /* "SIEFSv1": SieFS on the whole disk */
 }
 
-/* No virtio disk nor SD card: a USB disk? Asks the USB server (if it runs:
+/* No virtio disk nor SD card: an NVMe namespace with SieFS? Each
+ * controller's, in turn. */
+static int nvme_disk(void)
+{
+    for (int c = 0;; c++)
+        for (uint32_t ns = 1;; ns++) {
+            uint64_t n;
+            int e = nvme_open(c, ns, &n, &sector);
+            if (e == -2) return 0;
+            if (e < 0) break;
+            if (e) continue;
+            backend = B_NVME;
+            data = nvme_buffer();
+            first = 0;
+            nblocks = n / (DISK_BS / sector);
+            if (find_siefs()) return 1;
+        }
+}
+
+/* Nor NVMe: a USB disk? Asks the USB server (if it runs:
  * it registers "usb" first thing, so a short wait covers its start), which
  * answers once the devices present at boot are ready. */
 static int usb_disk(void)
@@ -259,11 +284,14 @@ int main(int argc, char **argv)
 #endif
     if (ok) find_siefs();                                /* (none found: the whole disk, as before) */
     else {
-        data = (uint8_t *)buf;
-        ok = usb_disk();
+        ok = nvme_disk();
+        if (!ok) {
+            data = (uint8_t *)buf;
+            ok = usb_disk();
+        }
     }
-    static const char *kind[] = { "virtio", "SD card", "USB" };
-    if (!ok) printf("vblk: no disk (virtio, SD card, or a USB key with SieFS)\n");
+    static const char *kind[] = { "virtio", "SD card", "NVMe", "USB" };
+    if (!ok) printf("vblk: no disk (virtio, SD card, or an NVMe drive or USB key with SieFS)\n");
     else printf("vblk: %s disk%s%s, %lu MiB%s\n", kind[backend], backend == B_USB ? " " : "",
                 backend == B_USB ? usb_name : "", (unsigned long)(nblocks >> 8), first ? " (SieFS partition)" : "");
     long port = port_create("disk");
