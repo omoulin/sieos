@@ -151,7 +151,9 @@ tour, file by file, with the crash and on-demand mechanisms:
   clock), 4 workspaces, and the sia strip (Ctrl+Space) to find a file,
   start an app or ask sia. One process, no redraw when nothing happens.
 - **Network** ([docs/net.md](docs/net.md)): TCP/IP, DHCP, DNS, HTTP, TLS 1.3
-  with certificate checking; `fetch URL`.
+  with certificate checking; `fetch URL` (also `curl`, `wget`), `ping`,
+  `host`, `ifconfig`, `netstat`, `traceroute`, `nc`. The cards: virtio,
+  Intel e1000/e1000e (any QEMU `-nic user` works).
 - **SSH** ([docs/ssh.md](docs/ssh.md)): `ssh`, `ssh-keygen` and `sshd`,
   interoperable with OpenSSH (Ed25519 keys, chacha20-poly1305).
 - **sia, the assistant** ([docs/sia.md](docs/sia.md)): below.

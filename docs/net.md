@@ -5,7 +5,7 @@ Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 SIEOS's network is three programs and a library, all written for SIEOS:
 
 ```
-  fetch, sia (remote.c) ...      user/lib: net.c (sockets), http.c (HTTP/1.1),
+  fetch, ping, nc, sia ...       user/lib: net.c (sockets), http.c (HTTP/1.1),
         │                                  tls.c (TLS 1.3), x509.c (certificates)
         │ NET_* messages, port "net"
         ▼
@@ -16,7 +16,8 @@ SIEOS's network is three programs and a library, all written for SIEOS:
   wifid (port "wifi")           the Wi-Fi chip (the Raspberry Pis) ┘  used at a time
         │                       ▲
         ▼
-  virtio-net (QEMU), GENET (Pi 4), RP1's GEM (Pi 5); the CYW43455 on SDIO (both Pis)
+  virtio-net, Intel e1000/e1000e (QEMU), GENET (Pi 4), RP1's GEM (Pi 5);
+  the CYW43455 on SDIO (both Pis)
 ```
 
 `init` starts and supervises `vnet`, `wifid` (on the Pis) and `netd` like
@@ -34,7 +35,8 @@ One program serves "nic0" whatever the card: it tries its backends in turn
 
 | Backend | Card | Receiving | Status |
 |---|---|---|---|
-| `vnet.c` | virtio-net (QEMU, both architectures) | interrupt | tested |
+| `vnet.c` | virtio-net (QEMU, both architectures): legacy or virtio 1.0, on PCI or (arm64) MMIO | interrupt | tested |
+| `e1000.c` | x86-64: Intel 82540EM (QEMU's `e1000`, the default card of the `pc` machine), 82545EM, 82574L (`e1000e`, the default of `q35`) | interrupt | tested (QEMU) |
 | `genet.c` | Raspberry Pi 4: BCM2711 GENET v5, PHY BCM54213PE | interrupt (status bit 13) | **untested on hardware** (QEMU has no GENET) |
 | `gem.c` | Raspberry Pi 5: RP1's Cadence GEM over PCIe, PHY BCM54213PE | polled: 0.2 ms after traffic, up to 10 ms when quiet (RP1's interrupts need MSI-X, not routed yet) | **untested on hardware** (no Pi 5 emulator) |
 
@@ -71,12 +73,41 @@ buffer of their own (the minimum Ethernet frame). Both accept all frames
 ("promiscuous"): netd drops what is not for us, which avoids programming
 the address filters.
 
-The virtio backend: the legacy virtio interface, like the disk driver: a receive queue with 64
-buffers of 2 KiB and a transmit queue, in DMA memory. A second thread waits
+The virtio backend: a receive queue with 64 buffers of 2 KiB and a transmit
+queue, in DMA memory, through `user/lib/virtio.c`, which hides the three
+ways to reach a virtio device (the disk driver uses the same): the legacy
+PCI interface (an I/O port range: QEMU's `virtio-net-pci` on a PCI bus, or
+with `disable-modern=on`), legacy MMIO (arm64's `virtio-net-device`), and
+**virtio 1.0 on PCI** ("modern": registers in memory, in pieces the
+device's PCI capabilities point to; QEMU's `virtio-net-pci` on PCIe, behind
+a root port, with `disable-legacy=on`, and on arm64's `virt`). x86-64 takes
+the legacy interface when the device has both. All three take the same
+queue layout; a modern card's frame header is 12 bytes instead of 10. A second thread waits
 for the card's interrupt (a message), collects every frame received, and
 sends them to netd in **one** message. Frames to send arrive from netd in
 one message too, straight into the DMA memory the card reads (no copy of
 our own); the reply waits until the card has taken them.
+
+The e1000 backend (x86-64): Intel's gigabit cards as QEMU emulates them,
+all with the same registers and "legacy" descriptors: a ring of 64 receive
+buffers of 2 KiB and a ring of 256 transmit descriptors in DMA memory. The
+card is reset (its MAC address comes back from its EEPROM into the first
+receive-address register), filters what it receives (our address and
+broadcasts), strips the CRC and pads short frames itself; an interrupt
+(frames received, the ring running low, an overrun) wakes the receiving
+thread, and the line is acknowledged once every frame is taken, as with
+virtio. Frames to send are one descriptor each, at most 255 at a time; the
+reply waits for the last one's "done" bit. The cable: `STATUS`, read once a
+second like the Pis' PHYs.
+
+**PCI** (`user/lib/pci.c`, shared with the USB server and the disk's SD
+controllers): x86-64 reads configuration space through the kernel and
+walks every bus behind the bridges, taking the addresses and interrupt
+lines the firmware gave. On arm64's `virt` there is no firmware: the
+"pci-host-ecam-generic" bridge's configuration space is in memory (ECAM,
+bus 0), each BAR gets an address in the bridge's memory window (device d's
+BAR i at d × 16 MiB + i MiB), and the interrupt comes from the bridge's
+`interrupt-map`, read from the device tree once.
 
 vnet also reads the CMOS real-time clock once at start (ports 0x70/0x71)
 and passes the date to netd: TLS needs today's date to check certificates,
@@ -211,8 +242,28 @@ Sep 25 03:12:01 2026 GMT", sha256 `a41b5d35...00505`, 121 roots, fetched
 
 - `fetch [-v] [-k] [-o FILE] URL`: a URL's body (on the screen or into a
   file); `-v` status, headers and cipher; `-k` no certificate check (tests).
-  Also `fetch -i` (address, counters, date), `fetch -p HOST [N]` (ping),
-  `fetch -r HOST` (DNS), `fetch -l PORT` (answer one HTTP request: a test).
+  `fetch -l PORT` answers one HTTP request (a test).
+- **The everyday commands** are other names of `/bin/fetch` (symbolic links,
+  `NETLINKS` in the Makefile): the name it was started by says which. One
+  program holds the network library once (65 KB of code on x86-64, TLS
+  included); the nine commands added 2.5 KB to it, where nine programs
+  would each carry the library (12 KB of code for even `hello`; 60 KB for
+  `curl` and `wget`, with TLS).
+
+  | Command | |
+  |---|---|
+  | `curl [-v] [-k] [-o FILE] URL` | the same as `fetch` |
+  | `wget [-k] [-O FILE] URL` | into a file named as the URL's last part (else `index.html`) |
+  | `ping HOST [-c COUNT]` | ICMP echo, one a second (4 by default), then how many came back |
+  | `host NAME`, `nslookup NAME` | the address of a name (DNS) |
+  | `ifconfig` | the interface in use (`nic0` the cable, `wifi`), its link, MAC and MTU, address/mask, gateway, DNS, the counters, the date |
+  | `netstat` | every socket: TCP or UDP, our port, the other side, TCP's state, the owner's pid (`NET_SOCKETS`) |
+  | `traceroute HOST` | pings with a growing time to live (1-30): each router on the way answers "time exceeded" |
+  | `nc [-u] HOST PORT` | connect (TCP, or UDP): each line typed goes there, what comes back is shown; Ctrl-D ends |
+  | `nc -l [-u] PORT` | the same, waiting for one connection (UDP: answers the last sender) |
+
+  The older `fetch -i`, `fetch -p HOST [N]` and `fetch -r HOST` still work
+  (`ifconfig`, `ping`, `host`).
 - `ssh [-p PORT] [-i KEY] [USER@]HOST [COMMAND]`, `ssh-keygen` and the
   server `sshd` (port 22, off until `/etc/ssh/sshd_config` exists):
   SSH-2 with OpenSSH's default algorithms, on the same sockets and crypto
@@ -229,7 +280,10 @@ Sep 25 03:12:01 2026 GMT", sha256 `a41b5d35...00505`, 121 roots, fetched
 
 ## In QEMU
 
-`make run` adds `-netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-modern=on,addr=5`:
+`make run` adds `-netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-modern=on,addr=5`,
+but any card QEMU gives by default works too: a plain `-nic user` is an
+e1000 on x86-64's `pc` machine, an e1000e on `q35`, a virtio 1.0 card on
+PCIe on arm64's `virt`. With any of them
 QEMU's user network gives 10.0.2.15, the gateway 10.0.2.2 (which is also the
 development machine), DNS 10.0.2.3. The card sits at PCI slot 5 so that its
 interrupt line (10) is not the disk's (11): the kernel gives each interrupt
@@ -248,17 +302,28 @@ host afterwards, a listening socket reached from the host, HTTPS to
 example.com and huggingface.co, TLS 1.3 servers (openssl s_server) with a
 test CA (RSA-PSS, forced AES-128-GCM, forced P-256 with HelloRetryRequest,
 ECDSA P-384) and certificates that must be refused (expired, another name,
-unknown issuer); sia against a mock OpenAI-compatible server (tools/netmock.py)
+unknown issuer); the commands (`ifconfig`, `ping -c`, `host`, `nslookup`,
+`traceroute`, `wget`, `curl -o`, `netstat` showing a listening socket, `nc`
+to a host's TCP and UDP servers and `nc -l` / `nc -l -u` reached from the
+host, both ways); sia against a mock OpenAI-compatible server (tools/netmock.py)
 over HTTP and HTTPS, a wrong key, a conversation; netd restarted during a
 transfer.
 
+`make net-nic-test`: the essentials (the card found, DHCP, ping, DNS,
+HTTP and a 24 MiB download, HTTPS to example.com and to a test-CA server)
+on each other card (`NICS_x86_64`, `NICS_arm64` in the Makefile): x86-64
+`pc` + e1000, `q35` + e1000e, `pc` and `q35` + virtio 1.0 without the
+legacy interface; arm64 `virt` + virtio 1.0 on PCIe. `tools/nettest.py`
+takes `NET_NIC=CARD` (QEMU's `-device`), `NET_MACHINE=q35` and
+`NET_QUICK=1` for that.
+
 | | |
 |---|---|
-| Download (HTTP, QEMU user network, KVM) | 65-78 MB/s |
+| Download (HTTP, QEMU user network, KVM) | 65-110 MB/s; by card (2026-10-16): e1000 110, virtio 1.0 87-106, e1000e 33 MB/s; arm64 (emulated) 27 MB/s |
 | HTTPS (ChaCha20-Poly1305), crypto alone on the host | 400 MB/s (AES-128-GCM: 31 MB/s) |
 | Signature checks (host) | ECDSA ~2.2 ms, RSA ~1.7 ms |
 | Memory | vnet ~420-440 KiB (192 KiB of it DMA buffers; the device tree is dropped after setup), netd ~300 KiB plus 320 KiB per TCP connection |
-| Code | netd 41 KB, vnet 20 KB (x86-64) / 44 KB (arm64, with the two Pi backends), fetch 78 KB (with TLS) |
+| Code (text, 2026-10-16) | netd 36 KB, vnet 21 KB (x86-64, with e1000) / 47 KB (arm64, with the two Pi backends), fetch 65 KB (with TLS and the commands) |
 
 ## Limits
 
@@ -282,5 +347,16 @@ transfer.
 - The card sits in PCI slot 5 in QEMU (line 10, apart from the disk's); the
   kernel now lets up to 4 drivers share a line, so this is no longer needed,
   only kept.
+- Cards: e1000 only on x86-64 (arm64 has virtio, the Pis their own); the
+  e1000e is slower in QEMU (33 MB/s). On arm64's `virt`, virtio on PCI is
+  virtio 1.0 only (a legacy-only card, `disable-modern=on`, is not found:
+  its I/O ports would need the bridge's I/O window), on bus 0, with INTx
+  interrupts (no MSI); x86-64 also uses INTx.
+- `traceroute`: QEMU's user network does not count the time to live, so
+  every host is one hop away there; the "time exceeded" answers of real
+  routers are untested.
+- `nc` works a line at a time (the console gives typed lines); when the
+  other side closes, it ends at the next Enter (a console read under way
+  cannot be taken back); no `nc` in a pipe (the shell has no pipes).
 - netd handles one message at a time; a connection's buffers are allocated
   when it opens (320 KiB) and freed when it ends.

@@ -19,9 +19,9 @@
  * device fills in. The driver writes the queue's number to a "notify"
  * register; the device answers with an interrupt.
  *
- * We use the "legacy" interface, the smallest one to drive: on x86-64 over
- * PCI (QEMU needs "disable-modern=on"), on arm64 over MMIO (QEMU's virt:
- * "-device virtio-blk-device"); user/lib/virtio.c hides the difference.
+ * user/lib/virtio.c hides how the device is reached: the "legacy" interface
+ * on PCI (x86-64) or MMIO (arm64's virt: "-device virtio-blk-device"), or
+ * virtio 1.0 on PCI (QEMU's virtio-blk-pci on PCIe, or disable-legacy=on).
  *
  * No copies of our own: a client's data arrives (IPC) straight into the
  * buffer the device reads, and the device writes read data where the reply

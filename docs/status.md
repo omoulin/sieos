@@ -14,14 +14,14 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Users, login, permissions | yes | yes | yes (serial) | untested |
 | Supervisor, on-demand servers | yes | yes | yes | untested |
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
-| Network, TLS | yes | yes | no driver yet | no driver yet |
+| Network, TLS | yes: virtio (legacy, 1.0), e1000, e1000e | yes: virtio (MMIO, PCIe) | no driver yet | no driver yet |
 | SSH client and server | yes | yes | needs the network | needs the network |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sia-test`, `demand-test`, `net-test`, `ssh-test`, `make-test`, `py-test` (both
+`kernel-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -92,3 +92,10 @@ checklist in [raspberrypi.md](raspberrypi.md).
   by sicc on AArch64); in the desktop's menu; `make py-test`
   ([python.md](python.md)). sicc: `#include MACRO` inside an `#if` group,
   and static flexible array members with initializers (pointers included).
+- **2026-10-16.** The network on QEMU's other cards: Intel's e1000 and
+  e1000e (the default cards of x86-64's `pc` and `q35`), and virtio 1.0 on
+  PCI, also for the disk (arm64's `virt` with a plain `-nic user`); one PCI
+  library for every driver (`user/lib/pci.c`). The everyday network
+  commands as names of `/bin/fetch`: `ping`, `host`/`nslookup`,
+  `ifconfig`, `netstat`, `traceroute`, `nc`, `wget`, `curl`
+  ([net.md](net.md#programs)); `make net-nic-test`.

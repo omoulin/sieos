@@ -415,6 +415,8 @@ static const struct { const char *name, *help; int (*run)(int, char **); } cmds[
     { "id",     "your user and group numbers",              cmd_id },
     { "groups", "the groups you belong to",                 cmd_groups },
     { "logout", "end this session (also: exit)",            cmd_logout },
+    { "fetch",  "[-o FILE] URL  get a web page (also: curl, wget)", 0 },
+    { "ping",   "HOST; also host NAME, ifconfig, netstat, nc, traceroute: the network", 0 },
     { "PROGRAM","[ARGS] [&]  run /bin/PROGRAM (&: do not wait)", 0 },
     { "exit",   "end this session",                         cmd_logout },
     { "poweroff", "turn the machine off (root)",            cmd_power },
