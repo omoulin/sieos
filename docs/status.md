@@ -20,7 +20,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sia-test`, `demand-test`, `net-test`, `make-test` (both
+`kernel-test`, `sia-test`, `demand-test`, `net-test`, `mail-test`, `make-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -79,3 +79,11 @@ checklist in [raspberrypi.md](raspberrypi.md).
   sealed with ChaCha20-Poly1305, its key wrapped by the user's password
   (Argon2id); it opens at login and gets a new wrapping when the password
   changes ([siefs.md](siefs.md#encryption), [accounts.md](accounts.md)).
+- **2026-10-16.** Mail ([desktop.md](desktop.md#mail)): a window of the
+  desktop (folders, messages, reading, writing, replying, forwarding,
+  deleting, the account) and `/bin/mail`, which does the talking: IMAP or
+  POP3 to read, SMTP to send (AUTH PLAIN/LOGIN), always over TLS (at once
+  or after STARTTLS/STLS); MIME text, quoted-printable, base64 and encoded
+  words decoded. The window runs `mail -S` as the user on a console of its
+  own, so the desktop links no TLS; `make mail-test` against a mail server
+  on the host (`tools/mailserver.py`).

@@ -129,6 +129,7 @@ What a window can be:
   beats, 1, 5, 9..., brighter) and the playhead lights its column. See
   [gpio.md](gpio.md).
 - **Settings** (`settings.c`): below.
+- **Mail** (`mail.c`, the app *Mail*): [below](#mail).
 
 ![Files](screens/files.png)
 
@@ -273,14 +274,80 @@ kind=terminal
 | `name` | what the strip and the menus show |
 | `run` | the program (absolute path) |
 | `args` | its arguments (one line) |
-| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings |
+| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `mail`: opens Mail |
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
-  Settings, Services, Hello, Fetch a web page, Disk benchmark. Yours are
+  Settings, Mail, Services, Hello, Fetch a web page, Disk benchmark. Yours are
   any `.app` file in your home folder (the strip and Files find them).
 - Starting an app opens a terminal **as you**; its shell runs the app's
   command when it first asks for a line. When the app ends, the shell
   stays (`exit` closes it).
+
+## Mail
+
+*Mail* (the menu, or "mail" in the strip) reads mail with **IMAP** or
+**POP3** and sends it with **SMTP**, always over TLS 1.3 with the
+certificate checked against `/etc/ssl/roots`.
+
+![Mail: INBOX and a message](screens/mail.png)
+
+- **The account**, asked the first time (and with *Account*): your name,
+  address, how mail comes (IMAP or POP3; for POP3, *Leave on server*,
+  yes by default), the incoming and outgoing servers and ports, user name
+  (the address if empty) and password. Kept in `~/.mail` (key=value
+  lines, mode 600, in your home, which is encrypted). Ports 993 (IMAP),
+  995 (POP3) and 465 (SMTP) speak TLS at once; others (143, 110, 587)
+  start in clear and must switch to TLS (STARTTLS, STLS) before the
+  password is sent, or nothing is sent.
+- **The window:** the buttons (*Check*, *New*, *Reply*, *Forward*,
+  *Delete*, *Account*); the folders on the left (IMAP's LIST; POP3:
+  INBOX); the newest 100 messages (from, subject, date; newest first;
+  unread ones bold, with a dot); under them the message clicked:
+  From, To, Cc, Date, Subject, the attachments by name (not opened), and
+  the text wrapped to the window (the wheel or PgUp/PgDn scrolls it).
+  Up/Down opens the next one, Del deletes. Opening a message marks it read.
+- **The text:** the text/plain part of a MIME message (else its HTML,
+  tags stripped), quoted-printable and base64 decoded, Latin-1 made
+  UTF-8, encoded words (`=?UTF-8?B?...?=`) in the headers decoded. The
+  desktop's font is ASCII: accents are dropped, other characters show as
+  `?` (`mail read` on a terminal shows the UTF-8).
+- **Writing:** *New*, *Reply* (to the sender, "Re:", the text quoted with
+  `>`, `In-Reply-To` and `References`), *Forward* (the text under a
+  "Forwarded message" header); To, Cc (addresses separated by commas),
+  Subject and the text; Tab goes to the next field; *Send*. The message
+  goes out as UTF-8 text with Date and Message-ID, CRLF lines, and lines
+  starting with a dot doubled. No copy is kept (most providers keep one).
+- **Delete:** IMAP: flagged `\Deleted`, then EXPUNGE; POP3: the copy here
+  and the server's (DELE).
+- **POP3** keeps the messages in `~/Mail/INBOX`, one file each named by
+  the server's UIDL, so none is fetched twice; read ones carry the
+  attribute `seen=1`. With *Leave on server* off, each is deleted from the
+  server once it is here. Messages over 1 MiB are left on the server.
+
+The window does no networking itself. It starts **`/bin/mail -S`** as
+you, on the console `atlas#1000`, and talks to it like a terminal does:
+each command is the answer to the helper's `CON_READ` (one line, words
+separated by tabs), and its answer comes back with `CON_WRITE`, ending in
+a line of one `\x1e` byte. So the desktop never waits for a server,
+atlas does not link TLS (it grows by 22 KB, the window, instead of about 80 KB with the protocols and TLS), and
+what comes from the network is parsed by a process of yours, not by the
+desktop, which runs as root. The helper keeps its IMAP connection between
+commands and is ended when the window closes or you log out.
+
+```
+   atlas (Mail window) ──"list\tINBOX"──► mail -S (as you) ──IMAP / POP3 / SMTP, TLS──► servers
+                       ◄──lines, then \x1e──┘
+```
+
+The same program is a command, on a terminal:
+
+| Command | What it does |
+|---|---|
+| `mail` / `mail list [FOLDER]` | the newest 100 messages: id, `*` if unread, date, from, subject (tab-separated) |
+| `mail folders` | the folders |
+| `mail read ID [FOLDER]` | a message as text (and marked read) |
+| `mail delete ID [FOLDER]` | deleted |
+| `mail send FILE` | a draft: `To:`, `Cc:`, `Subject:` lines, a blank line, the text |
 
 ## How it works
 
@@ -299,7 +366,7 @@ between processes.
 |---|---|
 | `atlas.c` | the session: terminals, the Deskbar, the sia strip, menus, input, login |
 | `wm.c` | the windows: tabs, boxes, moving and resizing, the stacking order, workspaces |
-| `files.c`, `edit.c`, `panel.c`, `settings.c` | the windows' insides: Files, the editor, sia, Settings |
+| `files.c`, `edit.c`, `panel.c`, `settings.c`, `mail.c` | the windows' insides: Files, the editor, sia, Settings, Mail |
 | `icons.c` | the icons (12 x 12 pixel maps; their outline alone on a tab) and the SIEOS cube (16 x 16) |
 | `setup.c` | the first start on the screen (the accounts) |
 | `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `screen.c` | drawing (and the looks), the fonts, the screen |

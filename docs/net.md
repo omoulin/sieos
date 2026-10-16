@@ -213,6 +213,10 @@ Sep 25 03:12:01 2026 GMT", sha256 `a41b5d35...00505`, 121 roots, fetched
   file); `-v` status, headers and cipher; `-k` no certificate check (tests).
   Also `fetch -i` (address, counters, date), `fetch -p HOST [N]` (ping),
   `fetch -r HOST` (DNS), `fetch -l PORT` (answer one HTTP request: a test).
+- `mail` (`user/mail`): IMAP, POP3 and SMTP over TLS, for the desktop's
+  Mail window and the command line ([desktop.md](desktop.md#mail)). It
+  uses the sockets and `tls_connect` on a socket it opened itself, so it
+  can switch to TLS after STARTTLS (IMAP, SMTP) or STLS (POP3).
 - **sia's remote backend** (`user/sia/remote.c`): an OpenAI-compatible API.
   `sia config backend=remote`, `sia config url=https://api.example.com/v1`
   (or `http://10.0.2.2:8000/v1` for a server on the development machine),
