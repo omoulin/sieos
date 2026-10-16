@@ -507,7 +507,7 @@ static int test_sig(void)
     use_fp = 0;
     thread_start(ipc_server, 0, 16384);
     int calls = 0, intr = 0, wrong = 0;
-    for (int i = 0; i < 20000; i++) {
+    for (int i = 0; i < 100000; i++) {
         m = (msg_t){ .w = { i } };
         long e;
         while ((e = ipc_call(ipc_port, &m)) == -EINTR) { intr++; m = (msg_t){ .w = { i } }; }
