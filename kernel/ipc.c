@@ -443,8 +443,8 @@ long ipc_reply_recv(long token, long id, msg_t *um)
  * whichever CPU is free. */
 long irq_bind(int irq, long id)
 {
-    int level = irq & IRQ_LEVEL;
-    irq &= ~IRQ_LEVEL;
+    int level = irq & IRQ_LEVEL, low = irq & IRQ_LOW;
+    irq &= ~(IRQ_LEVEL | IRQ_LOW);
     if (!cur->proc->driver) return -EPERM;
     port_t *p = port_get(id);
     int mine = p && p->owner == cur->proc;
@@ -459,7 +459,7 @@ long irq_bind(int irq, long id)
     }
     r = -EBUSY;
     if (k < 0) goto out;                                 /* IRQSHARE drivers on it already */
-    if (level) irq_set_level(irq);
+    if (level) irq_set_level(irq, low);
     r = -EINVAL;
     if (first && irq_route(irq, irq_cpu++ % ncpus())) goto out;
     irq_port[irq][k] = id;

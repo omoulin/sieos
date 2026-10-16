@@ -9,22 +9,22 @@
  * then up to 6 keys held. We compare with the previous report to find the
  * presses and releases, and repeat a held key (USB keyboards do not).
  * Mice and tablets are read with their own "report descriptor", which
- * says where the buttons, X, Y and the wheel are in a report.
+ * says where the buttons, X, Y and the wheel are in a report (user/lib/
+ * hidrep.c, shared with the I2C touchpads of user/i2chid).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "usb.h"
+#include "hidrep.h"
 
 typedef struct {
     usbdev_t *d;
-    int dci, len, kbd, rid;                  /* rid: the report id carrying X/Y (0: none) */
+    int dci, len, kbd;
     uint8_t *buf, prev[8];
     uint64_t bus;
-    int bpos, bn, xpos, xsz, ypos, ysz, wpos, wsz, absolute;
-    int32_t xmax, ymax;
+    hidrep_t r;                              /* a pointer's report layout (user/lib/hidrep.c) */
 } hid_t;
 static int nhid;
-static long con;
 
 /* Usage (the key's USB number, 4..0x52) -> set-1 scancode; 0x100: an
  * extended one (0xE0 first). */
@@ -39,11 +39,6 @@ static const uint16_t usage_sc[0x53] = {
 /* The modifier bits: left ctrl, shift, alt, gui; right ctrl, shift, alt, gui. */
 static const uint16_t mod_sc[8] = { 0x1D, 0x2A, 0x38, 0, 0x11D, 0x36, 0x138, 0 };
 
-static void send(const con_inject_t *v, int n)
-{
-    msg_t m = { .w = { CON_INJECT }, .sbuf = v, .slen = n * sizeof *v };
-    call_named(&con, "console", &m, 1);
-}
 static int key(con_inject_t *v, int n, int sc, int up)
 {
     if (!sc) return n;
@@ -67,7 +62,7 @@ static void repeat_thread(void *a)
         if (wait > 0) { sys_sleep(wait); continue; }
         if (u != rep_usage) continue;
         con_inject_t v[2];
-        send(v, key(v, 0, usage_sc[u], 0));
+        hid_send(v, key(v, 0, usage_sc[u], 0));
         rep_at = sys_clock() + 33000000;
     }
 }
@@ -94,33 +89,7 @@ static void keyboard(hid_t *h, const uint8_t *r)
             if (rep_tid) sys_wake(rep_tid);
         }
     memcpy(h->prev, r, 8);
-    if (n) send(v, n);
-}
-
-static int32_t bits(const uint8_t *r, int len, int pos, int sz, int sign)
-{
-    uint32_t v = 0;
-    for (int i = 0; i < sz && i < 32; i++) {
-        int b = pos + i;
-        if (b / 8 < len && r[b / 8] >> (b % 8) & 1) v |= 1u << i;
-    }
-    if (sign && sz < 32 && v & 1u << (sz - 1)) v |= ~0u << sz;
-    return (int32_t)v;
-}
-
-static void pointer(hid_t *h, const uint8_t *r, int len)
-{
-    if (h->rid) { if (r[0] != h->rid) return; r++; len--; }
-    con_inject_t v = { .kind = h->absolute ? INJ_ABS : INJ_REL };
-    int b = h->bn ? bits(r, len, h->bpos, h->bn > 3 ? 3 : h->bn, 0) : 0;
-    v.buttons = (b & 1 ? MB_LEFT : 0) | (b & 2 ? MB_RIGHT : 0) | (b & 4 ? MB_MIDDLE : 0);
-    int32_t x = bits(r, len, h->xpos, h->xsz, !h->absolute), y = bits(r, len, h->ypos, h->ysz, !h->absolute);
-    if (h->absolute) {
-        v.x = (uint16_t)((int64_t)(x < 0 ? 0 : x) * 65535 / (h->xmax > 0 ? h->xmax : 32767));
-        v.y = (uint16_t)((int64_t)(y < 0 ? 0 : y) * 65535 / (h->ymax > 0 ? h->ymax : 32767));
-    } else { v.dx = (int16_t)x; v.dy = (int16_t)y; }
-    if (h->wsz) v.wheel = (int8_t)bits(r, len, h->wpos, h->wsz, 1);
-    send(&v, 1);
+    if (n) hid_send(v, n);
 }
 
 /* A report arrived: use it, and queue the next transfer. */
@@ -133,48 +102,10 @@ static void hid_async(usbdev_t *d, int dci, int code, uint32_t left)
             dsync(h->buf, h->len);
             int got = h->len - (int)left;
             if (h->kbd) { if (got >= 8) keyboard(h, h->buf); }
-            else pointer(h, h->buf, got);
+            else hid_input(&h->r, h->buf, got);
         } else if (code == CC_STALL) return;                 /* (left alone: rare) */
         xfer_async(d, dci, h->bus, h->len);
     }
-}
-
-/* Where the buttons, X, Y and wheel are, from the report descriptor. */
-static void parse(hid_t *h, const uint8_t *p, int n)
-{
-    int page = 0, size = 0, count = 0, rid = 0, pos = 0, umin = 0, umax = 0, nu = 0, usages[16];
-    int32_t lmax = 0;
-    for (int i = 0; i < n; ) {
-        int b = p[i], sz = (b & 3) == 3 ? 4 : b & 3, type = b >> 2 & 3, tag = b >> 4;
-        uint32_t v = 0;
-        for (int k = 0; k < sz && i + 1 + k < n; k++) v |= (uint32_t)p[i + 1 + k] << 8 * k;
-        i += 1 + sz;
-        if (type == 1) {                                     /* global */
-            if (tag == 0) page = v;
-            else if (tag == 2) lmax = sz == 1 ? (int8_t)v : sz == 2 ? (int16_t)v : (int32_t)v;
-            else if (tag == 7) size = v;
-            else if (tag == 8) { rid = v; pos = 0; }
-            else if (tag == 9) count = v;
-        } else if (type == 2) {                              /* local */
-            if (tag == 0 && nu < 16) usages[nu++] = v & 0xFFFF;
-            else if (tag == 1) umin = v;
-            else if (tag == 2) umax = v;
-        } else if (type == 0) {                              /* main */
-            if (tag == 8 && !(v & 1)) {                      /* an input, data (not padding) */
-                for (int k = 0; k < count; k++) {
-                    int u = k < nu ? usages[k] : nu ? usages[nu - 1] : umin + k;
-                    int at = pos + k * size;
-                    if (page == 9 && !h->bn) { h->bpos = at; h->bn = count; h->rid = rid; }
-                    if (page == 1 && u == 0x30) { h->xpos = at; h->xsz = size; h->absolute = !(v & 4); h->xmax = lmax; h->rid = rid; }
-                    if (page == 1 && u == 0x31) { h->ypos = at; h->ysz = size; h->ymax = lmax; }
-                    if (page == 1 && u == 0x38) { h->wpos = at; h->wsz = size; }
-                }
-            }
-            if (tag == 8) pos += size * count;
-            nu = 0; umin = umax = 0;
-        }
-    }
-    (void)umax;
 }
 
 /* ---- A HID interface: a keyboard (boot protocol), or a pointer. */
@@ -204,18 +135,18 @@ int hid_attach(usbdev_t *d, const uint8_t *f, int len)
     } else {
         static uint8_t rd[1024];
         if (rlen > (int)sizeof rd) rlen = sizeof rd;
-        if (rlen && control(d, 0x81, 6, 0x2200, f[2], rd, rlen) > 0) parse(h, rd, rlen);
-        if (!h->xsz && f[6] == 1 && f[7] == 2) {                 /* no layout found: a boot mouse */
+        if (rlen && control(d, 0x81, 6, 0x2200, f[2], rd, rlen) > 0) hid_parse(&h->r, rd, rlen);
+        if (!h->r.xsz && f[6] == 1 && f[7] == 2) {               /* no layout found: a boot mouse */
             control(d, 0x21, 0x0B, 0, f[2], 0, 0);
-            h->bpos = 0; h->bn = 3; h->xpos = 8; h->xsz = 8; h->ypos = 16; h->ysz = 8; h->rid = 0;
+            h->r = (hidrep_t){ .bn = 3, .xpos = 8, .xsz = 8, .ypos = 16, .ysz = 8 };
         }
-        if (!h->xsz) { free(h); return -1; }
+        if (!h->r.xsz) { free(h); return -1; }
     }
     d->hid[slot] = h;
     d->async[h->dci] = hid_async;
     if (!nhid++) {
         rep_tid = thread_start(repeat_thread, 0, 8192);
-        send(0, 0);                                              /* con: a keyboard or pointer is here */
+        hid_send(0, 0);                                          /* con: a keyboard or pointer is here */
     }
     xfer_async(d, h->dci, h->bus, h->len);
     return 0;

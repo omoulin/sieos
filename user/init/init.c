@@ -98,6 +98,10 @@ static svc_t svc[MAXSVC] = {
     /* accounts: a login or a passwd now and then; 1 ms to start */
     { .i = { "auth",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "auth", 5 * MIN }, "/bin/auth", "auth", .watch = "auth" },
     { .i = { "login", 0, 0, 0, 0, SVC_ALWAYS, 0 }, "/bin/login", "login", .console = 1 },
+#if defined(__x86_64__)
+    /* a laptop's I2C touchpad (a driver, from the ACPI tables); with none it ends with 0 */
+    { .i = { "i2chid", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/i2chid", "i2chid" },
+#endif
     /* the desktop (screen: a driver); with no display card it ends with 0: not restarted */
     { .i = { "atlas", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/atlas", "atlas", .watch = "atlas" },
     /* the console's log on a Pimoroni GFX HAT (a Pi's screen and buttons, a driver);
