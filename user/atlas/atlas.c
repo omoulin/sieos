@@ -1690,6 +1690,7 @@ int main(int argc, char **argv)
     (void)argc; (void)argv;
     size_t dn = 0;                                      /* the size chosen in Settings (if the screen takes any) */
     char *dc = file_get("/etc/display.conf", &dn);
+    PW = PH = 0;                                        /* (none chosen: the screen's own size) */
     if (dc) {
         int w = 0, h = 0;
         const char *p = dc;

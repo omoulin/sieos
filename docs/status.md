@@ -162,3 +162,14 @@ checklist in [raspberrypi.md](raspberrypi.md).
   on one, before a USB key, never writing a drive without one. `bench` on
   QEMU's NVMe (KVM): 376-396 MiB/s written, 557-629 MiB/s read (virtio:
   217 / 213). vblk: +2.4 KB of code (x86-64), +3.6 KB (arm64); `make nvme-test`.
+- **2026-10-16.** The laptop's Intel display set up by SIEOS itself
+  (`user/atlas/igfx.c`, [desktop.md](desktop.md#how-it-works)): Raptor
+  Lake-S UHD Graphics (display version 12), the eDP panel and up to two DP
+  or HDMI monitors showing the same picture; the VBT from the ACPI
+  OpRegion, EDID over DP AUX and GMBUS, CDCLK raised through pcode when a
+  mode needs it, DPLLs, combo PHY voltage swing, DP link training, pipe
+  scalers (any size up to the firmware's), the panel's power sequence and
+  PWM backlight (a Brightness choice in Settings). Everything it does is
+  logged to `/etc/igfx.log`; anything it cannot do leaves the firmware's
+  screen. Not yet tried on the laptop; QEMU's paths unchanged (`gui-test`,
+  `usb-test`). atlas: +17.6 KB of code (igfx.o 17.1 KB, built `-Os`).
