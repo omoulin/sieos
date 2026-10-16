@@ -18,6 +18,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [accounts.md](accounts.md) | users, logins, the first start, Argon2id, account files |
 | [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, Git, apps, the assistant |
 | [audio.md](audio.md) | sound: Intel HD Audio playing and recording, the audio server, `play`, `rec`, `vol`, the test |
+| [bluetooth.md](bluetooth.md) | Bluetooth: btd (HCI, L2CAP, SMP), the AX210 over USB and the Pis' UART, keyboards and mice (classic HID, HID over GATT), `bt`, Settings |
 | [net.md](net.md) | the network: drivers, TCP/IP, DHCP, DNS, HTTP, TLS 1.3/1.2, `fetch` |
 | [ssh.md](ssh.md) | SSH: `ssh`, `ssh-keygen`, `sshd`; the transport, Ed25519, how a remote shell gets its terminal, tests |
 | [sia.md](sia.md) | the assistant: siad, backends (local, OpenAI-compatible), memory |

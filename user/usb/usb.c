@@ -1,7 +1,8 @@
 /*
  * usb - The USB server: the xHCI controller (xhci.c, found by pci.c) and
  * the devices plugged in it: USB disks (msc.c: a key can be SIEOS's whole
- * disk), keyboards and mice (hid.c), and hubs (here).
+ * disk), keyboards and mice (hid.c), Bluetooth adapters (btusb.c: a pipe
+ * for btd), and hubs (here).
  *
  * A new device, step by step (enumeration):
  *   1. a port says "connected"; a USB 2 port is reset (USB 3 ones train
@@ -223,6 +224,7 @@ static usbdev_t *attach(usbdev_t *hub, int port, int speed)
         if (cls == 9 && !hub_attach(d, f, len)) what = "hub";
         else if (cls == 8 && !msc_attach(d, f, len)) what = "disk";
         else if (cls == 3 && !hid_attach(d, f, len)) what = "keyboard/mouse";
+        else if (cls == 0xE0 && !btusb_attach(d, f, len)) what = "Bluetooth";
     }
     static const char *sp[] = { "?", "full", "low", "high", "super", "super+" };
     char where[24];
@@ -245,6 +247,7 @@ static void detach(usbdev_t *d)
     for (int p = 0; p < 16; p++) if (d->child[p]) { detach(d->child[p]); d->child[p] = 0; }
     msc_detach(d);
     hid_detach(d);
+    btusb_detach(d);
     if (d->slot) { xhci_cmd(0, 0, 0, 10 << 10 | d->slot << 24, 0); slot_dev(d->slot, 0); }
 }
 

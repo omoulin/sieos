@@ -12,6 +12,7 @@
  *                     ├─► vnet  (/bin/vnet, driver)    the network card     port "nic0"
  *                     ├─► netd  (/bin/netd)            TCP/IP, DHCP, DNS    port "net"
  *                     ├─► audio (/bin/audiod, driver)  sound                port "audio"
+ *                     ├─► bt    (/bin/btd, driver)     Bluetooth            at boot
  *                     └─► sia   (/bin/siad, 4.5 GiB)   the assistant        port "sia"
  *
  * On demand: a server with a port in the table is not started at boot.
@@ -121,6 +122,9 @@ static svc_t svc[MAXSVC] = {
      * port is there to find; on a machine with no Wi-Fi chip it ends with 0
      * and is not started again */
     { .i = { "wifi",  0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/wifid", "wifid", .watch = "wifi" },
+    /* Bluetooth (a driver, docs/bluetooth.md): the port "bt"; at boot, so bonded
+     * keyboards and mice come back; with no adapter it ends with 0 */
+    { .i = { "bt",    0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/btd", "btd", .watch = "bt" },
     { .i = { "netd",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "net", 10 * MIN },  "/bin/netd", "netd" },
     /* the SSH server (docs/ssh.md): only where /etc/ssh/sshd_config exists, else it
      * ends with 0 at once and is not started again; it listens, so it starts the

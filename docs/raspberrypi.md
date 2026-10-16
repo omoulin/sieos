@@ -302,7 +302,9 @@ serial console for each.
 
 6. The serial console needs `enable_uart=1` and `dtoverlay=disable-bt`
    (written in `config.txt`; the overlay file must be in `overlays/`):
-   SIEOS drives the PL011 (UART0), which Bluetooth otherwise uses.
+   SIEOS drives the PL011 (UART0), which Bluetooth otherwise uses;
+   Bluetooth takes the mini UART instead, with `core_freq_min=500` (its
+   clock is the VPU's): checks in [bluetooth.md](bluetooth.md).
 7. The spin-table start of the 3 other CPUs (`4 CPUs running`), with the
    firmware's own start-up code (QEMU imitates it).
 8. The SD card on **EMMC2** (QEMU attached it to the other controller).
@@ -509,7 +511,7 @@ The Pis' devices do not see the processors' caches (QEMU's do), so:
 - USB on the Pi 5 (the RP1 chip behind PCIe). On the Pi 4 the PCIe bridge
   and the VL805 USB chip are started by SIEOS (as Linux's pcie-brcmstb
   does): written, untested on a board yet.
-- Bluetooth. (Ethernet and Wi-Fi: written, untested on hardware, see above.)
+- Bluetooth: written, untested on the boards ([bluetooth.md](bluetooth.md)). (Ethernet and Wi-Fi: written, untested on hardware, see above.)
 - RP1's interrupts (MSI-X): the Pi 5's Ethernet is polled.
 - eMMC (Compute Modules): the card identification is the SD one; eMMC's
   (CMD1, HS200) is not written.

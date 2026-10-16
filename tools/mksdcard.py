@@ -30,6 +30,8 @@ initramfs sieos.mod 0x02000000
 # SIEOS's console. (Bluetooth would otherwise use it.)
 enable_uart=1
 dtoverlay=disable-bt
+# Bluetooth uses the mini UART instead, whose clock is the VPU's: keep it at 500 MHz
+core_freq_min=500
 # the frame buffer SIEOS asks the firmware for: 1920 x 1080
 disable_overscan=1
 hdmi_force_hotplug=1
