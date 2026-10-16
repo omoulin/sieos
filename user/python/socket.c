@@ -29,7 +29,9 @@ typedef struct {
     unsigned timeout;               /* ms, 0: none */
 } sock_t;
 
-static long check(long e) { if (e < 0) mp_raise_OSError((int)-e); return e; }
+/* An error -> OSError; a wait Ctrl-C ended (-EINTR): its KeyboardInterrupt. */
+static long intr(long e) { if (e == -EINTR) mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS); return e; }
+static long check(long e) { if (intr(e) < 0) mp_raise_OSError((int)-e); return e; }
 static sock_t *open_sock(mp_obj_t o)
 {
     sock_t *k = MP_OBJ_TO_PTR(o);
@@ -116,14 +118,14 @@ static mp_uint_t sock_read(mp_obj_t self, void *buf, mp_uint_t size, int *err)
 {
     sock_t *k = MP_OBJ_TO_PTR(self);
     long n = k->s < 0 ? -EBADF : k->tls ? tls_read(k->tls, buf, size, k->timeout) : net_recv(k->s, buf, size, k->timeout);
-    if (n < 0) { *err = (int)-n; return MP_STREAM_ERROR; }
+    if (intr(n) < 0) { *err = (int)-n; return MP_STREAM_ERROR; }
     return (mp_uint_t)n;
 }
 static mp_uint_t sock_write(mp_obj_t self, const void *buf, mp_uint_t size, int *err)
 {
     sock_t *k = MP_OBJ_TO_PTR(self);
     long n = k->s < 0 ? -EBADF : k->tls ? tls_write(k->tls, buf, size) : net_send(k->s, buf, size);
-    if (n < 0) { *err = (int)-n; return MP_STREAM_ERROR; }
+    if (intr(n) < 0) { *err = (int)-n; return MP_STREAM_ERROR; }
     return size;
 }
 static mp_uint_t sock_ioctl(mp_obj_t self, mp_uint_t req, uintptr_t arg, int *err)

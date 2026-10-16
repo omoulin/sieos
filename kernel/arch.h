@@ -59,11 +59,18 @@ void switch_to(uint64_t *save_ksp, uint64_t ksp);   /* save this kernel stack, r
 void arch_thread_start(struct task *t, uint64_t pc, uint64_t sp, uint64_t arg);
                                            /* t's first switch_to enters user mode at pc */
 void arch_set_tls(struct cpu *c, uint64_t base);    /* the running thread's TLS register, now */
+void arch_sig_enter(regs_t *r, uint64_t pc, long arg);   /* a thread's registers on its way to
+                                              user mode: call pc(arg) on its stack, below where it was */
+void arch_sig_return(regs_t *r);           /* r was put back whole: leave with every register */
 
 /* ---- Floating-point and vector registers of user threads (fpu.c). */
 int  fpu_first_use(struct task *t);
 void fpu_switch(struct cpu *c, struct task *prev, struct task *next);
 void fpu_free(struct task *t);
+void *fpu_detach(struct cpu *c, struct task *t);   /* the running t's registers, saved: its area,
+                                              handed over; t starts afresh (a signal's function) */
+void fpu_attach(struct cpu *c, struct task *t, void *area);  /* ... and back: t's registers are
+                                              area's again (its current ones are dropped) */
 
 /* ---- Interrupt lines of devices: an "irq" is a line number (ISA 0-15 or
  * a global line 16+ on x86-64). Masked until the drivers have handled it. */

@@ -49,6 +49,10 @@ typedef struct proc {
     int super;                  /* the supervisor (init): grants device rights, starts boot
                                    modules, adopts orphans; never killed */
     int bg;                     /* background work: its threads prefer E-cores (SPAWN_BACKGROUND) */
+    int pgid;                   /* its process group (SPAWN_PGROUP; 0: none) */
+    uint32_t sigign, sigcatch;  /* the signals it ignores, and those it catches (SYS_SIGNAL) */
+    uint64_t sigentry;          /* ... its function for those */
+    int sigtid;                 /* ... the thread that runs it (the one that set it) */
     spinlock_t lock;            /* its threads, its ports, its heap and mappings, exiting */
     int nthreads;
     volatile int exiting;       /* ending: each of its threads ends on its way out of the kernel */
@@ -93,7 +97,12 @@ typedef struct task {
     struct task *hnext;         /* in the thread id hash table */
     void *fpu;                  /* its x87/SSE/AVX registers, once it used them (fpu.c) */
     uint64_t fs_base;           /* its FS base: thread-local storage (SYS_SET_FS) */
+    volatile uint32_t sigpend;  /* caught signals waiting for it (one bit each) */
+    uint32_t gen;               /* its calls so far (mod 2^31): in its reply tokens (ipc.c) */
+    struct sigctx *sigctx;      /* running a signal's function: what it was doing (task.c) */
 } task_t;
+/* A caught signal waits for t, and t is not already in a signal's function. */
+#define sig_due(t) ((t)->sigpend && !(t)->sigctx)
 
 /* One per processor. The architecture's part comes first (its entry code
  * reaches it at fixed offsets); this_cpu() (arch_defs.h) finds the running
@@ -175,7 +184,10 @@ int  proc_start(proc_t *p, int ppid);
 long thread_create(uint64_t entry, uint64_t stack, uint64_t arg);
 void thread_exit(void) __attribute__((noreturn));
 void proc_exit(int code) __attribute__((noreturn));
-long proc_kill(int pid);
+long proc_kill(long pid, int sig);  /* SYS_KILL */
+long sig_set(int sig, uint64_t entry);   /* SYS_SIGNAL */
+long sig_return(regs_t *r);     /* SYS_SIGRETURN */
+void sig_deliver(task_t *t);
 extern proc_t *super;
 long proc_wait(int pid, int *status, int flags);
 task_t *task_lock(int tid);     /* the thread, with its bucket of the tid hash locked, or 0 */

@@ -911,9 +911,9 @@ static int recipe(file_t *f)
             ran++;
             if (!quiet || dry) printf("%s\n", c);
             long r = dry && !force ? 0 : shell(c);
-            if (r < 0 && r != EXIT_KILLED) { printf("make: /bin/sh: cannot start it (error %ld)\n", r); r = 127; }
+            if (r < 0 && !EXIT_SIGNO(r)) { printf("make: /bin/sh: cannot start it (error %ld)\n", r); r = 127; }
             if (r && noerr) printf("make: [%s] Error %ld (ignored)\n", f->name, r);
-            else if (r == EXIT_KILLED) { printf("make: *** [%s] Killed\n", f->name); bad = 1; }
+            else if (EXIT_SIGNO(r)) { printf("make: *** [%s] %s\n", f->name, EXIT_SIGNO(r) == SIGINT ? "Interrupt" : "Killed"); bad = 1; }
             else if (r) { printf("make: *** [%s] Error %ld\n", f->name, r); bad = 1; }
         }
         free(x);

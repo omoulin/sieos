@@ -19,6 +19,14 @@
  *                         all cores are alike): normal threads run on
  *                         P-cores, background ones on E-cores; more work
  *                         than cores of one kind uses the other kind
+ *   ktest sig             signals: caught, ignored, default; waits they
+ *                         interrupt (sleep, receive, lookup, wait, call: its
+ *                         late reply dropped); a process group; registers
+ *                         (floating point, AVX) and IPC through a storm of
+ *                         them; the thread that set the function takes them
+ *   ktest sigwait         (for tools/sigtest.py) SIGINT caught in a busy loop,
+ *                         a sleep and a console read, then a clean end
+ *   ktest hang spin|sleep|read|net   wait forever (for Ctrl-C)
  * Prints "ktest NAME: ok" or "... FAIL"; exit status 0 if all went well.
  * Built twice for the tests: by gcc (ktest), and by sicc (ktest-sicc,
  * without the AVX part: sicc does not encode AVX instructions yet). On
@@ -27,6 +35,7 @@
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
+#include "net.h"
 
 static volatile int done, bad;
 
@@ -358,6 +367,211 @@ static int test_log(void)
     return fails;
 }
 
+/* ---- Signals. A function for SIGUSR1 that computes in floating point
+ * itself (the interrupted code's registers must not change), a thread that
+ * sends one after a while ("kick"), or many ("storm"). */
+static volatile int sig_n[NSIG], sig_stop;
+static int self_pid;
+static void on_sig(int s)
+{
+    sig_n[s]++;
+    volatile double z = 1.5;
+    for (int i = 0; i < 50; i++) z = z * 1.01 + 0.25;
+}
+static void kick_thread(void *a)
+{
+    sys_sleep((uint64_t)(intptr_t)a * 1000000);
+    kill(self_pid, SIGUSR1);
+}
+static void kick(int ms) { thread_start(kick_thread, (void *)(intptr_t)ms, 16384); }
+static void storm_thread(void *a)
+{
+    (void)a;
+    while (!sig_stop) { kill(self_pid, SIGUSR1); sys_sleep(200000); }
+    __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
+}
+/* A server that answers its first call late (after the client was
+ * interrupted: the answer must go nowhere), the second at once. */
+static volatile long slow_r = 1;
+static void slow_server(void *a)
+{
+    (void)a;
+    msg_t m = { 0 };
+    long t = ipc_recv(ipc_port, &m);
+    sys_sleep(1500000000);
+    m = (msg_t){ .w = { 111 } };
+    long r = ipc_reply(t, &m);
+    t = ipc_recv(ipc_port, &m);
+    m = (msg_t){ .w = { 222 } };
+    ipc_reply(t, &m);
+    slow_r = r;
+}
+static void usr2_thread(void *a)        /* (the last to set a function takes the signal) */
+{
+    (void)a;
+    signal(SIGUSR2, on_sig);
+    __atomic_store_n(&done, 1, __ATOMIC_RELEASE);
+    long r = sys_sleep(20000000000UL);
+    __atomic_store_n(&done, r == -EINTR ? 2 : 3, __ATOMIC_RELEASE);
+}
+static int sig_check(const char *what, int ok)
+{
+    printf("ktest sig: %s: %s\n", what, ok ? "ok" : "FAIL");
+    return !ok;
+}
+static int has_child(int pid)           /* a process whose parent is pid */
+{
+    static mk_task_t t[32];
+    long n;
+    int after = 0;
+    do {
+        n = sys_tasks(t, 32, after);
+        for (long i = 0; i < n; i++) if (t[i].ppid == pid) return 1;
+        if (n > 0) after = t[n - 1].pid;
+    } while (n == 32);
+    return 0;
+}
+static int test_sig(void)
+{
+    mk_ident_t id;
+    int fails = 0, st;
+    sys_ident(0, &id);
+    self_pid = id.pid;
+    signal(SIGUSR1, on_sig);
+    raise(SIGUSR1);
+    fails += sig_check("raise runs the function at once", sig_n[SIGUSR1] == 1);
+    signal(SIGUSR2, SIG_IGN);
+    raise(SIGUSR2);
+    fails += sig_check("ignored", sig_n[SIGUSR2] == 0);
+    fails += sig_check("SIGKILL cannot be caught", signal(SIGKILL, on_sig) == SIG_ERR && SYS(SYS_SIGNAL, SIGKILL, 1) == -EINVAL);
+    fails += sig_check("not the supervisor", kill(1, SIGTERM) == -EPERM);
+
+    uint64_t t0 = sys_clock();
+    kick(100);
+    long r = sys_sleep(20000000000UL);
+    fails += sig_check("a sleep ends with -EINTR", r == -EINTR && sys_clock() - t0 < 10000000000UL);
+    long p = port_create(0);
+    kick(100);
+    msg_t m = { 0 };
+    fails += sig_check("a receive ends with -EINTR", ipc_recv(p, &m) == -EINTR);
+    kick(100);
+    fails += sig_check("a lookup ends with -EINTR", port_lookup("ktest-none") == -EINTR);
+
+    long pid = spawn_file("/bin/ktest", "ktest spin", -1, -1, 0);
+    kick(100);
+    r = sys_wait((int)pid, &st, 0);
+    fails += sig_check("a wait ends with -EINTR", r == -EINTR);
+    fails += sig_check("kill -0 finds it", kill((int)pid, 0) == 0);
+    kill((int)pid, SIGTERM);
+    r = sys_wait((int)pid, &st, 0);
+    fails += sig_check("SIGTERM ends a busy loop", r == pid && st == EXIT_SIGNAL(SIGTERM));
+    fails += sig_check("then it is gone", kill((int)pid, 0) == -ESRCH);
+
+    /* a call interrupted: the late answer goes nowhere, the next call gets its own */
+    ipc_port = port_create(0);
+    thread_start(slow_server, 0, 16384);
+    kick(200);
+    m = (msg_t){ .w = { 1 } };
+    long e1 = ipc_call(ipc_port, &m);
+    m = (msg_t){ .w = { 2 } };
+    long e2 = ipc_call(ipc_port, &m);
+    while (slow_r == 1) sys_sleep(10000000);
+    fails += sig_check("a call ends with -EINTR; its late reply is dropped", e1 == -EINTR && e2 == 0 && m.w[0] == 222 && slow_r == -ESRCH);
+
+    /* a process group: a child (its own group) and its child, ended together */
+    mk_spawn_t o = { .flags = SPAWN_PGROUP };
+    pid = spawn_file("/bin/ktest", "ktest sig-group", -1, -1, &o);
+    for (int i = 0; i < 1000 && !has_child((int)pid); i++) sys_sleep(10000000);
+    r = kill((int)-pid, SIGINT);
+    sys_wait((int)pid, &st, 0);
+    int gone = 0;
+    for (int i = 0; i < 1000 && !(gone = kill((int)-pid, 0) == -ESRCH); i++) sys_sleep(10000000);
+    fails += sig_check("SIGINT to a group ends all of it", r == 0 && st == EXIT_SIGNAL(SIGINT) && gone);
+
+    /* floating point through signals: bit for bit */
+    double ref[4], again[4];
+    for (int k = 0; k < 4; k++) ref[k] = series(k);
+    int before = sig_n[SIGUSR1];
+    done = 0; sig_stop = 0;
+    thread_start(storm_thread, 0, 16384);
+    for (int k = 0; k < 4; k++) again[k] = series(k);
+#if !defined(__SICC__) && defined(__x86_64__)
+    uint32_t c[4];
+    asm volatile("cpuid" : "=a"(c[0]), "=b"(c[1]), "=c"(c[2]), "=d"(c[3]) : "a"(1), "c"(0));
+    int avx_bad = c[2] >> 28 & 1 ? avx_hold(7) : 0;
+#else
+    int avx_bad = 0;
+#endif
+    /* IPC through signals: interrupted calls are made again; every answer must be its own */
+    ipc_port = port_create(0);
+    use_fp = 0;
+    thread_start(ipc_server, 0, 16384);
+    int calls = 0, intr = 0, wrong = 0;
+    for (int i = 0; i < 20000; i++) {
+        m = (msg_t){ .w = { i } };
+        long e;
+        while ((e = ipc_call(ipc_port, &m)) == -EINTR) { intr++; m = (msg_t){ .w = { i } }; }
+        calls++;
+        wrong += e < 0 || m.w[0] != (uint64_t)i + 1;
+    }
+    sig_stop = 1;
+    wait_all(1);
+    int got = sig_n[SIGUSR1] - before;
+    printf("ktest sig: %d signals taken during the computation and %d calls (%d calls interrupted)\n", got, calls, intr);
+    fails += sig_check("floating point unchanged by signals", !memcmp(ref, again, sizeof ref) && !avx_bad && got > 10);
+    fails += sig_check("no answer to the wrong call", !wrong);
+
+    /* the thread that sets the function takes the signal */
+    done = 0;
+    thread_start(usr2_thread, 0, 16384);
+    while (done != 1) sys_sleep(1000000);
+    raise(SIGUSR2);
+    while (done == 1) sys_sleep(1000000);
+    fails += sig_check("the signal goes to the thread that set the function", done == 2 && sig_n[SIGUSR2] == 1);
+    return fails;
+}
+
+static int hang(const char *how);
+/* ktest sig-group: a child of its own (same group), then busy */
+static int sig_group(void)
+{
+    spawn_file("/bin/ktest", "ktest spin", -1, -1, 0);
+    return hang("spin");
+}
+
+/* ktest sigwait: for the console tests (tools/sigtest.py), each step after
+ * a Ctrl-C: SIGINT caught in a busy loop, in a sleep, in a console read;
+ * then it cleans up and ends normally. */
+static volatile int intr_n;
+static void on_int(int s) { (void)s; intr_n++; }
+static int sig_wait(void)
+{
+    char line[64];
+    signal(SIGINT, on_int);
+    printf("ktest sigwait: ready\n");
+    while (!intr_n) ;
+    printf("ktest sigwait: caught in a busy loop\n");
+    long r = sys_sleep(600000000000UL);
+    printf("ktest sigwait: caught in a sleep (%s)\n", r == -EINTR ? "interrupted" : "not interrupted");
+    r = con_read(line, sizeof line);
+    printf("ktest sigwait: caught in a read (%s)\n", r == -EINTR ? "interrupted" : "not interrupted");
+    printf("ktest sigwait: cleaned up, %d signals\n", intr_n);
+    return intr_n == 3 ? 0 : 1;
+}
+
+/* ktest hang spin|sleep|read|net: wait forever, for Ctrl-C (no function) */
+static int hang(const char *how)
+{
+    char b[64];
+    printf("ktest hang: %s\n", how);
+    if (!strcmp(how, "sleep")) sys_sleep(600000000000UL);
+    else if (!strcmp(how, "read")) con_read(b, sizeof b);
+    else if (!strcmp(how, "net")) { long s = net_udp(0); net_recvfrom(s, b, sizeof b, 0, 0, 600000); }
+    else for (;;) ;
+    printf("ktest hang: not interrupted\n");
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     const char *what = argc > 1 ? argv[1] : "";
@@ -366,6 +580,10 @@ int main(int argc, char **argv)
     if (!strcmp(what, "quota-child")) return quota_child(0);
     if (!strcmp(what, "quota-grand")) return quota_child(1);
     if (!strcmp(what, "place-child")) return busy_place(0, 300, 0);   /* (background: its parent said so) */
+    if (!strcmp(what, "sig-group")) return sig_group();
+    if (!strcmp(what, "sigwait")) return sig_wait();
+    if (!strcmp(what, "spin")) return hang("spin");
+    if (!strcmp(what, "hang")) return hang(argc > 2 ? argv[2] : "spin");
     if (!strcmp(what, "fpu")) fails = test_fpu(n);
 #ifndef __SICC__
     else if (!strcmp(what, "avx")) fails = test_avx(n);
@@ -376,7 +594,8 @@ int main(int argc, char **argv)
     else if (!strcmp(what, "ipcmany")) fails = test_ipcmany(argc > 2 ? n : 40);
     else if (!strcmp(what, "place")) fails = test_place();
     else if (!strcmp(what, "log")) fails = test_log();
-    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|place|log [threads]\n"); return 2; }
+    else if (!strcmp(what, "sig")) fails = test_sig();
+    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|place|log|sig [threads]\n"); return 2; }
     printf("ktest %s: %s\n", what, fails ? "FAIL" : "ok");
     return fails != 0;
 }

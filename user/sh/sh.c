@@ -4,6 +4,14 @@
  * from the disk, started, and waited for. "sh -c LINE" runs one line and
  * ends with its status (make runs its recipes so).
  *
+ * Jobs: at the prompt, each program starts in a process group of its own
+ * (SPAWN_PGROUP), its children with it, and the terminal is told which one
+ * runs (CON_FG): Ctrl-C sends SIGINT to that group. Otherwise the shell's
+ * own group is the terminal's (a session's shell leads one: auth): Ctrl-C
+ * then ends a built-in command (sleep) or the typed line, and the shell
+ * carries on (it catches SIGINT). "sh -c" keeps its programs in its own
+ * group: Ctrl-C reaches them through the job it is part of.
+ *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "mk.h"
@@ -22,6 +30,7 @@ static const char *errstr(long e)
     case ELOOP: return "too many symbolic links"; case EBUSY: return "busy";
     case 61: return "no such attribute";          case ENOMEM: return "out of memory";
     case EROFS: return "read only (a snapshot)";  case EXDEV: return "not across volumes";
+    case EINTR: return "interrupted";
     }
     return "error";
 }
@@ -79,7 +88,8 @@ static int cmd_sleep(int ac, char **av)
     const char *p = av[1];
     for (; *p >= '0' && *p <= '9'; p++) ns = ns * 10 + (uint64_t)(*p - '0') * unit;
     if (*p == '.') for (p++; *p >= '0' && *p <= '9' && unit > 1; p++) ns += (uint64_t)(*p - '0') * (unit /= 10);
-    return err("sleep", sys_sleep(ns));
+    long r = sys_sleep(ns);
+    return r == -EINTR ? 128 + SIGINT : err("sleep", r);   /* (Ctrl-C: "^C" shown) */
 }
 
 /* poweroff and reboot: commit the files first, so nothing written is lost. */
@@ -109,10 +119,28 @@ static int cmd_groups(int ac, char **av)
     return 0;
 }
 static int cmd_logout(int ac, char **av) { (void)ac; (void)av; sys_exit(0); }
+
+/* Signals by name, for kill and for what ended a program. */
+static const char *signames[NSIG] = { [SIGHUP] = "HUP", [SIGINT] = "INT", [SIGKILL] = "KILL", [SIGUSR1] = "USR1",
+                                      [SIGUSR2] = "USR2", [SIGTERM] = "TERM" };
+static const char *sigwhy(int sig)
+{
+    return sig == SIGKILL ? "killed" : sig == SIGTERM ? "terminated" : sig == SIGINT ? "interrupted" :
+           sig == SIGHUP ? "hung up" : "ended by a signal";
+}
+
+/* kill [-INT|-TERM|-KILL|-HUP|-N] PID...: SIGTERM unless said */
 static int cmd_kill(int ac, char **av)
 {
-    int bad = ac < 2;
-    for (int i = 1; i < ac; i++) { long pid = strnum(av[i]); bad |= err(av[i], pid > 0 ? sys_kill((int)pid) : -EINVAL); }
+    int sig = SIGTERM, i = 1, bad = 0;
+    if (i < ac && av[i][0] == '-') {
+        const char *s = av[i++] + 1;
+        sig = s[0] >= '0' && s[0] <= '9' ? (int)strnum(s) : 0;
+        for (int k = 1; k < NSIG && !sig; k++) if (signames[k] && !strcmp(s, signames[k])) sig = k;
+        if (sig <= 0 || sig >= NSIG) return err(av[i - 1], -EINVAL);
+    }
+    if (i == ac) return err("kill", -EINVAL);
+    for (; i < ac; i++) { long pid = strnum(av[i]); bad |= err(av[i], pid > 0 ? kill((int)pid, sig) : -EINVAL); }
     return bad;
 }
 
@@ -406,7 +434,7 @@ static const struct { const char *name, *help; int (*run)(int, char **); } cmds[
     { "find",   "KEY=VALUE  files with this attribute",     cmd_find },
     { "snap",   "[list [PATH]] | take|delete|restore NAME [PATH]  snapshots", cmd_snap },
     { "ps",     "the running programs",                     cmd_ps },
-    { "kill",   "PID...  end programs (yours; root: any)",  cmd_kill },
+    { "kill",   "[-INT|-TERM|-KILL|-HUP] PID...  end programs (yours; root: any)", cmd_kill },
     { "mem",    "memory, processes, CPUs",                  cmd_mem },
     { "uptime", "time since start",                         cmd_uptime },
     { "sleep",  "SECONDS  wait (0.5 allowed)",              cmd_sleep },
@@ -432,7 +460,23 @@ static int cmd_help(int ac, char **av)
     return 0;
 }
 
-static int batch;                       /* sh -c: no "exit status" message (the caller tells) */
+static int batch;                       /* sh -c: no "exit status" message (the caller tells), no jobs */
+static void on_int(int sig) { (void)sig; }   /* (what it interrupted returns -EINTR) */
+
+/* Start a program; unless bg, wait for it -> its exit status (bg: its pid).
+ * At the prompt, it is a job: a group of its own, the terminal's foreground
+ * while it runs. */
+static long job(const char *path, const char *args, int bg)
+{
+    mk_spawn_t o = { .flags = SPAWN_PGROUP };
+    long pid = spawn_file(path, args, -1, -1, batch ? 0 : &o);
+    if (pid < 0 || bg) return pid;
+    int st = 0;
+    if (!batch) con_fg((int)pid);
+    while (sys_wait((int)pid, &st, 0) == -EINTR) ;
+    if (!batch) con_fg(me.pid);
+    return st;
+}
 
 /* A program from the disk; it gets "name args" as its argument string.
  * -> its exit status (127: not found, 126: could not start). */
@@ -452,13 +496,12 @@ static int program(int ac, char **av)
     }
     if (n >= sizeof args) n = sizeof args - 1;
     args[n] = 0;
-    long r;
-    if (bg) {                                        /* "cmd &": do not wait for it */
-        if ((r = spawn_file(path, args, -1, -1, 0)) > 0) { printf("[%ld]\n", r); return 0; }
-    } else r = run(path, args);
+    long r = job(path, args, bg);                    /* "cmd &": do not wait for it */
+    if (bg && r > 0) { printf("[%ld]\n", r); return 0; }
+    int sig = EXIT_SIGNO(r);
     if (r == -ENOENT) { printf("%s: unknown command (try 'help')\n", av[0]); return 127; }
-    if (r == EXIT_KILLED) printf("%s: killed\n", av[0]);
-    else if (r < 0) { printf("%s: %s\n", av[0], errstr(r)); return 126; }
+    if (sig) { if (sig != SIGINT) printf("%s: %s\n", av[0], sigwhy(sig)); return 128 + sig; }   /* (Ctrl-C: "^C" shown) */
+    if (r < 0) { printf("%s: %s\n", av[0], errstr(r)); return 126; }
     else if (r && !batch) printf("%s: exit status %ld\n", av[0], r);
     return (int)r;
 }
@@ -492,7 +535,7 @@ static void reap(void)
     int st;
     long pid;
     while ((pid = sys_wait(-1, &st, WAIT_NOHANG)) > 0)
-        if (st == EXIT_KILLED) printf("[%ld] killed\n", pid);
+        if (EXIT_SIGNO(st)) printf("[%ld] %s\n", pid, sigwhy(EXIT_SIGNO(st)));
         else printf("[%ld] done, status %d\n", pid, st);
 }
 
@@ -514,6 +557,8 @@ int main(int ac, char **av)
         batch = 1;
         return line_run(line);
     }
+    signal(SIGINT, on_int);                        /* Ctrl-C while no job runs: for us */
+    con_fg(me.pid);
     if (ac > 1 && !strcmp(av[1], "-l")) {          /* a login shell: start at home, say welcome */
         long h = fs_open("/etc/motd", FS_RDONLY, 0);
         printf("\n");

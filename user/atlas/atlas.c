@@ -971,7 +971,7 @@ static void new_term(void)
 static void close_win(int w)
 {
     if (w < 0) return;
-    if (w < MAXTERM) { if (terms[w].used) sys_kill(terms[w].pid); return; }   /* (closed when its shell ends) */
+    if (w < MAXTERM) { if (terms[w].used) { tty_hangup(&terms[w].tty); sys_kill(terms[w].pid); } return; }   /* (closed when its shell ends) */
     if (w == W_EDIT && !edit_close_window()) { strlcpy(toast, "Not saved: close it again to discard.", sizeof toast); settle(); return; }
     if (w == W_SIA) { sia_on = 0; say("atlas: assistant closed\n"); }
     if (w == W_SET) { set_on = 0; settings_close(); say("atlas: settings closed\n"); }
@@ -986,7 +986,7 @@ static void close_win(int w)
 
 static void logout(void)
 {
-    for (int t = 0; t < MAXTERM; t++) if (terms[t].used) { sys_kill(terms[t].pid); close_term(&terms[t]); }
+    for (int t = 0; t < MAXTERM; t++) if (terms[t].used) { tty_hangup(&terms[t].tty); sys_kill(terms[t].pid); close_term(&terms[t]); }
     edit_close();
     sia_on = set_on = files_on = pins_on = repo_on = 0;
     repo_close();
@@ -1822,9 +1822,10 @@ int main(int argc, char **argv)
                 tty_input(&t->tty, '\n');
                 t->pend[0] = 0;
             }
-            if (tty_read(&t->tty, from, m.w[1]) < 0) reply_val(from, -EBUSY);
+            if (tty_read(&t->tty, from, m.w[1], m.pid) < 0) reply_val(from, -EBUSY);
             break;
         case CON_ECHO: tty_mode(&t->tty, (int)m.w[1]); reply_val(from, 0); break;
+        case CON_FG: reply_val(from, tty_fg(&t->tty, &m)); break;
         default: reply_val(from, -ENOSYS);
         }
     }

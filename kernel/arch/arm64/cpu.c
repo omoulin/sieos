@@ -87,6 +87,17 @@ void arch_thread_start(task_t *t, uint64_t pc, uint64_t sp, uint64_t arg)
     t->ksp = (uint64_t)k;
 }
 
+/* A signal's function (task.c): pc(arg) on the thread's stack, 128 bytes
+ * below sp and 16-aligned, in EL0 with interrupts on. It never returns:
+ * it ends with SYS_SIGRETURN, which puts every register back (eret
+ * always does). */
+void arch_sig_enter(regs_t *r, uint64_t pc, long arg)
+{
+    r->sp = (r->sp - 128) & ~15UL;
+    r->pc = pc; r->x[0] = arg; r->x[30] = 0; r->pstate = 0;
+}
+void arch_sig_return(regs_t *r) { (void)r; }
+
 /* The running thread's TLS pointer: TPIDR_EL0. */
 void arch_set_tls(cpu_t *c, uint64_t base)
 {

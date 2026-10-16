@@ -482,9 +482,10 @@ int main(int argc, char **argv)
         case CON_WRITE: output(buf, m.rlen); answer = m.rlen; break;
         case CON_READ:
             reply = 0;                        /* answered by the tty, now or when a line is typed */
-            if (tty_read(&tty, from, m.w[1]) < 0) { answer = -EBUSY; reply = 1; }
+            if (tty_read(&tty, from, m.w[1], m.pid) < 0) { answer = -EBUSY; reply = 1; }
             break;
         case CON_ECHO:  tty_mode(&tty, (int)m.w[1]); answer = 0; break;
+        case CON_FG:    answer = tty_fg(&tty, &m); break;
         case CON_HASINPUT: answer = has_input() || usb_input; break;
         case CON_INJECT:
             if (m.uid) { answer = -EPERM; break; }
