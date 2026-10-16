@@ -42,6 +42,7 @@ LINKS   := acct/passwd acct/su acct/useradd acct/userdel ssh/ssh-keygen   # othe
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
 BINS    += $(if $(filter arm64,$(ARCH)),wifi wifid)   # the Raspberry Pis' Wi-Fi: the command and its server
+BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
 all: $(B)/kernel.bin $(PROGS:%=$(B)/%.elf) $(KARCH_EXTRA) $(B)/disk.img
@@ -187,6 +188,9 @@ $(B)/user/llm/%.o: llm/%.c llm/llm.h llm/internal.h $(TOOLDEP)
 # thread, kernel/arch/x86_64/fpu.c; the servers keep the flag and never pay for it).
 FPU_PROGS := ktest
 $(FPU_PROGS:%=$(B)/user/%.o): UCFLAGS := $(filter-out -mgeneral-regs-only,$(UCFLAGS))
+
+# ---- /bin/python: MicroPython, fetched and built by its own rules (also an FPU program)
+include user/python/python.mk
 
 # ---- the disk: a SieFS image of rootfs/ plus the programs in /bin.
 # build/rootfs is the staging copy. The image is made once (mkfs.siefs);
@@ -360,6 +364,12 @@ make-test: all
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	$(B)/host/siefs $(B)/test.img put tests/make/fail.mk /tmp/t/fail.mk
 	python3 tools/maketest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+# py-test: /bin/python (MicroPython, docs/python.md): scripts, files, modules, the prompt, sockets
+py-test: all
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
+	for f in tests/python/*.py; do $(B)/host/siefs $(B)/test.img put $$f /tmp/t/$$(basename $$f) || exit 1; done
+	python3 tools/pythontest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 demand-test: all
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /models && $(B)/host/siefs $(B)/test.img put models/$(SIATEST_MODEL) /models/$(SIATEST_MODEL)
@@ -371,7 +381,7 @@ clean:
 distclean:
 	rm -rf $(B)
 
-.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test model clean distclean newdisk FORCE
+.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test model clean distclean newdisk FORCE
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.

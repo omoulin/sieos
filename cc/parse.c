@@ -2082,7 +2082,8 @@ static Reloc **write_data(Reloc **cur, Init *in, Type *ty, char *buf, long off)
                 }
                 continue;
             }
-            cur = write_data(cur, in->child[i], m->ty, buf, off + m->offset);
+            /* (a flexible array member: as long as its initializer made it) */
+            cur = write_data(cur, in->child[i], m->ty->is_flex && !m->next ? in->child[i]->ty : m->ty, buf, off + m->offset);
         }
         return cur;
     }

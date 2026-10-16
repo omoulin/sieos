@@ -159,6 +159,9 @@ tour, file by file, with the crash and on-demand mechanisms:
 - **make** ([docs/make.md](docs/make.md)): `/bin/make` builds C projects on
   SIEOS with `/bin/cc` (pattern rules, variables, functions, `-n -k -B -C`);
   SIEOS's own hello, sh and make build there.
+- **Python** ([docs/python.md](docs/python.md)): `/bin/python` is
+  MicroPython (the prompt, scripts, files and `os`, sockets and TLS,
+  json, re, hashlib...), also in the desktop's menu.
 
 ## The assistant: sia
 
@@ -217,6 +220,7 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make sia-mem-test` | the assistant's memory ([docs/sia.md](docs/sia.md)) |
 | `make net-test` / `net-crypto-test` | the network end to end / its crypto against official vectors |
 | `make ssh-test` | ssh and sshd against OpenSSH, both ways |
+| `make py-test` | `/bin/python`: `-c`, scripts, files, modules, the prompt, sockets and TLS |
 | `make pi4-test` | (ARCH=arm64) the boot and crash test on QEMU's Pi 4 |
 | `make pi4-sdbench`, `make sdhci-bench` | (ARCH=arm64) SD card speed: on QEMU's Pi 4, and on a PCI SD controller with DMA (`SDCAPS`, `SDBSIZE`, `SDMIB`) |
 | `make siefs-tools` / `siefs-test` / `siefs-freestanding` | SieFS host tools / its tests / a freestanding build check |

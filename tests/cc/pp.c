@@ -21,13 +21,18 @@
 #ifdef NOPE
 #error should not be here
 #endif
+#define HDR "t.h"
+#if OK == 1                         /* #include MACRO inside a group: the lines after it stay */
+#include HDR
+#define AFTER_INC 7
+#endif
 static int count_args(int z, ...) { return z; }
 int main(void) {
     int CAT(my, var) = 5;
     printf("%d %d %s %s\n", SQ(3 + 1), myvar, STR(a + b "q"), XSTR(VER));
     LOG("no args");
     LOG("two %d %s", 2, "x");
-    printf("%d %d %d\n", OK, G, OPT(10) + OPT(1, 2));
+    printf("%d %d %d %d\n", OK, G, OPT(10) + OPT(1, 2), AFTER_INC);
     printf("%d %s %d\n", __LINE__, __FILE__ + 0 ? "file" : "", COUNT());
 #if (1 ? 2 : 3) == 2 && (0x10 >> 2) == 4 && -1 < 0 && 'A' == 65
     printf("if ok\n");

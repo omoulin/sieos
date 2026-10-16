@@ -21,7 +21,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sia-test`, `demand-test`, `net-test`, `ssh-test`, `make-test` (both
+`kernel-test`, `sia-test`, `demand-test`, `net-test`, `ssh-test`, `make-test`, `py-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -85,3 +85,10 @@ checklist in [raspberrypi.md](raspberrypi.md).
   ssh-ed25519, chacha20-poly1305@openssh.com, strict key exchange),
   interoperable with OpenSSH both ways; Ed25519 signatures (RFC 8032);
   the console's raw mode (`CON_RAW`); `make ssh-test`.
+- **2026-10-16.** Python: `/bin/python` is MicroPython 1.29.0 (fetched at
+  build time, checksum checked) with a SIEOS port: the prompt, scripts and
+  `-c`, files and `os`, `socket` and `ssl` (TLS 1.3), `hashlib`, json, re,
+  time, math and MicroPython's other modules, on both architectures (built
+  by sicc on AArch64); in the desktop's menu; `make py-test`
+  ([python.md](python.md)). sicc: `#include MACRO` inside an `#if` group,
+  and static flexible array members with initializers (pointers included).

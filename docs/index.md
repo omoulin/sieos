@@ -21,6 +21,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [sia.md](sia.md) | the assistant: siad, backends (local, OpenAI-compatible), memory |
 | [llm.md](llm.md) | the language-model engine: GGUF, number formats, AVX2 and NEON kernels, speeds |
 | [ai-plan.md](ai-plan.md) | the AI plan: the 4 GB budget, CPU / NVIDIA / online backends |
+| [python.md](python.md) | `/bin/python`: MicroPython on SIEOS, its modules, the port, what is missing, its test |
 | [python-plan.md](python-plan.md) | the Python plan: MicroPython first, then the POSIX layer and CPython |
 | [cc.md](cc.md) | sicc, the C compiler: x86-64 and AArch64, optimizer, assembler, linker, tests |
 | [make.md](make.md) | `/bin/make` on SIEOS: what it supports, the demo projects, `sh -c`, tests |
