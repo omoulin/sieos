@@ -75,11 +75,24 @@ void aead_seal(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t 
 int  aead_open(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t adlen,
                const void *in, size_t n, uint8_t *out);
 
+/* The pieces of ChaCha20-Poly1305 on their own, for SSH's variant
+ * (chacha20-poly1305@openssh.com: user/lib/ssh.c): the keystream from block
+ * `ctr` xor-ed into n bytes (in may be out), and a Poly1305 tag. */
+void chacha20_xor(const uint8_t key[32], const uint8_t nonce[12], uint32_t ctr,
+                  const uint8_t *in, uint8_t *out, size_t n);
+void poly1305(uint8_t tag[16], const uint8_t key[32], const void *m, size_t n);
+
 /* X25519 (RFC 7748): out = scalar * point (32-byte little-endian values);
  * x25519_base: scalar * the standard base point. -1 if the result is all
  * zeros (a malicious peer's point). */
 int x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]);
 int x25519_base(uint8_t out[32], const uint8_t scalar[32]);
+
+/* Ed25519 signatures (RFC 8032), for SSH: seed = the 32-byte secret key.
+ * verify: 0 if valid, -1 if not. */
+void ed25519_public(uint8_t pub[32], const uint8_t seed[32]);
+void ed25519_sign(uint8_t sig[64], const void *m, size_t n, const uint8_t seed[32], const uint8_t pub[32]);
+int  ed25519_verify(const uint8_t sig[64], const void *m, size_t n, const uint8_t pub[32]);
 
 /* Elliptic curves P-256 and P-384 (FIPS 186): ECDSA signature checks
  * (for certificates and TLS), and P-256 key exchange. Points are

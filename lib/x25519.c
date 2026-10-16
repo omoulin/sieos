@@ -12,12 +12,12 @@
  */
 #include "mk/crypto.h"
 #include "mk/lib.h"
+#include "fe25519.h"
 
 typedef unsigned __int128 u128;
-typedef uint64_t fe[5];
 #define M51 0x7ffffffffffffULL
 
-static void fe_load(fe r, const uint8_t b[32])
+void fe_load(fe r, const uint8_t b[32])
 {
     uint64_t w[4];
     memcpy(w, b, 32);
@@ -35,15 +35,15 @@ static void fe_carry(fe r)
     r[1] += r[0] >> 51; r[0] &= M51;
 }
 
-static void fe_add(fe r, const fe a, const fe b) { for (int i = 0; i < 5; i++) r[i] = a[i] + b[i]; fe_carry(r); }
-static void fe_sub(fe r, const fe a, const fe b)  /* + 4p, so nothing goes negative */
+void fe_add(fe r, const fe a, const fe b) { for (int i = 0; i < 5; i++) r[i] = a[i] + b[i]; fe_carry(r); }
+void fe_sub(fe r, const fe a, const fe b)  /* + 4p, so nothing goes negative */
 {
     r[0] = a[0] + 0x1fffffffffffb4 - b[0];
     for (int i = 1; i < 5; i++) r[i] = a[i] + 0x1ffffffffffffc - b[i];
     fe_carry(r);
 }
 
-static void fe_mul(fe r, const fe a, const fe b)
+void fe_mul(fe r, const fe a, const fe b)
 {
     u128 t[5];
     uint64_t b19[5];
@@ -68,18 +68,20 @@ static void fe_mul_small(fe r, const fe a, uint64_t k)
     r[1] += r[0] >> 51; r[0] &= M51;
 }
 
-static void fe_inv(fe r, const fe z)              /* z^(p-2), p-2 = 2^255 - 21 */
+/* z^e for an e whose bits top..0 are all 1 except those in `holes` (bits
+ * below 32): p-2 = 2^255 - 21 (an inverse) and (p-5)/8 = 2^252 - 3 (Ed25519). */
+void fe_pow(fe r, const fe z, int top, uint32_t holes)
 {
     fe x;
     memcpy(x, z, sizeof x);
-    for (int i = 253; i >= 0; i--) {              /* bits 254..0 of p-2: all 1 except 2 and 4 */
+    for (int i = top - 1; i >= 0; i--) {
         fe_mul(x, x, x);
-        if (i != 2 && i != 4) fe_mul(x, x, z);
+        if (i >= 32 || !(holes >> i & 1)) fe_mul(x, x, z);
     }
     memcpy(r, x, sizeof x);
 }
 
-static void fe_store(uint8_t b[32], const fe a)
+void fe_store(uint8_t b[32], const fe a)
 {
     fe t;
     memcpy(t, a, sizeof t);
@@ -94,7 +96,7 @@ static void fe_store(uint8_t b[32], const fe a)
     memcpy(b, w, 32);
 }
 
-static void cswap(fe a, fe b, uint64_t bit)
+void fe_cswap(fe a, fe b, uint64_t bit)
 {
     uint64_t m = -bit;
     for (int i = 0; i < 5; i++) { uint64_t t = m & (a[i] ^ b[i]); a[i] ^= t; b[i] ^= t; }
@@ -112,7 +114,7 @@ int x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32])
     for (int t = 254; t >= 0; t--) {
         uint64_t kt = k[t / 8] >> (t % 8) & 1;
         swap ^= kt;
-        cswap(x2, x3, swap); cswap(z2, z3, swap);
+        fe_cswap(x2, x3, swap); fe_cswap(z2, z3, swap);
         swap = kt;
         fe_add(a, x2, z2); fe_mul(aa, a, a);
         fe_sub(b, x2, z2); fe_mul(bb, b, b);
@@ -124,7 +126,7 @@ int x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32])
         fe_mul(x2, aa, bb);
         fe_mul_small(z2, e, 121665); fe_add(z2, z2, aa); fe_mul(z2, z2, e);
     }
-    cswap(x2, x3, swap); cswap(z2, z3, swap);
+    fe_cswap(x2, x3, swap); fe_cswap(z2, z3, swap);
     fe_inv(z2, z2);
     fe_mul(x2, x2, z2);
     fe_store(out, x2);

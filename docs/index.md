@@ -17,6 +17,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [accounts.md](accounts.md) | users, logins, the first start, Argon2id, account files |
 | [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, apps, the assistant |
 | [net.md](net.md) | the network: drivers, TCP/IP, DHCP, DNS, HTTP, TLS 1.3, `fetch` |
+| [ssh.md](ssh.md) | SSH: `ssh`, `ssh-keygen`, `sshd`; the transport, Ed25519, how a remote shell gets its terminal, tests |
 | [sia.md](sia.md) | the assistant: siad, backends (local, OpenAI-compatible), memory |
 | [llm.md](llm.md) | the language-model engine: GGUF, number formats, AVX2 and NEON kernels, speeds |
 | [ai-plan.md](ai-plan.md) | the AI plan: the 4 GB budget, CPU / NVIDIA / online backends |

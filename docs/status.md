@@ -15,12 +15,13 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Supervisor, on-demand servers | yes | yes | yes | untested |
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
 | Network, TLS | yes | yes | no driver yet | no driver yet |
+| SSH client and server | yes | yes | needs the network | needs the network |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sia-test`, `demand-test`, `net-test`, `make-test` (both
+`kernel-test`, `sia-test`, `demand-test`, `net-test`, `ssh-test`, `make-test` (both
 architectures), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -79,3 +80,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
   sealed with ChaCha20-Poly1305, its key wrapped by the user's password
   (Argon2id); it opens at login and gets a new wrapping when the password
   changes ([siefs.md](siefs.md#encryption), [accounts.md](accounts.md)).
+- **2026-10-16.** SSH ([ssh.md](ssh.md)): `/bin/ssh`, `ssh-keygen` and
+  `sshd`, a compact SSH-2 on SIEOS's own crypto (curve25519-sha256,
+  ssh-ed25519, chacha20-poly1305@openssh.com, strict key exchange),
+  interoperable with OpenSSH both ways; Ed25519 signatures (RFC 8032);
+  the console's raw mode (`CON_RAW`); `make ssh-test`.

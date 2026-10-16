@@ -1,7 +1,8 @@
 /*
- * test.c - The crypto library (lib/blake2b.c, chacha20.c, argon2.c) against
- * the official test vectors of RFC 7693, RFC 8439 and RFC 9106, plus a
- * timing of Argon2id at the parameters SIEOS uses.
+ * test.c - The crypto library (lib/blake2b.c, chacha20.c, argon2.c, and SSH's
+ * ed25519.c and Poly1305 from aead.c) against the official test vectors of
+ * RFC 7693, RFC 8439, RFC 9106 and RFC 8032, plus a timing of Argon2id at
+ * the parameters SIEOS uses.
  * With "-x": print BLAKE2b digests of a fixed pattern, for check.py to
  * compare with an independent implementation.
  *
@@ -16,6 +17,8 @@
 static int fails;
 
 static void hex(char *o, const uint8_t *p, size_t n) { for (size_t i = 0; i < n; i++) sprintf(o + 2 * i, "%02x", p[i]); }
+
+static void unhex(uint8_t *o, const char *h) { for (; h[0] && h[1]; h += 2) { unsigned v; sscanf(h, "%2x", &v); *o++ = (uint8_t)v; } }
 
 static void expect(const char *what, const uint8_t *got, size_t n, const char *want)
 {
@@ -59,6 +62,45 @@ int main(int argc, char **argv)
     chacha20_block(k, 1, nonce, out);
     expect("block, counter 1", out, 64,
         "10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4ed2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e");
+
+    printf("Poly1305 (RFC 8439, 2.5.2)\n");
+    unhex(key, "85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b");
+    poly1305(out, key, "Cryptographic Forum Research Group", 34);
+    expect("tag", out, 16, "a8061dc1305136c6c22b8baf0c0127a9");
+
+    printf("Ed25519 (RFC 8032, 7.1)\n");
+    static const char *ed[4][4] = {     /* secret key, message, public key, signature */
+        { "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", "",
+          "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+          "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b" },
+        { "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", "72",
+          "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+          "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00" },
+        { "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7", "af82",
+          "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+          "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a" },
+        { "833fe62409237b9d62ec77587520911e9a759cec1d19755b7da901b96dca3d42",
+          "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+          "ec172b93ad5e563bf4932c70e1245034c35467ef2efd4d64ebf819683467e2bf",
+          "dc2a4459e7369633a52b1bf277839a00201009a3efbf3ecb69bea2186c26b58909351fc9ac90b3ecfdfbc7c66431e0303dca179c138ac17ad9bef1177331a704" } };
+    for (int t = 0; t < 4; t++) {
+        uint8_t sk[32], pk[32], sig[64], msg[64];
+        size_t ml = strlen(ed[t][1]) / 2;
+        char what[40];
+        unhex(sk, ed[t][0]); unhex(msg, ed[t][1]);
+        ed25519_public(pk, sk);
+        snprintf(what, sizeof what, "test %d: public key", t + 1); expect(what, pk, 32, ed[t][2]);
+        ed25519_sign(sig, msg, ml, sk, pk);
+        snprintf(what, sizeof what, "test %d: signature", t + 1); expect(what, sig, 64, ed[t][3]);
+        int ok = !ed25519_verify(sig, msg, ml, pk);
+        sig[t * 9] ^= 4;                              /* a damaged signature (R or S) */
+        int bad = ed25519_verify(sig, msg, ml, pk);
+        sig[t * 9] ^= 4; sig[63] |= 0xe0;             /* S >= L */
+        int big = ed25519_verify(sig, msg, ml, pk);
+        snprintf(what, sizeof what, "test %d: verify, damaged, S >= L", t + 1);
+        printf("  %-34s %s\n", what, ok && bad && big ? "ok" : "FAIL");
+        if (!(ok && bad && big)) fails++;
+    }
 
     printf("Argon2 (RFC 9106, 5.1-5.3: m=32 KiB, t=3, p=4, 32-byte tag)\n");
     uint8_t pwd[32], salt[16], secret[8], ad[12];

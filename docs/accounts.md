@@ -38,6 +38,11 @@ login waits for its child shell to end, then shows the prompt again
   and is restarted, they go on.
 - **login** only talks: it reads a name and a password (hidden) and asks
   auth. It never sees a hash.
+- **sshd** ([ssh.md](ssh.md)) asks auth the same way: `AUTH_CHECK` for a
+  password, then `AUTH_LOGIN` with the session's terminal and, for an
+  `exec` request, a command (`"name\0password\0terminal\0command"`: the
+  shell runs `sh -c command` at the user's home). With a key it logs in
+  with `AUTH_NOPW` (root only), which opens no encrypted home.
 - **passwd, su, useradd, userdel** are one program, `/bin/acct`, under four
   names (symbolic links). Each only asks auth.
 - The **file server** checks every access with the caller's uid, gid and
