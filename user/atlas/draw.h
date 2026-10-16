@@ -20,8 +20,12 @@ typedef struct { uint32_t *fb; int pitch, swap, resizable; const char *name; } s
 int  screen_init(screen_t *s);      /* 0: ready, at SW x SH if the screen can take any size
                                        (resizable: QEMU's VGA and ramfb, the Pi 4's firmware);
                                        a firmware's fixed screen sets SW x SH itself. Called
-                                       again with a new SW x SH: the screen changes size. */
-long rtc_seconds(void);             /* the time of day in seconds (UTC), or -1: no clock */
+                                       again with a new SW x SH: the screen changes size.
+                                       PW 0: the screen's own size. */
+int  screen_native(int *w, int *h); /* a resizable screen's own size (the Intel display's
+                                       panel, igfx.c): 1, or 0 if it has none */
+int  screen_backlight(int pct);     /* the panel's brightness in %: set it (pct >= 0) -> now; -1: none */
+long rtc_seconds(void);            /* the time of day in seconds (UTC), or -1: no clock */
 
 void draw_init(const screen_t *s);
 void dl_reset(void);                /* start a new picture */

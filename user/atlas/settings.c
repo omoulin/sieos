@@ -3,10 +3,11 @@
  * desktop, like the editor, on every machine:
  *
  *   Screen     its size, where the screen can take any (QEMU's VGA and
- *              ramfb, the Pi 4's firmware); a firmware's fixed screen says
- *              its size. A new size shows at once and goes back by itself
- *              after 15 s unless kept (a monitor that cannot show it is
- *              never a dead end). Kept in /etc/display.conf.
+ *              ramfb, the Pi 4's firmware, the Intel display and its panel's
+ *              own size); a firmware's fixed screen says its size. A new
+ *              size shows at once and goes back by itself after 15 s unless
+ *              kept (a monitor that cannot show it is never a dead end); the
+ *              panel's brightness (the Intel display). Kept in /etc/display.conf.
  *   Look       Phosphor (a green monitor), Amber 1984, Glass or BeOS (draw.c),
  *              and the size of everything, 50% to 400% (draw.c's zoom):
  *              the user's own (~/.look), applied at login.
@@ -26,12 +27,14 @@
 #define TOP 48                           /* the window's title strip */
 #define ROW 54                           /* a row of buttons or a field */
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
-       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110,
+       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_BRIGHT = 120,
        S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET };
 enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
 
 static const int sizes[][2] = { { 1280, 720 }, { 1366, 768 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 } };
 #define NSIZE (int)(sizeof sizes / sizeof sizes[0])
+static int nat[2];                       /* the screen's own size, if it has one (screen_native) */
+static const int brights[] = { 10, 25, 50, 75, 100 };
 static const int zooms[] = { 50, 75, 100, 125, 150, 200, 300, 400 };
 #define NZOOM 8
 static const int speeds[] = { 50, 100, 150, 200 };
@@ -134,24 +137,13 @@ void settings_revert(void)                /* ATLAS_REVERT: the countdown ended *
     say("atlas: screen size back to %d x %d\n", back.w, back.h);
     redraw();
 }
-static void keep(void)
-{
-    int w, h;
-    atlas_screen(&w, &h);
-    back.on = 0; gen++;
-    char line[32], *p = line + strlcpy(line, "size=", sizeof line);
-    p += num(p, w); *p++ = 'x'; p += num(p, h); *p++ = '\n'; *p = 0;
-    long f = fs_open("/etc/display.conf", FS_WRONLY | FS_CREAT | FS_TRUNC, 0644);
-    if (f >= 0) { fs_write(f, 0, line, strlen(line)); fs_close(f); }
-    say("atlas: screen size %d x %d kept\n", w, h);
-}
-
-/* ---- The assistant's model: /etc/sia.conf (these keys replaced), /etc/sia.key. */
-static long conf_set(const char *const *kv, int n)
+/* A configuration file with these "key=value" lines replaced (/etc/display.conf, /etc/sia.conf). */
+static long conf_set(const char *path, const char *const *kv, int n)
 {
     static char out[2048];
+    char tmp[64];
     size_t len = 0, fl = 0;
-    char *f = file_get("/etc/sia.conf", &fl), *p = f;
+    char *f = file_get(path, &fl), *p = f;
     while (p && *p) {                                    /* the other lines, as they were */
         char *e = strchr(p, '\n');
         size_t l = e ? (size_t)(e - p) : strlen(p);
@@ -166,12 +158,34 @@ static long conf_set(const char *const *kv, int n)
         if (len + l + 2 >= sizeof out) return -ENOSPC;
         memcpy(out + len, kv[i], l); len += l; out[len++] = '\n';
     }
-    long h = fs_open("/etc/sia.conf.new", FS_WRONLY | FS_CREAT | FS_TRUNC, 0644);
+    strlcpy(tmp + strlcpy(tmp, path, sizeof tmp - 4), ".new", 5);
+    long h = fs_open(tmp, FS_WRONLY | FS_CREAT | FS_TRUNC, 0644);
     if (h < 0) return h;
     long r = fs_write(h, 0, out, len);
     fs_close(h);
-    return r < 0 ? r : fs_rename("/etc/sia.conf.new", "/etc/sia.conf");
+    return r < 0 ? r : fs_rename(tmp, path);
 }
+static void keep(void)
+{
+    int w, h;
+    atlas_screen(&w, &h);
+    back.on = 0; gen++;
+    char line[32], *p = line + strlcpy(line, "size=", sizeof line);
+    p += num(p, w); *p++ = 'x'; p[num(p, h)] = 0;
+    const char *kv[1] = { line };
+    conf_set("/etc/display.conf", kv, 1);
+    say("atlas: screen size %d x %d kept\n", w, h);
+}
+static void set_bright(int pct)                          /* the panel's backlight (the Intel display) */
+{
+    char line[24];
+    strlcpy(line, "brightness=", sizeof line);
+    line[11 + num(line + 11, screen_backlight(pct))] = 0;
+    const char *kv[1] = { line };
+    conf_set("/etc/display.conf", kv, 1);
+}
+
+/* ---- The assistant's model: /etc/sia.conf (these keys replaced), /etc/sia.key. */
 
 static void apply_sia(void)
 {
@@ -197,7 +211,7 @@ static void apply_sia(void)
     strlcpy(url + strlcpy(url, "url=", sizeof url), u, sizeof url - 4);
     strlcpy(model + strlcpy(model, "api_model=", sizeof model), fields[F_MODEL], sizeof model - 10);
     const char *kv[3] = { b, url, model };
-    long r = conf_set(kv, remote ? 3 : 1);
+    long r = conf_set("/etc/sia.conf", kv, remote ? 3 : 1);
     if (!r && remote && fields[F_KEY][0]) {              /* a new key (empty: the old one stays) */
         long h = fs_open("/etc/sia.key", FS_WRONLY | FS_CREAT | FS_TRUNC, 0600);
         if (h < 0) r = h;
@@ -361,15 +375,16 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
     int w, h, rs = atlas_screen(&w, &h);
     char t[64], *p;
     if (rs) {
-        const char *names[NSIZE];
-        static char nb[NSIZE][16];
-        int on = -1;
-        for (int i = 0; i < NSIZE; i++) {
-            p = nb[i]; p += num(p, sizes[i][0]); p += strlcpy(p, " x ", 4); p[num(p, sizes[i][1])] = 0;
+        const char *names[NSIZE + 1];
+        static char nb[NSIZE + 1][16];
+        int on = -1, n = NSIZE + screen_native(&nat[0], &nat[1]);   /* (and the panel's own size) */
+        for (int i = 0; i < n; i++) {
+            const int *z = i < NSIZE ? sizes[i] : nat;
+            p = nb[i]; p += num(p, z[0]); p += strlcpy(p, " x ", 4); p[num(p, z[1])] = 0;
             names[i] = nb[i];
-            if (sizes[i][0] == w && sizes[i][1] == h) on = i;
+            if (z[0] == w && z[1] == h) on = i;
         }
-        choices("Size", names, NSIZE, on, S_SIZE);
+        choices("Size", names, n, on, S_SIZE);
         if (back.on) {
             p = t + strlcpy(t, "Keep this size? Back to ", sizeof t);
             p += num(p, back.w); p += strlcpy(p, " x ", 4); p += num(p, back.h); strlcpy(p, " in 15 s.", 12);
@@ -388,6 +403,13 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
         p = t; p += num(p, w); p += strlcpy(p, " x ", 4); p += num(p, h); strlcpy(p, ", set by the firmware", 24);
         if (fits(42)) label(cx, cy + 10, t, 2, C_TXT);
         cy += ROW;
+    }
+    int bl = screen_backlight(-1);
+    if (bl >= 0) {
+        static const char *bn[5] = { "10%", "25%", "50%", "75%", "100%" };
+        int bk = -1;
+        for (int i = 0; i < 5; i++) if (brights[i] == bl) bk = i;
+        choices("Brightness", bn, 5, bk, S_BRIGHT);
     }
 
     heading("LOOK");
@@ -472,6 +494,8 @@ int settings_click(int kind, int arg)
 {
     if (kind != H_SET) return 0;
     if (arg >= S_SIZE && arg < S_SIZE + NSIZE) set_size(sizes[arg - S_SIZE][0], sizes[arg - S_SIZE][1]);
+    else if (arg == S_SIZE + NSIZE) set_size(nat[0], nat[1]);
+    else if (arg >= S_BRIGHT && arg < S_BRIGHT + 5) set_bright(brights[arg - S_BRIGHT]);
     else if (arg == S_KEEP) keep();
     else if (arg == S_BACK) { gen++; settings_revert(); back.on = 0; }
     else if (arg >= S_SPEED && arg < S_SPEED + 4) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(speeds[arg - S_SPEED], w, r); }
