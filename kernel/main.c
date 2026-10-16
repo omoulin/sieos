@@ -28,7 +28,8 @@ int opt_pcores;
  * other):
  *
  *   proc_lock         the process table: pids, parents and children (task.c)
- *   p->lock           a process: its threads, its ports, its heap, exiting
+ *   p->lock           a process: its threads, its ports, its heap and regions, exiting
+ *                     (also taken by a copy into a region's untouched page: vm.c)
  *   names_lock        port names, threads waiting in port_lookup (ipc.c)
  *   irq_lock          which ports each interrupt line goes to (ipc.c)
  *   port bucket       a bucket of the port table: its ports and their queues
@@ -40,6 +41,8 @@ int opt_pcores;
  *   page_lock         the physical page bitmap (mem.c)
  *   rand, log, print  the random pool, the log, the serial port
  *   (arch)            x86-64: the I/O APICs; PCI configuration
+ *   as_lock, futexes  vm.c's address space table and futex buckets: each taken
+ *                     alone, nothing else held
  *
  * Threads move between states without a lock of their own: a waiting
  * thread is woken by whoever takes it off the queue it waits in (under that

@@ -80,6 +80,12 @@ static inline long sys_wait(int pid, int *status, int flags) { return syscall4(S
 static inline long sys_random(void *buf, size_t n)      { return SYS(SYS_RANDOM, buf, n); }
 static inline long sys_ident(int pid, mk_ident_t *id)   { return SYS(SYS_IDENT, pid, id); }
 static inline long sys_child_port(long port)            { return SYS(SYS_CHILD_PORT, port, 0); }
+/* Anonymous memory given on first touch, futexes, thread ids (docs/webkit-plan.md). */
+static inline void *sys_mmap(void *addr, size_t size, int flags) { return (void *)syscall4(SYS_MMAP, (long)addr, size, flags, 0); }
+static inline long sys_munmap(void *addr, size_t size, int flags) { return syscall4(SYS_MUNMAP, (long)addr, size, flags, 0); }
+static inline long sys_mprotect(void *addr, size_t size, int prot) { return syscall4(SYS_MPROTECT, (long)addr, size, prot, 0); }
+static inline long sys_futex(int op, volatile void *addr, long val, uint64_t ns) { return syscall4(SYS_FUTEX, op, (long)addr, val, ns); }
+static inline long sys_thread_self(volatile void *clear)  { return SYS(SYS_THREAD_SELF, clear, 0); }
 
 /* Answer a message with just a result in w[0]. */
 static inline long reply_val(long token, long v)        { msg_t m = { .w = { v } }; return ipc_reply(token, &m); }

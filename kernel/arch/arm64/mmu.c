@@ -188,11 +188,12 @@ void arch_vm_free(uint64_t as, void (*leaf)(uint64_t pa, uint64_t flags)) { free
 
 /* Where the kernel finds user address va of address space as: 0 unless it
  * is mapped for user mode (and writable, if write == 1; write == 2: the
- * kernel itself writes, read-only pages included, to load a program). */
+ * kernel itself writes, read-only pages included, to load a program;
+ * write == 3: any page there, even one user mode may not touch: vm.c). */
 char *arch_uaddr(uint64_t as, uint64_t va, int write)
 {
     uint64_t *e = va < USER_TOP ? walk(as, va, 0) : 0;
-    if (!e || !(*e & D_VALID) || !(*e & D_USER) || (write == 1 && (*e & D_RO))) return 0;
+    if (!e || !(*e & D_VALID) || (write != 3 && !(*e & D_USER)) || (write == 1 && (*e & D_RO))) return 0;
     return (char *)P2V(*e & D_ADDR) + va % PAGE;
 }
 

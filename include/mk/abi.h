@@ -101,7 +101,26 @@ enum {
     SYS_ACPI,          /* (buf, size) -> bytes: the firmware's ACPI DSDT then each SSDT, one
                           after the other (x86-64; drivers only, for user/i2chid's AML
                           reader); a buffer too small gets nothing; -ENOSYS: none        */
+    SYS_MMAP,          /* (addr, size, PROT_* | MAP_FIXED) -> address: reserve anonymous
+                          memory; each page is given, zeroed, when first touched. Without
+                          MAP_FIXED the kernel chooses where (addr is ignored); with it,
+                          exactly at addr, replacing what was there (docs/webkit-plan.md) */
+    SYS_MUNMAP,        /* (addr, size, flags): remove that memory; UNMAP_KEEP: only give its
+                          pages back (they come back zeroed when touched: MADV_DONTNEED)  */
+    SYS_MPROTECT,      /* (addr, size, PROT_*): new rights for memory SYS_MMAP gave       */
+    SYS_FUTEX,         /* (FUTEX_WAIT, addr, value, ns): sleep while the 32-bit word at addr
+                          holds value (-EAGAIN: it does not), at most ns (0: no limit;
+                          -ETIMEDOUT); (FUTEX_WAKE, addr, n) -> how many woken. Keyed by
+                          the word's memory, so it also works between processes sharing it */
+    SYS_THREAD_SELF,   /* (clear) -> the calling thread's id; if clear != 0, when this thread
+                          ends the kernel writes a 32-bit 0 there and wakes a futex waiter */
 };
+/* SYS_MMAP, SYS_MPROTECT: rights (Linux's values), and where. PROT_NONE: no
+ * access at all (guard pages). PROT_WRITE with PROT_EXEC is allowed on
+ * anonymous memory (a JIT's code pool); programs' own files stay W^X. */
+enum { PROT_NONE = 0, PROT_READ = 1, PROT_WRITE = 2, PROT_EXEC = 4, MAP_FIXED = 0x10 };
+#define UNMAP_KEEP 1                 /* SYS_MUNMAP */
+enum { FUTEX_WAIT, FUTEX_WAKE };     /* SYS_FUTEX */
 #define LOG_KEEP 32768
 enum { PLACE_NORMAL, PLACE_BACKGROUND };   /* SYS_PLACE: P-cores first (speed) / E-cores first */
 /* SYS_SCREEN's answer. pitch: pixels per row; format: 0 = bytes R,G,B,x in
@@ -152,7 +171,8 @@ enum { SIGHUP = 1, SIGINT = 2, SIGKILL = 9, SIGUSR1 = 10, SIGUSR2 = 12, SIGTERM 
 /* Errors (the POSIX numbers, returned negated). */
 enum { EPERM = 1, ENOENT = 2, ESRCH = 3, EINTR = 4, EIO = 5, EBADF = 9, ECHILD = 10, EAGAIN = 11, ENOMEM = 12, EACCES = 13,
        EFAULT = 14, EBUSY = 16, EEXIST = 17, ENOTDIR = 20, EISDIR = 21, EINVAL = 22, EMFILE = 24,
-       EXDEV = 18, ENOSPC = 28, EROFS = 30, EPIPE = 32, ENAMETOOLONG = 36, ENOSYS = 38, ENOTEMPTY = 39, ELOOP = 40 };
+       EXDEV = 18, ENOSPC = 28, EROFS = 30, EPIPE = 32, ENAMETOOLONG = 36, ENOSYS = 38, ENOTEMPTY = 39, ELOOP = 40,
+       ETIMEDOUT = 110 };
 
 /*
  * A message. Small values travel in w[]; larger data is copied by the

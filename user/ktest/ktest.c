@@ -26,6 +26,13 @@
  *                         them; the thread that set the function takes them
  *   ktest sigwait         (for tools/sigtest.py) SIGINT caught in a busy loop,
  *                         a sleep and a console read, then a clean end
+ *   ktest vm              anonymous memory given on first touch: pages counted
+ *                         only once touched, given back, MAP_FIXED, messages
+ *                         into and out of untouched memory, generated code
+ *                         run, faults that still end a process (PROT_NONE,
+ *                         writing after mprotect read-only)
+ *   ktest futex           a futex mutex shared by 8 threads, time limits,
+ *                         waking many waiters, a thread's end waking its joiner
  *   ktest hang spin|sleep|read|net   wait forever (for Ctrl-C)
  * Prints "ktest NAME: ok" or "... FAIL"; exit status 0 if all went well.
  * Built twice for the tests: by gcc (ktest), and by sicc (ktest-sicc,
@@ -539,6 +546,160 @@ static int sig_group(void)
     return hang("spin");
 }
 
+/* ---- Anonymous memory given on first touch (SYS_MMAP...): what it costs
+ * (pages counted only once touched), giving pages back, rights, code. */
+static long my_pages(void)
+{
+    mk_task_t t;
+    mk_ident_t id;
+    sys_ident(0, &id);
+    return sys_tasks(&t, 1, id.pid - 1) == 1 && t.pid == id.pid ? (long)t.pages : -1;
+}
+static const char *vm_name = "vm";
+static int vm_check(const char *what, int ok)
+{
+    printf("ktest %s: %s: %s\n", vm_name, what, ok ? "ok" : "FAIL");
+    return !ok;
+}
+static long vm_port;
+static char *vm_rbuf;
+static void vm_server(void *a)
+{
+    (void)a;
+    msg_t m = { .rbuf = vm_rbuf, .rlen = 8192 };
+    long tok = ipc_recv(vm_port, &m);
+    msg_t r = { .w = { m.rlen } };
+    ipc_reply(tok, &r);
+}
+static int vm_child(const char *how)       /* ends by a fault if all is well */
+{
+    if (!strcmp(how, "none")) {
+        volatile char *p = sys_mmap(0, 4096, PROT_NONE);
+        return p[0] + 2;
+    }
+    volatile char *p = sys_mmap(0, 8192, PROT_READ | PROT_WRITE);
+    p[100] = 7;
+    if (sys_mprotect((void *)p, 8192, PROT_READ) || p[100] != 7) return 3;   /* kept, readable */
+    p[100] = 8;                            /* not writable any more */
+    return 2;
+}
+static int test_vm(void)
+{
+    int fails = 0;
+    long p0 = my_pages();
+    char *a = sys_mmap(0, 1UL << 30, PROT_READ | PROT_WRITE);
+    fails += vm_check("reserve 1 GiB", (long)a > 0 && my_pages() == p0);
+    a[0] = 1; a[5 << 20] = 2; a[(1UL << 30) - 1] = 3;
+    fails += vm_check("3 pages touched, 3 pages used", my_pages() == p0 + 3 && a[0] == 1 && a[5 << 20] == 2 && a[1] == 0);
+    sys_munmap(a, 4096, UNMAP_KEEP);
+    fails += vm_check("one given back", my_pages() == p0 + 2);
+    fails += vm_check("it comes back zeroed", a[0] == 0 && my_pages() == p0 + 3);
+    char *b = sys_mmap(a + (5 << 20), 4096, PROT_READ | PROT_WRITE | MAP_FIXED);
+    fails += vm_check("MAP_FIXED replaces", b == a + (5 << 20) && b[0] == 0 && my_pages() == p0 + 3);
+    sys_munmap(a, 1UL << 30, 0);
+    fails += vm_check("unmapped: nothing used", my_pages() == p0);
+    /* the kernel's copies: a message into untouched memory, and out of it */
+    vm_rbuf = sys_mmap(0, 1 << 20, PROT_READ | PROT_WRITE);
+    char *src = sys_mmap(0, 1 << 20, PROT_READ | PROT_WRITE);
+    for (int i = 0; i < 100; i++) src[4096 + i] = (char)i;
+    vm_port = port_create(0);
+    thread_start(vm_server, 0, 16384);
+    msg_t m = { .sbuf = src + 4000, .slen = 4000 };
+    long r = ipc_call(vm_port, &m);
+    int same = 1;
+    for (int i = 0; i < 4000; i++) same &= vm_rbuf[i] == (i >= 96 && i < 196 ? (char)(i - 96) : 0);
+    fails += vm_check("a message into and out of untouched memory", r == 0 && m.w[0] == 4000 && same);
+    /* code: generated, run, then made read-only and run again */
+    unsigned char *code = sys_mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC);
+#if defined(__x86_64__)
+    static const unsigned char ret42[] = { 0xb8, 42, 0, 0, 0, 0xc3 };        /* mov eax, 42; ret */
+#else
+    static const unsigned char ret42[] = { 0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6 };   /* mov w0, #42; ret */
+#endif
+    for (unsigned i = 0; i < sizeof ret42; i++) code[i] = ret42[i];
+#if defined(__aarch64__)
+    asm volatile("dc cvau, %0; dsb ish; ic ivau, %0; dsb ish; isb" : : "r"(code) : "memory");
+#endif
+    int (*f)(void) = (int (*)(void))(uintptr_t)code;
+    int v1 = f();
+    sys_mprotect(code, 4096, PROT_READ | PROT_EXEC);
+    fails += vm_check("generated code runs (read+write+execute, then read+execute)", v1 == 42 && f() == 42);
+    /* faults that still end a process */
+    const char *how[] = { "none", "ro" };
+    for (int i = 0; i < 2; i++) {
+        char args[40] = "ktest vm-child ";
+        strlcpy(args + 15, how[i], sizeof args - 15);
+        long pid = spawn_file("/bin/ktest", args, -1, -1, 0);
+        int st = 0;
+        if (pid > 0) sys_wait(pid, &st, 0);
+        fails += vm_check(i ? "writing read-only memory ends the process (its data kept)" : "touching PROT_NONE ends the process", pid > 0 && st == -1);
+    }
+    return fails;
+}
+
+/* ---- Futexes: a mutex of 8 threads, time limits, waking many, a thread's end. */
+static volatile uint32_t fx_lock, fx_word;
+static volatile long fx_count;
+static void fx_mutex_lock(void)         /* Drepper's: 0 free, 1 taken, 2 taken with waiters */
+{
+    uint32_t c = 0;
+    if (__atomic_compare_exchange_n(&fx_lock, &c, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return;
+    if (c != 2) c = __atomic_exchange_n(&fx_lock, 2, __ATOMIC_ACQUIRE);
+    while (c) { sys_futex(FUTEX_WAIT, &fx_lock, 2, 0); c = __atomic_exchange_n(&fx_lock, 2, __ATOMIC_ACQUIRE); }
+}
+static void fx_mutex_unlock(void)
+{
+    if (__atomic_exchange_n(&fx_lock, 0, __ATOMIC_RELEASE) == 2) sys_futex(FUTEX_WAKE, &fx_lock, 1, 0);
+}
+static void fx_thread(void *a)
+{
+    (void)a;
+    for (int i = 0; i < 20000; i++) { fx_mutex_lock(); fx_count++; fx_mutex_unlock(); }
+    __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
+}
+static void fx_waiter(void *a)
+{
+    (void)a;
+    __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
+    while (fx_word == 0) sys_futex(FUTEX_WAIT, &fx_word, 0, 0);
+    __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
+}
+static volatile uint32_t fx_tid;
+static void fx_ender(void *a)
+{
+    (void)a;
+    fx_tid = (uint32_t)sys_thread_self(&fx_tid);
+    sys_sleep(20000000);
+}
+static int test_futex(void)
+{
+    int fails = 0;
+    vm_name = "futex";
+    done = 0;
+    for (int i = 0; i < 8; i++) thread_start(fx_thread, 0, 16384);
+    wait_all(8);
+    fails += vm_check("8 threads, one futex mutex", fx_count == 8 * 20000);
+    uint64_t t = sys_clock();
+    long r = sys_futex(FUTEX_WAIT, &fx_word, 0, 20000000);
+    t = sys_clock() - t;
+    fails += vm_check("a time limit", r == -ETIMEDOUT && t >= 20000000 && t < 500000000);
+    fails += vm_check("not the value: at once", sys_futex(FUTEX_WAIT, &fx_word, 1, 0) == -EAGAIN);
+    done = 0;
+    for (int i = 0; i < 6; i++) thread_start(fx_waiter, 0, 16384);
+    wait_all(6);
+    sys_sleep(20000000);                   /* (all asleep in the kernel by now) */
+    fx_word = 1;
+    long n = sys_futex(FUTEX_WAKE, &fx_word, 100, 0);
+    wait_all(12);
+    fails += vm_check("waking 6 waiters", n == 6);
+    fx_tid = 1;
+    thread_start(fx_ender, 0, 16384);
+    uint32_t v;
+    while ((v = fx_tid) != 0) sys_futex(FUTEX_WAIT, &fx_tid, v, 0);
+    fails += vm_check("a thread's end clears its word and wakes us", fx_tid == 0);
+    return fails;
+}
+
 /* ktest sigwait: for the console tests (tools/sigtest.py), each step after
  * a Ctrl-C: SIGINT caught in a busy loop, in a sleep, in a console read;
  * then it cleans up and ends normally. */
@@ -581,6 +742,7 @@ int main(int argc, char **argv)
     if (!strcmp(what, "quota-grand")) return quota_child(1);
     if (!strcmp(what, "place-child")) return busy_place(0, 300, 0);   /* (background: its parent said so) */
     if (!strcmp(what, "sig-group")) return sig_group();
+    if (!strcmp(what, "vm-child")) return vm_child(argc > 2 ? argv[2] : "");
     if (!strcmp(what, "sigwait")) return sig_wait();
     if (!strcmp(what, "spin")) return hang("spin");
     if (!strcmp(what, "hang")) return hang(argc > 2 ? argv[2] : "spin");
@@ -595,7 +757,9 @@ int main(int argc, char **argv)
     else if (!strcmp(what, "place")) fails = test_place();
     else if (!strcmp(what, "log")) fails = test_log();
     else if (!strcmp(what, "sig")) fails = test_sig();
-    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|place|log|sig [threads]\n"); return 2; }
+    else if (!strcmp(what, "vm")) fails = test_vm();
+    else if (!strcmp(what, "futex")) fails = test_futex();
+    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|place|log|sig|vm|futex [threads]\n"); return 2; }
     printf("ktest %s: %s\n", what, fails ? "FAIL" : "ok");
     return fails != 0;
 }

@@ -194,6 +194,8 @@ int trap(regs_t *r)
         panic("exception %lu in the kernel at %lx (error %lx, address %lx)\n", r->vec, r->rip, r->err, cr2);
     rand_event(r->vec);                  /* the time of every interrupt feeds the random pool */
     if (r->vec == 7 && fpu_first_use(cur)) return 1;   /* #NM: its first floating-point instruction */
+    if (r->vec == 14 && vm_fault(cr2, r->err & 16 ? PROT_EXEC : r->err & 2 ? PROT_WRITE : PROT_READ))
+        return 1;                           /* #PF: memory given on first touch (vm.c); the access runs again */
     if (r->vec < 32) {                      /* a user program did something wrong: its process dies */
         kprintf("mk: %s (pid %d) killed: exception %lu at %lx (error %lx, address %lx)\n",
                 cur->proc->name, cur->proc->pid, r->vec, r->rip, r->err, cr2);

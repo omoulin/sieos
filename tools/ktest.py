@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Boot SIEOS without a window and check, as root on the serial console:
   kernel  floating-point and AVX registers per thread, thread-local
-          variables (programs built by gcc and by sicc), memory quotas
+          variables (programs built by gcc and by sicc), memory quotas,
+          anonymous memory given on first touch, futexes
   sia     the assistant: a question, two sessions at once, sia killed in
           the middle of an answer (init restarts it), speed and memory
   bench   the IPC round trip, and 40 clients calling one server at once
@@ -79,7 +80,7 @@ def ok(name, cond, detail=""):
 
 if what == "kernel":
     for prog in ("ktest", "ktest-sicc"):
-        for t in (["fpu", "24"], ["avx", "24"], ["tls", "16"], ["quota"], ["ipc"], ["log"]):
+        for t in (["fpu", "24"], ["avx", "24"], ["tls", "16"], ["quota"], ["ipc"], ["log"], ["vm"], ["futex"]):
             if t[0] == "avx" and (prog == "ktest-sicc" or A64):   # (AVX: x86-64, built by gcc)
                 continue
             r = run(f"{prog} {' '.join(t)}", 120)

@@ -128,6 +128,10 @@ int trap_sync(regs_t *r)
     if (ec == EC_SVC) { diag_stage(12); syscall(r); return 1; }   /* step 12: a program runs (once) */
     rand_event(esr ^ ticks());
     if (ec == EC_FP && fpu_first_use(cur)) return 1;   /* the instruction runs again */
+    int fsc = esr & 0x3C;                              /* translation (4) or permission (0xC) fault, any level */
+    if ((ec == EC_DABT_LOW || ec == EC_IABT_LOW) && (fsc == 4 || fsc == 0xC) &&
+        vm_fault(far, ec == EC_IABT_LOW ? PROT_EXEC : esr & (1 << 6) ? PROT_WRITE : PROT_READ))
+        return 1;                                      /* memory given on first touch (vm.c) */
     diag_fault(4, esr, r->pc, far);                    /* (on a Pi's screen, before step 12: init itself) */
     kprintf("mk: %s (pid %d) killed: %s at %lx (syndrome %lx, address %lx)\n",
             cur->proc->name, cur->proc->pid,

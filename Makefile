@@ -31,7 +31,7 @@ KCFLAGS := $(CFLAGS) $(KARCH_CFLAGS) -Ikernel -Ikernel/arch/$(ARCH) $(if $(STACK
 KHDRS   := kernel/*.h kernel/arch/$(ARCH)/*.h include/mk/*.h
 UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 
-KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
+KCORE   := main mem task ipc syscall vm random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
 ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
