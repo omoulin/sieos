@@ -156,6 +156,8 @@ $(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/mk.h include/mk/*.h $(TO
 ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen igfx wm settings files icons pins repo mail
 $(B)/atlas.elf: $(ATLAS:%=$(B)/user/atlas/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(ATLAS:%=$(B)/user/atlas/%.o) $(ULIB)
+$(B)/user/atlas/igfx.o: user/lib/eld.h
+$(B)/user/audiod.o: user/audiod/codec.c user/lib/eld.h
 $(B)/user/atlas/%.o: user/atlas/%.c user/atlas/draw.h user/atlas/atlas.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
@@ -412,8 +414,8 @@ git-test: all
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	python3 tools/gittest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # audio-test: sound (docs/audio.md) on QEMU's intel-hda + hda-duplex, output to a WAV file:
-# vol, play (the tone checked in QEMU's file), mute, rec (tools/audiotest.py)
-audio-test: all
+# vol, play (the tone checked in QEMU's file), mute, rec (tools/audiotest.py); first the HDMI codec test (hdmi-test)
+audio-test: all hdmi-test
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	python3 tools/audiotest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
@@ -638,6 +640,14 @@ crypto-test: $(B)/host/crypto-test
 $(B)/host/aml-test: tests/aml/test.c user/i2chid/aml.c user/i2chid/aml.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -DAML_HOST -Iuser/i2chid -o $@ tests/aml/test.c user/i2chid/aml.c
+# ---- audiod's codec side (codec.c, eld.h) on the host: the laptop's real
+# codecs (their /proc/asound dumps) answered by a fake, two real EDIDs (tests/hdmi)
+$(B)/host/hdmi-test: tests/hdmi/test.c user/audiod/codec.c user/lib/eld.h
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -Iuser/lib -o $@ tests/hdmi/test.c
+hdmi-test: $(B)/host/hdmi-test
+	$(B)/host/hdmi-test tests/hdmi
+.PHONY: hdmi-test
 aml-test: $(B)/host/aml-test
 	sh tests/aml/check.sh $(B)/host/aml-test
 .PHONY: aml-test

@@ -93,6 +93,10 @@ run("play /tmp/t/tone.wav")
 time.sleep(1)
 r = run("vol 50")
 ok("vol 50 unmutes", "volume 50%" in r and "muted" not in r, r.strip()[-200:])
+r = run("vol out")
+ok("vol out: the speakers only, playing", "* 0 Speakers" in r and " 1 " not in r, r.strip()[-200:])
+r = run("vol out 1")
+ok("vol out 1: no monitor, refused", "vol: error" in r, r.strip()[-200:])
 stop()
 with wave.open(captured) as w: x = array.array("h", w.readframes(w.getnframes()))[0::2]
 loud = [i for i, v in enumerate(x) if abs(v) > 2000]

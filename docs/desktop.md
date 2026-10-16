@@ -200,7 +200,7 @@ one filled), wrapped onto more rows when the window is narrow:
 | Screen | the size: 1280 x 720, 1366 x 768, 1600 x 900, 1920 x 1080, 2560 x 1440 where the screen can take any (QEMU's VGA and ramfb, the Pi 4, whose firmware scales the picture to the monitor, the laptop's Intel display, which also offers its panel's own size and the panel's **brightness**). It changes at once and **goes back by itself after 15 s** unless you press *Keep*, so a monitor that cannot show it is never a dead end. A firmware's fixed screen (UEFI, the Pi 5) shows its size. | `/etc/display.conf` (the login screen too) |
 | Look | **Phosphor** (the default: a green monitor, with scanlines and glowing text), **Amber 1984** (amber, square corners, a grid of dots), **Glass** (the desktop's own colours) or **BeOS** (BeOS R5's colours: the blue desk, grey windows and panels, the yellow tab, black text, white fields and lists); the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% | `~/.look`, applied at your login (the login screen: Phosphor, 100%) |
 | Mouse | pointer speed (Slow, Normal, Fast, Faster), right- or left-handed buttons, the wheel normal or reversed | `~/.mouse`, applied at your login |
-| Sound | the volume: Mute, 25%, 50%, 75%, 100% ([audio.md](audio.md)) | the audio server, until a reboot |
+| Sound | the volume: Mute, 25%, 50%, 75%, 100%; the output (Speakers or a monitor with sound, shown when there is one) ([audio.md](audio.md)) | the audio server, until a reboot |
 | Network | Wi-Fi (the Raspberry Pis' CYW43455): the connection's state, **Scan** for networks in range, pick one, type the passphrase (WPA2) and **Join**, or **Forget**. A system setting: root's password is asked unless root is logged in. Where there is no Wi-Fi chip (every machine but a real Pi, QEMU included) it shows "No Wi-Fi on this machine." | `/etc/wifi.conf` (root only) |
 | Assistant | sia's model: the one on this computer, or **online**, any service with an OpenAI-compatible API (server URL, model name, API key). A system setting: root's password is asked unless root is logged in. | `/etc/sia.conf`, the key in `/etc/sia.key` (root only) |
 
@@ -410,7 +410,9 @@ between processes.
   GMBUS, the VBT from the ACPI OpRegion for ports and the panel's power
   sequence and backlight), all showing the same picture, any size up to
   the firmware's, fitted by each pipe's scaler; the panel's brightness in
-  Settings. The picture stays in the firmware's frame buffer (already in
+  Settings; a monitor with speakers gets its sound turned on (HDMI mode,
+  the ELD for the HDMI codec: [audio.md](audio.md#hdmi-and-displayport)).
+  The picture stays in the firmware's frame buffer (already in
   the GGTT; cached RAM would need flushing for the display engine). It logs
   registers, modes and link training to the console and `/etc/igfx.log`
   (on Linux: `sudo build/host/siefs /dev/sdX2 cat /etc/igfx.log`); anything

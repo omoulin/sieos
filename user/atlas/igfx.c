@@ -45,6 +45,7 @@
 #include <stdarg.h>
 #include "mk.h"
 #include "draw.h"
+#include "eld.h"
 
 /* ---- Registers (BAR0), time, the log. */
 static volatile uint32_t *mm;
@@ -94,6 +95,8 @@ typedef struct {
     int rates[8], nrates, edp14;     /* DP: link rates (port clock, kHz); eDP 1.4 rate table (LINK_RATE_SET) */
     int clk, lanes, rsel;            /* the link: port clock (DP: link rate / 10; HDMI: TMDS clock), lanes, rate index */
     mode_t m;
+    int eldn;                        /* a monitor with sound: its ELD (eld.h) for the HDMI codec */
+    uint8_t eld[ELD_MAX];
 } out_t;
 static out_t out[3];
 static int nout, ref, cdmax, fbw, fbh, stride, a4, active, failed;
@@ -303,6 +306,8 @@ static int probe(out_t *o, int i)
     if (e[0] || e[1] != 0xFF) return lg("port %d: bad EDID\n", o->port);
     lg("  EDID %02x%02x product %02x%02x, %d extension(s)\n", e[8], e[9], e[11], e[10], e[126]);
     nmodes[i] = dtds(e, modes[i], 12);
+    if (o->kind != 'e' && (o->eldn = eld_build(e, o->kind == 'd', o->eld)))
+        lg("  sound: ELD %d bytes, %d audio descriptors, speakers %02x\n", o->eldn, o->eld[5] >> 4, o->eld[7]);
     for (int k = 0; k < nmodes[i]; k++) mlog("mode", &modes[i][k]);
     return 0;
 }
@@ -489,6 +494,7 @@ static void pipe_off(int t)
     wr(T + 0x70080, 0); wr(T + 0x70084, rd(T + 0x70084));   /* cursor */
     if (rd(T + 0x70008) & 1u << 31) { rmw(T + 0x70008, 1u << 31, 0); poll(T + 0x70008, 1u << 30, 0, 100); }   /* TRANSCONF */
     for (int k = 0; k < 2; k++) { uint32_t S = 0x68180 + t * 0x800 + k * 0x100; wr(S, 0); wr(S - 0x10, 0); wr(S - 0xC, 0); }   /* scalers */
+    rmw(0x650C0, 5u << 4 * t, 0);                        /* its audio, its ELD not valid (AUD_PIN_ELD_CP_VLD) */
     rmw(T + 0x60400, 1u << 31, 0);                       /* the DDI function */
     if (port >= 0) {
         rmw(0x64000 + port * 0x100, 1u << 31, 0);        /* DDI buffer, DP transport, wait idle */
@@ -567,6 +573,31 @@ static void plane(out_t *o)
     wr(T + 0x7019C, surf);                               /* PLANE_SURF: arms the plane */
 }
 
+/* ---- Sound to a monitor (intel_audio.c hsw_audio_codec_enable): the
+ * transcoder's audio on, its N/CTS (DP: Maud/Naud) left to the hardware,
+ * from the pixel clock's class; the ELD into the HDMI codec (which tells the
+ * HDA side: "ELD valid" on the pin device of this pipe). HDMI: in HDMI mode
+ * (not DVI) with an AVI infoframe (RGB, full range, no VIC). */
+static void audio(out_t *o)
+{
+    static const int hz[14] = { 25175, 25200, 27000, 27027, 54000, 54054, 74176, 74250, 148352, 148500, 296703, 297000, 593407, 594000 };
+    uint32_t t = o->pipe, A = 0x65000 + t * 0x100, w;
+    int k = 1;                                           /* (25.2 MHz if none: bspec's default) */
+    for (int i = 0; i < 14; i++) if (o->m.clock - hz[i] < 10 && hz[i] - o->m.clock < 10) k = i;
+    rmw(0x650C0, 1u << 4 * t, 4u << 4 * t);              /* AUD_PIN_ELD_CP_VLD: audio out on, ELD not valid */
+    rmw(A, 0x3FFFFFF0, o->kind == 'h' ? (uint32_t)k << 16 : 1u << 29);   /* AUD_CFG: pixel clock (HDMI) or DP; N by the hardware */
+    rmw(A + 0xB4, 0x1F << 5, 0);                         /* AUD_DIP_ELD_CTRL: from the ELD's start */
+    for (int i = 0; i < ELD_MAX; i += 4) { memcpy(&w, o->eld + i, 4); wr(A + 0x50, w); }   /* AUD_EDID_DATA */
+    rmw(0x650C0, 0, 1u << 4 * t);                        /* ELD valid */
+    lg("pipe %c: sound on (AUD_CFG %08x, ELD_CP_VLD %08x)\n", 'A' + t, rd(A), rd(0x650C0));
+}
+static void avi(uint32_t T)                              /* (hsw_write_infoframe) */
+{
+    rmw(T + 0x60200, 1u << 12, 0);                       /* VIDEO_DIP_CTL: AVI off while written */
+    for (int i = 0; i < 8; i++) wr(T + 0x60220 + 4 * i, i ? i == 1 ? 0x00081057 : 0 : 0x000D0282);   /* type 82 v2, 13 bytes; sum; A0, R = 8 */
+    rmw(T + 0x60200, 0, 1u << 12);
+}
+
 /* ---- One output on (the PRM's "Enable sequence" for DP / HDMI). */
 static int enable(out_t *o, int mask)
 {
@@ -587,8 +618,8 @@ static int enable(out_t *o, int mask)
     rmw(k, 3u << ph % 3 * 2, (uint32_t)p << ph % 3 * 2);
     rmw(k, 1u << clkoff[ph], 0);
     wr(0x46140 + 4 * p, (o->port + 1) << 28);            /* 7.a TRANS_CLK_SEL: the port's clock */
-    uint32_t f = (o->port + 1) << 27 | (m->flags & 2) << 16 | (m->flags & 1) << 16 | (dp ? 2u << 24 | (o->lanes - 1) << 1 : 1u << 24);
-    wr(T + 0x60400, f);                                  /* 7.b TRANS_DDI_FUNC_CTL: port, DP SST / DVI, 8 bpc, lanes */
+    uint32_t f = (o->port + 1) << 27 | (m->flags & 2) << 16 | (m->flags & 1) << 16 | (dp ? 2u << 24 | (o->lanes - 1) << 1 : o->eldn ? 0 : 1u << 24);
+    wr(T + 0x60400, f);                                  /* 7.b TRANS_DDI_FUNC_CTL: port, DP SST / HDMI (sound) or DVI, 8 bpc, lanes */
     if (dp && train(o)) return -1;                       /* 7.c-7.k */
     if (dp) {                                            /* M/N: 24-bit pixels over the link; TU 64 */
         uint64_t N = 0x800000, M = (uint64_t)m->clock * 3 * N / ((uint64_t)o->clk * o->lanes);
@@ -617,6 +648,7 @@ static int enable(out_t *o, int mask)
     wr(T + 0x70240, wm); wr(T + 0x70258, wm);
     for (int l = 1; l < 8; l++) wr(T + 0x70240 + 4 * l, 0);
     wr(T + 0x70268, 0); wr(T + 0x7025C, 0); wr(T + 0x7017C, 0);
+    if (!dp && o->eldn) avi(T);
     wr(T + 0x60404, 0); wr(T + 0x60400, f | 1u << 31);  /* the DDI function on, then the transcoder */
     rmw(T + 0x70008, 0, 1u << 31);
     if (poll(T + 0x70008, 1u << 30, 1u << 30, 100)) return lg("pipe %c does not start\n", 'A' + p);
@@ -634,6 +666,7 @@ static int enable(out_t *o, int mask)
     lg("pipe %c on: port %d, %s, link status %02x %02x %02x\n", 'A' + p, o->port,
        rd(0x44408 + 0x10 * p) & 1u << 31 ? "FIFO UNDERRUN" : "no underrun", s[0], s[1], s[2]);
     rmw(0x44404 + 0x10 * p, 0, 1u << 31);
+    if (o->eldn) audio(o);
     o->on = 1;
     return 0;
 }
@@ -676,6 +709,15 @@ static int modeset(void)
     wr(0x45504, 0);                                      /* DC_STATE_EN: no DC5/DC6 while we drive it */
     rmw(0x44FE8, 0, 1u << 31); rmw(0x44300, 0, 1u << 31);   /* DBUF slices S1, S2 */
     if (poll(0x44FE8, 1u << 30, 1u << 30, 2) || poll(0x44300, 1u << 30, 1u << 30, 2)) return lg("DBUF power\n");
+    int snd = 0;
+    for (int i = 1; i < nout; i++) snd |= out[i].m.clock && out[i].eldn;
+    if (snd) {                                           /* display audio (i915_audio_component_get_power, codec_wake_override) */
+        wr(0x65900, 0x8010);                             /* AUD_FREQ_CNTRL: 8T, 96 MHz BCLK (AUD_FREQ_GEN12) */
+        rmw(0x48414, 0, 1u << 31);                       /* AUD_PIN_BUF_CTL: on */
+        rmw(0x65F10, 1u << 15, 0); us(1000);             /* AUD_CHICKENBIT: the codec's wake signal, left on, */
+        rmw(0x65F10, 0, 1u << 15); us(1000);             /* so the HDA link finds the HDMI codec after its resets */
+        lg("display audio on: AUD_FREQ_CNTRL %08x, AUD_PIN_BUF_CTL %08x, AUD_CHICKENBIT %08x\n", rd(0x65900), rd(0x48414), rd(0x65F10));
+    }
     int nd = 0, cd = cdclk_now(), hbr3 = 0;
     for (int i = 0; i < nout; i++) {
         if (!out[i].m.clock) continue;

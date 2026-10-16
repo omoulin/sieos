@@ -158,6 +158,16 @@ checklist in [raspberrypi.md](raspberrypi.md).
   plugged headphone silences the speaker. `play`, `rec`, `vol`; a volume
   choice in Settings; `make audio-test` checks the tone QEMU plays into a
   WAV file. audiod.o: 6.4 KB of code. Not yet run on the laptop.
+- **2026-10-16, later.** HDMI/DP sound ([audio.md](audio.md#hdmi-and-displayport)):
+  igfx turns display audio on for a monitor whose EDID has sound (ELD
+  built from it into the HDMI codec, the transcoder's audio, HDMI mode with
+  an AVI infoframe instead of DVI); audiod finds the sinks by the codec's
+  "ELD valid" (Intel's codec opened by its vendor verb; DP-MST devices per
+  pin), on up to two controllers (an NVIDIA GPU's HDMI function too,
+  enabled if hidden: useful only when the firmware lit a screen on it).
+  `vol out [N]`, a Settings "Output" row. `make hdmi-test`: the laptop's
+  real codec dumps replayed, ELDs from two real EDIDs. audiod.o 10.5 KB
+  (+4.1), igfx.o +1.4 KB. Not tried with a monitor yet.
 - **2026-10-16.** NVMe ([usb.md](usb.md#the-pcs-nvme-drives)): the disk
   server drives NVMe SSDs (reset, Identify, one I/O queue pair; read,
   write, flush with PRP lists; polled), on both architectures; it lists
