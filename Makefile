@@ -37,8 +37,8 @@ UCORE   := crt0 lib                     # in every program
 ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
-BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git mail   # programs on the disk, in /bin
-LINKS   := acct/passwd acct/su acct/useradd acct/userdel ssh/ssh-keygen   # other names of programs (symbolic links)
+BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git mail audiod play   # programs on the disk, in /bin
+LINKS   := acct/passwd acct/su acct/useradd acct/userdel ssh/ssh-keygen play/rec play/vol   # other names of programs (symbolic links)
 NETLINKS := ping host nslookup ifconfig netstat traceroute nc curl wget   # other names of /bin/fetch (docs/net.md)
 LINKS   += $(NETLINKS:%=fetch/%)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
@@ -399,6 +399,12 @@ git-test: all
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	python3 tools/gittest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+# audio-test: sound (docs/audio.md) on QEMU's intel-hda + hda-duplex, output to a WAV file:
+# vol, play (the tone checked in QEMU's file), mute, rec (tools/audiotest.py)
+audio-test: all
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
+	python3 tools/audiotest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 demand-test: all
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /models && $(B)/host/siefs $(B)/test.img put models/$(SIATEST_MODEL) /models/$(SIATEST_MODEL)
@@ -410,7 +416,7 @@ clean:
 distclean:
 	rm -rf $(B)
 
-.PHONY: all run run-nox test crash-test gpio-test gui-test gui-test-real kernel-test sig-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test git-test model clean distclean newdisk FORCE
+.PHONY: all run run-nox test crash-test audio-test gpio-test gui-test gui-test-real kernel-test sig-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test git-test model clean distclean newdisk FORCE
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.

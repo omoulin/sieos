@@ -11,6 +11,7 @@
  *                     ├─► auth  (/bin/auth)            accounts             port "auth"
  *                     ├─► vnet  (/bin/vnet, driver)    the network card     port "nic0"
  *                     ├─► netd  (/bin/netd)            TCP/IP, DHCP, DNS    port "net"
+ *                     ├─► audio (/bin/audiod, driver)  sound                port "audio"
  *                     └─► sia   (/bin/siad, 4.5 GiB)   the assistant        port "sia"
  *
  * On demand: a server with a port in the table is not started at boot.
@@ -106,6 +107,8 @@ static svc_t svc[MAXSVC] = {
     /* the pins (a Pi's GPIO; simulated elsewhere): started by its first user, then
      * kept (a pattern may be playing) */
     { .i = { "gpio",  0, 0, 0, 0, SVC_ALWAYS, 1, 0, "gpio", 0 }, "/bin/gpiod", "gpiod" },
+    /* sound (a driver): started by its first user, then kept (the volume) */
+    { .i = { "audio", 0, 0, 0, 0, SVC_ALWAYS, 1, 0, "audio", 0 }, "/bin/audiod", "audiod" },
     /* the network: kept a while, since starting means a new DHCP exchange;
      * the card's driver stops after netd (it is busy while netd runs) */
     { .i = { "vnet",  0, 0, 0, 0, SVC_ALWAYS, 1, 0, "nic0", 10 * MIN }, "/bin/vnet", "vnet" },

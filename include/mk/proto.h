@@ -390,3 +390,17 @@ enum {                                        /* a pin's self-check: the checks 
 };
 typedef struct { uint8_t mode, pull, level, pad; } gpio_pin_t;
 typedef struct { uint32_t mask, steps, step_us, loop; } gpio_pattern_t;
+
+/* The audio server, port "audio" (/bin/audiod, docs/audio.md): one output
+ * and one input stream, 48 kHz, 16-bit, stereo (4 bytes a frame). Written
+ * data goes by IPC straight into the ring the controller plays from; read
+ * data straight out of the one it records into. Reply: w[0] = result or -error. */
+enum {
+    AUDIO_WRITE = 1,  /* sbuf = frames; playing starts -> bytes taken (0: there was no
+                         room; the reply waited for some: send again)            */
+    AUDIO_READ,       /* w[1] = rbuf's size; recording starts, and runs while someone
+                         reads -> bytes in rbuf (waits for some)                 */
+    AUDIO_VOL,        /* w[1] = volume 0-100, | AUDIO_MUTE; AUDIO_ASK: no change -> the same */
+};
+#define AUDIO_MUTE 0x100
+#define AUDIO_ASK  0x200
