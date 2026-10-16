@@ -10,6 +10,8 @@
 _Static_assert(sizeof(int) == 4, "int is 4 bytes");
 struct P { int kind; union { struct { short x, y; }; long v; }; };
 struct F { int n; double d[]; };
+/* a static one with its flexible array initialized (pointers: relocations; MicroPython's qstr pool) */
+static const struct Pool { unsigned long n : 63, sorted : 1; const char *s[]; } pool = { 3, 1, { "ab", "cd", "ef" } };
 static _Alignas(32) char buf32[5];
 static inline int sq(int v) { return v * v; }
 static int sum(const int *restrict a, int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }
@@ -25,6 +27,7 @@ int main(void)
     struct F *f = malloc(sizeof *f + 3 * sizeof(double));
     f->n = 3; for (int i = 0; i < 3; i++) f->d[i] = i * 1.5;
     printf("%zu %g\n", sizeof(struct F), f->d[2]);
+    printf("%lu %d %s %s\n", (unsigned long)pool.n, (int)pool.sorted, pool.s[0], pool.s[2]);
     printf("%zu %zu %d\n", alignof(max_align_t), _Alignof(double), (int)((uintptr_t)buf32 % 32));
     const char *u8 = u8"héllo";
     const unsigned short *u = (const unsigned short *)u"€!";

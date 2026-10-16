@@ -668,9 +668,11 @@ static Token *include_file(Token *rest, const char *path, Token *at)
 
 static Token *do_include(Token **rest, Token *t)
 {
-    Token *start = t;
+    Token *start = t, *after = 0;
     const char *name;
     int quoted;
+    if (t->kind != TK_STR && !tok_is(t, '<'))   /* #include MACRO: the name it expands to */
+        t = expand(copy_line(&after, t));
     if (t->kind == TK_STR) {
         name = xstrndup(t->loc + 1, t->len - 2);
         quoted = 1;
@@ -686,12 +688,8 @@ static Token *do_include(Token **rest, Token *t)
         free(b.p);
         quoted = 0;
         *rest = skip_line(t->next);
-    } else {                                    /* #include MACRO */
-        Token *line = copy_line(rest, t);
-        Token *e = expand(line);
-        Token *r;
-        return do_include(&r, e);
-    }
+    } else error_at(start, "expected a file name");
+    if (after) *rest = after;                   /* (the line after the directive, not the expansion's end) */
     const char *path = search_include(name, quoted, start->file);
     if (!path) error_at(start, "%s: no such header", name);
     return include_file(*rest, path, start);
