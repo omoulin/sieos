@@ -700,7 +700,7 @@ llm-neon-test: $(SICC)
 # HTTPS) on each other kind of card, MACHINE:CARD (x86-64: the default cards
 # of QEMU's "pc" and "q35", virtio 1.0 without the legacy interface; arm64:
 # virtio on PCIe, what "-nic user" gives on virt).
-NET_CRYPTO := lib/sha2.c lib/aead.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
+NET_CRYPTO := lib/sha2.c lib/sha1.c user/wifi/wpa.c lib/aead.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
 $(B)/host/net-crypto-test: tests/net/crypto.c $(NET_CRYPTO) include/mk/crypto.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/net/crypto.c $(NET_CRYPTO)
