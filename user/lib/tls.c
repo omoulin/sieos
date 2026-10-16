@@ -315,8 +315,8 @@ static size_t client_hello(uint8_t *m, const char *host, int group, const uint8_
     put16(p + 6, (unsigned)group); put16(p + 8, (unsigned)publen); memcpy(p + 10, pub, publen); p += 10 + publen;
     put16(p, 0x002b); put16(p + 2, 5); p[4] = 4; put16(p + 5, 0x0304); put16(p + 7, 0x0303); p += 9;  /* 1.3, 1.2 */
     /* for 1.2: uncompressed points, the extended master secret, an empty renegotiation_info */
-    static const uint8_t v12[] = { 0, 0x0b, 0, 2, 1, 0, 0, 0x17, 0, 0, 0xff, 1, 0, 1, 0 };
-    memcpy(p, v12, sizeof v12); p += sizeof v12;
+    static const uint8_t ext12[] = { 0, 0x0b, 0, 2, 1, 0, 0, 0x17, 0, 0, 0xff, 1, 0, 1, 0 };
+    memcpy(p, ext12, sizeof ext12); p += sizeof ext12;
     put16(p, 0x0010); put16(p + 2, 11); put16(p + 4, 9); p[6] = 8; memcpy(p + 7, "http/1.1", 8); p += 15;
     if (cookielen) { put16(p, 0x002c); put16(p + 2, (unsigned)cookielen); memcpy(p + 4, cookie, cookielen); p += 4 + cookielen; }
     put16(ext, (unsigned)(p - ext - 2));
@@ -508,7 +508,7 @@ tls_t *tls_connect(long sock, const char *host, int flags, long *err)
             if (et == 0xff01 && (el != 1 || v[0])) { e = -EPROTO; goto out; }   /* renegotiation_info */
             i += 4 + el;
         }
-        if (!version && get16(b) == 0x0303 && !hrr && !is_hrr) {   /* TLS 1.2 */
+        if ((!version || version == 0x0303) && get16(b) == 0x0303 && !hrr && !is_hrr) {   /* TLS 1.2 */
             /* a 1.3 server pushed down to 1.2 (by someone in the middle) says so */
             if (!memcmp(b + 26, "DOWNGRD", 7)) { printf("tls: %s: downgrade to TLS 1.2 refused\n", host); e = -EIO; goto out; }
             if (!t->cs || t->cs->id >> 8 == 0x13) { e = -EPROTO; goto out; }
