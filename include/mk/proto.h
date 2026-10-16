@@ -404,3 +404,40 @@ enum {
 };
 #define AUDIO_MUTE 0x100
 #define AUDIO_ASK  0x200
+
+/* Bluetooth (docs/bluetooth.md). A USB adapter's HCI pipe, port "bthci"
+ * (the USB server, user/usb/btusb.c; btd is its only client). Reply: w[0]. */
+enum {
+    BTH_SEND = 0x50,  /* w[1] = 0: an HCI command (control endpoint), 1: bulk OUT (ACL data;
+                         Intel's bootloader commands); sbuf = the packet          -> 0 */
+    BTH_RECV,         /* rbuf <- what came, records of {endpoint: 0 interrupt (events),
+                         1 bulk IN; length (16 bits, LE); bytes}; waits for some -> bytes */
+};
+/* The Bluetooth server, port "bt" (/bin/btd; the command: /bin/bt; Settings).
+ * Reply: w[0] = result or -error. Addresses: 6 bytes, least significant first. */
+#define BT_MAXDEV 24
+enum {
+    BT_STATUS = 0x58, /* rbuf <- bt_status_t                                         -> 0 */
+    BT_LIST,          /* rbuf <- bt_dev_t[]: found by the last scan, and bonded      -> how many */
+    BT_SCAN,          /* look for devices (classic and LE), about 10 s; see BT_LIST   -> 0 */
+    BT_PAIR,          /* (root) sbuf = bt_dev_t (addr, type): connect, pair, bond; then its
+                         keyboard or mouse is used. BT_STATUS follows it (a code to show) -> 0 */
+    BT_CONFIRM,       /* (root) w[1] = 1: the code matches, 0: it does not          -> 0 */
+    BT_FORGET,        /* (root) sbuf = bt_dev_t (addr): disconnect, delete its keys -> 0 */
+    BT_POWER,         /* (root) w[1] = 1 on, 0 off (kept in /etc/bluetooth.keys)    -> 0 */
+};
+enum { BTS_OFF, BTS_STARTING, BTS_ON, BTS_FAILED };            /* bt_status_t.state */
+enum { BTP_NONE, BTP_BUSY, BTP_CONFIRM, BTP_PASSKEY, BTP_DONE, BTP_FAILED };   /* .pair: CONFIRM:
+                         does the code match the device's? PASSKEY: type the code on the device */
+enum { BTK_OTHER, BTK_KEYBOARD, BTK_MOUSE, BTK_AUDIO, BTK_PHONE, BTK_COMPUTER }; /* bt_dev_t.kind */
+enum { BTT_CLASSIC, BTT_LE_PUBLIC, BTT_LE_RANDOM };             /* bt_dev_t.type */
+#define BTF_BONDED    1
+#define BTF_CONNECTED 2
+#define BTF_INPUT     4                        /* its keyboard / mouse is in use */
+typedef struct { uint8_t addr[6], type, kind, flags; int8_t rssi; char name[32]; } bt_dev_t;
+typedef struct {
+    uint8_t state, scanning, pair, _pad;
+    uint8_t addr[6], pair_addr[6];             /* ours; the device being paired */
+    uint32_t code;                             /* BTP_CONFIRM / BTP_PASSKEY: the 6 digits */
+    char chip[48], why[64];                    /* the controller and its firmware; the last failure */
+} bt_status_t;

@@ -1,7 +1,8 @@
 /*
  * usb.h - The USB server's parts (user/usb): finding the controller
  * (pci.c), driving it (xhci.c), the devices and hubs (usb.c), and the
- * class drivers: USB disks (msc.c), keyboards and mice (hid.c).
+ * class drivers: USB disks (msc.c), keyboards and mice (hid.c, hidrep.c),
+ * Bluetooth adapters (btusb.c).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -103,3 +104,5 @@ int  msc_settled(void);                       /* every disk found at start is re
 int  hid_attach(usbdev_t *d, const uint8_t *iface, int len);
 void hid_detach(usbdev_t *d);
 int  hid_count(void);
+int  btusb_attach(usbdev_t *d, const uint8_t *iface, int len);
+void btusb_detach(usbdev_t *d);
