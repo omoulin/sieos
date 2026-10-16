@@ -207,6 +207,7 @@ typedef struct {
     int32_t starts;                            /* how many times it was started */
     int32_t bg;                                /* background work (svc add -b): E-cores first */
 } svc_info_t;
+#define SVC_MAX 32                             /* services init supervises, at most */
 
 /* The assistant, port "sia" (/bin/siad; the command: /bin/sia; docs/ai-plan.md). A client opens
  * a session, sends a prompt and receives the answer in pieces: the reply to

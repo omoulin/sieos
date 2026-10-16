@@ -52,7 +52,7 @@ static int fail(const char *what, long e)
 int main(int argc, char **argv)
 {
     if (argc == 1) {
-        static svc_info_t s[16];
+        static svc_info_t s[SVC_MAX];
         static const char *state[] = { "running", "waiting", "GIVEN UP", "stopped", "idle" };
         static const char *policy[] = { "always", "on-failure", "never" };
         msg_t m = { .w = { INIT_LIST }, .rbuf = s, .rlen = sizeof s };

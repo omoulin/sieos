@@ -60,7 +60,7 @@
  */
 #include "mk.h"
 
-#define MAXSVC     16
+#define MAXSVC     SVC_MAX
 #define QUICK_NS   1000000000L          /* ended within 1 s of starting: a "quick" failure */
 #define GIVE_UP    5                    /* quick failures in a row */
 #define BACKOFF0   10000000L            /* 10 ms, doubled each quick failure, ... */
