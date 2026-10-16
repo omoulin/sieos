@@ -447,3 +447,18 @@ the tabs, boxes, Deskbar rows, workspaces, files and Settings' controls,
 and the time of each full frame; nothing is logged without it. `make
 gui-test-real` does the same with the real sia and a model on the test
 disk.
+
+`make mail-test` (both architectures; 42 s on x86-64, 86 s on AArch64
+emulated) runs Mail against `tools/mailserver.py` on the host (IMAP,
+POP3 and SMTP over TLS, with a certificate from a test CA made by openssl
+for the run and added to the test disk's `/etc/ssl/roots` only), reached
+at 10.0.2.100 on the usual ports through QEMU's `guestfwd`: the account
+form; INBOX's four seeded messages (quoted-printable, base64 multipart
+with an attachment, encoded-word subject and sender, HTML only) in order,
+unread ones counted; one read (`\Seen` on the server); a reply and a new
+message checked byte for byte on the host (CRLF, the doubled dot, Date,
+Message-ID, In-Reply-To, the recipients); one deleted; `mail list`,
+`read`, `folders` on the console; POP3 in the window (list, read, delete,
+nothing fetched twice); POP3 with STLS and *Leave on server* off, SMTP on
+465, IMAP with STARTTLS and a wrong password from the command line.
+Screenshots: `mail-*.png` in the build's `screens`.
