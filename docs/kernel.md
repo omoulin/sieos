@@ -237,11 +237,12 @@ away, is the terminals' business, in the one place they share (`tty.c`).
   come meanwhile wait for its end), and it must return, not jump out.
 - **An interrupted call:** the server still holds the token and answers
   later. A token is the client thread's id and, in its high half, the
-  thread's count of finished calls; the count moves on when a call ends
-  (answered, interrupted, or the server gone), so the late answer goes
+  count of calls the thread gave up; the count moves on when one is
+  given up (a signal, or its process ending), so the late answer goes
   nowhere (`-ESRCH` for the server), even if the client has meanwhile
-  called the same server again. The work the server did stands (a read
-  from the network has taken the data).
+  called the same server again. An answered call changes nothing: the
+  round trip writes no more than before. The work the server did stands
+  (a read from the network has taken the data).
 - **Process groups:** each process has one (`pgid`), its parent's unless
   started with `SPAWN_PGROUP` (it then leads a group of its own number).
   auth starts each session's shell so; the shell starts each job so.
@@ -258,12 +259,17 @@ away, is the terminals' business, in the one place they share (`tty.c`).
   `sleep` interrupts only that); `kill [-INT|-TERM|-KILL|-HUP] PID`; it
   says "killed", "terminated", "hung up", nothing for Ctrl-C. `sh -c` (make's
   recipes) keeps its programs in its own group: Ctrl-C reaches all of them.
-- **Cost:** the kernel grew by 1.9 KB on x86-64 (code: 52.7 to 54.6 KB) and
-  2.2 KB on AArch64; programs that use no signal, not a byte (the
-  functions are a library member of their own). On the IPC fast path: one
-  more test (the signal mark) where a call waits, and the reply token
-  carries the count: the round trip stays at 0.45 µs, 40 clients on 4 CPUs
-  at 0.74 µs per call (`make ipc-bench`).
+- **Cost:** the kernel's code grew by 1.6 KB on x86-64 (52.7 to 54.3 KB)
+  and 2.3 KB on AArch64 (78.3 to 80.6 KB); programs that use no signal, not
+  a byte (the functions are a library member of their own). On the IPC
+  path: one test (`may_stop`: is the process ending, or a signal marked?)
+  where a call waits and where a thread leaves the kernel, everything else
+  out of line, and the token's check in the reply: a few instructions.
+  Measured (`make ipc-bench`, x86-64 on KVM, several boots each): the round
+  trip on 1 CPU 452-455 ns (448 before), 40 clients on 4 CPUs 742-798 ns
+  per call (723-791 before). Where the code lands in memory moves these
+  numbers as much: builds with the very same logic, only placed
+  differently, measured from 443 to 457 ns.
 - **Not done (on purpose, for size):** no signal masks (`sigprocmask`),
   no `sigaction` flags (an interrupted call is not made again: it returns
   `-EINTR`, the library passes it on), no information beyond the number,

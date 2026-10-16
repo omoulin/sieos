@@ -125,5 +125,5 @@ checklist in [raspberrypi.md](raspberrypi.md).
   meanwhile; reply tokens count calls, so an interrupted call's late answer
   goes nowhere. Each shell job is a process group the terminal knows
   (`CON_FG`); a closed window or SSH connection sends `SIGHUP`; `kill -INT
-  /-TERM/-KILL/-HUP`. Python raises `KeyboardInterrupt`. The kernel grew by
-  1.9 KB (x86-64), the IPC round trip did not move; `make sig-test`.
+  /-TERM/-KILL/-HUP`. Python raises `KeyboardInterrupt`. The kernel's code
+  grew by 1.6 KB (x86-64), the IPC round trip by 1% at most; `make sig-test`.
