@@ -204,5 +204,5 @@ checklist in [raspberrypi.md](raspberrypi.md).
   traces, 84 checks), SMP's functions in `crypto-test`, `make run-bt` (the
   host's adapter in QEMU, run by hand). Untested on hardware. Sizes
   (x86-64, text + data): btd 82 KB (its own code 38 KB, crypto 21 KB),
-  bt 15 KB, the USB server +3 KB, Atlas +4 KB, wifid -5 KB (AES apart),
+  bt 15 KB, the USB server +3 KB, Atlas +4 KB, wifid -5 KB on x86-64 (AES apart),
   i2chid +2 KB (keyboards in hidrep).
