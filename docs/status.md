@@ -16,6 +16,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
 | Network, TLS | yes: virtio (legacy, 1.0), e1000, e1000e; RTL8168h written, untested on the laptop | yes: virtio (MMIO, PCIe) | no driver yet | no driver yet |
 | SSH client and server | yes | yes | needs the network | needs the network |
+| Bluetooth (keyboards, mice) | AX210 over USB: written, untested (`run-bt`); stack: `bt-test` | no controller | CYW43455 on the mini UART: untested | CYW43455 on the BCM2712 UART: untested |
 | Sound (Intel HDA) | yes: intel-hda, ich9-intel-hda | no driver (no HDA there) | no | no |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
@@ -24,7 +25,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
 `kernel-test`, `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
-`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `aml-test`,
+`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
 
@@ -189,3 +190,19 @@ checklist in [raspberrypi.md](raspberrypi.md).
   and the target's real report descriptor; `make aml-test`. Untested on the
   laptop itself. Sizes: i2chid 36 KB of code (the AML reader 13.5 KB,
   `-Os`), the kernel +0.5 KB, the USB server +2 KB (touchpad gestures).
+- **2026-10-16, later.** Bluetooth ([bluetooth.md](bluetooth.md)): `btd`,
+  one server for the whole host stack (HCI with command credits and ACL
+  flow control, L2CAP channels, classic SSP answered for the controller,
+  LE SMP Secure Connections and legacy pairing, bonds in
+  `/etc/bluetooth.keys`), keyboards and mice by classic HID (boot protocol)
+  and HID over GATT into the same `hidrep.c` as USB (which now reads
+  keyboards too); the laptop's AX210 through a USB pipe in the usb server
+  (`btusb.c`) with Intel's TLV firmware boot, the Pis' CYW43455 on a UART
+  (Pi 4: the mini UART, since the PL011 is the console) with Broadcom's
+  patch; `/bin/bt`; Settings' Bluetooth section. P-256 key exchange made
+  constant time; AES moved to `lib/aes.c`. `make bt-test` (scripted HCI
+  traces, 84 checks), SMP's functions in `crypto-test`, `make run-bt` (the
+  host's adapter in QEMU, run by hand). Untested on hardware. Sizes
+  (x86-64, text + data): btd 82 KB (its own code 38 KB, crypto 21 KB),
+  bt 15 KB, the USB server +3 KB, Atlas +4 KB, wifid -5 KB (AES apart),
+  i2chid +2 KB (keyboards in hidrep).

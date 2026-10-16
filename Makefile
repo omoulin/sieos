@@ -34,7 +34,7 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey btcrypt net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
+ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead aes x25519 ed25519 pubkey btcrypt net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
 BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git mail audiod play   # programs on the disk, in /bin
@@ -470,11 +470,11 @@ WIFIFW  := .hosttools/rpi/fw/brcmfmac43455-sdio.bin .hosttools/rpi/fw/brcmfmac43
 	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/cypress/cyfmac43455-sdio.clm_blob
 .hosttools/rpi/fw/brcmfmac43455-sdio.txt:
 	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/brcm/brcmfmac43455-sdio.txt
-sdcard: all $(WIFIFW)
+sdcard: all $(WIFIFW) .hosttools/bt/BCM4345C0.hcd
 	rm -f $(B)/sd-siefs.img && $(B)/host/mkfs.siefs -s $(SDDISK) -L SIEOS -d $(B)/rootfs $(B)/sd-siefs.img
 	$(if $(SDMODEL),$(B)/host/siefs $(B)/sd-siefs.img mkdir /models && $(B)/host/siefs $(B)/sd-siefs.img put models/$(PIMODEL) /models/$(PIMODEL))
 	$(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware 2>/dev/null; $(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware/brcm 2>/dev/null; \
-	    for f in $(WIFIFW); do $(B)/host/siefs $(B)/sd-siefs.img put $$f /lib/firmware/brcm/$$(basename $$f); done
+	    for f in $(WIFIFW) .hosttools/bt/BCM4345C0.hcd; do $(B)/host/siefs $(B)/sd-siefs.img put $$f /lib/firmware/brcm/$$(basename $$f); done
 	python3 tools/mksdcard.py $(B)/sieos-pi$(PI).img --pi $(PI) --kernel $(B)/kernel.bin --initrd $(B)/modules.img \
 	    --siefs $(B)/sd-siefs.img $(if $(FIRMWARE),--firmware $(FIRMWARE))
 	rm -f $(B)/sd-siefs.img
@@ -554,9 +554,17 @@ IWLFW_URL := https://gitlab.com/kernel-firmware/linux-firmware/-/raw/38c1a7096df
 IWLFW := .hosttools/intel/iwlwifi-ty-a0-gf-a0-89.ucode .hosttools/intel/iwlwifi-ty-a0-gf-a0.pnvm
 .hosttools/intel/%:
 	mkdir -p $(@D) && curl -sfL -o $@ $(IWLFW_URL)/$*
-usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW)
+# Its Bluetooth's firmware (and the Pis' Bluetooth patch, for sdcard), the
+# same way, each file checked against tools/bt-firmware.sha256.
+BTFW_URL  := https://gitlab.com/kernel-firmware/linux-firmware/-/raw/38c1a7096dfb2188f55f342b835f14c362c59409/intel
+BCMFW_URL := https://raw.githubusercontent.com/RPi-Distro/bluez-firmware/6851250bf9d51ff50e3c5b2cf2111e2419d4335b/broadcom
+BTFW := .hosttools/bt/ibt-0041-0041.sfi .hosttools/bt/ibt-0041-0041.ddc
+.hosttools/bt/%: tools/bt-firmware.sha256
+	mkdir -p $(@D) && curl -sfL -o $@.part $(if $(filter BCM%,$*),$(BCMFW_URL),$(BTFW_URL))/$*
+	echo "$$(grep ' $*$$' tools/bt-firmware.sha256 | cut -d' ' -f1)  $@.part" | sha256sum -c --quiet && mv $@.part $@
+usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW) $(BTFW)
 	$(call USBMAKE,$(B)/sieos-usb.img,$(USBDISK)) $(if $(USBMODEL),--put models/$(MODEL) /models/$(MODEL)) \
-	    $(foreach f,$(IWLFW),--put $(f) /lib/firmware/$(notdir $(f)))
+	    $(foreach f,$(IWLFW) $(BTFW),--put $(f) /lib/firmware/$(notdir $(f)))
 QEMU_UEFI = qemu-system-x86_64 -smp $(SMP) -m $(MEM) $(ACCEL) -no-reboot \
            -bios $(UEFI_FW) \
            -drive if=none,id=k,file=$(1),format=raw \
@@ -571,7 +579,14 @@ $(B)/sieos-usb.img:
 usb-test: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(B)/host/fsck.siefs
 	$(call USBMAKE,$(B)/usb-test.img,512M)
 	python3 tools/usbtest.py $(SMP) $(B)/host $(B)/usb-test.img $(B)/screens $(call QEMU_UEFI,$(B)/usb-test.img) -display none -serial stdio
-.PHONY: usb run-usb usb-test
+# run-bt: this PC's own Intel Bluetooth (8087:0032) passed into QEMU, with the
+# firmware on the disk (docs/bluetooth.md). Linux loses its Bluetooth while it
+# runs, and QEMU needs access to the device (/dev/bus/usb/...): run it yourself.
+run-bt: all $(BTFW)
+	$(B)/host/siefs $(B)/disk.img mkdir /lib/firmware 2>/dev/null; \
+	    for f in $(BTFW); do $(B)/host/siefs $(B)/disk.img put $$f /lib/firmware/$$(basename $$f); done
+	$(QEMU) $(SCREEN) -device qemu-xhci -device usb-host,vendorid=0x8087,productid=0x0032 -display $(WINDOW) $(SERIAL)
+.PHONY: usb run-usb usb-test run-bt
 
 # usb-dev-test: the USB stack itself (tools/usbdevtest.py), on both architectures:
 # SIEOS's only disk on a USB key (no virtio disk), the first start typed on a USB
@@ -602,7 +617,7 @@ nvme-test: all $(B)/host/fsck.siefs $(B)/host/siefs $(if $(filter arm64,$(ARCH))
 #   make siefs-test          unit, model, crash and corruption tests, with measurements
 #   make siefs-freestanding  compile the library with the SIEOS flags (no C library)
 HOSTCFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Isiefs -Itools/siefs -Itools -Iinclude
-SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/vol.c siefs/crypt.c siefs/check.c lib/fmt.c lib/aead.c lib/chacha20.c
+SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/vol.c siefs/crypt.c siefs/check.c lib/fmt.c lib/aead.c lib/aes.c lib/chacha20.c
 SIEFS_H     := siefs/siefs.h siefs/siefs_int.h tools/siefs/host.h include/mk/crypto.h
 SIEFS_TOOLS := mkfs.siefs fsck.siefs siefs-dump siefs
 SIEFS_FCFLAGS := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-pic \
@@ -633,7 +648,7 @@ $(B)/siefs-fs/%.o: %.c $(SIEFS_H)
 # ---- the crypto library (lib/blake2b.c, chacha20.c, argon2.c, sha1.c, zlib.c;
 # SSH's ed25519.c and Poly1305): official test vectors, BLAKE2b and zlib
 # against independent implementations, Argon2id timing.
-CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/sha1.c lib/zlib.c lib/string.c lib/pubkey.c lib/btcrypt.c
+CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/aes.c lib/sha1.c lib/zlib.c lib/string.c lib/pubkey.c lib/btcrypt.c
 $(B)/host/crypto-test: tests/crypto/test.c $(CRYPTO_SRC) include/mk/crypto.h include/mk/zlib.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/crypto/test.c $(CRYPTO_SRC)
@@ -646,10 +661,10 @@ crypto-test: $(B)/host/crypto-test
 # scripted HCI traces (tests/bt/hcitest.c: classic pairing and HID, LE SMP
 # and HID over GATT); hidrep.c and the stand-in mk.h copied beside it.
 BT_STACK := user/btd/hci.c user/btd/l2cap.c user/btd/smp.c user/btd/input.c
-$(B)/host/bt-test: tests/bt/hcitest.c tests/bt/btmk.h $(BT_STACK) user/btd/btd.h user/lib/hidrep.c user/lib/hidrep.h lib/btcrypt.c lib/aead.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c include/mk/*.h
+$(B)/host/bt-test: tests/bt/hcitest.c tests/bt/btmk.h $(BT_STACK) user/btd/btd.h user/lib/hidrep.c user/lib/hidrep.h lib/btcrypt.c lib/aes.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c include/mk/*.h
 	@mkdir -p $(B)/host/bt
 	cp user/lib/hidrep.c user/lib/hidrep.h $(B)/host/bt/ && cp tests/bt/btmk.h $(B)/host/bt/mk.h
-	gcc $(HOSTCFLAGS) -I$(B)/host/bt -Iuser/btd -o $@ tests/bt/hcitest.c $(BT_STACK) $(B)/host/bt/hidrep.c lib/btcrypt.c lib/aead.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c
+	gcc $(HOSTCFLAGS) -I$(B)/host/bt -Iuser/btd -o $@ tests/bt/hcitest.c $(BT_STACK) $(B)/host/bt/hidrep.c lib/btcrypt.c lib/aes.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c
 bt-test: $(B)/host/bt-test
 	$(B)/host/bt-test
 .PHONY: bt-test
@@ -767,7 +782,7 @@ llm-neon-test: $(SICC)
 # HTTPS) on each other kind of card, MACHINE:CARD (x86-64: the default cards
 # of QEMU's "pc" and "q35", virtio 1.0 without the legacy interface; arm64:
 # virtio on PCIe, what "-nic user" gives on virt).
-NET_CRYPTO := lib/sha2.c lib/sha1.c user/wifi/wpa.c lib/aead.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
+NET_CRYPTO := lib/sha2.c lib/sha1.c user/wifi/wpa.c lib/aead.c lib/aes.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
 $(B)/host/net-crypto-test: tests/net/crypto.c $(NET_CRYPTO) include/mk/crypto.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/net/crypto.c $(NET_CRYPTO)

@@ -168,7 +168,7 @@ static int intel_fw(char *name, int cap)
     char path[64];
     fmt(name, cap, "ibt-%04x-%04x", (a >> 8 | a << 8) & 0xFFFF, (b >> 8 | b << 8) & 0xFFFF);
     if (iv.img == 3) { bt_log("bt: Intel: the firmware runs already\n"); return 0; }
-    fmt(path, sizeof path, "/lib/firmware/intel/%s.sfi", name);
+    fmt(path, sizeof path, "/lib/firmware/%s.sfi", name);
     size_t len = 0;
     uint8_t *fw = (uint8_t *)file_get(path, &len);
     if (!fw) { bt_log("bt: Intel: %s is missing (make usb puts it on the key)\n", path); return -1; }
@@ -204,7 +204,7 @@ static int intel_fw(char *name, int cap)
     intel_boot = 0;
     bt_log("bt: Intel: booted in %d ms\n", (int)((sys_clock() - t0) / 1000000));
     intel_version();
-    fmt(path, sizeof path, "/lib/firmware/intel/%s.ddc", name);   /* its settings: optional */
+    fmt(path, sizeof path, "/lib/firmware/%s.ddc", name);   /* its settings: optional */
     uint8_t *ddc = (uint8_t *)file_get(path, &len);
     for (size_t i = 0; ddc && i < len; i += ddc[i] + 1) hci_sync(0xFC8B, ddc + i, ddc[i] + 1);
     bt_log("bt: Intel: %s %s\n", path, ddc ? "applied" : "missing (optional)");

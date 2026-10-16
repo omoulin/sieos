@@ -14,6 +14,9 @@
  *   Mouse      the pointer's speed, left- or right-handed buttons, the
  *              wheel's direction: the user's own (~/.mouse), applied at login.
  *   Sound      the volume, or mute (the audio server's, docs/audio.md).
+ *   Bluetooth  on or off, a scan, the devices found and bonded; Pair shows
+ *              the 6 digits to compare (Yes / No) or to type on a keyboard;
+ *              Forget (docs/bluetooth.md). Root's password unless root.
  *   Assistant  sia's model: the local one, or an online one with an
  *              OpenAI-compatible API (server URL, model name, API key). A
  *              system setting: root's password is asked unless root is
@@ -29,7 +32,8 @@
 #define ROW 54                           /* a row of buttons or a field */
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
        S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130,
-       S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET };
+       S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET,
+       S_BPOW = 260, S_BSCAN = 262, S_BPAIR, S_BFORGET, S_BYES, S_BNO, S_BDEV = 270 };
 enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
 
 static const int sizes[][2] = { { 1280, 720 }, { 1366, 768 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 } };
@@ -53,7 +57,40 @@ static int wifi_have, wifi_sel = -1, wifi_n;
 static wifi_status_t wstat;
 static wifi_net_t wnets[WIFI_MAXNET];
 
+/* The Bluetooth section's: the server's status, its devices, the one picked. */
+static int bt_have, bt_sel = -1, bt_n;
+static volatile int bt_busy, bt_ticking;
+static bt_status_t bst;
+static bt_dev_t bdev[BT_MAXDEV];
+
 void settings_init(long atlas_port) { port = atlas_port; }
+
+/* The Bluetooth server, only if it runs (none: no adapter). */
+static long bt_call(msg_t *m)
+{
+    long p = port_find("bt");
+    if (p <= 0) return -ENOENT;
+    long e = ipc_call(p, m);
+    return e < 0 ? e : (long)m->w[0];
+}
+static void bt_refresh(void)
+{
+    msg_t m = { .w = { BT_STATUS }, .rbuf = &bst, .rlen = sizeof bst };
+    bt_have = bt_call(&m) == 0 && m.rlen == sizeof bst;
+    msg_t l = { .w = { BT_LIST }, .rbuf = bdev, .rlen = sizeof bdev };
+    long n = bt_have ? bt_call(&l) : 0;
+    bt_n = n > 0 ? (int)n : 0;
+    if (bt_sel >= bt_n) bt_sel = -1;
+    bt_busy = bt_have && (bst.scanning || bst.pair == BTP_BUSY || bst.pair == BTP_CONFIRM || bst.pair == BTP_PASSKEY);
+}
+static void bt_ticker(void *a)                           /* twice a second while something goes on */
+{
+    (void)a;
+    for (int i = 0; i < 300 && (bt_busy || !i); i++) { sys_sleep(500000000); msg_t m = { .w = { ATLAS_BT } }; ipc_call(port, &m); }
+    bt_ticking = 0;
+}
+static void bt_follow(void) { bt_refresh(); if (!bt_ticking) { bt_ticking = 1; thread_start(bt_ticker, 0, 4096); } }
+int settings_bt_tick(void) { bt_refresh(); return 1; }
 
 /* The audio server's volume (it starts when first used). */
 static long audio_vol(uint64_t v)
@@ -107,6 +144,8 @@ void settings_open(void)
     wipe(fields[F_ROOTPW], sizeof fields[0]);
     wifi_sel = -1; wifi_n = 0;
     wifi_refresh();
+    bt_sel = -1;
+    bt_refresh();
     if (vol != -2) vol = port_find("audio") > 0 ? audio_vol(AUDIO_ASK) : -1;   /* (not started just for this) */
     field = -1; scroll = 0; msg[0] = 0;
     say("atlas: settings open (wifi %s)\n", wifi_have ? "present" : "none");
@@ -296,6 +335,19 @@ static void wifi_forget(void)
     say("atlas: settings: wifi forget -> %ld\n", r);
 }
 
+/* ---- The Bluetooth section's actions. */
+static void bt_do(int req, uint64_t arg, int sel, const char *done)
+{
+    if (req != BT_SCAN && req != BT_CONFIRM && !check_root()) return;
+    bt_dev_t d = sel >= 0 ? bdev[sel] : (bt_dev_t){ 0 };
+    msg_t m = { .w = { (uint64_t)req, arg }, .sbuf = &d, .slen = sel >= 0 ? sizeof d : 0 };
+    long r = bt_call(&m);
+    msg_err = r < 0;
+    strlcpy(msg, r == -EAGAIN ? "Bluetooth is off or not ready." : r < 0 ? "Could not do that." : done, sizeof msg);
+    say("atlas: settings: bluetooth request %d -> %ld\n", req, r);
+    bt_follow();
+}
+
 /* ---- Drawing: rows from the top (scrolled), only those wholly in view. */
 static int X0, Y0, X1, Y1, cy, lx, cx;
 static int fits(int h) { return cy >= Y0 + TOP + 6 && cy + h <= Y1 - 6; }
@@ -483,6 +535,57 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
         cy += ROW;
     }
 
+    heading("BLUETOOTH");
+    if (!bt_have) {
+        row_label("Bluetooth");
+        if (fits(42)) label(cx, cy + 10, "No Bluetooth on this machine.", 2, C_TXT);
+        cy += ROW;
+    } else {
+        static const char *onoff[2] = { "Off", "On" };
+        char s[120], *p = s;
+        choices("Bluetooth", onoff, 2, bst.state == BTS_OFF ? 0 : bst.state == BTS_ON ? 1 : -1, S_BPOW);
+        p += strlcpy(p, bst.state == BTS_STARTING ? "Starting... " : bst.state == BTS_FAILED ? "Failed: " : "", 16);
+        p += strlcpy(p, bst.state == BTS_FAILED ? bst.why : bst.chip, 64);
+        if (bst.scanning) strlcpy(p, ", scanning...", 16);
+        row_label("Controller");
+        if (fits(42)) label(cx, cy + 10, s, 2, C_TXT);
+        cy += ROW;
+        const char *who = "the device";
+        for (int i = 0; i < bt_n; i++) if (!memcmp(bdev[i].addr, bst.pair_addr, 6) && bdev[i].name[0]) who = bdev[i].name;
+        p = s; s[0] = 0;
+        if (bst.pair == BTP_CONFIRM || bst.pair == BTP_PASSKEY) {
+            p += strlcpy(p, bst.pair == BTP_CONFIRM ? "Does " : "Type ", 8);
+            if (bst.pair == BTP_CONFIRM) { p += strlcpy(p, who, 33); p += strlcpy(p, " show ", 8); }
+            *p++ = (char)('0' + bst.code / 100000 % 10); *p++ = (char)('0' + bst.code / 10000 % 10); *p++ = (char)('0' + bst.code / 1000 % 10);
+            *p++ = (char)('0' + bst.code / 100 % 10); *p++ = (char)('0' + bst.code / 10 % 10); *p++ = (char)('0' + bst.code % 10);
+            if (bst.pair == BTP_CONFIRM) strlcpy(p, "?", 2);
+            else { p += strlcpy(p, " on ", 5); p += strlcpy(p, who, 33); strlcpy(p, ", then Enter.", 16); }
+        } else if (bst.pair == BTP_BUSY) strlcpy(s, "Pairing...", 16);
+        else if (bst.pair == BTP_DONE) { p += strlcpy(p, "Paired with ", 14); strlcpy(p, who, 33); }
+        else if (bst.pair == BTP_FAILED) { p += strlcpy(p, "Pairing failed: ", 18); strlcpy(p, bst.why, 64); }
+        if (s[0]) {
+            row_label("Pairing");
+            if (fits(42)) label(cx, cy + 10, s, 2, bst.pair == BTP_FAILED ? C_ERR : C_TXT);
+            cy += ROW;
+            if (bst.pair == BTP_CONFIRM && fits(42)) { int x = pill(cx, cy, "Yes", 1, H_SET, S_BYES); pill(x + 10, cy, "No", 0, H_SET, S_BNO); cy += ROW; }
+        }
+        if (fits(42)) { int x = pill(cx, cy, "Scan", 0, H_SET, S_BSCAN);
+            if (atlas_debug) say("atlas: dbg set %d at %d %d\n", S_BSCAN, x - 40, cy + 21); }
+        cy += ROW;
+        if (bt_n) {
+            static char lbl[BT_MAXDEV][48];
+            static const char *names[BT_MAXDEV];
+            for (int i = 0; i < bt_n; i++) {
+                p = lbl[i] + strlcpy(lbl[i], bdev[i].name[0] ? bdev[i].name : "(no name)", 33);
+                strlcpy(p, bdev[i].flags & BTF_INPUT ? " (in use)" : bdev[i].flags & BTF_BONDED ? " (paired)" : "", 12);
+                names[i] = lbl[i];
+            }
+            choices("Devices", names, bt_n, bt_sel, S_BDEV);
+        }
+        if (bt_sel >= 0 && fits(42)) { int x = pill(cx, cy, "Pair", 1, H_SET, S_BPAIR); pill(x + 10, cy, "Forget", 0, H_SET, S_BFORGET); }
+        if (bt_sel >= 0) cy += ROW;
+    }
+
     heading("ASSISTANT");
     static const char *where[2] = { "On this computer", "Online (OpenAI API)" };
     choices("Model", where, 2, remote, S_SIA);
@@ -531,6 +634,12 @@ int settings_click(int kind, int arg)
     else if (arg >= S_WNET && arg < S_WNET + wifi_n) { wifi_sel = arg - S_WNET; wipe(fields[F_WPASS], sizeof fields[0]); msg[0] = 0; }
     else if (arg == S_WJOIN) wifi_join();
     else if (arg == S_WFORGET) wifi_forget();
+    else if (arg >= S_BPOW && arg < S_BPOW + 2) bt_do(BT_POWER, arg - S_BPOW, -1, arg > S_BPOW ? "Bluetooth on." : "Bluetooth off.");
+    else if (arg == S_BSCAN) bt_do(BT_SCAN, 0, -1, "Scanning for 10 s...");
+    else if (arg >= S_BDEV && arg < S_BDEV + bt_n) { bt_sel = arg - S_BDEV; msg[0] = 0; }
+    else if (arg == S_BPAIR && bt_sel >= 0) bt_do(BT_PAIR, 0, bt_sel, "Pairing...");
+    else if (arg == S_BFORGET && bt_sel >= 0) bt_do(BT_FORGET, 0, bt_sel, "Forgotten.");
+    else if (arg == S_BYES || arg == S_BNO) bt_do(BT_CONFIRM, arg == S_BYES, -1, arg == S_BYES ? "Confirmed." : "Refused.");
     else if (arg == S_APPLY) apply_sia();
     else if (arg == S_BODY) field = -1;
     return 1;

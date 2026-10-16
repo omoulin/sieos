@@ -1778,6 +1778,11 @@ int main(int argc, char **argv)
             settings_revert();
             continue;
         }
+        if (m.pid == self && m.w[0] == ATLAS_BT) {       /* Settings: a Bluetooth scan or pairing goes on */
+            reply_val(from, 0);
+            if (mode == SESSION && settings_bt_tick()) redraw();
+            continue;
+        }
         if (m.pid == self && m.w[0] == ATLAS_PINS) {     /* the Pins window: the levels, the step */
             reply_val(from, 0);
             int a0, b0, c0, d0;
