@@ -23,8 +23,9 @@
  * woken by whoever sets its `server` to 0, under its bucket's lock in the
  * thread table (the server's reply, its death, the client's own end, a
  * signal): exactly one of them. A reply token names the client thread and
- * its call (the thread's id, and in the high half its count of calls):
- * a call a signal interrupted is answered nowhere, never in a later call.
+ * its call (the thread's id, and in the high half a count of the calls it
+ * gave up): a call a signal interrupted is answered nowhere, never in a
+ * later call.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -264,26 +265,33 @@ long port_wanted(uint64_t buf, uint64_t size)
 }
 
 /* Take thread t (its tid bucket locked) off its wait for a reply from
- * srv (from any server if 0): 1 if it waited, and is now ours to wake;
- * that call is over (its token is stale from now on). Every such change
- * is made under that lock: one waker, never two. (It starts waiting with
- * no lock: it is nobody's to wake before.) */
+ * srv (from any server if 0): 1 if it waited, and is now ours to wake.
+ * Every such change is made under that lock: one waker, never two. (It
+ * starts waiting with no lock: it is nobody's to wake before.) */
 static int unwait(task_t *t, proc_t *srv)
 {
     proc_t *s = t->server;
     if (!s || (srv && s != srv)) return 0;
     t->server = 0;
+    return 1;
+}
+/* The same, for a call given up before its reply (a signal, its process
+ * ending): its token is stale from now on, so the server's later reply
+ * goes nowhere, not into the thread's next call. */
+static int abandon(task_t *t, proc_t *srv)
+{
+    if (!unwait(t, srv)) return 0;
     t->gen = (t->gen + 1) & 0x7FFFFFFF;
     return 1;
 }
 static long call_token(task_t *t) { return t->tid | (long)t->gen << 32; }   /* (t's call: gen stays) */
 /* A call that must not wait for its reply: its process is ending (-EPIPE),
  * or a signal came for the thread (-EINTR). */
-static long call_stop(task_t *t) { return t->proc->exiting ? -EPIPE : sig_due(t) ? -EINTR : 0; }
+static long call_stop(task_t *t) { return may_stop(t) ? stop_why(t) : 0; }
 int ipc_unreply(task_t *t)          /* (proc_stop) */
 {
     task_t *x = task_lock(t->tid);  /* (0: it is ending, so not waiting) */
-    int got = x && unwait(x, 0);
+    int got = x && abandon(x, 0);
     if (x) task_unlock(x);
     return got;
 }
@@ -318,7 +326,7 @@ long ipc_call(long id, msg_t *um)
     __atomic_store_n(&me->server, owner, __ATOMIC_RELEASE);   /* from now on its reply may come */
     if ((e = call_stop(me))) {         /* ending, or a signal: no waiting, unless a reply is coming */
         task_lock(me->tid);
-        int bail = unwait(me, owner);
+        int bail = abandon(me, owner);
         task_unlock(me);
         if (bail) { me->state = TS_RUN; return e; }   /* (r runs next all the same) */
     }
@@ -354,7 +362,7 @@ static long recv_locked(port_t *p, msg_t *um)
         s->state = TS_REPLY;
         __atomic_store_n(&s->server, owner, __ATOMIC_RELEASE);
         long stop = call_stop(s);
-        if (stop && !unwait(s, owner)) stop = 0;
+        if (stop && !abandon(s, owner)) stop = 0;
         task_unlock(s);
         if (stop) { s->ret = stop; ready(s); }
         return tok;

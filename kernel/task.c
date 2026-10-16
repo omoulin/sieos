@@ -72,15 +72,11 @@ proc_t *proc_find(int pid)
  * -EPIPE (the caller takes it off the queue again); nor if a signal it
  * catches came: -EINTR. No barrier is needed between the two (proc_stop,
  * sig_post): no CPU answers a shootdown between them. */
-__attribute__((cold)) static int unblocked(task_t *t)
-{
-    t->state = TS_RUN;
-    return t->proc->exiting ? -EPIPE : -EINTR;
-}
+static int unblocked(task_t *t);
 int blocked(task_t *t, int state)
 {
     __atomic_store_n(&t->state, state, __ATOMIC_RELEASE);
-    return t->proc->exiting || sig_due(t) ? unblocked(t) : 0;
+    return may_stop(t) ? unblocked(t) : 0;
 }
 
 /* ---- The run queues. */
@@ -271,6 +267,8 @@ static int idle_kind(int type)
     return 0;
 }
 
+static void leaving(cpu_t *c, task_t *t);
+
 /* Leaving the kernel (entry.S): a thread of an ending process ends here
  * (every thread that runs again passes here: proc_stop relies on it);
  * otherwise set this CPU's timer. */
@@ -285,9 +283,8 @@ void kernel_exit(void)
         c = this_cpu();                  /* it goes there (place_on claims it) */
     }
     task_t *t = c->running;
-    if (t && t->proc->exiting) thread_exit();
-    while (t && sig_due(t)) sig_deliver(t);
-    timer_update(c);
+    if (t && may_stop(t)) leaving(c, t);
+    else timer_update(c);
 }
 
 /* Decide when this CPU's timer must fire next (called on the way out of
@@ -740,6 +737,21 @@ void proc_exit(int code)
  * them), its floating-point registers too (the function starts with fresh
  * ones); SYS_SIGRETURN puts all back. One function at a time per thread:
  * signals that come meanwhile wait for its end. */
+
+__attribute__((cold)) long stop_why(task_t *t) { return t->proc->exiting ? -EPIPE : sig_due(t) ? -EINTR : 0; }
+__attribute__((cold)) static int unblocked(task_t *t)   /* (blocked: it must not wait after all) */
+{
+    int e = (int)stop_why(t);
+    if (e) t->state = TS_RUN;
+    return e;
+}
+
+__attribute__((cold)) static void leaving(cpu_t *c, task_t *t)   /* (kernel_exit: its process ends, or a signal) */
+{
+    if (t->proc->exiting) thread_exit();
+    while (sig_due(t)) sig_deliver(t);
+    timer_update(c);
+}
 
 /* Send sig to p (under proc_lock: p cannot be freed meanwhile). -> 1 if
  * it is the caller's own process, which must end (after unlocking). As

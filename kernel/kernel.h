@@ -49,10 +49,6 @@ typedef struct proc {
     int super;                  /* the supervisor (init): grants device rights, starts boot
                                    modules, adopts orphans; never killed */
     int bg;                     /* background work: its threads prefer E-cores (SPAWN_BACKGROUND) */
-    int pgid;                   /* its process group (SPAWN_PGROUP; 0: none) */
-    uint32_t sigign, sigcatch;  /* the signals it ignores, and those it catches (SYS_SIGNAL) */
-    uint64_t sigentry;          /* ... its function for those */
-    int sigtid;                 /* ... the thread that runs it (the one that set it) */
     spinlock_t lock;            /* its threads, its ports, its heap and mappings, exiting */
     int nthreads;
     volatile int exiting;       /* ending: each of its threads ends on its way out of the kernel */
@@ -68,6 +64,10 @@ typedef struct proc {
     struct port *ports;         /* the ports it owns */
     struct proc *hnext;         /* in the pid hash table */
     struct proc *anext, *aprev; /* in the list of all processes (pid order) */
+    int pgid;                   /* its process group (SPAWN_PGROUP; 0: none) */
+    uint32_t sigign, sigcatch;  /* the signals it ignores, and those it catches (SYS_SIGNAL) */
+    uint64_t sigentry;          /* ... its function for those */
+    int sigtid;                 /* ... the thread that runs it (the one that set it) */
 } proc_t;
 
 /* A thread ("task"): what the scheduler runs. Its task_t sits at the bottom
@@ -98,11 +98,14 @@ typedef struct task {
     void *fpu;                  /* its x87/SSE/AVX registers, once it used them (fpu.c) */
     uint64_t fs_base;           /* its FS base: thread-local storage (SYS_SET_FS) */
     volatile uint32_t sigpend;  /* caught signals waiting for it (one bit each) */
-    uint32_t gen;               /* its calls so far (mod 2^31): in its reply tokens (ipc.c) */
+    uint32_t gen;               /* the calls it gave up (mod 2^31): in its reply tokens (ipc.c) */
     struct sigctx *sigctx;      /* running a signal's function: what it was doing (task.c) */
 } task_t;
 /* A caught signal waits for t, and t is not already in a signal's function. */
 #define sig_due(t) ((t)->sigpend && !(t)->sigctx)
+/* The fast test, where a thread waits or leaves the kernel: nonzero if its
+ * process may be ending or a signal may be due (stop_why then says). */
+#define may_stop(t) ((t)->proc->exiting | (t)->sigpend)
 
 /* One per processor. The architecture's part comes first (its entry code
  * reaches it at fixed offsets); this_cpu() (arch_defs.h) finds the running
@@ -194,6 +197,7 @@ task_t *task_lock(int tid);     /* the thread, with its bucket of the tid hash l
 void task_unlock(task_t *t);
 proc_t *proc_find(int pid);     /* (under proc_lock) */
 int  blocked(task_t *t, int state);
+long stop_why(task_t *t);       /* -EPIPE: its process is ending; -EINTR: a signal is due; else 0 */
 void ready(task_t *t);
 void ready_first(task_t *t);
 void schedule(void);
