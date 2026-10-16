@@ -329,6 +329,11 @@ int main(int ac, char **av)
             w = ssh_begin(s, SSH_CHANNEL_CLOSE); ssh_put32(w, peer_chan); ssh_end(s);
             open = 0;
             break;
+        case SSH_KEXINIT:                         /* new keys (OpenSSH: after 1 GiB): not done */
+            ssh_disconnect(s, "re-keying is not supported");
+            printf("ssh: %s asked for new keys: not supported, disconnected\n", host);
+            open = 0;
+            break;
         case -1:
             open = 0;
             break;

@@ -97,7 +97,7 @@ crash takes down alone: init starts it again in about a millisecond, and
 its clients carry on by themselves.
 
 ```
- programs   sh, fetch, sia, svc, hello, bench ...           (any user)
+ programs   sh, fetch, ssh, sia, svc, hello, bench ...      (any user)
                │ messages (the kernel copies them, stamped with the sender's identity)
  servers    init  con  vblk  fs  auth  login  atlas  netd  vnet  wifid  siad
                │
@@ -117,6 +117,7 @@ its clients carry on by themselves.
 | `atlas` | the desktop | at boot |
 | `vnet`, `netd` | the network card's driver; TCP/IP, DHCP, DNS | on demand |
 | `siad` | the assistant | on demand |
+| `sshd` | the SSH server ([docs/ssh.md](docs/ssh.md)) | at boot, if `/etc/ssh/sshd_config` exists |
 
 On-demand servers start the first time a program asks for them and stop
 after a quiet period (network 10 min, assistant 15, accounts 5). The full
@@ -151,6 +152,8 @@ tour, file by file, with the crash and on-demand mechanisms:
   start an app or ask sia. One process, no redraw when nothing happens.
 - **Network** ([docs/net.md](docs/net.md)): TCP/IP, DHCP, DNS, HTTP, TLS 1.3
   with certificate checking; `fetch URL`.
+- **SSH** ([docs/ssh.md](docs/ssh.md)): `ssh`, `ssh-keygen` and `sshd`,
+  interoperable with OpenSSH (Ed25519 keys, chacha20-poly1305).
 - **sia, the assistant** ([docs/sia.md](docs/sia.md)): below.
 - **sicc, the C compiler** ([docs/cc.md](docs/cc.md)): below.
 - **make** ([docs/make.md](docs/make.md)): `/bin/make` builds C projects on
@@ -213,10 +216,11 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make sia-test` | the assistant: answers, two conversations, restart (`CPU64=max` on arm64: `sdot`) |
 | `make sia-mem-test` | the assistant's memory ([docs/sia.md](docs/sia.md)) |
 | `make net-test` / `net-crypto-test` | the network end to end / its crypto against official vectors |
+| `make ssh-test` | ssh and sshd against OpenSSH, both ways |
 | `make pi4-test` | (ARCH=arm64) the boot and crash test on QEMU's Pi 4 |
 | `make pi4-sdbench`, `make sdhci-bench` | (ARCH=arm64) SD card speed: on QEMU's Pi 4, and on a PCI SD controller with DMA (`SDCAPS`, `SDBSIZE`, `SDMIB`) |
 | `make siefs-tools` / `siefs-test` / `siefs-freestanding` | SieFS host tools / its tests / a freestanding build check |
-| `make crypto-test` | BLAKE2b, ChaCha20, Argon2 against official vectors |
+| `make crypto-test` | BLAKE2b, ChaCha20, Argon2, Poly1305, Ed25519 against official vectors |
 | `make cc` / `cc-test` / `cc-bootstrap` / `cc-bench` | sicc / its tests / self-compilation / speed vs gcc |
 | `make cc-sieos` | all of SIEOS (x86-64) built by sicc, then the boot and crash tests |
 | `make cc-sieos-test` / `make-test` | `/bin/cc` on SIEOS / `/bin/make` there, with SIEOS's own programs |

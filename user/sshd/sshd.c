@@ -291,8 +291,10 @@ static void serve(conn_t *c)
     if (ssh_recv(s, &r, 120000) != SSH_SERVICE_REQUEST || !ssh_is(&r, "ssh-userauth")) return;
     ssh_puts(ssh_begin(s, SSH_SERVICE_ACCEPT), "ssh-userauth");
     ssh_end(s);
+    uint64_t end = (uint64_t)sys_clock() + 120000000000UL;
     for (int tries = 0;;) {                       /* authentication: 2 minutes, 6 tries */
-        if (ssh_recv(s, &r, 120000) != SSH_USERAUTH_REQUEST) return;
+        uint64_t now = (uint64_t)sys_clock();
+        if (now >= end || ssh_recv(s, &r, (unsigned)((end - now) / 1000000) + 1) != SSH_USERAUTH_REQUEST) return;
         int ok = userauth(c, &r);
         if (ok > 0) break;
         if (ok < 0) continue;
@@ -378,6 +380,9 @@ static void serve(conn_t *c)
             break;
         case SSH_CHANNEL_CLOSE:
             if (!c->closed) { w = ssh_begin(s, SSH_CHANNEL_CLOSE); ssh_put32(w, c->peer_chan); ssh_end(s); }
+            return;
+        case SSH_KEXINIT:                         /* new keys (OpenSSH: after 1 GiB): not done */
+            ssh_disconnect(s, "re-keying is not supported");
             return;
         case -1:
             return;
