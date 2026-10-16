@@ -263,7 +263,8 @@ def run(cmd):
 rt_ = os.path.join(out, "rt"); os.makedirs(rt_, exist_ok=True)
 run(A + ["-c", "-o", f"{rt_}/crt0.o", f"{here}/crt0.S"])
 run(A + ["-c", "-o", f"{rt_}/tramp.o", f"{here}/abi_tramp.S"])
-for f in ("libc", "fmt"): run(A + ["-O2", "-c", "-o", f"{rt_}/{f}.o", f"{here}/{f}.c"])
+for f, path in (("libc", f"{here}/libc.c"), ("fmt", f"{here}/../../../cc/libc/fmt.c")):
+    run(A + ["-O2", "-c", "-o", f"{rt_}/{f}.o", path])
 run(A + ["-O2", "-c", "-o", f"{rt_}/rt.o", f"{here}/../../../cc/rt/rt.c"])
 ok = True
 for o in ("-O0", "-O1", "-O2"):
