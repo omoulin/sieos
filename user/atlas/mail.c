@@ -61,7 +61,7 @@ static const char *const flabel[NF] = { "Your name", "Address", "Incoming", "Por
 static const char *const keys_[] = { "name", "address", "in_host", "in_port", "out_host", "out_port", "user", "pass",
                                      "in", "keep", "selfsigned", "sent", "in_pin", "out_pin", "fav" };
 
-typedef struct { char f[F_TO][160], pin[2][65], fav[512]; int o[NO]; } acct_t;   /* fav: "\tname" each */
+typedef struct { char f[F_TO][160], pin[2][65], fav[512]; int o[NO]; } acct_t;   /* fav: its ~/.mail lines, "fav=name\n" */
 static acct_t ac[MAXA];
 static int nac, edit, cur, from;         /* the accounts; the one edited, the one shown, the one writing */
 static int view, on, field = -1;
@@ -111,12 +111,15 @@ static int ci(const char *a, const char *b, size_t n)   /* the same n characters
     for (size_t i = 0; i < n; i++) if ((a[i] | 32) != (b[i] | 32) || !a[i]) return 0;
     return 1;
 }
-static int is_fav(int i)
+static char *fav_at(int i, char *line)  /* folder i's "fav=name\n" in its account's, or 0 */
 {
-    const char *f = ac[fo[i].a].fav, *n = fo[i].name;
-    for (size_t l = strlen(n); (f = find(f, "\t")); f++) if (!memcmp(f + 1, n, l) && (!f[l + 1] || f[l + 1] == '\t')) return 1;
-    return 0;
+    char *f = ac[fo[i].a].fav, *p = f;
+    strlcpy(line + strlcpy(line, "fav=", 72), fo[i].name, 66);
+    strlcpy(line + strlen(line), "\n", 2);
+    while ((p = (char *)find(p, line)) && p > f && p[-1] != '\n') p++;
+    return p;
 }
+static int is_fav(int i) { char l[72]; return fav_at(i, l) != 0; }
 
 static void helper(void)
 {
@@ -381,7 +384,7 @@ static void acct_load(void)
         else if (key == 8) a->o[O_POP] = !strcmp(v, "pop3");
         else if (key < 12) a->o[key - 8] = key == 10 ? v[0] == '1' : v[0] != '0';
         else if (key < 14) strlcpy(a->pin[key - 12], v, 65);
-        else if (key == 14 && strlen(a->fav) + n + 2 < sizeof a->fav) { strlcpy(a->fav + strlen(a->fav), "\t", 2); strlcpy(a->fav + strlen(a->fav), v, 400); }
+        else if (key == 14 && strlen(a->fav) + (e - l) + 2 < sizeof a->fav) { strlcpy(a->fav + strlen(a->fav), l, e - l + 2); }
     }
     if (t) wipe(t, strlen(t));
     free(t);
@@ -406,13 +409,7 @@ static int acct_write(void)
         put(t, &n, "in", a->o[O_POP] ? "pop3" : "imap");
         for (int o = O_KEEP; o < NO; o++) put(t, &n, keys_[8 + o], a->o[o] ? "1" : "0");
         for (int w = 0; w < 2; w++) if (a->pin[w][0]) put(t, &n, keys_[12 + w], a->pin[w]);
-        for (char *s = a->fav, *e; *s; s = e) {
-            char nm[64];
-            e = (char *)find(s + 1, "\t");
-            if (!e) e = s + strlen(s);
-            strlcpy(nm, s + 1, e - s < 64 ? e - s : 64);
-            put(t, &n, "fav", nm);
-        }
+        n += strlcpy(t + n, a->fav, sizeof a->fav);
     }
     path_of(p, "/.mail");
     long h = fs_open(p, FS_WRONLY | FS_CREAT | FS_TRUNC, 0600), r = h;
@@ -445,6 +442,7 @@ static void acct_form(int k)
 }
 
 /* ---- Writing: new, reply, reply all, forward; sent through a draft file. */
+static int has(const char *l, const char *a, size_t n) { for (; *l; l++) if (ci(l, a, n)) return 1; return 0; }
 static void others(char *dst, const char *src)           /* src's addresses not ours, not in To, not in dst: added to dst */
 {
     for (const char *p = src; *p; ) {
@@ -455,10 +453,8 @@ static void others(char *dst, const char *src)           /* src's addresses not 
         while (t > s && t[-1] == ' ') t--;
         a = s; ae = t;
         for (const char *c = s; c < t; c++) { if (*c == '<') a = c + 1; if (*c == '>') ae = c; }
-        int skip = ae <= a;
+        int skip = ae <= a || has(fld[F_TO], a, ae - a) || has(dst, a, ae - a);
         for (int k = 0; k < nac && !skip; k++) skip = strlen(ac[k].f[F_ADDR]) == (size_t)(ae - a) && ci(ac[k].f[F_ADDR], a, ae - a);
-        for (const char *c = fld[F_TO]; *c && !skip; c++) skip = ci(c, a, ae - a);
-        for (const char *c = dst; *c && !skip; c++) skip = ci(c, a, ae - a);
         size_t n = strlen(dst);
         if (!skip && n + (t - s) + 3 < sizeof fld[0]) { if (n) n += strlcpy(dst + n, ", ", 3); memcpy(dst + n, s, t - s); dst[n + (t - s)] = 0; }
         p = *e ? e + 1 : e;
@@ -909,14 +905,11 @@ int mail_click(int kind, int arg)
     if (arg >= M_ROW) open_msg(arg - M_ROW);
     else if (arg >= M_STAR) {                            /* a favorite, or not any more */
         int i = arg - M_STAR;
-        acct_t *a = &ac[fo[i].a];
-        char *f = a->fav, *p = f;
-        size_t l = strlen(fo[i].name);
-        if (is_fav(i)) {
-            while ((p = (char *)find(p, "\t")) && !(!memcmp(p + 1, fo[i].name, l) && (!p[l + 1] || p[l + 1] == '\t'))) p++;
-            memmove(p, p + l + 1, strlen(p + l + 1) + 1);
-        } else if (strlen(f) + l + 2 < sizeof a->fav) { strlcpy(f + strlen(f), "\t", 2); strlcpy(f + strlen(f), fo[i].name, 64); }
-        say("atlas: mail: favorites %d:%s\n", fo[i].a, a->fav);
+        char *f = ac[fo[i].a].fav, l[72], *p = fav_at(i, l);
+        size_t n = strlen(l);
+        if (p) memmove(p, p + n, strlen(p + n) + 1);
+        else if (strlen(f) + n < sizeof ac[0].fav) strlcpy(f + strlen(f), l, n + 1);
+        say("atlas: mail: favorites %d: %s\n", fo[i].a, p ? "-" : l);
         if (acct_write() < 0) set_status("Could not save the accounts.", 1);
     } else if (arg >= M_FOLDER) {
         cur = fo[arg - M_FOLDER].a;
