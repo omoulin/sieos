@@ -9,7 +9,7 @@ each file does. The architecture interface (x86-64, AArch64) is in
 ## The idea: a microkernel
 
 The kernel (about 2,900 lines of portable core, plus 1,700-2,000 per
-processor architecture; 58 KB on x86-64, 88 KB on AArch64) does only what
+processor architecture; 58 KB on x86-64, 86 KB on AArch64) does only what
 nothing else can do:
 
 | The kernel does | Programs ("servers") do |
