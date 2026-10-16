@@ -72,7 +72,8 @@ threading.Thread(target=udp_upper, args=(us_,), daemon=True).start()
 # test CA that is added to the test disk's /etc/ssl/roots: a valid one (RSA:
 # the server signs with RSA-PSS; forced AES-128-GCM; forced P-256, so the
 # server first asks again: HelloRetryRequest), an ECDSA P-384 one, and ones
-# that must be refused (expired, another name, unknown issuer).
+# that must be refused (expired, another name, unknown issuer); and TLS 1.2
+# only servers (RSA; ECDSA P-384 with AES-256-GCM).
 tdir = tempfile.mkdtemp()
 def ossl(*a): subprocess.run(["openssl", *a], cwd=tdir, check=True, capture_output=True)
 ossl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "30",
@@ -96,7 +97,8 @@ subprocess.run([os.path.join(tools, "siefs"), copy, "put", os.path.join(tdir, "r
 servers, tls_port = [], {}
 def s_server(tag, cert, *opts):
     sk = socket.socket(); sk.bind(("127.0.0.1", 0)); p = sk.getsockname()[1]; sk.close()
-    servers.append(subprocess.Popen(["openssl", "s_server", "-accept", f"127.0.0.1:{p}", "-www", "-tls1_3",
+    servers.append(subprocess.Popen(["openssl", "s_server", "-accept", f"127.0.0.1:{p}", "-www",
+                                     *([] if "-tls1_2" in opts else ["-tls1_3"]),
                                      "-cert", cert + ".pem", "-key", cert + ".key", *opts],
                                     cwd=tdir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     tls_port[tag] = p
@@ -107,6 +109,8 @@ s_server("p384", "p384")
 s_server("old", "old")
 s_server("other", "other")
 s_server("self", "self")
+s_server("rsa12", "rsa", "-tls1_2")
+s_server("p384_12", "p384", "-tls1_2", "-cipher", "ECDHE-ECDSA-AES256-GCM-SHA384")
 time.sleep(SLOW * 0.5)
 
 # sia's remote backend against a mock OpenAI-compatible server (tools/netmock.py),
@@ -171,7 +175,7 @@ if QUICK:
     print("   " + re.search(r"\d+ bytes in .*", seen).group(0).strip())
     if not os.environ.get("NET_OFFLINE"):
         check("host example.com", "example.com has address ")
-        check("fetch -v https://example.com/", "HTTP 200", "cipher: TLS_", "Example Domain", timeout=60)
+        check("fetch -v https://example.com/", "HTTP 200", "cipher: TLS 1.", "Example Domain", timeout=60)
     check(f"fetch -v https://10.0.2.2:{tls_port['rsa']}/", "HTTP 200", "s_server", timeout=60)
     send("poweroff"); qemu.wait(SLOW * 10)
     srv.shutdown()
@@ -242,13 +246,14 @@ print("ok: nc -l -u 9001, from the host and back")
 
 if not os.environ.get("NET_OFFLINE"):
     check("host example.com", "example.com has address ")
-    seen = check("fetch -v https://example.com/", "HTTP 200", "cipher: TLS_", "Example Domain", timeout=60)
-    print("   " + re.search(r"cipher: (\S+)", seen).group(0))
+    seen = check("fetch -v https://example.com/", "HTTP 200", "cipher: TLS 1.", "Example Domain", timeout=60)
+    print("   " + re.search(r"cipher: [^\r\n]+", seen).group(0))
     check("fetch -v -o /tmp/hf.html https://huggingface.co/", "HTTP 200", "bytes in", timeout=60)
 
 # our TLS servers on the host (10.0.2.2), certificates from the test CA
-for tag, want in (("rsa", "TLS_CHACHA20_POLY1305_SHA256"), ("aes", "TLS_AES_128_GCM_SHA256"),
-                  ("p256", "TLS_"), ("p384", "TLS_")):
+for tag, want in (("rsa", "TLS 1.3 TLS_CHACHA20_POLY1305_SHA256"), ("aes", "TLS 1.3 TLS_AES_128_GCM_SHA256"),
+                  ("p256", "TLS 1.3 "), ("p384", "TLS 1.3 "), ("rsa12", "TLS 1.2 ECDHE-RSA-CHACHA20-POLY1305"),
+                  ("p384_12", "TLS 1.2 ECDHE-ECDSA-AES256-GCM-SHA384")):
     check(f"fetch -v https://10.0.2.2:{tls_port[tag]}/", "HTTP 200", "cipher: " + want, "s_server", timeout=60)
 for tag, why in (("old", "expired"), ("other", "another name"), ("self", "unknown issuer")):
     check(f"fetch https://10.0.2.2:{tls_port[tag]}/", "tls: 10.0.2.2:", why, timeout=60)

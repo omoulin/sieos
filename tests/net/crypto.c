@@ -89,6 +89,20 @@ static void aeads(void)
     aead_init(&a, AEAD_AES128_GCM, key);
     aead_seal(&a, nonce, 0, 0, pt, 16, ct);
     same("aes-128-gcm tc2", ct, "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf");
+    /* AES-256-GCM: test cases 14 (zero key, one zero block) and 16 */
+    memset(key, 0, 32);
+    aead_init(&a, AEAD_AES256_GCM, key);
+    aead_seal(&a, nonce, 0, 0, pt, 16, ct);
+    same("aes-256-gcm tc14", ct, "cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919");
+    unhex(key, "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308");
+    unhex(nonce, "cafebabefacedbaddecaf888");
+    adl = unhex(ad, "feedfacedeadbeeffeedfacedeadbeefabaddad2");
+    n = unhex(pt, "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39");
+    aead_init(&a, AEAD_AES256_GCM, key);
+    aead_seal(&a, nonce, ad, adl, pt, n, ct);
+    same("aes-256-gcm tc16 ciphertext", ct, "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662");
+    same("aes-256-gcm tc16 tag", ct + n, "76fc6ece0f4e1768cddf8853bb2d551b");
+    checks++; if (aead_open(&a, nonce, ad, adl, ct, n + 16, back) || memcmp(back, pt, n)) { fails++; puts("FAIL gcm-256 open"); }
 }
 
 static void dh(void)
@@ -108,15 +122,16 @@ static void dh(void)
         if (i == 0) same("x25519 iterated x1", k, "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079");
     }
     same("x25519 iterated x1000", k, "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51");
-    /* P-256 key exchange: both sides agree */
-    uint8_t da[32], db[32], qa[65], qb[65];
-    for (int i = 0; i < 32; i++) { da[i] = (uint8_t)rand(); db[i] = (uint8_t)rand(); }
-    checks++;
-    if (p256_public(qa, da) || p256_public(qb, db) || p256_shared(s1, da, qb, 65) || p256_shared(s2, db, qa, 65) || memcmp(s1, s2, 32)) {
-        fails++; puts("FAIL p256 key exchange");
+    /* P-256 and P-384 key exchange: both sides agree; a point off the curve is refused */
+    for (int cv = P256, L = 32; cv <= P384; cv++, L = 48) {
+        uint8_t da[48], db[48], qa[97], qb[97], z1[48], z2[48];
+        for (int i = 0; i < L; i++) { da[i] = (uint8_t)rand(); db[i] = (uint8_t)rand(); }
+        checks++;
+        if (ec_public(cv, qa, da) || ec_public(cv, qb, db) || ec_shared(cv, z1, da, qb, 2 * L + 1) ||
+            ec_shared(cv, z2, db, qa, 2 * L + 1) || memcmp(z1, z2, L)) { fails++; printf("FAIL p%d key exchange\n", L * 8); }
+        qb[40] ^= 1;
+        checks++; if (!ec_shared(cv, z1, da, qb, 2 * L + 1)) { fails++; printf("FAIL p%d off-curve point accepted\n", L * 8); }
     }
-    qb[40] ^= 1;
-    checks++; if (!p256_shared(s1, da, qb, 65)) { fails++; puts("FAIL p256 off-curve point accepted"); }
 }
 
 static int halg(const char *h) { return !strcmp(h, "sha256") ? SHA256 : !strcmp(h, "sha384") ? SHA384 : SHA512; }
@@ -169,13 +184,13 @@ int main(int argc, char **argv)
     /* speed of the record ciphers */
     static uint8_t buf[1 << 20], out[(1 << 20) + 16];
     uint8_t key[32] = { 1 }, nonce[12] = { 2 };
-    for (int alg = AEAD_CHACHA20_POLY1305; alg <= AEAD_AES128_GCM; alg++) {
+    for (int alg = AEAD_CHACHA20_POLY1305; alg <= AEAD_AES256_GCM; alg++) {
         aead_t a;
         aead_init(&a, alg, key);
         clock_t t0 = clock();
         for (int i = 0; i < 8; i++) aead_seal(&a, nonce, 0, 0, buf, sizeof buf, out);
         double s = (double)(clock() - t0) / CLOCKS_PER_SEC;
-        printf("  %s: %.0f MB/s\n", alg == AEAD_AES128_GCM ? "aes-128-gcm" : "chacha20-poly1305", 8 / s);
+        printf("  %s: %.0f MB/s\n", alg == AEAD_AES256_GCM ? "aes-256-gcm" : alg == AEAD_AES128_GCM ? "aes-128-gcm" : "chacha20-poly1305", 8 / s);
     }
     printf("net crypto: %d of %d checks passed\n", checks - fails, checks);
     return fails != 0;

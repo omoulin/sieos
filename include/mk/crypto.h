@@ -40,7 +40,7 @@ int argon2(const argon2_t *a, void *out, uint32_t outlen, void *mem);
 int  ct_equal(const void *a, const void *b, size_t n);
 void wipe(void *p, size_t n);
 
-/* ---- For TLS 1.3 (user/lib/tls.c): hashes, MACs, key derivation,
+/* ---- For TLS 1.3 and 1.2 (user/lib/tls.c): hashes, MACs, key derivation,
  * authenticated encryption, key exchange and signature checks. */
 
 /* SHA-2 (FIPS 180-4): SHA256 (32-byte digest), SHA384 (48), SHA512 (64). */
@@ -70,11 +70,11 @@ void hkdf_extract(int alg, void *prk, const void *salt, size_t slen, const void 
 void hkdf_expand(int alg, void *out, size_t olen, const void *prk, size_t plen, const void *info, size_t ilen);
 
 /* Authenticated encryption with a 12-byte nonce and a 16-byte tag:
- * ChaCha20-Poly1305 (RFC 8439) or AES-128-GCM (NIST SP 800-38D).
+ * ChaCha20-Poly1305 (RFC 8439), AES-128-GCM or AES-256-GCM (NIST SP 800-38D).
  * seal: out = ciphertext (n bytes) + tag; open: in = ciphertext + tag
  * (n bytes in all), out = n - 16 bytes; -1 if the tag is wrong (out wiped). */
-enum { AEAD_CHACHA20_POLY1305 = 1, AEAD_AES128_GCM };
-typedef struct { int alg; uint8_t key[32]; uint32_t rk[44]; uint64_t hh, hl; } aead_t;
+enum { AEAD_CHACHA20_POLY1305 = 1, AEAD_AES128_GCM, AEAD_AES256_GCM };
+typedef struct { int alg, nr; uint8_t key[32]; uint32_t rk[60]; uint64_t hh, hl; } aead_t;
 void aead_init(aead_t *a, int alg, const uint8_t *key);
 void aead_seal(const aead_t *a, const uint8_t nonce[12], const void *ad, size_t adlen,
                const void *in, size_t n, uint8_t *out);
@@ -101,13 +101,14 @@ void ed25519_sign(uint8_t sig[64], const void *m, size_t n, const uint8_t seed[3
 int  ed25519_verify(const uint8_t sig[64], const void *m, size_t n, const uint8_t pub[32]);
 
 /* Elliptic curves P-256 and P-384 (FIPS 186): ECDSA signature checks
- * (for certificates and TLS), and P-256 key exchange. Points are
+ * (for certificates and TLS), and key exchange (ECDH; L = 32 or 48 bytes:
+ * priv L random bytes, pub 2L + 1, the shared secret L). Points are
  * "uncompressed": 04 || x || y. Return 0 if valid, -1 if not. */
 enum { P256 = 1, P384 };
 int ecdsa_verify(int curve, const uint8_t *pub, size_t publen, const uint8_t *hash, size_t hlen,
                  const uint8_t *r, size_t rlen, const uint8_t *s, size_t slen);
-int p256_public(uint8_t pub[65], const uint8_t priv[32]);     /* priv: 32 random bytes */
-int p256_shared(uint8_t out[32], const uint8_t priv[32], const uint8_t *peer, size_t plen);
+int ec_public(int curve, uint8_t *pub, const uint8_t *priv);
+int ec_shared(int curve, uint8_t *out, const uint8_t *priv, const uint8_t *peer, size_t plen);
 
 /* RSA signature checks (RFC 8017): PKCS #1 v1.5 and PSS (MGF1 with the same
  * hash, salt as long as the hash), moduli up to 4096 bits. 0 if valid. */

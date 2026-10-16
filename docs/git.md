@@ -53,7 +53,7 @@ git -C DIR COMMAND ...
 
 - `git://host[:port]/path`: TCP, port 9418 (`git daemon`).
 - `http://` and `https://` (smart HTTP, `git http-backend`, GitHub,
-  GitLab...) over SIEOS's HTTP client and TLS 1.3 ([net.md](net.md)), with
+  GitLab...) over SIEOS's HTTP client and TLS 1.3 or 1.2 ([net.md](net.md)), with
   the server's certificate checked.
 - Both speak protocol v0: the server lists its refs, the client sends
   `want` lines (`ofs-delta thin-pack`), up to 256 `have` lines (our

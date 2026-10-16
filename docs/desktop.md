@@ -314,7 +314,8 @@ kind=terminal
 ## Mail
 
 *Mail* (the menu, or "mail" in the strip) reads mail with **IMAP** or
-**POP3** and sends it with **SMTP**, always over TLS 1.3 with the
+**POP3** and sends it with **SMTP**, always over TLS (1.3, or 1.2 for
+servers that know no better, as many mail providers) with the
 certificate checked against `/etc/ssl/roots`.
 
 ![Mail: INBOX and a message](screens/mail.png)

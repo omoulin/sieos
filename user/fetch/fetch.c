@@ -201,8 +201,8 @@ static int get(const char *url, const char *out, int verbose, int flags)
     long e = http_request(&h, "GET", url, 0, 0, 0, flags, 0);
     if (e < 0) return fail(url, e);
     if (verbose) {
-        printf("HTTP %d%s\n%s", h.status, h.tls ? (const char *)" (TLS 1.3)" : "", h.headers);
-        if (h.tls) printf("cipher: %s\n", tls_cipher(h.tls));
+        printf("HTTP %d\n%s", h.status, h.headers);
+        if (h.tls) printf("cipher: %s\n", tls_cipher(h.tls));   /* "TLS 1.x ..." */
     }
     long fd = -1;
     if (out && (fd = fs_open(out, FS_WRONLY | FS_CREAT | FS_TRUNC, 0644)) < 0) {

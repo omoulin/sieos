@@ -6,7 +6,7 @@ SIEOS's network is three programs and a library, all written for SIEOS:
 
 ```
   fetch, ping, nc, sia ...       user/lib: net.c (sockets), http.c (HTTP/1.1),
-        │                                  tls.c (TLS 1.3), x509.c (certificates)
+        │                                  tls.c (TLS 1.3/1.2), x509.c (certificates)
         │ NET_* messages, port "net"
         ▼
   netd  (/bin/netd)             IPv4, ARP, ICMP, UDP, TCP, DHCP client, DNS resolver
@@ -216,20 +216,41 @@ supplicant (`idsup`/`sup_wpa`) that WPA2 needs. Version 7.45.265 (2023).
 - `http.c`: HTTP/1.1, `http://` and `https://`; Content-Length, chunked, or
   until close; up to 5 redirects for GET; `http_line` reads a body line by
   line (Server-Sent Events).
-- `tls.c`: **TLS 1.3 only** (RFC 8446). Ciphers: ChaCha20-Poly1305
-  (preferred) and AES-128-GCM, with SHA-256. Key exchange: X25519, or P-256
-  when the server asks (HelloRetryRequest). The server's
-  CertificateVerify: ECDSA P-256/P-384, RSA-PSS. Post-handshake key updates;
-  session tickets are ignored (no resumption).
+- `tls.c`: **TLS 1.3** (RFC 8446), preferred, and **TLS 1.2** (RFC 5246)
+  for servers that know no better (many mail providers, older sites). One
+  ClientHello offers both (supported_versions 1.3, 1.2). The same API either
+  way; `tls_cipher` says which, e.g. `TLS 1.3 TLS_CHACHA20_POLY1305_SHA256`
+  or `TLS 1.2 ECDHE-RSA-AES128-GCM-SHA256` (`fetch -v`, `curl -v`).
+  - 1.3: ChaCha20-Poly1305 (preferred) and AES-128-GCM, with SHA-256. Key
+    exchange: X25519, or P-256/P-384 when the server asks
+    (HelloRetryRequest). The server's CertificateVerify: ECDSA P-256/P-384,
+    RSA-PSS. Post-handshake key updates; session tickets are ignored.
+  - 1.2: only suites with forward secrecy and authenticated encryption:
+    ECDHE-ECDSA and ECDHE-RSA with ChaCha20-Poly1305, AES-128-GCM-SHA256 or
+    AES-256-GCM-SHA384 (no static RSA key exchange, no CBC, no SHA-1 MACs).
+    ECDHE over X25519, P-256 or P-384; the ServerKeyExchange signature
+    checked: RSA PKCS #1 v1.5 or RSA-PSS, ECDSA P-256/P-384, SHA-256/384/512.
+    Keys from the PRF (HMAC-SHA-256 or -384) with the extended master secret
+    (RFC 7627) whenever the server offers it (OpenSSL, Go, Windows and the
+    big providers all do; without it the old derivation, which is safe here
+    as there is no resumption nor renegotiation). Records: GCM's nonce is the
+    4-byte implicit IV + 8 bytes sent (the sequence number); ChaCha20's the
+    IV xor the sequence number (RFC 7905). An empty renegotiation_info (RFC
+    5746); a HelloRequest gets a no_renegotiation warning; warning alerts
+    are ignored; no resumption; a certificate request is answered with an
+    empty Certificate.
+  - Downgrade protection (RFC 8446 4.1.3): a 1.3 server made to answer 1.2
+    (someone in the middle took 1.3 out of our hello) marks its random with
+    `DOWNGRD`; tls.c refuses that ("downgrade to TLS 1.2 refused").
 - `x509.c`: certificates in DER; the chain is followed to one of the
   trusted roots in `/etc/ssl/roots`, every signature checked (RSA PKCS #1
   v1.5, ECDSA P-256/P-384), validity dates checked against the clock chip's
   date, the name checked against the subject alternative names (`*.` for one
   label; IP addresses too), intermediate certificates must be authorities.
 - The crypto (`lib/`): `sha2.c` (SHA-256/384/512, HMAC, HKDF), `aead.c`
-  (Poly1305, ChaCha20-Poly1305, AES-128, GCM), `x25519.c`, `pubkey.c`
+  (Poly1305, ChaCha20-Poly1305, AES-128/256, GCM), `x25519.c`, `pubkey.c`
   (Montgomery arithmetic, P-256/P-384 ECDSA and key exchange, RSA). All plain
-  integer code.
+  integer code. TLS 1.2's PRF is in `tls.c` (over `sha2.c`'s HMAC).
 
 **The trusted roots**: `rootfs/etc/ssl/roots` is Mozilla's list of root
 certificates as published by the curl project
@@ -295,18 +316,30 @@ line to one driver only (see Limits).
 
 ## Tests and measurements
 
-`make net-crypto-test`: 134 checks: FIPS 180-4, RFC 4231, 5869, 8439, 7748
-and GCM test vectors, and 54 signatures made by the host's openssl (ECDSA
-P-256/P-384 with SHA-256/384, RSA 2048/3072/4096 PKCS #1 v1.5 and PSS with
-SHA-256/384/512), each also damaged and refused.
+`make net-crypto-test`: 140 checks: FIPS 180-4, RFC 4231, 5869, 8439, 7748
+and GCM test vectors (AES-128 and AES-256), P-256 and P-384 key exchange,
+and 54 signatures made by the host's openssl (ECDSA P-256/P-384 with
+SHA-256/384, RSA 2048/3072/4096 PKCS #1 v1.5 and PSS with SHA-256/384/512),
+each also damaged and refused. Then `tls.c` and `x509.c` themselves, built
+on the host (`tests/net/tlsclient.c`, `tests/net/tlsmk.h` standing in for
+`mk.h`), against `openssl s_server` with a test CA (`tests/net/tls.py`, 27
+cases): TLS 1.2 with each suite, RSA and ECDSA P-256/P-384 certificates,
+X25519/P-256/P-384, PKCS #1 v1.5 (SHA-256, SHA-512), RSA-PSS and ECDSA with
+another hash than the curve's, without the extended master secret, a
+certificate request, the server's preference; TLS 1.3 (both ciphers,
+HelloRetryRequest to P-256 and P-384, a certificate request, preferred over
+1.2 when the server has both); and what must fail: a downgrade by a man in
+the middle (the sentinel), a damaged ServerKeyExchange signature, a damaged
+record, CBC-only and static-RSA-only servers, an unknown issuer.
 
 `make net-test` (SMP=1/4/8): DHCP, ping, DNS, HTTP from a server on the
 development machine, a 24 MiB download checked byte for byte (sha256) on the
 host afterwards, a listening socket reached from the host, HTTPS to
 example.com and huggingface.co, TLS 1.3 servers (openssl s_server) with a
 test CA (RSA-PSS, forced AES-128-GCM, forced P-256 with HelloRetryRequest,
-ECDSA P-384) and certificates that must be refused (expired, another name,
-unknown issuer); the commands (`ifconfig`, `ping -c`, `host`, `nslookup`,
+ECDSA P-384), TLS 1.2-only servers (RSA: ChaCha20; ECDSA P-384:
+AES-256-GCM-SHA384) and certificates that must be refused (expired, another
+name, unknown issuer); the commands (`ifconfig`, `ping -c`, `host`, `nslookup`,
 `traceroute`, `wget`, `curl -o`, `netstat` showing a listening socket, `nc`
 to a host's TCP and UDP servers and `nc -l` / `nc -l -u` reached from the
 host, both ways); sia against a mock OpenAI-compatible server (tools/netmock.py)
@@ -324,17 +357,18 @@ takes `NET_NIC=CARD` (QEMU's `-device`), `NET_MACHINE=q35` and
 | | |
 |---|---|
 | Download (HTTP, QEMU user network, KVM) | 65-110 MB/s; by card (2026-10-16): e1000 110, virtio 1.0 87-106, e1000e 33 MB/s; arm64 (emulated) 27 MB/s |
-| HTTPS (ChaCha20-Poly1305), crypto alone on the host | 400 MB/s (AES-128-GCM: 31 MB/s) |
+| HTTPS (ChaCha20-Poly1305), crypto alone on the host | 400 MB/s (AES-128-GCM: 31 MB/s, AES-256-GCM: 25 MB/s) |
 | Signature checks (host) | ECDSA ~2.2 ms, RSA ~1.7 ms |
 | Memory | vnet ~420-440 KiB (192 KiB of it DMA buffers; the device tree is dropped after setup), netd ~300 KiB plus 320 KiB per TCP connection |
-| Code (text, 2026-10-16) | netd 36 KB, vnet 21 KB (x86-64, with e1000) / 47 KB (arm64, with the two Pi backends), fetch 65 KB (with TLS and the commands) |
+| Code (text, 2026-10-16) | netd 36 KB, vnet 21 KB (x86-64, with e1000) / 47 KB (arm64, with the two Pi backends), fetch 69 KB (with TLS 1.3 and 1.2 and the commands; TLS 1.2 added 5 KB to tls.o, 12.9 KB in all) |
 
 ## Limits
 
 - IPv4 only; no fragments; no selective acknowledgements; no keepalives;
   one route (local network or gateway).
-- TLS 1.3 only (servers that only speak TLS 1.2 are refused), no client
-  certificates, no session resumption. Certificate names: subject
+- TLS 1.3 and 1.2 only (1.1 and older are refused); in 1.2, only ECDHE with
+  AEAD ciphers (servers offering only CBC or static RSA are refused). No
+  client certificates, no session resumption, no renegotiation. Certificate names: subject
   alternative names only (no fallback to the common name), no revocation
   checks. AES uses a table, which in theory leaks timing to a program sharing
   the cache: ChaCha20 is preferred.

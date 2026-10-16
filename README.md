@@ -3,7 +3,7 @@
 A small, fast microkernel operating system written from scratch in C, for
 **x86-64** and **AArch64** (QEMU, Raspberry Pi 4 and 5). It has its own file
 system (SieFS), its own C compiler (sicc), a desktop laid out as BeOS's was, its
-own network stack with TLS 1.3, and an AI assistant (sia) that runs a
+own network stack with TLS 1.3 and 1.2, and an AI assistant (sia) that runs a
 language model on the machine or talks to an OpenAI-compatible service.
 GPL-3.0. All the code is new.
 
@@ -151,7 +151,7 @@ tour, file by file, with the crash and on-demand mechanisms:
   clock), 4 workspaces, and the sia strip (Ctrl+Space) to find a file,
   start an app or ask sia. One process, no redraw when nothing happens.
 - **Network** ([docs/net.md](docs/net.md)): TCP/IP, DHCP, DNS, HTTP, TLS 1.3
-  with certificate checking; `fetch URL` (also `curl`, `wget`), `ping`,
+  (and 1.2, ECDHE + AEAD only) with certificate checking; `fetch URL` (also `curl`, `wget`), `ping`,
   `host`, `ifconfig`, `netstat`, `traceroute`, `nc`. The cards: virtio,
   Intel e1000/e1000e (any QEMU `-nic user` works).
 - **SSH** ([docs/ssh.md](docs/ssh.md)): `ssh`, `ssh-keygen` and `sshd`,
@@ -252,7 +252,7 @@ directory), `CPU64=cortex-a72|max` (the emulated ARM processor).
   projects, 8 terminals and one open file at a time.
 - **Files:** up to 1 s of changes can be lost if the file server crashes
   (`sync` reports it).
-- **Network:** IPv4 only; TLS 1.3 only.
+- **Network:** IPv4 only; TLS 1.3 and 1.2 only (in 1.2, ECDHE with AEAD ciphers only).
 - **Raspberry Pi:** Ethernet and Wi-Fi (the CYW43455, open and WPA2) are
   written but untested on hardware (QEMU emulates neither); no USB on the
   Pi 5 yet; real boards not yet tried.

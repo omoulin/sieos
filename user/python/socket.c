@@ -1,6 +1,6 @@
 /*
  * socket.c - The socket and ssl modules for Python on SIEOS, over the
- * network server's sockets (user/lib/net.c) and TLS 1.3 (user/lib/tls.c).
+ * network server's sockets (user/lib/net.c) and TLS 1.3/1.2 (user/lib/tls.c).
  *
  *   s = socket.socket()                          TCP (socket.SOCK_DGRAM: UDP)
  *   s.connect((host, port)); s.send(b); s.recv(n); s.close()

@@ -1,6 +1,6 @@
 /*
  * pubkey.c - Public-key signature checks for TLS and certificates, and the
- * P-256 key exchange:
+ * P-256 and P-384 key exchange (ECDH):
  *   RSA (RFC 8017): s^e mod n must be the expected encoding of the hash,
  *     PKCS #1 v1.5 (a fixed layout) or PSS (salted, then masked);
  *   ECDSA (FIPS 186) on the NIST curves P-256 and P-384: the point
@@ -9,8 +9,8 @@
  * Big numbers are arrays of 32-bit "limbs", least significant first. All
  * modular arithmetic is in Montgomery form (x*R mod m, R = 2^(32n)), which
  * replaces divisions by shifts. Checking a signature uses only public data,
- * so speed matters more than constant time here; the one secret (the P-256
- * key exchange's scalar) is a fresh random number used once.
+ * so speed matters more than constant time here; the one secret (the key
+ * exchange's scalar) is a fresh random number used once.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -396,36 +396,36 @@ int ecdsa_verify(int id, const uint8_t *pub, size_t publen, const uint8_t *hash,
     return bn_cmp(t, r, n) ? -1 : 0;
 }
 
-static void p256_scalar(const curve_t *c, uint8_t k[32], const uint8_t priv[32])
+static void ec_scalar(const curve_t *c, uint8_t *k, const uint8_t *priv)
 {
     uint32_t d[12] = { 0 };
-    bn_from(d, c->n.n, priv, 32);
+    bn_from(d, c->n.n, priv, c->len);
     if (bn_cmp(d, c->n.m, c->n.n) >= 0) bn_sub(d, d, c->n.m, c->n.n);
     if (bn_zero(d, c->n.n)) d[0] = 1;
-    bn_to(k, 32, d, c->n.n);
+    bn_to(k, c->len, d, c->n.n);
 }
 
-int p256_public(uint8_t pub[65], const uint8_t priv[32])
+int ec_public(int id, uint8_t *pub, const uint8_t *priv)
 {
-    curve_t *c = curve(P256);
+    curve_t *c = curve(id);
     pt_t g, r;
-    uint8_t k[32];
-    p256_scalar(c, k, priv);
+    uint8_t k[48];
+    ec_scalar(c, k, priv);
     memcpy(g.x, c->gx, sizeof g.x); memcpy(g.y, c->gy, sizeof g.y); memcpy(g.z, c->p.one, sizeof g.z);
-    pt_mul2(&c->p, &r, k, &g, 0, 0, 32);
+    pt_mul2(&c->p, &r, k, &g, 0, 0, c->len);
     pub[0] = 4;
     wipe(k, sizeof k);
-    return pt_affine_x(c, pub + 1, pub + 33, &r);
+    return pt_affine_x(c, pub + 1, pub + 1 + c->len, &r);
 }
 
-int p256_shared(uint8_t out[32], const uint8_t priv[32], const uint8_t *peer, size_t plen)
+int ec_shared(int id, uint8_t *out, const uint8_t *priv, const uint8_t *peer, size_t plen)
 {
-    curve_t *c = curve(P256);
+    curve_t *c = curve(id);
     pt_t q, r;
-    uint8_t k[32];
+    uint8_t k[48];
     if (pt_load(c, &q, peer, plen)) return -1;
-    p256_scalar(c, k, priv);
-    pt_mul2(&c->p, &r, k, &q, 0, 0, 32);
+    ec_scalar(c, k, priv);
+    pt_mul2(&c->p, &r, k, &q, 0, 0, c->len);
     wipe(k, sizeof k);
     return pt_affine_x(c, out, 0, &r);
 }
