@@ -145,10 +145,10 @@ $(B)/user/mail/%.o: user/mail/%.c user/mail/mail.h user/lib/net.h user/lib/mk.h 
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The USB server (user/usb): the xHCI controller, hubs, disks, keyboards and mice.
-USBSRV  := usb xhci pci msc hid hidrep btusb
+USBSRV  := usb xhci pci msc hid btusb
 $(B)/usb.elf: $(USBSRV:%=$(B)/user/usb/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(USBSRV:%=$(B)/user/usb/%.o) $(ULIB)
-$(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/usb/hidrep.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
+$(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/hidrep.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
