@@ -1,5 +1,7 @@
 # Plan: Python on SIEOS
 
+(Phase 1 is done, without its `gpio` module yet: [python.md](python.md).)
+
 What must be built so Python runs on SIEOS, in what order, and how we
 know each step works. Two interpreters, one after the other:
 **MicroPython** first (small, few needs: a working Python in days, with a
