@@ -16,7 +16,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [siefs.md](siefs.md) | SieFS, the file system: disk layout, commits, checksums, attributes, volumes, snapshots, encryption |
 | [accounts.md](accounts.md) | users, logins, the first start, Argon2id, account files |
 | [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, Git, apps, the assistant |
-| [net.md](net.md) | the network: drivers, TCP/IP, DHCP, DNS, HTTP, TLS 1.3, `fetch` |
+| [net.md](net.md) | the network: drivers, TCP/IP, DHCP, DNS, HTTP, TLS 1.3/1.2, `fetch` |
 | [ssh.md](ssh.md) | SSH: `ssh`, `ssh-keygen`, `sshd`; the transport, Ed25519, how a remote shell gets its terminal, tests |
 | [sia.md](sia.md) | the assistant: siad, backends (local, OpenAI-compatible), memory |
 | [llm.md](llm.md) | the language-model engine: GGUF, number formats, AVX2 and NEON kernels, speeds |

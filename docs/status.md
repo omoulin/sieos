@@ -116,3 +116,16 @@ checklist in [raspberrypi.md](raspberrypi.md).
   words decoded. The window runs `mail -S` as the user on a console of its
   own, so the desktop links no TLS; `make mail-test` against a mail server
   on the host (`tools/mailserver.py`).
+- **2026-10-16.** TLS 1.2 (RFC 5246) next to 1.3 in `user/lib/tls.c`
+  ([net.md](net.md#the-library-sockets-http-tls)), for the servers that
+  know no better (many mail providers, older sites): one ClientHello offers
+  both, 1.3 preferred; in 1.2 only ECDHE (X25519, P-256, P-384) with
+  ChaCha20-Poly1305, AES-128-GCM or AES-256-GCM, the ServerKeyExchange
+  signature checked (RSA PKCS #1 v1.5 / PSS, ECDSA), the extended master
+  secret, the 1.3 downgrade sentinel checked; no CBC, no static RSA, no
+  renegotiation or resumption. AES-256-GCM in `lib/aead.c`, P-384 key
+  exchange in `lib/pubkey.c` (also for 1.3's HelloRetryRequest). The same
+  API: fetch, curl, wget, http.c, sia, mail, git and python all gain it.
+  `tls.c` itself is now tested on the host against `openssl s_server` (27
+  cases, `make net-crypto-test`); `net-test` fetches from 1.2-only servers,
+  `mail-test` uses one. tls.o: +5 KB of code (12.9 KB).

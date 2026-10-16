@@ -94,7 +94,7 @@ $(B)/user/lib/%.o: lib/%.c lib/*.h include/mk/*.h $(TOOLDEP)
 $(B)/fs.elf: $(B)/user/fs.o $(SIEFS_CORE:%=$(B)/user/siefs/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(SIEFS_CORE:%=$(B)/user/siefs/%.o) $(ULIB)
 $(B)/user/fs.o: UCFLAGS += -DEPOCH=$(shell date +%s)
-$(B)/user/siefs/%.o: siefs/%.c siefs/*.h $(TOOLDEP)
+$(B)/user/siefs/%.o: siefs/%.c siefs/*.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
@@ -552,7 +552,7 @@ usb-dev-test: all $(B)/host/fsck.siefs $(if $(filter arm64,$(ARCH)),$(B)/modules
 #   make siefs-freestanding  compile the library with the SIEOS flags (no C library)
 HOSTCFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Isiefs -Itools/siefs -Itools -Iinclude
 SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/vol.c siefs/crypt.c siefs/check.c lib/fmt.c lib/aead.c lib/chacha20.c
-SIEFS_H     := siefs/siefs.h siefs/siefs_int.h tools/siefs/host.h
+SIEFS_H     := siefs/siefs.h siefs/siefs_int.h tools/siefs/host.h include/mk/crypto.h
 SIEFS_TOOLS := mkfs.siefs fsck.siefs siefs-dump siefs
 SIEFS_FCFLAGS := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-pic \
            -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns -mgeneral-regs-only -Iinclude -Isiefs
@@ -698,9 +698,16 @@ NET_CRYPTO := lib/sha2.c lib/aead.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib
 $(B)/host/net-crypto-test: tests/net/crypto.c $(NET_CRYPTO) include/mk/crypto.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/net/crypto.c $(NET_CRYPTO)
-net-crypto-test: $(B)/host/net-crypto-test
+# tls.c and x509.c themselves on the host (tests/net/tlsmk.h for mk.h), against openssl s_server
+TLS_HOST := user/lib/tls.c user/lib/x509.c user/lib/net.h tests/net/tlsmk.h tests/net/tlsclient.c
+$(B)/host/tlsclient: $(TLS_HOST) $(NET_CRYPTO) include/mk/crypto.h
+	@mkdir -p $(B)/host/tls
+	cp user/lib/tls.c user/lib/x509.c user/lib/net.h tests/net/tlsclient.c $(B)/host/tls/ && cp tests/net/tlsmk.h $(B)/host/tls/mk.h
+	gcc $(HOSTCFLAGS) -o $@ $(B)/host/tls/tlsclient.c $(B)/host/tls/tls.c $(B)/host/tls/x509.c $(NET_CRYPTO)
+net-crypto-test: $(B)/host/net-crypto-test $(B)/host/tlsclient
 	python3 tests/net/gen.py $(B)/host/sigvec.txt
 	$(B)/host/net-crypto-test $(B)/host/sigvec.txt
+	python3 tests/net/tls.py $(B)/host/tlsclient
 net-test: all $(B)/host/fsck.siefs net-crypto-test
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/nettest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio

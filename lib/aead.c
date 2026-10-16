@@ -1,6 +1,6 @@
 /*
- * aead.c - Authenticated encryption for TLS 1.3: ChaCha20-Poly1305
- * (RFC 8439) and AES-128-GCM (NIST SP 800-38D).
+ * aead.c - Authenticated encryption for TLS: ChaCha20-Poly1305
+ * (RFC 8439) and AES-128-GCM, AES-256-GCM (NIST SP 800-38D).
  *
  * Both encrypt with a keystream (ChaCha20 blocks, or AES applied to a
  * counter) and append a 16-byte tag: a keyed checksum of the associated
@@ -155,7 +155,8 @@ static void cp_tag(const uint8_t key[32], const uint8_t nonce[12], const void *a
     wipe(k, sizeof k);
 }
 
-/* ---- AES-128 (FIPS 197), encryption only: GCM never decrypts with AES. */
+/* ---- AES-128 and AES-256 (FIPS 197), encryption only: GCM never decrypts
+ * with AES. nk: the key's length in 32-bit words (4 or 8); 6 + nk rounds. */
 static const uint8_t SBOX[256] = {
     0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
     0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
@@ -181,27 +182,28 @@ static uint32_t subword(uint32_t w)
            (uint32_t)SBOX[w >> 8 & 255] << 8 | SBOX[w & 255];
 }
 
-static void aes_expand(uint32_t rk[44], const uint8_t key[16])
+static void aes_expand(uint32_t rk[60], const uint8_t *key, int nk)
 {
     static const uint8_t rcon[10] = { 1, 2, 4, 8, 16, 32, 64, 128, 0x1b, 0x36 };
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < nk; i++)
         rk[i] = (uint32_t)key[4 * i] << 24 | key[4 * i + 1] << 16 | key[4 * i + 2] << 8 | key[4 * i + 3];
-    for (int i = 4; i < 44; i++) {
+    for (int i = nk; i < 4 * (7 + nk); i++) {
         uint32_t t = rk[i - 1];
-        if (i % 4 == 0) t = subword(t << 8 | t >> 24) ^ (uint32_t)rcon[i / 4 - 1] << 24;
-        rk[i] = rk[i - 4] ^ t;
+        if (i % nk == 0) t = subword(t << 8 | t >> 24) ^ (uint32_t)rcon[i / nk - 1] << 24;
+        else if (nk == 8 && i % 8 == 4) t = subword(t);
+        rk[i] = rk[i - nk] ^ t;
     }
 }
 
 static uint8_t xt(uint8_t b) { return (uint8_t)(b << 1 ^ ((b >> 7) * 0x1b)); }   /* times 2 */
 
-static void aes_encrypt(const uint32_t rk[44], const uint8_t in[16], uint8_t out[16])
+static void aes_encrypt(const uint32_t *rk, int nr, const uint8_t in[16], uint8_t out[16])
 {
     uint8_t s[16], t[16];
     for (int i = 0; i < 16; i++) s[i] = in[i] ^ (uint8_t)(rk[i / 4] >> (24 - 8 * (i % 4)));
-    for (int r = 1; r <= 10; r++) {
+    for (int r = 1; r <= nr; r++) {
         for (int i = 0; i < 16; i++) t[i] = SBOX[s[(i + 4 * (i % 4)) % 16]];   /* SubBytes + ShiftRows */
-        if (r < 10)
+        if (r < nr)
             for (int c = 0; c < 4; c++) {                                     /* MixColumns */
                 uint8_t *p = t + 4 * c, a0 = p[0], a1 = p[1], a2 = p[2], a3 = p[3], x = a0 ^ a1 ^ a2 ^ a3;
                 p[0] ^= x ^ xt(a0 ^ a1); p[1] ^= x ^ xt(a1 ^ a2);
@@ -248,7 +250,7 @@ static void gcm_ctr(const aead_t *a, const uint8_t nonce[12], uint32_t ctr, cons
     memcpy(cb, nonce, 12);
     for (size_t off = 0; off < n; off += 16, ctr++) {
         cb[12] = ctr >> 24; cb[13] = ctr >> 16; cb[14] = ctr >> 8; cb[15] = (uint8_t)ctr;
-        aes_encrypt(a->rk, cb, ks);
+        aes_encrypt(a->rk, a->nr, cb, ks);
         size_t c = n - off < 16 ? n - off : 16;
         for (size_t i = 0; i < c; i++) out[off + i] = in[off + i] ^ ks[i];
     }
@@ -274,9 +276,10 @@ void aead_init(aead_t *a, int alg, const uint8_t *key)
     memset(a, 0, sizeof *a);
     a->alg = alg;
     if (alg == AEAD_CHACHA20_POLY1305) { memcpy(a->key, key, 32); return; }
-    aes_expand(a->rk, key);
+    a->nr = alg == AEAD_AES256_GCM ? 14 : 10;
+    aes_expand(a->rk, key, a->nr - 6);
     uint8_t h[16];
-    aes_encrypt(a->rk, (const uint8_t[16]){ 0 }, h);         /* H = E(K, 0) */
+    aes_encrypt(a->rk, a->nr, (const uint8_t[16]){ 0 }, h);         /* H = E(K, 0) */
     a->hh = be64(h); a->hl = be64(h + 8);
 }
 

@@ -49,7 +49,7 @@ program's command line (with its folder) has room for 256 bytes.
   `send`/`sendall`, `recv`, `sendto`, `recvfrom`, `settimeout` (None: wait
   as long as it takes), `close`, and `read`/`readline`/`write` as a stream;
   `getaddrinfo(host, port)` (DNS through netd).
-- **`ssl`:** `ssl.wrap_socket(sock, server_hostname=host)`: TLS 1.3 with
+- **`ssl`:** `ssl.wrap_socket(sock, server_hostname=host)`: TLS 1.3 (or 1.2) with
   SIEOS's client (`user/lib/tls.c`), certificates checked against
   `/etc/ssl/roots` (`cert_reqs=ssl.CERT_NONE`: not checked).
 - **`import`** reads `.py` files: `sys.path` is the script's folder (or the

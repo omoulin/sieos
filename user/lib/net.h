@@ -1,6 +1,6 @@
 /*
  * net.h - The network for programs: sockets (through the network server,
- * port "net"), an HTTP/1.1 client, and TLS 1.3 for https (docs/net.md).
+ * port "net"), an HTTP/1.1 client, and TLS (1.3, or 1.2) for https (docs/net.md).
  * Errors are -E... (mk/abi.h, mk/proto.h).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -28,8 +28,10 @@ long net_sockets(net_sock_t *s, int max);                                /* -> h
 const char *net_ntoa(uint32_t ip, char buf[16]);                         /* "a.b.c.d" */
 const char *net_strerror(long e);                                        /* a few words */
 
-/* ---- tls.c: TLS 1.3 client (certificates checked against /etc/ssl/roots).
- * flags: TLS_INSECURE skips the certificate check (tests only). */
+/* ---- tls.c: TLS 1.3 client, or 1.2 when the server knows no better
+ * (certificates checked against /etc/ssl/roots). flags: TLS_INSECURE skips
+ * the certificate check (tests only). tls_cipher: "TLS 1.3 TLS_AES_128_GCM_SHA256",
+ * "TLS 1.2 ECDHE-RSA-AES128-GCM-SHA256"... */
 typedef struct tls tls_t;
 enum { TLS_INSECURE = 1 };
 tls_t *tls_connect(long sock, const char *host, int flags, long *err);

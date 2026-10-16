@@ -13,7 +13,7 @@ CA made here with openssl (added to the test disk's /etc/ssl/roots only).
   list, read (the decoding), folders -> POP3 (995) in the window: list,
   read, delete (left on the server, then deleted there) -> the command
   line again: POP3 with STLS (110), IMAP with STARTTLS (143), SMTP on
-  465 -> ~/.mail is only alice's.
+  465 -> ~/.mail is only alice's -> a server limited to TLS 1.2: IMAP, SMTP.
 
 The servers are reached from SIEOS at 10.0.2.100 on the usual ports
 (QEMU's guestfwd runs `mailserver.py relay PORT` for each connection).
@@ -366,6 +366,16 @@ account(**{"in": "imap", "pass": "wrong"})
 out = sh("mail list")
 if "error:" not in out: fail(f"a wrong password: {out!r}")
 say("ok: POP3 with STLS (not left on the server), SMTP on 465, IMAP with STARTTLS; a wrong password is an error")
+
+# ---- a server that knows TLS 1.2 only (as many mail providers still do)
+ctx.minimum_version = ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+account(**{"in": "imap", "out_port": "465"})
+out = sh("mail folders")
+if "Trash" not in out: fail(f"IMAP over TLS 1.2: {out!r}")
+n = len(srv.sent)
+out = sh("mail send /tmp/d.txt")
+if "sent to 1 address" not in out or len(srv.sent) != n + 1: fail(f"SMTP over TLS 1.2: {out!r}")
+say("ok: IMAP (993) and SMTP (465) with a server limited to TLS 1.2")
 
 qemu.kill()
 print(f"PASS: mail test (screenshots in {shots})")
