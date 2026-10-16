@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 #include "mk/crypto.h"
+#include "../../user/wifi/wpa.h"
 
 static int fails, checks;
 
@@ -175,9 +176,65 @@ static void signatures(const char *file)
            ec ? 1000 * t_ec / CLOCKS_PER_SEC / ec : 0.0, rsa, rsa ? 1000 * t_rsa / CLOCKS_PER_SEC / rsa : 0.0);
 }
 
+/* WPA2 (user/wifi/wpa.c and its crypto): RFC 2202, 6070 and 3394, the
+ * IEEE 802.11 passphrase vector (J.4), then a 4-way and a group handshake
+ * against frames made by an access point written apart (tests/net/wpagen.py:
+ * hashlib, openssl's AES), each answer compared byte for byte; damaged or
+ * replayed frames refused. */
+static void wpa(void)
+{
+    uint8_t d[64], f[256], o[256];
+    hmac_sha1(d, "Jefe", 4, "what do ya want for nothing?", 28);
+    same("hmac-sha1 rfc2202 #2", d, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79");
+    pbkdf2_sha1(d, 20, "password", 8, "salt", 4, 4096);
+    same("pbkdf2-sha1 rfc6070 #3", d, "4b007901b765489abead49d926f721d065a429c1");
+    pbkdf2_sha1(d, 25, "passwordPASSWORDpassword", 24, "saltSALTsaltSALTsaltSALTsaltSALTsalt", 36, 4096);
+    same("pbkdf2-sha1 rfc6070 #5", d, "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038");
+    wpa_pmk(d, "password", "IEEE");
+    same("wpa psk ieee 802.11 j.4", d, "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e");
+    uint8_t kek[16], key[16];
+    for (int i = 0; i < 16; i++) kek[i] = (uint8_t)i;
+    unhex(f, "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5");
+    checks++; if (aes_unwrap(kek, 16, f, 24, key)) { fails++; printf("FAIL aes unwrap rfc3394 4.1\n"); }
+    same("aes unwrap rfc3394 4.1", key, "00112233445566778899aabbccddeeff");
+    f[3] ^= 1; checks++; if (!aes_unwrap(kek, 16, f, 24, key)) { fails++; printf("FAIL aes unwrap damaged\n"); }
+
+    static const uint8_t ap_rsn[22] = { 0x30, 20, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0, 0 };
+    wpa_t w = { .aa = { 2, 0, 0, 0, 0, 1 }, .spa = { 2, 0x11, 0x22, 0x33, 0x44, 0x55 }, .ap_rsn = ap_rsn };
+    for (int i = 0; i < 32; i++) w.snonce[i] = (uint8_t)(32 + i);
+    wpa_pmk(w.pmk, "correct horse", "SIEOS-test");
+    same("wpa pmk", w.pmk, "651423552fc2ffdb35d12450833dbe042867b32232498a88fbf5d23523505ef4");
+    checks++; if (!wpa_rsn_ok(ap_rsn)) { fails++; printf("FAIL rsn ok\n"); }
+    int done, n = (int)unhex(f, "0203005f02008a00000000000000000001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    int r = wpa_rx(&w, f, n, o, &done);
+    same("wpa ptk", w.ptk, "40cf12fd240577c909d6be705f122ffec9b19071fe6ae6d0ce5a4b5dd9a87aee7ea2e44ca84b80677951911f4bf92294");
+    checks++; if (r != 121 || done) { fails++; printf("FAIL wpa msg 2 length\n"); }
+    same("wpa msg 2", o, "0203007502010a00000000000000000001202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e"
+        "3f00000000000000000000000000000000000000000000000000000000000000007892251071f2616a2074064cd7c38a"
+        "ca001630140100000fac040100000fac040100000fac020000");
+    n = (int)unhex(f, "020300970213ca00000000000000000002000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
+        "1f0000000000000000000000000000000000000000000000000000000000000000db466af84234890dd30d20f6bb0995"
+        "5f00385750e318da8ac6bb9284b2eff7c53acc6875879e51dd8997750bd0362567f3f89339d11293d8d9619d17d6aa74"
+        "e9b932e2168d06b78c25a0");
+    f[100] ^= 1; checks++; if (wpa_rx(&w, f, n, o, &done) != -1) { fails++; printf("FAIL wpa damaged msg 3\n"); }
+    f[100] ^= 1; r = wpa_rx(&w, f, n, o, &done);
+    checks++; if (r != 99 || done != WPA_PTK || w.gtkid != 1 || w.gtklen != 16) { fails++; printf("FAIL wpa msg 3\n"); }
+    same("wpa msg 4", o, "0203005f02030a00000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001f83fe741492b9f955eaf07def5a3fc10000");
+    same("wpa gtk", w.gtk, "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf");
+    checks++; if (wpa_rx(&w, f, n, o, &done) != -1) { fails++; printf("FAIL wpa replayed msg 3\n"); }
+    n = (int)unhex(f, "020300870213820000000000000000000300000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000009ff4a09e0e40d6adbbecd2e3017d47"
+        "940028bcf253a58d8cf56880641032de469e233f1a9b62ae039e498f5eceaa6ad7ecfb6eb7b3bd4c0aae95");
+    r = wpa_rx(&w, f, n, o, &done);
+    checks++; if (r != 99 || done != WPA_GTK || w.gtkid != 2) { fails++; printf("FAIL wpa group msg 1\n"); }
+    same("wpa group msg 2", o, "0203005f0203020000000000000000000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c8a1954eb7dba889d43d119560395ebd0000");
+    same("wpa new gtk", w.gtk, "afaeadacabaaa9a8a7a6a5a4a3a2a1a0");
+}
+
 int main(int argc, char **argv)
 {
     hashes();
+    wpa();
     aeads();
     dh();
     if (argc > 1) signatures(argv[1]);

@@ -106,7 +106,7 @@ static long first_start_here(void)
 static int screen_possible(void)
 {
     static long init;
-    static svc_info_t s[32];
+    static svc_info_t s[SVC_MAX];
     msg_t m = { .w = { INIT_LIST }, .rbuf = s, .rlen = sizeof s };
     long n = call_named(&init, "init", &m, 1);
     n = n < 0 ? n : (long)m.w[0];

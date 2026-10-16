@@ -98,6 +98,9 @@ enum {
                           it ends with SYS_SIGRETURN). Not SIGKILL                       */
     SYS_SIGRETURN,     /* (): the end of a signal's function: the thread goes on where the
                           signal found it, all its registers as they were                */
+    SYS_ACPI,          /* (buf, size) -> bytes: the firmware's ACPI DSDT then each SSDT, one
+                          after the other (x86-64; drivers only, for user/i2chid's AML
+                          reader); a buffer too small gets nothing; -ENOSYS: none        */
 };
 #define LOG_KEEP 32768
 enum { PLACE_NORMAL, PLACE_BACKGROUND };   /* SYS_PLACE: P-cores first (speed) / E-cores first */
@@ -134,6 +137,7 @@ enum { SIGHUP = 1, SIGINT = 2, SIGKILL = 9, SIGUSR1 = 10, SIGUSR2 = 12, SIGTERM 
  * arm64; x86 maps it uncached as usual). */
 #define MAP_WC  (1UL << 62)
 #define IRQ_LEVEL 0x100
+#define IRQ_LOW   0x200              /* with IRQ_LEVEL: active low (x86-64: a chipset line the ACPI tables call so) */
 /* Interrupt numbers: on x86-64, ISA IRQs 0-15 or I/O APIC lines ("GSIs") 16+;
  * on arm64, the GIC's shared lines ("SPI" n: what a device tree's
  * "interrupts = <0 n flags>" says). w[0] of a token 0 message has bit

@@ -154,7 +154,7 @@ static uint8_t *rsdp_scan(uint64_t pa, uint64_t len)
     return 0;
 }
 
-static sdt_t *acpi_find(const char *sig)
+static sdt_t *acpi_find(const char *sig, int nth)   /* the nth table with this signature */
 {
     uint8_t *rsdp = x86_rsdp ? P2V(x86_rsdp) : 0;     /* (given by the UEFI loader: no BIOS areas then) */
     if (!rsdp) rsdp = rsdp_scan((uint64_t)*(uint16_t *)P2V(0x40E) << 4, 1024);
@@ -164,9 +164,27 @@ static sdt_t *acpi_find(const char *sig)
     sdt_t *root = P2V(x ? *(uint64_t *)(rsdp + 24) : *(uint32_t *)(rsdp + 16));
     for (uint32_t i = 0; i < (root->len - sizeof *root) / (x ? 8 : 4); i++) {
         sdt_t *t = P2V(x ? ((uint64_t *)root->data)[i] : ((uint32_t *)root->data)[i]);
-        if (!memcmp(t->sig, sig, 4)) return t;
+        if (!memcmp(t->sig, sig, 4) && !nth--) return t;
     }
     return 0;
+}
+
+/* SYS_ACPI: the DSDT (the FADT says where) then every SSDT, one after the
+ * other, for drivers' AML reader (user/i2chid). -> their size (a buffer
+ * too small gets nothing). */
+long arch_acpi(uint64_t ubuf, uint64_t size)
+{
+    sdt_t *f = acpi_find("FACP", 0), *t[64];
+    uint64_t d = 0, len = 0;
+    int n = 0;
+    if (f) d = f->len >= 148 && *(uint64_t *)((uint8_t *)f + 140) ? *(uint64_t *)((uint8_t *)f + 140) : *(uint32_t *)((uint8_t *)f + 40);
+    if (d) t[n++] = P2V(d);
+    while (n < 64 && (t[n] = acpi_find("SSDT", n - !!d))) n++;
+    for (int i = 0; i < n; i++) len += t[i]->len;
+    if (size < len) return len;
+    for (int i = 0; i < n; ubuf += t[i++]->len)
+        if (vm_copy(cur->proc->as, (void *)ubuf, 0, t[i], t[i]->len)) return -EFAULT;
+    return len;
 }
 
 /* ---- I/O APICs. Each has a window of registers (select, then read or
@@ -206,8 +224,9 @@ int irq_route(int irq, int cpu)
     return 0;
 }
 /* A PCI device's line routed by the chipset to an ISA IRQ (IRQ_LEVEL):
- * level-triggered, active high (unless an override says otherwise). */
-void irq_set_level(int irq) { irq_flags[irq] |= 2; }
+ * level-triggered, active high unless an override or the driver (IRQ_LOW:
+ * the ACPI tables said so) says low. */
+void irq_set_level(int irq, int low) { irq_flags[irq] |= 2 | (low ? 1 : 0); }
 
 static void irq_set_mask(int irq, int m)
 {
@@ -240,7 +259,7 @@ void smp_init(void)
     uint64_t base = 0xFEE00000;
     for (int i = 0; i < 16; i++) irq_gsi[i] = i;
     for (int i = 16; i < MAXIRQ; i++) irq_flags[i] = 3;           /* PCI: level, active low */
-    sdt_t *madt = acpi_find("APIC");
+    sdt_t *madt = acpi_find("APIC", 0);
     if (!madt) panic("no ACPI MADT: cannot find the processors and I/O APICs\n");
     /* after the header: the APIC address (32 bits), flags (32), then
      * entries {type, length, ...}: 0 = a processor, 1 = an I/O APIC,

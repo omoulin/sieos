@@ -197,7 +197,7 @@ one filled), wrapped onto more rows when the window is narrow:
 
 | Section | What | Kept in |
 |---|---|---|
-| Screen | the size: 1280 x 720, 1366 x 768, 1600 x 900, 1920 x 1080, 2560 x 1440 where the screen can take any (QEMU's VGA and ramfb, the Pi 4, whose firmware scales the picture to the monitor). It changes at once and **goes back by itself after 15 s** unless you press *Keep*, so a monitor that cannot show it is never a dead end. A firmware's fixed screen (UEFI, the Pi 5) shows its size. | `/etc/display.conf` (the login screen too) |
+| Screen | the size: 1280 x 720, 1366 x 768, 1600 x 900, 1920 x 1080, 2560 x 1440 where the screen can take any (QEMU's VGA and ramfb, the Pi 4, whose firmware scales the picture to the monitor, the laptop's Intel display, which also offers its panel's own size and the panel's **brightness**). It changes at once and **goes back by itself after 15 s** unless you press *Keep*, so a monitor that cannot show it is never a dead end. A firmware's fixed screen (UEFI, the Pi 5) shows its size. | `/etc/display.conf` (the login screen too) |
 | Look | **Phosphor** (the default: a green monitor, with scanlines and glowing text), **Amber 1984** (amber, square corners, a grid of dots), **Glass** (the desktop's own colours) or **BeOS** (BeOS R5's colours: the blue desk, grey windows and panels, the yellow tab, black text, white fields and lists); the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% | `~/.look`, applied at your login (the login screen: Phosphor, 100%) |
 | Mouse | pointer speed (Slow, Normal, Fast, Faster), right- or left-handed buttons, the wheel normal or reversed | `~/.mouse`, applied at your login |
 | Sound | the volume: Mute, 25%, 50%, 75%, 100% ([audio.md](audio.md)) | the audio server, until a reboot |
@@ -400,10 +400,23 @@ between processes.
 | `files.c`, `edit.c`, `panel.c`, `settings.c`, `mail.c` | the windows' insides: Files, the editor, sia, Settings, Mail |
 | `icons.c` | the icons (12 x 12 pixel maps; their outline alone on a tab) and the SIEOS cube (16 x 16) |
 | `setup.c` | the first start on the screen (the accounts) |
-| `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `screen.c` | drawing (and the looks), the fonts, the screen |
+| `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `screen.c`, `igfx.c` | drawing (and the looks), the fonts, the screen (and the laptop's Intel display) |
 
 - **The screen** (`screen.c`): x86, QEMU's standard VGA card or the UEFI
-  firmware's screen (GOP); AArch64, QEMU's ramfb on `virt`, the
+  firmware's screen (GOP); on the target laptop's Intel display (Raptor
+  Lake-S / Alder Lake-S, PCI 8086:a788, display version 12) `igfx.c` sets
+  the display up itself: the eDP panel and up to two DP or HDMI monitors,
+  each in its best mode the link and CDCLK can carry (EDID over DP AUX or
+  GMBUS, the VBT from the ACPI OpRegion for ports and the panel's power
+  sequence and backlight), all showing the same picture, any size up to
+  the firmware's, fitted by each pipe's scaler; the panel's brightness in
+  Settings. The picture stays in the firmware's frame buffer (already in
+  the GGTT; cached RAM would need flushing for the display engine). It logs
+  registers, modes and link training to the console and `/etc/igfx.log`
+  (on Linux: `sudo build/host/siefs /dev/sdX2 cat /etc/igfx.log`); anything
+  it cannot do leaves the firmware's screen, and a modeset that never
+  finished makes the next start keep it (remove the log to try again).
+  Not tested on the laptop yet. AArch64, QEMU's ramfb on `virt`, the
   firmware's framebuffer on the Pi 4, `simple-framebuffer` on the Pi 5.
   The layout is computed from the screen's size; below 1600 pixels wide
   the Deskbar is narrower.

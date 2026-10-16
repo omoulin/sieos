@@ -3,7 +3,9 @@
  * only machine-dependent part of Atlas.
  *
  *   x86-64          started by the UEFI loader (boot/uefi): the frame buffer the
- *                   firmware set up, at its size, write-combining;
+ *                   firmware set up, write-combining; on the laptop's Intel
+ *                   display (igfx.c) set up again by us, any size up to the
+ *                   firmware's (its pipes scale it), else at the firmware's size;
  *                   else QEMU's standard VGA (PCI 1234:1111), set to 1920 x 1080
  *                   x 32 through its "DISPI" registers; video memory, not RAM.
  *   arm64, QEMU virt  "ramfb": a frame buffer in our own memory (8 MiB), whose
@@ -14,9 +16,9 @@
  *                   device tree ("simple-framebuffer"), at the size it chose.
  *
  * Atlas draws a PW x PH picture: the size chosen in Settings
- * (/etc/display.conf, 1920 x 1080 by default) where the screen can take any
- * size (QEMU's VGA and ramfb, the Pi 4's firmware, which scales it to the
- * monitor); else the firmware's size (UEFI), or 1920 x 1080 centred in a
+ * (/etc/display.conf; by default 1920 x 1080, the Intel display: its panel's)
+ * where the screen can take any size (QEMU's VGA and ramfb, the Pi 4's
+ * firmware, which scales it to the monitor, the Intel display); else the firmware's size (UEFI), or 1920 x 1080 centred in a
  * bigger fixed frame buffer (the Pi 5); a smaller one is not used. The clock: the CMOS clock (x86), the PL031 (QEMU
  * virt); the Pis have none (uptime, until the network gives the time).
  *
@@ -29,6 +31,7 @@
 #if defined(__x86_64__)
 static uint32_t pci(int dev, int reg) { return pci_read(dev << 11 | reg); }   /* bus 0 (SYS_PCI: shared with the drivers) */
 static void dispi(int i, int v) { outw(0x1CE, i); outw(0x1CF, v); }
+int igfx_init(const mk_screen_t *g);
 
 int screen_init(screen_t *s)
 {
@@ -37,11 +40,17 @@ int screen_init(screen_t *s)
      * any size from 1024 x 600; above 3840 x 2400 it uses the top-left part). */
     mk_screen_t g;
     if (!sys_screen(&g) && g.width >= 1024 && g.height >= 600 && g.pitch >= g.width) {
+        static uint32_t *fb;                             /* (mapped once: the Intel display resizes) */
+        if (!fb) fb = map_phys(g.pa, ((uint64_t)g.pitch * g.height * 4) | MAP_WC);
+        if ((long)fb <= 0) return -1;
+        int r = igfx_init(&g);
+        if (r >= 0) { *s = (screen_t){ fb, g.pitch, 0, 1, "Intel display" }; return r ? -1 : 0; }
         PW = g.width < 3840 ? g.width : 3840;
         PH = g.height < 2400 ? g.height : 2400;
-        *s = (screen_t){ map_phys(g.pa, ((uint64_t)g.pitch * g.height * 4) | MAP_WC), g.pitch, g.format == 0, 0, "firmware screen (UEFI)" };
-        return (long)s->fb > 0 ? 0 : -1;
+        *s = (screen_t){ fb, g.pitch, g.format == 0, 0, "firmware screen (UEFI)" };
+        return 0;
     }
+    if (!PW) { PW = 1920; PH = 1080; }
     for (int d = 0; d < 32; d++) {
         if (pci(d, 0) != 0x11111234) continue;
         uint64_t bar = pci(d, 0x10) & ~0xFUL;
@@ -171,8 +180,12 @@ static int simplefb(screen_t *s)
     return use(s, map_phys(a, len | MAP_WC), fdt_be32(w), fdt_be32(h), fdt_be32(st) / 4, swap, 0, "firmware frame buffer");
 }
 
+int screen_native(int *w, int *h) { (void)w; (void)h; return 0; }
+int screen_backlight(int pct) { (void)pct; return -1; }
+
 int screen_init(screen_t *s)
 {
+    if (!PW) { PW = 1920; PH = 1080; }
     long size = dt ? 1 : sys_fdt(0, 0);                 /* (the device tree: read once) */
     if (!dt && (size <= 0 || !(dt = malloc(size)) || sys_fdt(dt, size) != size)) { free(dt); dt = 0; return -1; }
     return simplefb(s) && pi_mailbox(s) && ramfb(s) ? -1 : 0;

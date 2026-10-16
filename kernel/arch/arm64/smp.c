@@ -48,9 +48,10 @@ int irq_route(int irq, int cpu)
 }
 /* Lines are edge-triggered unless a driver says level (IRQ_LEVEL): a
  * device that keeps its line up until handled (virtio, the PL011). */
-void irq_set_level(int irq)
+void irq_set_level(int irq, int low)
 {
     int id = GIC_SPI0 + irq;
+    (void)low;                                   /* (the GIC's lines are active high) */
     if (id < nlines) gicd[D_ICFGR + id / 16] &= ~(2u << (id % 16 * 2));
 }
 void irq_mask(int irq)   { int id = GIC_SPI0 + irq; if (id < nlines) gicd[D_ICENABLER + id / 32] = 1u << id % 32; }

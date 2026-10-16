@@ -16,7 +16,7 @@ built and booted (UEFI loader, `make usb`) is in [usb.md](usb.md).
 | `user/usb/xhci.c` | the controller: rings, contexts, commands, event ring, interrupts or polling, transfers |
 | `user/usb/usb.c` | enumeration, control transfers, Configure Endpoint, hubs, hotplug, the `usb` port (`USB_DISKS`, `USB_DISK`) |
 | `user/usb/msc.c` | mass storage: Bulk-Only Transport + SCSI, one `usbdiskN` port per disk |
-| `user/usb/hid.c` | boot keyboards, mice and tablets (report descriptor parsed) → `CON_INJECT` |
+| `user/usb/hid.c` | boot keyboards, mice and tablets (report descriptor parsed by `user/lib/hidrep.c`, shared with I2C touchpads: [touchpad.md](touchpad.md)) → `CON_INJECT` |
 | `include/mk/gpt.h` | GPT layout and the SieFS partition type GUID (shared with `tools/mkusb.py`) |
 
 ## How it works

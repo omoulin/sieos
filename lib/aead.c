@@ -155,8 +155,8 @@ static void cp_tag(const uint8_t key[32], const uint8_t nonce[12], const void *a
     wipe(k, sizeof k);
 }
 
-/* ---- AES-128 and AES-256 (FIPS 197), encryption only: GCM never decrypts
- * with AES. nk: the key's length in 32-bit words (4 or 8); 6 + nk rounds. */
+/* ---- AES-128 and AES-256 (FIPS 197); GCM only encrypts (decryption is
+ * for aes_unwrap below). nk: the key's length in 32-bit words (4 or 8); 6 + nk rounds. */
 static const uint8_t SBOX[256] = {
     0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
     0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
@@ -212,6 +212,53 @@ void aes_encrypt(const uint32_t *rk, int nr, const uint8_t in[16], uint8_t out[1
         for (int i = 0; i < 16; i++) s[i] = t[i] ^ (uint8_t)(rk[4 * r + i / 4] >> (24 - 8 * (i % 4)));
     }
     memcpy(out, s, 16);
+}
+
+/* The inverse cipher, for AES key unwrap (RFC 3394: WPA2 sends the group key
+ * wrapped). The inverse S-box is the S-box read backwards, built once. */
+static void aes_decrypt(const uint32_t *rk, int nr, const uint8_t in[16], uint8_t out[16])
+{
+    static uint8_t inv[256];
+    if (!inv[0]) for (int i = 0; i < 256; i++) inv[SBOX[i]] = (uint8_t)i;   /* (inv[0x63] = 0, inv[0] = 0x52) */
+    uint8_t s[16], t[16];
+    for (int i = 0; i < 16; i++) s[i] = in[i] ^ (uint8_t)(rk[4 * nr + i / 4] >> (24 - 8 * (i % 4)));
+    for (int r = nr - 1; r >= 0; r--) {
+        for (int i = 0; i < 16; i++) t[(i + 4 * (i % 4)) % 16] = inv[s[i]];   /* InvShiftRows + InvSubBytes */
+        for (int i = 0; i < 16; i++) t[i] ^= (uint8_t)(rk[4 * r + i / 4] >> (24 - 8 * (i % 4)));
+        if (r)
+            for (int c = 0; c < 4; c++) {                                     /* InvMixColumns */
+                uint8_t *p = t + 4 * c, u = xt(xt(p[0] ^ p[2])), v = xt(xt(p[1] ^ p[3]));
+                p[0] ^= u; p[1] ^= v; p[2] ^= u; p[3] ^= v;
+                uint8_t a0 = p[0], a1 = p[1], a2 = p[2], a3 = p[3], x = a0 ^ a1 ^ a2 ^ a3;
+                p[0] ^= x ^ xt(a0 ^ a1); p[1] ^= x ^ xt(a1 ^ a2);
+                p[2] ^= x ^ xt(a2 ^ a3); p[3] ^= x ^ xt(a3 ^ a0);
+            }
+        memcpy(s, t, 16);
+    }
+    memcpy(out, s, 16);
+}
+
+int aes_unwrap(const uint8_t *kek, size_t klen, const uint8_t *in, size_t n, uint8_t *out)
+{
+    uint32_t rk[60];
+    uint8_t a[8], b[16];
+    size_t m = n / 8 - 1;
+    if (n % 8 || n < 24) return -1;
+    aes_expand(rk, kek, (int)klen / 4);
+    memcpy(a, in, 8);
+    memmove(out, in + 8, n - 8);
+    for (int j = 5; j >= 0; j--)
+        for (size_t i = m; i >= 1; i--) {
+            uint64_t t = (uint64_t)m * j + i;
+            memcpy(b, a, 8);
+            for (int k = 0; k < 8; k++) b[7 - k] ^= (uint8_t)(t >> 8 * k);
+            memcpy(b + 8, out + 8 * (i - 1), 8);
+            aes_decrypt(rk, (int)klen / 4 + 6, b, b);
+            memcpy(a, b, 8); memcpy(out + 8 * (i - 1), b + 8, 8);
+        }
+    wipe(rk, sizeof rk);
+    for (int k = 0; k < 8; k++) if (a[k] != 0xa6) { wipe(out, n - 8); return -1; }
+    return 0;
 }
 
 /* ---- GHASH: multiplication in GF(2^128) by H, bit by bit and in

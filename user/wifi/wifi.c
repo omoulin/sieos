@@ -8,8 +8,8 @@
  *                        /etc/wifi.conf (root only), and rejoined at boot
  *   wifi forget          (root) leave the network and forget it
  *
- * Starting the command starts wifid on demand (the port "wifi"); on a
- * machine that is not a Raspberry Pi, wifid ends at once and this says so.
+ * wifid serves the port "wifi" (the Raspberry Pis' CYW43455, or a PC's
+ * Intel AX210); on a machine without Wi-Fi it says so.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */

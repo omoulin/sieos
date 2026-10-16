@@ -236,3 +236,4 @@ long arch_fdt(uint64_t ubuf, uint64_t size)
 
 /* ---- SYS_SCREEN: no UEFI loader here (the screen comes from the device tree). */
 long arch_screen(uint64_t ubuf) { (void)ubuf; return -ENOSYS; }
+long arch_acpi(uint64_t ubuf, uint64_t size) { (void)ubuf; (void)size; return -ENOSYS; }
