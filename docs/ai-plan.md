@@ -94,5 +94,5 @@ add, copy/convert, argmax/top-k.
 2. The `sia` protocol and the desktop's assistant (the prototypes' design). **Done.**
 3. SIEOS on the laptop (USB boot into RAM; then NVMe). Not yet.
 4. NVIDIA backend: develop with the GPU passed to a SIEOS virtual machine,
-   then on the laptop itself. Not yet.
+   then on the laptop itself. Not yet: the plan is [gpu-plan.md](gpu-plan.md).
 5. Online backend, once networking exists. **Done** (OpenAI-compatible, HTTP and HTTPS).
