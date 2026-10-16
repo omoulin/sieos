@@ -9,8 +9,11 @@ setup on a fresh disk), then, against OpenSSH:
     host key, seen from SIEOS at 10.0.2.2): first sight asked, a command run with
     the key, an interactive shell on the console (raw keys), the same host with
     another key refused;
+  - Ctrl-C in an interactive session ends its job, the shell goes on; a
+    connection that drops ends what its session runs (SIGHUP);
   - SIEOS's ssh to its own sshd (through the host's forwarded port: netd has no
-    loopback), interactively, with a password.
+    loopback), interactively, with a password; Ctrl-C there (the console raw)
+    goes through to the remote job.
 
 Usage: sshtest.py <cpus> <host tools dir> <disk image> <qemu command line...>
 (see make ssh-test). The host part needs OpenSSH's ssh, ssh-keygen and sshd.
@@ -69,15 +72,38 @@ askpass = os.path.join(tmp, "askpass")
 open(askpass, "w").write('#!/bin/sh\necho "$SSHTEST_PW"\n')
 os.chmod(askpass, 0o755)
 kh = os.path.join(tmp, "known_hosts")
-def ossh(*args, pw=None, key=None, inp=None, tty=False, timeout=60):
+def ssh_cmd(args, pw=None, key=None, tty=False):
     env = dict(os.environ, SSH_ASKPASS=askpass, SSH_ASKPASS_REQUIRE="force", SSHTEST_PW=pw or "", DISPLAY=":0")
     opts = ["-F", "/dev/null", "-p", str(fport), "-o", f"UserKnownHostsFile={kh}", "-o", "StrictHostKeyChecking=accept-new",
             "-o", "IdentityAgent=none", "-o", "IdentitiesOnly=yes", "-o", "NumberOfPasswordPrompts=1",
             "-o", "ConnectTimeout=30", "-o", "LogLevel=ERROR"]
     opts += ["-i", key, "-o", "PreferredAuthentications=publickey"] if key else ["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"]
     if tty: opts.append("-tt")
-    return subprocess.run(["ssh", *opts, *args], input=inp, capture_output=True, timeout=timeout * SLOW, env=env,
+    return ["ssh", *opts, *args], env
+def ossh(*args, pw=None, key=None, inp=None, tty=False, timeout=60):
+    cmd, env = ssh_cmd(args, pw, key, tty)
+    return subprocess.run(cmd, input=inp, capture_output=True, timeout=timeout * SLOW, env=env,
                           stdin=None if inp is not None else subprocess.DEVNULL)
+class Session:
+    """An interactive session (a terminal) through the host's ssh, typed into as it goes."""
+    def __init__(self, *args, key):
+        cmd, env = ssh_cmd(args, key=key, tty=True)
+        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+        self.out = b""
+    def send(self, data):
+        self.p.stdin.write(data); self.p.stdin.flush()
+    def expect(self, text, timeout=30):
+        end = time.time() + timeout * SLOW
+        while text.encode() not in self.out:
+            left = end - time.time()
+            if left <= 0 or (self.p.poll() is not None and not select.select([self.p.stdout], [], [], 0)[0]):
+                self.p.kill()
+                fail(f"ssh session: waiting for {text!r}, got {self.out.decode(errors='replace')[-500:]!r}")
+            if select.select([self.p.stdout], [], [], left)[0]:
+                self.out += os.read(self.p.stdout.fileno(), 4096)
+        i = self.out.index(text.encode()) + len(text)
+        seen, self.out = self.out[:i], self.out[i:]
+        return seen.decode(errors="replace")
 
 qemu = subprocess.Popen(cmdline, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 import atexit; atexit.register(lambda: [p.kill() for p in [qemu] + servers])
@@ -142,6 +168,22 @@ o = r.stdout.decode(errors="replace")
 if "alice@" not in o or "typed-$((1))\r\n" not in o or "/bin/ssh" not in o or r.returncode: fail(f"interactive session: {r}")
 print("ok: interactive session (pty, echo, exit)")
 
+# Ctrl-C in a session: the job ends, the shell stays; when the connection
+# goes, what the session still runs ends with it (SIGHUP)
+sp = "alice@sieos:/home/alice$ "
+ses = Session("alice@127.0.0.1", key=key)
+ses.expect(sp, 60)
+ses.send(b"ktest hang spin\r"); ses.expect("ktest hang: spin"); time.sleep(0.5 * SLOW)
+ses.send(b"\x03"); ses.expect("^C"); ses.expect(sp)
+ses.send(b"echo after-$((2))\r"); ses.expect("after-$((2))\r\n")
+print("ok: Ctrl-C in an ssh session ends the job; the shell goes on")
+ses.send(b"ktest hang sleep\r"); ses.expect("ktest hang: sleep"); time.sleep(0.5 * SLOW)
+ses.p.kill()                                          # (the connection drops)
+time.sleep(2 * SLOW)
+seen = check("ps")
+if "ktest" in seen: fail(f"the job of a closed connection still runs: {seen}")
+print("ok: the connection gone, its job ended (SIGHUP)")
+
 # ---- SIEOS's ssh-keygen, and ssh to an sshd on the host (this user, its own host key)
 hport = free_port()
 hkey = os.path.join(tmp, "host_key")
@@ -193,8 +235,11 @@ expect("(yes/no)? ", 60); send("yes")
 expect(f"alice@10.0.2.2's password: ", 60); send("alicepass1")
 expect("alice@sieos:/home/alice$ ", 60)
 send("echo nested shell"); expect("\nnested shell", 30)
+send("ktest hang spin"); expect("ktest hang: spin", 30); time.sleep(0.5 * SLOW)
+qemu.stdin.write(b"\x03"); qemu.stdin.flush()       # (raw console: the key goes through ssh)
+expect("^C", 30); expect("alice@sieos:/home/alice$ ", 30)
 send("exit"); expect("Connection to 10.0.2.2 closed.", 30); expect(prompt)
-print("ok: SIEOS ssh -> SIEOS sshd, interactive, password")
+print("ok: SIEOS ssh -> SIEOS sshd, interactive, password; Ctrl-C there ends the remote job")
 check(f"ssh -p {free_port()} 10.0.2.2", "connection refused")
 
 send("exit"); expect("login: ")
