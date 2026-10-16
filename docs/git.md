@@ -103,7 +103,11 @@ blocks), and the host's zlib both ways on several inputs.
 Merges of changes inside one file (conflict markers), rebase, stash,
 tags made here (read only), submodules (left out of checkouts), shallow
 clones, SSH, protocol v2, the dumb HTTP protocol, `diff` between two
-commits, SHA-256 repositories, delta compression of what we push.
+commits, SHA-256 repositories, delta compression of what we push. Packs
+are read whole into memory (and a fetch's pack too, while it is indexed):
+fine for projects of a few tens of MB, not for very large ones. Untested
+yet against the big hosting services (GitHub, GitLab) over HTTPS; the
+HTTP client says `User-Agent: SIEOS/1`, not `git/...`.
 
 ## Test
 

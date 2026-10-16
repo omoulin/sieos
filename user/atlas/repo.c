@@ -172,6 +172,7 @@ int repo_ended(long p, int status)
 {
     if (p != pid || !pid) return 0;
     pid = 0;
+    if (!dir[0]) return 1;               /* (the window was closed meanwhile) */
     if (ob) ob[on] = 0;
     if (job == J_STATUS) {
         nchg = 0;
@@ -336,7 +337,7 @@ int repo_key(int c)
         if (c == '\n') act(B_COMMIT);
         else if (c == 27) field = 0;
         else if (c == '\b') { if (n) msg[n - 1] = 0; }
-        else if (c >= 32 && c < 127 && c != '"' && n + 1 < sizeof msg) { msg[n] = (char)c; msg[n + 1] = 0; }
+        else if (c >= 32 && c < 127 && n + 1 < sizeof msg) { msg[n] = (char)c; msg[n + 1] = 0; }
         else return 0;
         return 1;
     }
