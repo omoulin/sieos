@@ -46,7 +46,7 @@ SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the
 BINS    += unixd                        # pipes and unix sockets for libposix (docs/webkit-plan.md)
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
 BINS    += kblight                     # a keyboard's light (the USB server's kbl.c)
-BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid install)   # install: SIEOS onto a PC's NVMe drive (UEFI)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
+BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid ipts install)   # install: SIEOS onto a PC's NVMe drive (UEFI)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
 ULIBOBJ += $(if $(filter x86_64,$(ARCH)),aml)       # the AML interpreter they share
 BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    += btd bt                       # Bluetooth: the server and the command
@@ -795,6 +795,15 @@ $(B)/host/ssam-test: tests/ssam/test.c user/acpid/ssam.c user/acpid/ssam.h
 ssam-test: $(B)/host/ssam-test
 	$(B)/host/ssam-test
 .PHONY: ssam-test
+# ---- a Surface's touch screen (user/ipts: the iTouch MEI, HBM, the IPTS
+# client) on the host, against a pretend ME (tests/ipts).
+$(B)/host/ipts-test: tests/ipts/test.c tests/hid/mk.h user/ipts/ipts.c user/lib/hidrep.c user/lib/hidrep.h include/mk/*.h
+	@mkdir -p $(B)/host/ipts
+	cp user/lib/hidrep.c user/lib/hidrep.h tests/hid/mk.h $(B)/host/ipts/
+	gcc $(HOSTCFLAGS) -I$(B)/host/ipts -Iuser/ipts -o $@ tests/ipts/test.c $(B)/host/ipts/hidrep.c
+ipts-test: $(B)/host/ipts-test
+	$(B)/host/ipts-test
+.PHONY: ipts-test
 
 # ---- sicc, the SIEOS C compiler (cc/, docs/cc.md): compiler, assembler and
 # linker in one program, written for SIEOS.
