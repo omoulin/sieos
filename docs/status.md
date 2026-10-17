@@ -47,6 +47,19 @@ checklist in [raspberrypi.md](raspberrypi.md).
   sound, touch screen, power and disk are written and wait for a boot;
   then, if wanted, the DSP's microphones (SOF), the sensor hub (rotation),
   s2idle and Ice Lake's display in igfx.
+- The second laptop (Ice Lake): its Intel display (full modeset, Type-C
+  and Thunderbolt monitors) waits for a boot from the USB key; its other
+  devices are to be listed from its `lspci`.
+
+## The laptops
+
+| | The target laptop | The second laptop |
+|---|---|---|
+| Processor | Raptor Lake-HX (Lenovo Legion, 83LY) | Ice Lake-LP ("10th gen" Core, 10 nm) |
+| Intel display | UHD Graphics, 8086:a788, display version 12; eDP panel 2560 x 1600 | Iris Plus Graphics G4/G7, 8086:8a52 and kin, display version 11; eDP panel (1920 x 1200 or 3840 x 2400) |
+| Monitor ports (igfx) | TC1-TC4 as the VBT lists them (combo PHYs) | DDI B (combo PHY) if wired; Type-C ports C-F: the Thunderbolt 3 / USB-C ports (DP-alt, TBT) |
+| Other GPU | GeForce RTX 5060 Laptop | none |
+| Other devices | 2 NVMe, RTL8168h, AX210 (Wi-Fi, Bluetooth), HDA (ALC257, HDMI codec), I2C touchpad (ELAN06FA), UVC camera, ITE 8258 keyboard light | not yet known |
 - A web browser: WPE WebKit on a musl-based POSIX layer, phase by phase
   ([webkit-plan.md](webkit-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
@@ -369,3 +382,16 @@ checklist in [raspberrypi.md](raspberrypi.md).
   case; `bt-test`: a touch screen descriptor. Untested on the machine.
   Sizes (x86-64, text): audiod.o +2.9 KB, i2chid.o +1.8 KB, hidrep.o
   +0.3 KB, acpid.o +0.9 KB, nvme.o +0.25 KB (arm64 +0.3 KB), sh.o +14 B.
+- **2026-10-17, later.** The second laptop's Intel display: Ice Lake
+  (Iris Plus, display version 11) in `igfx.c`, sharing the Raptor Lake
+  code ([desktop.md](desktop.md#how-it-works)): the panel on the eDP
+  transcoder, ICL's DPLL registers, swing table, CDCLK voltage and DBUF
+  table; monitors on DDI B and on the Type-C ports: DP alternate mode and
+  legacy connectors (the FIA's lanes and PHY ownership, the MG PLL and MG
+  PHY) and Thunderbolt (the shared TBT PLL), with hot-plug from the FIA's
+  live states. Fixed on the way, for both: the DBUF slices are
+  `DBUF_CTL_S1` 0x45008 and `S2` 0x44FE8 (igfx enabled S2 and the
+  nonexistent S3, so its modeset would have stopped at "DBUF power").
+  `make igfx-test` runs the Ice Lake engine too. Not yet tried on either
+  laptop. Sizes: igfx.o 19.8 -> 24.2 KB of code (+4.4 KB), atlas.elf
+  +4.5 KB of code, +64 bytes of bss.
