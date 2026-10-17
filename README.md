@@ -67,7 +67,10 @@ make usb-test   # the automatic test: first start, files, second boot, the key c
 
 The PC starts SIEOS's own UEFI loader from the key (Secure Boot off), and
 SIEOS uses the key as its disk: what you write stays on it. How to write the
-key safely and start a PC from it: [docs/usb.md](docs/usb.md).
+key safely and start a PC from it: [docs/usb.md](docs/usb.md). From the key,
+the desktop's **Install SIEOS** puts it on the PC's NVMe drive, into free
+space beside your other systems or onto a whole drive, with an entry in the
+firmware's boot menu ([docs/install.md](docs/install.md), `make install-test`).
 The USB stack itself (xHCI, hubs, disks, keyboards and mice, `make
 usb-dev-test`): [docs/usb-stack.md](docs/usb-stack.md).
 

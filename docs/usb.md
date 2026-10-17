@@ -13,10 +13,16 @@ Nothing on the PC's own disks is touched.
   │      EFI/BOOT/BOOTX64.EFI   SIEOS's own UEFI loader (boot/uefi, 11 KB)
   │      SIEOS/KERNEL.BIN       the kernel
   │      SIEOS/INIT.ELF ...     the boot modules (init, con, usb, vblk, fs)
-  │      SIEOS/BOOT.CFG         module= lines (init first), screen=WxH
+  │      SIEOS/BOOT.CFG         module= lines (init first), screen=WxH, root=GUID
   └── 2. SieFS (the rest of the key): SIEOS's disk, read and written
-         found by its partition type 5E1E0500-51EF-4153-9E05-534945465331
+         type 5E1E0500-51EF-4153-9E05-534945465331, found by its own
+         GUID (BOOT.CFG's root=); /boot holds the boot files, and the
+         snapshot "factory" the system as built (what the installer copies)
 ```
+
+To put SIEOS on the PC's own drive, beside its other systems (or on a
+whole drive), see [install.md](install.md): the desktop's Install window,
+started from this key.
 
 ## Make the image
 
@@ -84,9 +90,12 @@ system and data.
 - **The screen**: the desktop asks the kernel for the firmware's frame buffer
   (`SYS_SCREEN`) and lays out to its size (tested at 1280 x 800,
   1920 x 1080 and 2560 x 1600).
-- **The disk**: `vblk` takes the GPT partition of type SieFS on the boot
-  disk; on a real key it reaches it through the USB storage driver
-  (`user/usb`).
+- **The disk**: `BOOT.CFG`'s `root=GUID` (the SieFS partition's unique
+  GUID, random for each image) is passed by the loader to the kernel as a
+  boot option, and by the kernel to `vblk` (`SYS_INFO`), which takes that
+  partition on whichever drive it is (on a real key through the USB
+  storage driver, `user/usb`), never another drive's SieFS: with SIEOS
+  also installed on the PC's NVMe drive, the key still uses its own.
 
 ## Tests
 
@@ -110,8 +119,10 @@ Unionmemory and Samsung PM9A1 drives, behind PCIe root ports: the PCI scan
 follows the bridges). At boot, when there is no virtio disk, it lists each
 controller and namespace on the console and log, then takes the first
 namespace with a **SieFS partition** (GPT type above, or MBR `0x5E`) as
-SIEOS's disk, before any USB key; a drive without one is only read (its
-partition table), never written. In `make nvme-test`:
+SIEOS's disk, before any USB key (with `root=GUID`, the partition with that
+GUID only); a drive without one is only read (its partition table), never
+written, except by the installer ([install.md](install.md): `DISK_RAW_*`,
+root only, while SIEOS's own disk is not an NVMe drive). In `make nvme-test`:
 
 ```
 vblk: NVMe 00:06.0: QEMU NVMe Ctrl
@@ -146,8 +157,8 @@ both ways, QEMU's cost per command; without the limit 365 / 600 MiB/s).
 The Ice Lake laptop's SK hynix BC501 needs no quirk ([ice-lake.md](ice-lake.md#the-disk)).
 
 Untested on the real drives: the controllers' reset timing, their MDTS and
-LBA formats as read, a SieFS partition on one (no tool makes it yet: copy
-`mkfs.siefs`'s image into a GPT partition of that type from Linux).
+LBA formats as read, a SieFS partition on one (the installer makes it:
+[install.md](install.md), tested in QEMU).
 
 ## The laptop's camera and keyboard light
 

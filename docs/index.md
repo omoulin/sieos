@@ -12,6 +12,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [raspberrypi.md](raspberrypi.md) | the Raspberry Pi 4 and 5: card images, serial console, what to check on real boards |
 | [gpio.md](gpio.md) | the Raspberry Pi's pins (Pi 4; Pi 5 through RP1): the GPIO server, the C library (`gpio.h`), `/bin/gpio`, patterns, the self-check |
 | [usb.md](usb.md) | a PC from a USB key: the UEFI loader, the key image, writing it safely, the key as SIEOS's disk |
+| [install.md](install.md) | installing on a PC's NVMe drive: free space or a whole drive, the Install window, the boot menu entry, making free space on the Lenovo's Debian drive (LUKS + LVM), removing SIEOS |
 | [usb-stack.md](usb-stack.md) | the USB stack: xHCI, hubs, USB disks (SCSI), keyboards and mice, hotplug, the Pi glue still to check |
 | [power.md](power.md) | ACPI: power off, restart, suspend to RAM, battery, AC, lid, buttons (`acpid`), what to check on the laptop |
 | [touchpad.md](touchpad.md) | laptop touchpads and touch screens: HID over I2C, the ACPI (AML) reader, the LPSS I2C controller, gestures, what to check on the laptop |

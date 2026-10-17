@@ -53,7 +53,8 @@ struct bootfb x86_fb;
 static void from_uefi(uint64_t pa)
 {
     sieos_boot_t *b = P2V(pa);
-    if (b->version != 1) panic("UEFI loader: unknown version %u\n", b->version);
+    if (b->version != 1 && b->version != 2) panic("UEFI loader: unknown version %u\n", b->version);
+    if (b->version == 2) bi.cmdline = b->cmdline;                      /* (root=: SIEOS's partition) */
     for (uint64_t o = 0; o + b->desc_size <= b->mmap_size; o += b->desc_size) {
         uint8_t *d = (uint8_t *)P2V(b->mmap) + o;
         uint32_t type = *(uint32_t *)d;

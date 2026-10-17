@@ -62,7 +62,21 @@ enum {
     DISK_READ,      /* w[1] = first block, w[2] = count; data comes in rbuf -> 0  */
     DISK_WRITE,     /* w[1] = first block, w[2] = count; data in sbuf       -> 0  */
     DISK_FLUSH,     /* make every write so far durable                      -> 0  */
+    /* The PC's NVMe drives themselves, for the installer (user/install), root
+     * only. Sectors are the drive's own (disk_raw_t.sector bytes). -EBUSY while
+     * SIEOS itself runs from an NVMe drive (vblk would have to switch controllers
+     * under its own disk). */
+    DISK_RAW_INFO = 16, /* w[1] = drive (0, 1...); rbuf <- disk_raw_t -> 0 (-ENOENT: no more) */
+    DISK_RAW_READ,  /* w[1] = drive, w[2] = first sector, w[3] = count; data in rbuf -> 0 */
+    DISK_RAW_WRITE, /* the same, data in sbuf                               -> 0  */
+    DISK_RAW_FLUSH, /* w[1] = drive                                         -> 0  */
 };
+typedef struct {
+    char model[41], serial[21];
+    uint8_t self, busy;                /* SIEOS's own disk is on it; raw access refused (-EBUSY) */
+    uint32_t sector;                   /* bytes */
+    uint64_t sectors;
+} disk_raw_t;
 
 /* The USB server, port "usb" (/bin/usb: the xHCI controller and its
  * devices). Each USB disk (a key) is served on a port of its own, "usbdisk0",

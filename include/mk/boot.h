@@ -17,7 +17,7 @@
 #define SIEOS_BOOT_MODS  16
 
 typedef struct {
-    uint32_t magic, version;                   /* SIEOS_BOOT_MAGIC, 1 */
+    uint32_t magic, version;                   /* SIEOS_BOOT_MAGIC, 2 (1: no cmdline) */
     uint64_t mmap, mmap_size, desc_size;       /* the firmware's memory map: its descriptors (UEFI
                                                   layout: type at 0, start at 8, pages at 24) */
     uint64_t rsdp;                             /* the ACPI root pointer (0: none) */
@@ -30,4 +30,5 @@ typedef struct {
     uint64_t self_len;
     uint32_t nmod, pad;
     struct { uint64_t pa, len; char cmdline[64]; } mod[SIEOS_BOOT_MODS];   /* init first */
+    char cmdline[128];                         /* the kernel's boot options (BOOT.CFG's root= line) */
 } sieos_boot_t;

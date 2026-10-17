@@ -283,6 +283,7 @@ typedef struct {
     uint32_t hwcap;                  /* what the processor can do, HWCAP_* below */
     int32_t ecores;                  /* how many of the CPUs are E-cores (0: all cores alike) */
     int32_t cpu, cpu_e;              /* the CPU the caller runs on now; 1 if it is an E-core */
+    char root[40];                   /* the boot option root=GUID (SIEOS's partition), or "" */
 } mk_info_t;
 /* Processor features a program may use (the kernel reads them once at boot;
  * some, like the AArch64 ID registers, are not readable from user mode). */

@@ -110,6 +110,8 @@ t_kernel = time.time() - t0
 wait("mk: started by the UEFI loader")
 wait(f"mk: {cpus} CPUs running")
 got = wait("vblk: ")                       # (a virtio disk, or the key through the USB driver)
+while got.startswith("root "):              # (the key's partition GUID, BOOT.CFG's root=: then the disk)
+    got = wait("vblk: ")
 if "SieFS partition" not in got:
     fail(f"the disk driver did not take the key's SieFS partition: {got}")
 disk = got

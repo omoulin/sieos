@@ -46,7 +46,7 @@ SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the
 BINS    += unixd                        # pipes and unix sockets for libposix (docs/webkit-plan.md)
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
 BINS    += kblight                     # a keyboard's light (the USB server's kbl.c)
-BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
+BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid install)   # install: SIEOS onto a PC's NVMe drive (UEFI)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
 ULIBOBJ += $(if $(filter x86_64,$(ARCH)),aml)       # the AML interpreter they share
 BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    += btd bt                       # Bluetooth: the server and the command
@@ -100,6 +100,15 @@ $(B)/fs.elf: $(B)/user/fs.o $(SIEFS_CORE:%=$(B)/user/siefs/%.o) $(UCORE:%=$(B)/u
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(SIEFS_CORE:%=$(B)/user/siefs/%.o) $(ULIB)
 $(B)/user/fs.o: UCFLAGS += -DEPOCH=$(shell date +%s)
 $(B)/user/siefs/%.o: siefs/%.c siefs/*.h include/mk/*.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(UCFLAGS) -c $< -o $@
+
+# The installer (docs/install.md): its FAT32 part, and the SieFS library with its check.
+INSTALL_X := $(B)/user/install/fat.o $(SIEFS_CORE:%=$(B)/user/siefs/%.o) $(B)/user/siefs/check.o
+$(B)/install.elf: $(B)/user/install.o $(INSTALL_X) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(INSTALL_X) $(ULIB)
+$(B)/user/install.o $(B)/user/install/fat.o: user/install/install.h
+$(B)/user/install/%.o: user/install/%.c user/install/install.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
@@ -162,7 +171,7 @@ $(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/hidrep.h user/lib/mk.h i
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The desktop has several files; its font is drawn in tools/mkfont.py.
-ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen igfx wm settings files icons pins repo mail cam
+ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen igfx wm settings files icons pins repo mail cam inst
 $(B)/atlas.elf: $(ATLAS:%=$(B)/user/atlas/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(ATLAS:%=$(B)/user/atlas/%.o) $(ULIB)
 $(B)/user/atlas/igfx.o: user/lib/eld.h
@@ -601,6 +610,16 @@ run-bt: all $(BTFW)
 	    for f in $(BTFW); do $(B)/host/siefs $(B)/disk.img put $$f /lib/firmware/$$(basename $$f); done
 	$(QEMU) $(SCREEN) -device qemu-xhci -device usb-host,vendorid=0x8087,productid=0x0032 -display $(WINDOW) $(SERIAL)
 .PHONY: usb run-usb usb-test run-bt
+
+# install-test: the installer (user/install and the desktop's Install window,
+# docs/install.md) in QEMU with UEFI firmware that keeps its variables (OVMF,
+# /usr/share/OVMF) on emulated NVMe drives: a fake Debian drive (free space
+# used, everything else hashed), the refusals, the boot entry, the installed
+# system started alone; a whole drive erased from the window (tools/installtest.py)
+install-test: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(B)/host/fsck.siefs
+	$(call USBMAKE,$(B)/install-usb.img,768M)
+	python3 tools/installtest.py $(SMP) $(B)/host $(B)/install-usb.img $(B)/install-test $(ACCEL)
+.PHONY: install-test
 
 # usb-dev-test: the USB stack itself (tools/usbdevtest.py), on both architectures:
 # SIEOS's only disk on a USB key (no virtio disk), the first start typed on a USB

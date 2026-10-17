@@ -17,6 +17,7 @@ int nmodules;
 cpu_t *cpus[MAXCPU];
 int ncpu;
 int opt_pcores;
+char opt_root[40];              /* boot option "root=GUID": SIEOS's partition (SYS_INFO, for vblk) */
 
 /* ---- Locks. Every CPU may be in the kernel at once: each piece of shared
  * data has its own lock (spinlock_t, kernel.h), held for a few hundred
@@ -70,9 +71,11 @@ void spin_wait(spinlock_t *l, uint32_t t)
 }
 
 /* The boot options, on the kernel's command line (x86-64: multiboot's;
- * arm64: the device tree's /chosen bootargs). One so far:
+ * arm64: the device tree's /chosen bootargs; the UEFI loader's BOOT.CFG):
  *   pcores=N   pretend that CPUs 0..N-1 are P-cores and the others E-cores
- *              (to test the scheduler's placement where all cores are alike) */
+ *              (to test the scheduler's placement where all cores are alike)
+ *   root=GUID  the unique GUID of SIEOS's SieFS partition: kept for the disk
+ *              server (SYS_INFO), which takes that partition, on any drive */
 static void options(const char *s)
 {
     while (s && *s) {                    /* s: at the start of a word */
@@ -80,6 +83,7 @@ static void options(const char *s)
         while (s[n] && s[n] != ' ') n++;
         if (n > 7 && !memcmp(s, "pcores=", 7))
             for (int i = 7; i < n && s[i] >= '0' && s[i] <= '9'; i++) opt_pcores = opt_pcores * 10 + s[i] - '0';
+        if (n > 5 && n < 45 && !memcmp(s, "root=", 5)) { memcpy(opt_root, s + 5, n - 5); opt_root[n - 5] = 0; }
         for (s += n; *s == ' '; s++) ;
     }
 }

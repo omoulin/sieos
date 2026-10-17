@@ -9,6 +9,14 @@
  * first NVMe namespace with a SieFS partition (never a drive without one:
  * a PC's own drives hold its other systems).
  *
+ * With the boot option root=GUID (the UEFI loader's BOOT.CFG: a key made by
+ * mkusb.py, or a drive SIEOS was installed on), the disk is the SieFS
+ * partition with that unique GUID, on whichever drive it is: never another
+ * drive's SieFS, whatever the order the drives are found in.
+ *
+ * The NVMe drives are also offered whole to the installer (DISK_RAW_*,
+ * root only), while SIEOS's own disk is not on one.
+ *
  * Or a USB key (the USB server, user/usb, serves each USB disk on a port of
  * its own, "usbdisk0"...): when there is no virtio disk or SD card, the
  * first USB disk with a SieFS partition is SIEOS's disk (NVMe first).
@@ -151,6 +159,8 @@ enum { B_VIRTIO, B_SD, B_NVME, B_USB };
 static int backend;
 static uint64_t first;
 static uint32_t sector = 512;                           /* the device's sector size */
+static uint8_t root[16];                                /* root=GUID (on-disk byte order) */
+static int has_root;
 static long usb_port;
 static char usb_name[16];
 static long io(int op, uint64_t blk, uint32_t bytes)
@@ -196,7 +206,7 @@ static int find_siefs(void)
                 if (at / DISK_BS != cached) { if (io(T_IN, at / DISK_BS, DISK_BS)) break; cached = at / DISK_BS; }
                 gpt_entry_t e;
                 memcpy(&e, data + at % DISK_BS, sizeof e);
-                if (memcmp(e.type, type, 16)) continue;
+                if (memcmp(e.type, type, 16) || (has_root && memcmp(e.guid, root, 16))) continue;
                 uint64_t a = e.first * sector, z = (e.last + 1) * sector;
                 if (a % DISK_BS || z <= a || z / DISK_BS > total) continue;
                 first = a / DISK_BS;
@@ -205,6 +215,7 @@ static int find_siefs(void)
             }
         }
     }
+    if (has_root) return 0;                              /* (that partition, or nothing) */
     if (!io(T_IN, 0, DISK_BS) && data[510] == 0x55 && data[511] == 0xAA)
         for (int i = 0; i < 4; i++) {
             const uint8_t *e = data + 446 + 16 * i;
@@ -222,6 +233,25 @@ static int find_siefs(void)
     return magic == 0x0031765346454953ULL;               /* "SIEFSv1": SieFS on the whole disk */
 }
 
+/* "root=5e1e0500-51ef-...": the GUID's text, its first three fields
+ * little-endian on disk. */
+static void parse_root(const char *s)
+{
+    static const uint8_t at[16] = { 3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15 };
+    int k = 0;
+    for (; *s && k < 32; s++) {
+        int v = *s >= '0' && *s <= '9' ? *s - '0' : (*s | 32) >= 'a' && (*s | 32) <= 'f' ? (*s | 32) - 'a' + 10 : -1;
+        if (v < 0) continue;                             /* (the dashes) */
+        root[at[k / 2]] |= v << (k & 1 ? 0 : 4);
+        k++;
+    }
+    has_root = k == 32;
+}
+
+/* The NVMe namespaces seen, for the installer (DISK_RAW_*). */
+static struct { int ctl; uint32_t ns; disk_raw_t d; } raw[8];
+static int nraw, raw_cur = -1;
+
 /* No virtio disk nor SD card: an NVMe namespace with SieFS? Each
  * controller's, in turn. */
 static int nvme_disk(void)
@@ -230,14 +260,48 @@ static int nvme_disk(void)
         for (uint32_t ns = 1;; ns++) {
             uint64_t n;
             int e = nvme_open(c, ns, &n, &sector);
-            if (e == -2) return 0;
+            if (e == -2) { raw_cur = -1; return 0; }    /* (looking for one more controller turned the last one off) */
             if (e < 0) break;
             if (e) continue;
+            if (nraw < 8) {
+                raw[nraw].ctl = c; raw[nraw].ns = ns;
+                raw[nraw].d.sector = sector; raw[nraw].d.sectors = n;
+                strlcpy(raw[nraw].d.model, nvme_model, sizeof raw[0].d.model);
+                strlcpy(raw[nraw].d.serial, nvme_serial, sizeof raw[0].d.serial);
+                raw_cur = nraw++;
+            }
             backend = B_NVME;
             data = nvme_buffer();
             nblocks = n / (DISK_BS / sector);
-            if (find_siefs()) return 1;
+            if (find_siefs()) {
+                for (int i = 0; i < nraw; i++) raw[i].d.busy = 1;
+                raw[nraw - 1].d.self = 1;
+                return 1;
+            }
         }
+}
+
+/* DISK_RAW_*: one drive's sectors, for root. -> 0 or -error; *out, *olen: a read's data. */
+static long raw_io(msg_t *m, const void **out, uint64_t *olen)
+{
+    uint64_t d = m->w[1], lba = m->w[2], n = m->w[3], s;
+    if (m->uid) return -EPERM;
+    if (d >= (uint64_t)nraw) return -ENOENT;
+    if (m->w[0] == DISK_RAW_INFO) { *out = &raw[d].d; *olen = sizeof raw[0].d; return 0; }
+    if (backend == B_NVME) return -EBUSY;
+    if (m->w[0] != DISK_RAW_FLUSH &&
+        (!n || n * raw[d].d.sector > DISK_MAX || lba + n > raw[d].d.sectors || lba + n < lba)) return -EINVAL;
+    if (m->w[0] == DISK_RAW_WRITE && m->rlen != n * raw[d].d.sector) return -EINVAL;
+    if (raw_cur != (int)d) {
+        raw_cur = -1;
+        uint32_t bs;
+        if (nvme_open(raw[d].ctl, raw[d].ns, &s, &bs)) return -EIO;
+        raw_cur = (int)d;
+    }
+    if (m->w[0] == DISK_RAW_WRITE) memcpy(nvme_buffer(), data, n * raw[d].d.sector);
+    long e = nvme_io(m->w[0] == DISK_RAW_READ ? 2 : m->w[0] == DISK_RAW_WRITE ? 1 : 0, lba, m->w[0] == DISK_RAW_FLUSH ? 0 : (uint32_t)n);
+    if (!e && m->w[0] == DISK_RAW_READ) { *out = nvme_buffer(); *olen = n * raw[d].d.sector; }
+    return e;
 }
 
 /* Nor NVMe: a USB disk? Asks the USB server (if it runs:
@@ -270,6 +334,8 @@ static int usb_disk(void)
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
+    mk_info_t in;
+    if (!sys_info(&in) && in.root[0]) parse_root(in.root);
     int ok = !setup();                                   /* without a disk, answer -EIO to all */
     static uint32_t buf[DISK_MAX / 4];                   /* the data buffer, when not virtio's DMA one */
 #if defined(__aarch64__)
@@ -281,12 +347,13 @@ int main(int argc, char **argv)
         backend = B_SD;
     }
 #endif
-    if (ok) {
-        find_siefs();                                    /* (none found: the whole disk, as before) */
-    } else if (!(ok = nvme_disk())) {
+    if (ok && !find_siefs() && has_root) ok = 0;        /* (none found: the whole disk, as before; but
+                                                            root= is a partition: look on the other drives) */
+    if (!ok && !(ok = nvme_disk())) {
         data = (uint8_t *)buf;
         ok = usb_disk();
     }
+    if (has_root) printf("vblk: root %s%s\n", in.root, ok ? "" : " not found");
     static const char *kind[] = { "virtio", "SD card", "NVMe", "USB" };
     if (!ok) printf("vblk: no disk (virtio, SD card, or an NVMe drive or USB key with SieFS)\n");
     else printf("vblk: %s disk%s%s, %lu MiB%s\n", kind[backend], backend == B_USB ? " " : "",
@@ -299,6 +366,7 @@ int main(int argc, char **argv)
         long r = 0;
         const void *out = 0;
         if (from <= 0) r = -EINVAL;                     /* (no interrupts arrive on this port) */
+        else if (m.w[0] >= DISK_RAW_INFO && m.w[0] <= DISK_RAW_FLUSH) r = raw_io(&m, &out, &bytes);
         else if (!ok) r = -EIO;
         else switch (m.w[0]) {
         case DISK_INFO:  r = nblocks; break;      /* (w[1] below: which SD controller, for wifid) */

@@ -36,6 +36,7 @@ static uint8_t *mem;                         /* DMA: data (DISK_MAX), then admin
 static uint64_t bus;                         /* its bus address */
 static uint32_t dstrd, nn, nsid, lbads, mdts;   /* doorbell stride, namespaces, the one in use, log2(sector size), largest transfer */
 static int cur = -1, dead;                   /* the controller set up; a command timed out */
+char nvme_model[41], nvme_serial[21];        /* the controller set up's (Identify: space-padded, trimmed) */
 
 /* One command, waited for: -> 0 done, -EIO failed. Spin a little (the
  * usual answer), then yield until the timeout. */
@@ -102,9 +103,12 @@ static int start(int nth)
     nsid = dead = 0;
     if (wait_rdy(1, to) || admin(6, bus, 1, 0)) return -1;   /* identify the controller (CNS 1) */
     memcpy(&nn, mem + 516, 4);                           /* (both processors are little-endian, like NVMe) */
-    char m[41] = { 0 };                                  /* the model: 40 characters, space-padded */
-    memcpy(m, mem + 24, 40);
+    char *m = nvme_model, *sn = nvme_serial;              /* the model: 40 characters, the serial number 20 */
+    memcpy(m, mem + 24, 40); m[40] = 0;
+    memcpy(sn, mem + 4, 20); sn[20] = 0;
     for (int n = 40; n && m[n - 1] == ' ';) m[--n] = 0;
+    for (int n = 20; n && sn[n - 1] == ' ';) sn[--n] = 0;
+    while (*sn == ' ') memmove(sn, sn + 1, strlen(sn));
     printf("vblk: NVMe %02x:%02x.%x: %s\n", p.at >> 16 & 0xFF, p.at >> 11 & 31, p.at >> 8 & 7, m);
     mdts = mem[77] < 5 ? mem[77] : 0;                    /* MDTS (in 4 KiB pages, log2; 0: any): below 128 KiB, transfers are cut */
     if (mdts) printf("vblk: NVMe: at most %u KiB per command\n", 4u << mdts);

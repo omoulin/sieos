@@ -242,6 +242,7 @@ static long info(uint64_t dst)
                      .self_pid = cur->proc->pid, .self_uid = cur->proc->uid,
                      .nprocs = nprocs, .nthreads = nthreads, .ncpus = ncpus(), .hwcap = arch_hwcap(),
                      .ecores = ecores, .cpu = c->id, .cpu_e = c->type == CPU_E };
+    memcpy(in.root, opt_root, sizeof in.root);
     return vm_copy(cur->proc->as, (void *)dst, 0, &in, sizeof in);
 }
 
