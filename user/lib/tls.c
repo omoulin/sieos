@@ -71,6 +71,10 @@ struct tls {
     uint8_t *hs;                               /* handshake messages, reassembled */
     size_t hslen, hscap, consumed;          /* consumed: the message hs_next last returned */
     unsigned timeout;
+    int alpn;                                  /* the protocol the server chose: 1 http/1.1, 2 h2 */
+    uint8_t *chain;                            /* TLS_CHAIN: the server's certificates, kept */
+    const uint8_t *certs[10]; size_t clens[10]; int ncerts;
+    uint8_t out[REC_MAX + 256 + 5];            /* the record being sent */
 };
 
 static void put16(uint8_t *p, unsigned v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
@@ -160,16 +164,16 @@ static void prf(int alg, uint8_t *out, size_t olen, const uint8_t *secret, size_
 /* ---- Records out. */
 static long rec_send(struct tls *t, int type, const uint8_t *data, size_t n)
 {
-    static uint8_t rec[REC_MAX + 256 + 5];
+    uint8_t *rec = t->out;
     for (size_t off = 0; off < n || (n == 0 && off == 0); ) {
         size_t c = n - off < REC_MAX ? n - off : REC_MAX;
         size_t len;
         if (t->wr_on && (t->v12 || type != CT_CCS)) {
             /* 1.3: the data then its real type, as "application data"; 1.2: the
              * data as it is, after the explicit part of the nonce (GCM) */
-            static uint8_t inner[REC_MAX + 1];
             uint8_t no[12], ad[13];
             size_t m = c, ex = t->ex;
+            uint8_t *inner = rec + 5 + ex;      /* sealed where it lies */
             memcpy(inner, data + off, c);
             if (!t->v12) inner[m++] = (uint8_t)type;
             len = ex + m + 16;
@@ -178,7 +182,7 @@ static long rec_send(struct tls *t, int type, const uint8_t *data, size_t n)
             memcpy(rec + 5, no + 4, ex);
             if (t->v12) ad12(ad, t->wr_seq, type, c); else memcpy(ad, rec, 5);
             t->wr_seq++;
-            aead_seal(&t->wr, no, ad, t->v12 ? 13 : 5, inner, m, rec + 5 + ex);
+            aead_seal(&t->wr, no, ad, t->v12 ? 13 : 5, inner, m, inner);
         } else {
             len = c;
             rec[0] = (uint8_t)type; rec[1] = 3; rec[2] = type == CT_HS && !t->wr_on && !t->v12 ? 1 : 3; put16(rec + 3, (unsigned)len);
@@ -290,7 +294,7 @@ static const uint8_t HRR_RANDOM[32] = {
     0xc2,0xa2,0x11,0x16,0x7a,0xbb,0x8c,0x5e,0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c };
 
 static size_t client_hello(uint8_t *m, const char *host, int group, const uint8_t *pub, size_t publen,
-                           const uint8_t *cookie, size_t cookielen, const uint8_t sid[32])
+                           const uint8_t *cookie, size_t cookielen, const uint8_t sid[32], int h2)
 {
     uint8_t *p = m + 4;
     put16(p, 0x0303); p += 2;
@@ -318,7 +322,8 @@ static size_t client_hello(uint8_t *m, const char *host, int group, const uint8_
     /* for 1.2: uncompressed points, the extended master secret, an empty renegotiation_info */
     static const uint8_t ext12[] = { 0, 0x0b, 0, 2, 1, 0, 0, 0x17, 0, 0, 0xff, 1, 0, 1, 0 };
     memcpy(p, ext12, sizeof ext12); p += sizeof ext12;
-    put16(p, 0x0010); put16(p + 2, 11); put16(p + 4, 9); p[6] = 8; memcpy(p + 7, "http/1.1", 8); p += 15;
+    if (h2) { put16(p, 0x0010); put16(p + 2, 14); put16(p + 4, 12); memcpy(p + 6, "\2h2\10http/1.1", 12); p += 18; }
+    else { put16(p, 0x0010); put16(p + 2, 11); put16(p + 4, 9); p[6] = 8; memcpy(p + 7, "http/1.1", 8); p += 15; }
     if (cookielen) { put16(p, 0x002c); put16(p + 2, (unsigned)cookielen); memcpy(p + 4, cookie, cookielen); p += 4 + cookielen; }
     put16(ext, (unsigned)(p - ext - 2));
     m[0] = HS_CH;
@@ -326,9 +331,16 @@ static size_t client_hello(uint8_t *m, const char *host, int group, const uint8_
     return (size_t)(p - m);
 }
 
+/* The protocol the server chose (ALPN): a list holding one name */
+static void alpn(struct tls *t, const uint8_t *v, size_t n)
+{
+    if (n == 5 && !memcmp(v, "\0\3\2h2", 5)) t->alpn = 2;
+    else if (n == 11 && !memcmp(v, "\0\11\10http/1.1", 11)) t->alpn = 1;
+}
+
 static long fail(tls_t *t, long e)
 {
-    if (t) { free(t->hs); net_close(t->sock); wipe(t, sizeof *t); free(t); }
+    if (t) { free(t->hs); free(t->chain); net_close(t->sock); wipe(t, sizeof *t); free(t); }
     return e;
 }
 
@@ -351,7 +363,11 @@ static long certificates(struct tls *t, const char *host, const uint8_t *b, size
         if (v13) i += 2 + get16(c + i);         /* the entry's extensions */
     }
     if (!n) return -EPROTO;
-    if (!(t->flags & TLS_INSECURE)) {           /* pinned: that certificate only; else a chain to our roots */
+    if (t->flags & TLS_CHAIN) {                 /* the caller checks it (tls_certs) */
+        free(t->chain);
+        t->chain = c; *chain = 0;
+        memcpy(t->certs, certs, sizeof certs); memcpy(t->clens, clens, sizeof clens); t->ncerts = n;
+    } else if (!(t->flags & TLS_INSECURE)) {           /* pinned: that certificate only; else a chain to our roots */
         net_info_t ni;
         const char *why = "not the certificate pinned";
         static const uint8_t z[32];
@@ -482,10 +498,10 @@ tls_t *tls_open(long sock, const char *host, int flags, uint8_t *pin, long *err)
     t->both = 1;
     uint8_t xpriv[32], xpub[32], ppriv[48], ppub[97], sid[32], shared[48], rnd[64];
     size_t zl = 32;                             /* the shared secret's length */
-    static uint8_t msg[2048];
+    uint8_t msg[2048];
     sys_random(xpriv, 32); sys_random(sid, 32);
     x25519_base(xpub, xpriv);
-    size_t n = client_hello(msg, host, 0x001d, xpub, 32, 0, 0, sid);
+    size_t n = client_hello(msg, host, 0x001d, xpub, 32, 0, 0, sid, flags & TLS_H2);
     memcpy(rnd, msg + 6, 32);                   /* our random (for 1.2) */
     long e = hs_send(t, msg, n);
     int type, group = 0x001d, hrr = 0;
@@ -512,6 +528,7 @@ tls_t *tls_open(long sock, const char *host, int flags, uint8_t *pin, long *err)
             if (et == 0x0033 && el >= 2) { sgroup = (int)get16(v); if (el >= 4) { skeyl = get16(v + 2); skey = v + 4; if (4 + skeyl > el) { e = -EPROTO; goto out; } } }
             if (et == 0x002c && el >= 2) { cookiel = el; cookie = v; }
             if (et == 0x0017) ems = 1;
+            if (et == 0x0010) alpn(t, v, el);
             if (et == 0xff01 && (el != 1 || v[0])) { e = -EPROTO; goto out; }   /* renegotiation_info */
             i += 4 + el;
         }
@@ -552,7 +569,7 @@ tls_t *tls_open(long sock, const char *host, int flags, uint8_t *pin, long *err)
         uint8_t ck[256];
         if (cookiel > sizeof ck) { e = -EPROTO; goto out; }
         if (cookiel) memcpy(ck, cookie, cookiel);
-        n = client_hello(msg, host, group, ppub, 2 * zl + 1, ck, cookiel, sid);
+        n = client_hello(msg, host, group, ppub, 2 * zl + 1, ck, cookiel, sid, flags & TLS_H2);
         e = hs_send(t, msg, n);
     }
     t->aead_alg = t->cs->aead;
@@ -573,7 +590,12 @@ tls_t *tls_open(long sock, const char *host, int flags, uint8_t *pin, long *err)
     x509_t leaf;
     for (int stage = 0; stage < 4;) {
         if ((e = hs_next(t, &type, &b, &bl))) goto out2;
-        if (stage == 0 && type == HS_EE) { stage = 1; continue; }
+        if (stage == 0 && type == HS_EE) {
+            for (size_t i = 2; i + 4 <= bl && bl >= 2; i += 4 + get16(b + i + 2))
+                if (get16(b + i) == 0x0010 && i + 4 + get16(b + i + 2) <= bl) alpn(t, b + i + 4, get16(b + i + 2));
+            stage = 1;
+            continue;
+        }
         if (stage == 1 && type == HS_CREQ) { creq = 1; continue; }
         if (stage == 1 && type == HS_CERT) {
             if ((e = certificates(t, host, b, bl, &chain, &leaf))) goto out2;
@@ -696,8 +718,19 @@ void tls_close(tls_t *t)
     rec_send(t, CT_ALERT, alert, 2);
     net_close(t->sock);
     free(t->hs);
+    free(t->chain);
     wipe(t, sizeof *t);
     free(t);
 }
 
 const char *tls_cipher(tls_t *t) { return t->cs->name; }
+const char *tls_alpn(tls_t *t) { return t->alpn == 2 ? "h2" : t->alpn == 1 ? "http/1.1" : 0; }
+int tls_certs(tls_t *t, const uint8_t ***certs, const size_t **lens) { *certs = t->certs; *lens = t->clens; return t->ncerts; }
+
+/* Can tls_read go on without the network: plaintext left, or a whole record
+ * already in? */
+int tls_pending(tls_t *t)
+{
+    return (t->pttype == CT_APP && t->ptpos < t->ptlen) || t->eof ||
+           (t->inlen >= 5 && t->inlen >= 5 + get16(t->in + 3));
+}

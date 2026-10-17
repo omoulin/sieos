@@ -33,7 +33,7 @@ const char *net_strerror(long e);                                        /* a fe
  * the certificate check (tests only). tls_cipher: "TLS 1.3 TLS_AES_128_GCM_SHA256",
  * "TLS 1.2 ECDHE-RSA-AES128-GCM-SHA256"... */
 typedef struct tls tls_t;
-enum { TLS_INSECURE = 1 };
+enum { TLS_INSECURE = 1, TLS_H2 = 2, TLS_CHAIN = 4 };
 tls_t *tls_connect(long sock, const char *host, int flags, long *err);
 /* pin: a certificate's SHA-256 (a self-signed server's, accepted once):
  * all zeros, the usual check; else that certificate only, whoever signed it.
@@ -43,6 +43,14 @@ long tls_write(tls_t *t, const void *buf, size_t n);
 long tls_read(tls_t *t, void *buf, size_t n, unsigned timeout_ms);       /* 0: closed */
 void tls_close(tls_t *t);                                                /* also closes the socket */
 const char *tls_cipher(tls_t *t);
+/* For a GIO TLS connection (user/web/giotls.c): the protocol the server
+ * chose by ALPN ("h2" offered too with TLS_H2; "http/1.1", or 0); with
+ * TLS_CHAIN, the server's chain, kept, for the caller to check (the
+ * handshake still checks the server's signature); does tls_read have data
+ * without reading the network? */
+const char *tls_alpn(tls_t *t);
+int tls_certs(tls_t *t, const uint8_t ***certs, const size_t **lens);
+int tls_pending(tls_t *t);
 
 /* ---- http.c: HTTP/1.1 client, http:// and https://. A request returns a
  * response whose body is read in pieces (chunked or not). */

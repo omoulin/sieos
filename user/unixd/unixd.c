@@ -338,13 +338,14 @@ static long request(long from, msg_t *m)
         uint64_t *ids = (uint64_t *)in;
         long ready = 0;
         if (n > UNIX_MAX / 8) return -EINVAL;
-        for (size_t i = 0; i < n; i++) {
-            end_t *x = end_of(ids[i]);
+        for (size_t i = 0; i < n; i++) {         /* (the top byte: what is waited for) */
+            end_t *x = end_of(ids[i] & ~(0xffULL << 56));
+            int want = ids[i] >> 56 ? (int)(ids[i] >> 56) : NET_IN | NET_OUT;
             out[i] = x && holder(x, pid) ? (uint8_t)readiness(x) : NET_ERR;
-            ready += out[i] != 0;
+            ready += (out[i] & (want | NET_ERR)) != 0;
         }
         for (size_t i = 0; !ready && i < n; i++) {     /* nothing ready: note the caller when something is */
-            end_t *x = end_of(ids[i]);
+            end_t *x = end_of(ids[i] & ~(0xffULL << 56));
             int k = 0;
             while (x && k < NWATCH && x->watch[k] && x->watch[k] != pid) k++;
             if (x && k < NWATCH) x->watch[k] = pid;

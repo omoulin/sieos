@@ -136,7 +136,7 @@ static void mont_inv(const mont_t *c, uint32_t *r, const uint32_t *x)
 static int rsa_em(const uint8_t *n, size_t nlen, const uint8_t *e, size_t elen,
                   const uint8_t *sig, size_t slen, uint8_t *em, size_t *k, int *bits)
 {
-    static mont_t c;                              /* 1.5 KiB: kept off the stack */
+    mont_t c;                                     /* (1.5 KiB; on the stack: threads may verify at once) */
     while (nlen && !*n) { n++; nlen--; }
     if (mont_init(&c, n, nlen) || slen > nlen || elen > 8) return -1;
     uint32_t s[BN], x[BN];
@@ -164,7 +164,7 @@ static const uint8_t *digest_info(int alg, size_t *len)
 int rsa_verify_pkcs1(const uint8_t *n, size_t nlen, const uint8_t *e, size_t elen,
                      int alg, const uint8_t *hash, const uint8_t *sig, size_t slen)
 {
-    static uint8_t em[BN * 4], want[BN * 4];
+    uint8_t em[BN * 4], want[BN * 4];
     size_t k, dl, hl = sha_len(alg);
     int bits;
     if (rsa_em(n, nlen, e, elen, sig, slen, em, &k, &bits)) return -1;
@@ -195,7 +195,7 @@ static void mgf1(int alg, uint8_t *mask, size_t len, const uint8_t *seed, size_t
 int rsa_verify_pss(const uint8_t *n, size_t nlen, const uint8_t *e, size_t elen,
                    int alg, const uint8_t *hash, const uint8_t *sig, size_t slen)
 {
-    static uint8_t em[BN * 4];
+    uint8_t em[BN * 4];
     size_t k, hl = sha_len(alg), sl = hl;
     int bits;
     if (rsa_em(n, nlen, e, elen, sig, slen, em, &k, &bits)) return -1;
@@ -255,20 +255,26 @@ static void hexbytes(uint8_t *o, const char *h, int len)
     }
 }
 
+/* A curve's constants, made once (threads may ask at once: each makes its
+ * own copy, the first one in is kept, and a curve once ready never changes) */
 static curve_t *curve(int id)
 {
-    curve_t *c = &curves[id - 1];
-    if (c->ready) return c;
+    static int lock;
+    curve_t *c = &curves[id - 1], k;
+    if (__atomic_load_n(&c->ready, __ATOMIC_ACQUIRE)) return c;
     const curve_def_t *d = &CURVES[id - 1];
     uint8_t t[48] = { 0 };
     uint32_t x[12];
-    c->len = d->len;
-    hexbytes(t, d->p, d->len); mont_init(&c->p, t, d->len);
-    hexbytes(t, d->n, d->len); mont_init(&c->n, t, d->len);
-    hexbytes(t, d->b, d->len);  bn_from(x, c->p.n, t, d->len); to_mont(&c->p, c->b, x);
-    hexbytes(t, d->gx, d->len); bn_from(x, c->p.n, t, d->len); to_mont(&c->p, c->gx, x);
-    hexbytes(t, d->gy, d->len); bn_from(x, c->p.n, t, d->len); to_mont(&c->p, c->gy, x);
-    c->ready = 1;
+    k.len = d->len;
+    hexbytes(t, d->p, d->len); mont_init(&k.p, t, d->len);
+    hexbytes(t, d->n, d->len); mont_init(&k.n, t, d->len);
+    hexbytes(t, d->b, d->len);  bn_from(x, k.p.n, t, d->len); to_mont(&k.p, k.b, x);
+    hexbytes(t, d->gx, d->len); bn_from(x, k.p.n, t, d->len); to_mont(&k.p, k.gx, x);
+    hexbytes(t, d->gy, d->len); bn_from(x, k.p.n, t, d->len); to_mont(&k.p, k.gy, x);
+    k.ready = 0;
+    while (__atomic_exchange_n(&lock, 1, __ATOMIC_ACQUIRE)) ;
+    if (!c->ready) { *c = k; __atomic_store_n(&c->ready, 1, __ATOMIC_RELEASE); }
+    __atomic_store_n(&lock, 0, __ATOMIC_RELEASE);
     return c;
 }
 

@@ -119,6 +119,17 @@ int main(int argc, char **argv)
     pf.revents = 0;
     check("poll sees the writer gone (POLLHUP)", poll(&pf, 1, 1000) == 1 && (pf.revents & POLLHUP));
     close(p[0]);
+    int sp[2];                                  /* waiting to read an end that can be written */
+    socketpair(AF_UNIX, SOCK_STREAM, 0, sp);
+    late_fd = sp[1];
+    pthread_create(&th, 0, late_writer, 0);
+    struct pollfd ps = { sp[0], POLLIN, 0 };
+    t0 = now();
+    r = poll(&ps, 1, 5000);
+    pthread_join(th, 0);
+    check("poll for reading a socket pair end (writable): wakes when another thread writes",
+          r == 1 && (ps.revents & POLLIN) && !(ps.revents & POLLOUT) && now() - t0 < 2);
+    close(sp[0]); close(sp[1]);
     efd = eventfd(0, EFD_NONBLOCK);
     pthread_create(&th, 0, late_event, 0);
     struct pollfd pe = { efd, POLLIN, 0 };

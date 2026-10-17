@@ -52,8 +52,8 @@ char *file_get(const char *path, size_t *len)
 
 int main(int argc, char **argv)
 {
-    int flags = 0;
-    if (argc > 1 && !strcmp(argv[1], "-k")) { flags = TLS_INSECURE; argv++; argc--; }
+    int flags = TLS_H2;                         /* h2 offered: the answer printed (ALPN) */
+    if (argc > 1 && !strcmp(argv[1], "-k")) { flags |= TLS_INSECURE; argv++; argc--; }
     if (argc != 4) { fprintf(stderr, "usage: tlsclient [-k] PORT NAME ROOTS\n"); return 2; }
     roots = argv[3];
     int s = socket(AF_INET, SOCK_STREAM, 0);
@@ -64,6 +64,7 @@ int main(int argc, char **argv)
     tls_t *t = tls_connect(s, argv[2], flags, &e);
     if (!t) { printf("handshake failed: %ld\n", e); return 1; }
     printf("cipher: %s\n", tls_cipher(t));
+    printf("alpn: %s\n", tls_alpn(t) ? tls_alpn(t) : "none");
     const char *req = "GET / HTTP/1.0\r\n\r\n";
     tls_write(t, req, strlen(req));
     char buf[65536];

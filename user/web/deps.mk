@@ -345,8 +345,66 @@ $(WB)/stamp/libxkbcommon: $(WB)/toolchain.stamp | $(WKT)/bin/bison
 	    $(PKGENV) $(MESON) install -C $(WB)/build/libxkbcommon --destdir $(SR) --no-rebuild >/dev/null   # (its tests: not built)
 	touch $@
 
+# ---- libpsl: the public suffix list (which part of a name is a site, for
+# cookies), built in; no IDNA library (libsoup gives it names already)
+PSL_VER   := 0.23.3
+PSL_SHA   := 93941f85a1e7bd593fa94f299233cb5dfc91cd144fd9a78a6ceb75001c5b03be
+$(WB)/stamp/libpsl: $(WB)/toolchain.stamp
+	$(call fetch,https://github.com/rockdaboot/libpsl/releases/download/$(PSL_VER)/libpsl-$(PSL_VER).tar.gz,libpsl-$(PSL_VER).tar.gz,$(PSL_SHA))
+	$(call unpack,libpsl,libpsl-$(PSL_VER).tar.gz)
+	rm -rf $(WB)/build/libpsl && cd $(WB)/src/libpsl && $(MESONSET) $(CURDIR)/$(WB)/build/libpsl -Druntime=no -Dbuiltin=true \
+	    -Dtests=false -Ddocs=false >/dev/null
+	$(PKGENV) $(NINJA) -C $(WB)/build/libpsl >/dev/null && \
+	    $(PKGENV) $(MESON) install -C $(WB)/build/libpsl --destdir $(SR) --no-rebuild >/dev/null
+	touch $@
+
+# ---- nghttp2: HTTP/2 frames (the library only)
+NGH2_VER  := 1.70.0
+NGH2_SHA  := e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2
+$(WB)/stamp/nghttp2: $(WB)/toolchain.stamp
+	$(call fetch,https://github.com/nghttp2/nghttp2/releases/download/v$(NGH2_VER)/nghttp2-$(NGH2_VER).tar.xz,nghttp2-$(NGH2_VER).tar.xz,$(NGH2_SHA))
+	$(call unpack,nghttp2,nghttp2-$(NGH2_VER).tar.xz)
+	rm -rf $(WB)/build/nghttp2 && $(CMAKESET) -S $(WB)/src/nghttp2 -B $(WB)/build/nghttp2 -DENABLE_LIB_ONLY=ON -DBUILD_SHARED_LIBS=OFF \
+	    -DBUILD_STATIC_LIBS=ON -DENABLE_DOC=OFF -DBUILD_TESTING=OFF -DENABLE_FAILMALLOC=OFF >/dev/null
+	$(NINJA) -C $(WB)/build/nghttp2 >/dev/null && DESTDIR=$(SR) $(NINJA) -C $(WB)/build/nghttp2 install >/dev/null
+	touch $@
+
+# ---- libsoup: HTTP/1.1 and HTTP/2, cookies, the cache, WebSockets. No
+# Kerberos, NTLM, Brotli, Zstandard, sysprof; TLS from GIO (gio-tls below)
+SOUP_VER  := 3.8.0
+SOUP_SHA  := bbf08fa3e03a88c31a3d27a0d87cb422e9490f2d08e149211103df6d638a2238
+$(WB)/stamp/libsoup: $(WB)/stamp/glib $(WB)/stamp/sqlite $(WB)/stamp/libpsl $(WB)/stamp/nghttp2
+	$(call fetch,https://download.gnome.org/sources/libsoup/$(basename $(SOUP_VER))/libsoup-$(SOUP_VER).tar.xz,libsoup-$(SOUP_VER).tar.xz,$(SOUP_SHA))
+	$(call unpack,libsoup,libsoup-$(SOUP_VER).tar.xz)
+	rm -rf $(WB)/build/libsoup && cd $(WB)/src/libsoup && $(MESONSET) $(CURDIR)/$(WB)/build/libsoup -Dgssapi=disabled \
+	    -Dntlm=disabled -Dbrotli=disabled -Dzstd=disabled -Dtls_check=false -Dintrospection=disabled -Dvapi=disabled \
+	    -Ddocs=disabled -Ddoc_tests=false -Dtests=false -Dautobahn=disabled -Dinstalled_tests=false -Dsysprof=disabled \
+	    -Dpkcs11_tests=disabled >/dev/null
+	$(PKGENV) $(NINJA) -C $(WB)/build/libsoup >/dev/null && \
+	    $(PKGENV) $(MESON) install -C $(WB)/build/libsoup --destdir $(SR) --no-rebuild >/dev/null
+	touch $@
+
+# ---- GIO's TLS on SIEOS's tls.c (user/web/giotls.c): tls.c, x509.c and
+# their crypto (lib/) built with the C library (tests/net/tlsmk.h standing
+# in for mk.h, as for the host's tests). Linked in, it is GIO's TLS backend:
+# its constructor registers it, after GObject's (whose object, gtype.o, the
+# .pc has the linker take first: constructors run in link order)
+GIOTLS_SRC := user/web/giotls.c user/lib/tls.c user/lib/x509.c user/lib/net.h tests/net/tlsmk.h
+GIOTLS_LIB := lib/sha2.c lib/aead.c lib/aes.c lib/x25519.c lib/pubkey.c lib/chacha20.c
+$(WB)/stamp/giotls: $(GIOTLS_SRC) $(GIOTLS_LIB) include/mk/crypto.h $(WB)/stamp/glib
+	rm -rf $(WB)/giotls && mkdir -p $(WB)/giotls && cp user/web/giotls.c user/lib/tls.c user/lib/x509.c user/lib/net.h $(WB)/giotls/ && \
+	    cp tests/net/tlsmk.h $(WB)/giotls/mk.h
+	for f in $(WB)/giotls/giotls.c $(WB)/giotls/tls.c $(WB)/giotls/x509.c $(GIOTLS_LIB); do \
+	    $(PKGENV) $(WB)/bin/cc -O2 -Wall -I$(WB)/giotls -Iinclude -c -o $(WB)/giotls/$$(basename $$f .c).o $$f \
+	    $$($(PKGENV) $(WKT)/bin/pkg-config --cflags gio-2.0) || exit 1; done
+	rm -f $(SR)/usr/lib/libgio-tls-sieos.a && $(LLVM)/bin/llvm-ar rcs $(SR)/usr/lib/libgio-tls-sieos.a $(WB)/giotls/*.o
+	printf 'prefix=/usr\nlibdir=$${prefix}/lib\n\nName: gio-tls-sieos\nDescription: GIO TLS on SIEOS tls.c\nVersion: 1\nRequires: gio-2.0\nLibs: -L$${libdir} -Wl,-u,g_type_register_static -lgobject-2.0 -Wl,-u,g_io_sieos_tls_load -lgio-tls-sieos\n' \
+	    > $(SR)/usr/lib/pkgconfig/gio-tls-sieos.pc
+	touch $@
+
 WEBDEPS   := zlib libffi pcre2 glib icu libpng freetype harfbuzz expat fontconfig libjpeg libwebp sqlite libxml2 \
-             libgpg-error libgcrypt libtasn1 khronos libepoxy libxkbcommon
+             libgpg-error libgcrypt libtasn1 khronos libepoxy libxkbcommon \
+             libpsl nghttp2 libsoup giotls
 webdeps: $(WEBDEPS:%=$(WB)/stamp/%)
 
 # ---- webdeps-test: our programs (tests/webdeps/NAME.c, linked with the

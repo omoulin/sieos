@@ -104,6 +104,10 @@ cases = [  # name, certificate, s_server options, expected output, proxy
     ("1.3 HelloRetryRequest for P-384", "rsa", ["-tls1_3", "-groups", "P-384"], "TLS 1.3 "),
     ("1.3 certificate request", "rsa", ["-tls1_3", "-verify", "1"], "TLS 1.3 "),
     ("1.3 preferred over 1.2", "rsa", [], "TLS 1.3 "),
+    ("1.3 ALPN: h2 chosen", "rsa", ["-tls1_3", "-alpn", "h2"], "alpn: h2"),
+    ("1.3 ALPN: http/1.1 chosen", "p256", ["-tls1_3", "-alpn", "http/1.1"], "alpn: http/1.1"),
+    ("1.2 ALPN: h2 chosen", "rsa", T12 + ["-alpn", "h2"], "alpn: h2"),
+    ("no ALPN", "rsa", [], "alpn: none"),
     ("downgrade to 1.2 refused", "rsa", [], "downgrade to TLS 1.2 refused", "downgrade"),
     ("1.2 damaged ServerKeyExchange: refused", "rsa", T12, "bad ServerKeyExchange", "sig"),
     ("1.2 damaged record: refused", "p256", T12, "got 0 bytes", "record"),
@@ -117,7 +121,7 @@ for name, cert, opts, want, *proxy in cases:
     if proxy: port = mitm(port, proxy[0])
     r = subprocess.run([client, str(port), "tls.test", os.path.join(d, "roots")], capture_output=True, text=True, timeout=30)
     srv.kill(); srv.wait()
-    ok = want in r.stdout and (r.returncode == 0) == want.startswith("TLS")
+    ok = want in r.stdout and (r.returncode == 0) == want.startswith(("TLS", "alpn"))
     if not ok: fails += 1
     print(("ok:   " if ok else "FAIL: ") + name + ("" if ok else "\n" + r.stdout + r.stderr))
 print(f"tls: {len(cases) - fails} of {len(cases)} against openssl s_server passed")
