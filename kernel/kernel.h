@@ -262,6 +262,7 @@ uint64_t vm_shm_page(uint64_t va, void **o, uint64_t *off);
 int  vm_shm_share(proc_t *c, uint64_t va, void *o, uint64_t off, uint64_t flags);
 long note(int pid);
 long note_word(uint64_t uaddr);
+void wall_init(void);                   /* syscall.c: the wall clock from the clock chip, at boot */
 #define PN_SHARE 2                      /* proc_new's driver argument: SPAWN_SHARE */
 /* random.c */
 void rand_init(void);

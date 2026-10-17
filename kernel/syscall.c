@@ -282,15 +282,17 @@ static long set_fs(uint64_t base)
 }
 
 /* SYS_TIME: the wall clock: the real-time clock read at boot (arch_rtc), or
- * the time root last set, plus the time since. */
+ * the time root last set, plus the time since. The clock chip is read
+ * before any program runs (main.c), so a driver that uses it too (acpid
+ * sets the CMOS alarm) is never interrupted half-way by the kernel. */
 static int64_t wall_base;               /* ns since 1970 at boot (now_ns() = 0) */
+void wall_init(void)
+{
+    int64_t r = arch_rtc();
+    if (r > 0) wall_base = r * 1000000000 - (int64_t)now_ns();
+}
 static long wall_time(uint64_t set)
 {
-    static spinlock_t lock;             /* (the first reader reads the clock chip) */
-    static int read;
-    spin_lock(&lock);
-    if (!read) { int64_t r = arch_rtc(); read = 1; if (r > 0 && !wall_base) wall_base = r * 1000000000 - (int64_t)now_ns(); }
-    spin_unlock(&lock);
     if (set) {
         if (cur->proc->uid) return -EPERM;
         wall_base = (int64_t)set - (int64_t)now_ns();
