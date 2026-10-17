@@ -535,7 +535,7 @@ sdhci-bench: all $(B)/host/fsck.siefs
 # assistant's model (models/$(MODEL)); USBSCREEN: the preferred screen size.
 # USBBUS: how QEMU attaches the key: usb (QEMU's xHCI and USB storage: the
 # real case) or virtio (the image as a plain disk).
-USBDISK   ?= 8G
+USBDISK   ?= 7G
 USBSCREEN ?= 1920x1080
 USBBUS    ?= usb
 # UEFI firmware for the virtual PC (the key boots like on a real PC), one file

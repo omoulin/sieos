@@ -21,8 +21,8 @@ Nothing on the PC's own disks is touched.
 ## Make the image
 
 ```sh
-make usb                      # build/sieos-usb.img, 8 GiB (sparse: it takes little room)
-make usb USBDISK=16G          # the key's size (at most your key's)
+make usb                      # build/sieos-usb.img, 7 GiB, so it fits a key sold as "8 GB" (sparse: it takes little room)
+make usb USBDISK=16G          # the key's size (at most your key's: a key sold as "8 GB" is 7.5 GiB)
 make usb USBMODEL=1           # with the assistant's model in /models (1 GB)
 make usb USBSCREEN=2560x1600  # the screen size the loader asks for first
 make run-usb                  # try it in QEMU first (UEFI firmware, the image as a USB stick)
