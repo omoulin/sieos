@@ -106,6 +106,25 @@ static uint64_t cpuid_tsc_hz(void)
     return 0;
 }
 
+/* Else the ACPI power-management timer (3.579545 MHz, at a port the FADT
+ * gives; hardware-reduced machines have none), over 10 ms. 0: none. */
+static uint64_t pmtimer_tsc_hz(void)
+{
+    const uint8_t *f = (const uint8_t *)acpi_find("FACP", 0);
+    uint32_t len = f ? ((const sdt_t *)f)->len : 0, port = len >= 80 ? *(const uint32_t *)(f + 76) : 0, a, b, l;
+    if (!port && len >= 220 && f[208] == 1) port = (uint32_t)*(const uint64_t *)(f + 212);   /* X_PM_TMR_BLK, I/O */
+    if (!port || port > 0xFFFF) return 0;
+    uint32_t mask = len >= 116 && *(const uint32_t *)(f + 112) >> 8 & 1 ? ~0u : 0xFFFFFF;   /* TMR_VAL_EXT: 32 bits */
+    asm volatile("inl %w1, %0" : "=a"(a) : "Nd"((uint16_t)port));
+    uint64_t n = 0, t = rdtsc();
+    for (l = a; n < 35795; l = b) {
+        if (rdtsc() - t > 4000000000UL) return 0;     /* not counting */
+        asm volatile("inl %w1, %0" : "=a"(b) : "Nd"((uint16_t)port));
+        n += (b - l) & mask;
+    }
+    return (rdtsc() - t) * 3579545 / n;
+}
+
 /* ---- Time. tsc_hz: TSC ticks per second. Conversions use fixed-point
  * multipliers (no 128-bit division in the kernel): ns = tsc * ns_mul >> 32. */
 static uint64_t tsc_hz, tsc0, ns_mul, tsc_mul, lapic_mul;
@@ -344,11 +363,13 @@ void smp_init(void)
     lw(L_TINIT, 0xFFFFFFFF);
     uint64_t t = rdtsc();
     if (!pit_wait(10000) && (tsc_hz = (rdtsc() - t) * 100) > 100000000 && tsc_hz < 20000000000UL) ;
-    else {                               /* no PIT: the CPU's word, and the APIC timer over 10 ms of TSC */
-        if (!(tsc_hz = cpuid_tsc_hz())) panic("no way to measure time (no PIT, no TSC rate in CPUID)\n");
+    else {                               /* no PIT: the CPU's word or ACPI's timer, and the APIC timer over 10 ms of TSC */
+        const char *by = "CPUID";
+        if (!(tsc_hz = cpuid_tsc_hz()) && (by = "the ACPI PM timer", !(tsc_hz = pmtimer_tsc_hz())))
+            panic("no way to measure time (no PIT, no TSC rate in CPUID, no ACPI PM timer)\n");
         lw(L_TINIT, 0xFFFFFFFF);
         for (t = rdtsc(); rdtsc() - t < tsc_hz / 100; ) asm volatile("pause");
-        kprintf("mk: no PIT: TSC rate from CPUID\n");
+        kprintf("mk: no PIT: TSC rate from %s\n", by);
     }
     uint64_t lapic_hz = (uint64_t)(0xFFFFFFFF - lr(L_TCUR)) * 100;
     lw(L_TINIT, 0);
