@@ -4,9 +4,9 @@
  * and one chip driver per architecture:
  *   bcm.c  the Raspberry Pis' CYW43455 (arm64), FullMAC, on SDIO (sdio.c:
  *          an SDHCI controller driven as an SDIO host, CMD52/CMD53);
- *   iwl.c  Intel's Wi-Fi 6E AX210 (x86-64), on PCIe: the firmware scans,
- *          picks rates and encrypts; the host joins and runs WPA2's
- *          handshake (wpa.c).
+ *   iwl.c  Intel's Wi-Fi 6E AX210 and the 22000 family's CNVi (AX201)
+ *          (x86-64), on PCIe: the firmware scans, picks rates and
+ *          encrypts; the host joins and runs WPA2's handshake (wpa.c).
  * Both are UNTESTED ON HARDWARE (QEMU has neither chip): what to check is in
  * docs/raspberrypi.md and docs/net.md.
  *
