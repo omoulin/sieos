@@ -718,6 +718,15 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     case SYS_chmod:      c = b; b = a; a = AT_FDCWD; /* fall through */
 #endif
     case SYS_fchmodat:   return (r = at_path(a, A(b), p)) ? r : fs_path(FS_CHMOD, p, c & 07777, 0, 0, 0);
+#ifdef SYS_chown
+    case SYS_chown: case SYS_lchown: d = c; c = b; b = a; a = AT_FDCWD; /* fall through */
+#endif
+    case SYS_fchownat:                                 /* (dirfd, path, uid, gid) */
+        return (r = at_path(a, A(b), p)) ? r : fs_path(FS_CHOWN, p, c, d, 0, 0);
+    case SYS_fchown: {
+        fd_t *fl = fd_get(a);
+        return !fl || !fl->path ? -EBADF : fs_path(FS_CHOWN, fl->path, b, c, 0, 0);
+    }
     case SYS_fchmod: {
         fd_t *fl = fd_get(a);
         return !fl || !fl->path ? -EBADF : fs_path(FS_CHMOD, fl->path, b & 07777, 0, 0, 0);
