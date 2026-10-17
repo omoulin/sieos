@@ -117,9 +117,11 @@ static void claimed(cpu_t *c, int how)       /* its thread is queued */
  * other kind; else, for a normal thread, a P-core running background work
  * (asked to move it away: *how = -1, kick it); else the shortest queue of
  * its kind, its last CPU on a tie (*how = 0). */
+static volatile int parking;              /* suspending: 1, threads go to CPU 0 only; 2, the others stop */
 static cpu_t *place_on(task_t *t, cpu_t *me, int *how)
 {
     int n = ncpus(), want = hybrid && t->bg ? CPU_E : CPU_P;
+    if (parking) { *how = claim(cpus[0]); return cpus[0]; }
     cpu_t *last = cpus[t->cpu < n ? t->cpu : 0], *best = last->type == want ? last : 0;
     if (best && (*how = claim(last))) return last;
     for (int other = 0; other < 2; other++)
@@ -313,8 +315,10 @@ void timer_update(cpu_t *c)
  * this CPU from user mode or idle: wake the sleepers whose time has come
  * (CPU 0); move the running thread if asked to and it suits another kind
  * of core better; end its slice if it is over and others wait. */
+static void park(cpu_t *c);
 void core_tick(cpu_t *c, int timer)
 {
+    if (c->park == 1 && c->running) { park(c); return; }   /* suspending: its thread to CPU 0 (it runs there now) */
     if (timer) {
         store_mb(&c->armed, NEVER);      /* it fired; kernel_exit sets the next one (seeing what ready() queued) */
         if (c->id == 0) wake_sleepers();
@@ -334,6 +338,7 @@ static int waits(cpu_t *v) { return v->nready && v->running; }
 static int steal(cpu_t *c)
 {
     int n = ncpus();
+    if (parking && c->id) return 0;
     for (int other = 0; other < 2; other++)
         for (int i = 1; i < n; i++) {
             cpu_t *v = cpus[(c->id + i) % n];
@@ -373,6 +378,50 @@ static int work_elsewhere(cpu_t *c)
     return 0;
 }
 
+/* ---- Suspending to RAM (SYS_POWER, POWER_SLEEP). The other CPUs give
+ * their threads to CPU 0 (place_on sends every thread there meanwhile) and
+ * stop; CPU 0 sleeps (arch_suspend: the machine's state saved, the
+ * firmware's sleep, awake again, the others started anew, in idle()). */
+__attribute__((cold)) static void park(cpu_t *c)   /* its queue, then its running thread, to CPU 0 */
+{
+    spin_lock(&c->rq_lock);
+    task_t *t = c->rq_head;
+    c->rq_head = c->rq_tail = 0;
+    c->nready = 0;
+    spin_unlock(&c->rq_lock);
+    for (task_t *n; t; t = n) { n = t->next; ready(t); }
+    if (c->running) { c->running->move = 1; schedule(); }
+}
+__attribute__((cold, noreturn)) static void parked(cpu_t *c)   /* (idle) until CPU 0 sleeps: then stopped */
+{
+    park(c);
+    store_mb(&c->park, 2);
+    while (parking == 1) arch_lock_wait(c);  /* (answering shootdowns meanwhile) */
+    arch_park(&c->park);
+}
+__attribute__((cold)) long suspend(void)
+{
+    static int busy;
+    long r = arch_suspend(0);
+    if (r || __atomic_exchange_n(&busy, 1, __ATOMIC_ACQ_REL)) return r ? r : -EBUSY;
+    int n = ncpus();
+    for (int i = 1; i < n; i++) cpus[i]->park = 1;
+    store_mb(&parking, 1);
+    for (int i = 1; i < n; i++) arch_kick(cpus[i]);
+    if (this_cpu()->id) { cur->move = 1; schedule(); }   /* to CPU 0 */
+    for (int i = 1; i < n; i++) while (cpus[i]->park != 2) arch_lock_wait(cpus[0]);
+    __atomic_store_n(&ncpu, 1, __ATOMIC_RELEASE);        /* (nothing runs on them now) */
+    store_mb(&parking, 2);
+    for (int i = 1; i < n; i++) while (cpus[i]->park != 3) arch_relax();
+    kprintf("mk: suspend: %d other CPU%s stopped\n", n - 1, n == 2 ? "" : "s");
+    for (int i = 1; i < n; i++) cpus[i]->park = 0;
+    r = arch_suspend(n);                                  /* (back: the others run idle() again) */
+    __atomic_store_n(&ncpu, n, __ATOMIC_RELEASE);
+    store_mb(&parking, 0);
+    busy = 0;
+    return r;
+}
+
 /* Each CPU's idle loop: run threads, or poll a while (letting interrupts
  * in), then sleep. Each step is announced first (idle: a waker may then
  * claim it), and the queues are looked at after that, with a barrier
@@ -384,6 +433,7 @@ void idle(void)
 {
     for (;;) {
         cpu_t *c = this_cpu();
+        if (c->park == 1) parked(c);
         if (c->nready || steal(c)) { schedule(); continue; }
         store_mb(&c->idle, POLLING);
         int work = 0;

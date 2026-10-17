@@ -30,7 +30,7 @@ enum {
     SYS_MAP_PHYS,      /* (phys, size) -> address: map device memory, never RAM (drivers)*/
     SYS_BRK,           /* (end) -> end: grow/shrink the heap (0: just ask)               */
     SYS_INFO,          /* (mk_info_t*): system information                               */
-    SYS_POWER,         /* (0 = power off, 1 = restart): root only                        */
+    SYS_POWER,         /* (POWER_*, arg): power off, restart, suspend; root only (below) */
     SYS_TASKS,         /* (mk_task_t*, max, after) -> n: the processes with pid > after,
                           in pid order; call again with the last pid to get more         */
     SYS_CLOCK,         /* () -> nanoseconds since boot                                   */
@@ -98,11 +98,15 @@ enum {
                           it ends with SYS_SIGRETURN). Not SIGKILL                       */
     SYS_SIGRETURN,     /* (): the end of a signal's function: the thread goes on where the
                           signal found it, all its registers as they were                */
-    SYS_ACPI,          /* (buf, size) -> bytes: the firmware's ACPI DSDT then each SSDT, one
-                          after the other (x86-64; drivers only, for user/i2chid's AML
-                          reader); a buffer too small gets nothing; -ENOSYS: none        */
+    SYS_ACPI,          /* (buf, size) -> bytes: the firmware's ACPI FADT, DSDT then each SSDT,
+                          one after the other (x86-64; drivers only, for user/lib/aml.c);
+                          a buffer too small gets nothing; -ENOSYS: none                 */
 };
 #define LOG_KEEP 32768
+/* SYS_POWER: POWER_SLEEP suspends to RAM (ACPI S3) and returns once awake;
+ * POWER_SET (user/acpid): arg = state (3 or 5) | ACPI sleep type a << 8 |
+ * type b << 16, from the firmware's \_S3 and \_S5. */
+enum { POWER_OFF, POWER_RESTART, POWER_SLEEP, POWER_SET };
 enum { PLACE_NORMAL, PLACE_BACKGROUND };   /* SYS_PLACE: P-cores first (speed) / E-cores first */
 /* SYS_SCREEN's answer. pitch: pixels per row; format: 0 = bytes R,G,B,x in
  * memory, 1 = bytes B,G,R,x (0x00RRGGBB words). */

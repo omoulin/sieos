@@ -141,9 +141,6 @@ void tlb_shootdown(proc_t *p)
 /* ---- ACPI: the RSDP ("RSD PTR ") is in the first KiB of the EBDA or in
  * the BIOS area 0xE0000-0xFFFFF; it points to the RSDT (32-bit pointers)
  * or XSDT (64-bit), which list the other tables. */
-typedef struct __attribute__((packed)) { char sig[4]; uint32_t len; uint8_t rev, sum; char oem[6], table[8];
-                                         uint32_t oemrev, creator, crev; uint8_t data[]; } sdt_t;
-
 static uint8_t *rsdp_scan(uint64_t pa, uint64_t len)
 {
     for (uint8_t *p = P2V(pa), *e = p + len; p < e; p += 16) {
@@ -154,7 +151,7 @@ static uint8_t *rsdp_scan(uint64_t pa, uint64_t len)
     return 0;
 }
 
-static sdt_t *acpi_find(const char *sig, int nth)   /* the nth table with this signature */
+sdt_t *acpi_find(const char *sig, int nth)          /* the nth table with this signature */
 {
     uint8_t *rsdp = x86_rsdp ? P2V(x86_rsdp) : 0;     /* (given by the UEFI loader: no BIOS areas then) */
     if (!rsdp) rsdp = rsdp_scan((uint64_t)*(uint16_t *)P2V(0x40E) << 4, 1024);
@@ -169,17 +166,17 @@ static sdt_t *acpi_find(const char *sig, int nth)   /* the nth table with this s
     return 0;
 }
 
-/* SYS_ACPI: the DSDT (the FADT says where) then every SSDT, one after the
- * other, for drivers' AML reader (user/i2chid). -> their size (a buffer
- * too small gets nothing). */
+/* SYS_ACPI: the FADT, the DSDT (the FADT says where) then every SSDT, one
+ * after the other, for drivers' AML interpreter (user/lib/aml.c: the
+ * touchpad, the ACPI server). -> their size (a buffer too small gets nothing). */
 long arch_acpi(uint64_t ubuf, uint64_t size)
 {
     sdt_t *f = acpi_find("FACP", 0), *t[64];
     uint64_t d = 0, len = 0;
-    int n = 0;
-    if (f) d = f->len >= 148 && *(uint64_t *)((uint8_t *)f + 140) ? *(uint64_t *)((uint8_t *)f + 140) : *(uint32_t *)((uint8_t *)f + 40);
+    int n = 0, k = 0;
+    if (f) t[n++] = f, d = f->len >= 148 && *(uint64_t *)((uint8_t *)f + 140) ? *(uint64_t *)((uint8_t *)f + 140) : *(uint32_t *)((uint8_t *)f + 40);
     if (d) t[n++] = P2V(d);
-    while (n < 64 && (t[n] = acpi_find("SSDT", n - !!d))) n++;
+    while (n < 64 && (t[n] = acpi_find("SSDT", k++))) n++;
     for (int i = 0; i < n; i++) len += t[i]->len;
     if (size < len) return len;
     for (int i = 0; i < n; ubuf += t[i++]->len)
@@ -280,6 +277,10 @@ void smp_init(void)
         }
         if (e[0] == 5) base = *(uint64_t *)(e + 4);
     }
+    /* The ACPI interrupt (SCI: user/acpid): level, active low, unless the MADT said otherwise. */
+    sdt_t *fa = acpi_find("FACP", 0);
+    int sci = fa ? *(uint16_t *)((uint8_t *)fa + 46) : 0;
+    if (sci && sci < 16 && irq_gsi[sci] == sci && !irq_flags[sci]) irq_flags[sci] = 3;
     if (!nioapic) panic("no I/O APIC\n");
     for (int a = 0; a < nioapic; a++)    /* every line masked to start with */
         for (int p = 0; p < ioapic[a].count; p++) io_write(a, 0x10 + 2 * p, 1 << 16);
@@ -320,36 +321,64 @@ void smp_init(void)
 /* ---- Starting the other CPUs. */
 extern char ap_start[], ap_end[], ap_cr3[], ap_stack[], ap_cpu[];   /* ap.S */
 extern uint64_t boot_pml4[512], pdpt_low[512];                      /* boot.S */
+int s3_save(uint64_t *ctx);                                         /* ap.S */
+void s3_jump(uint64_t *ctx) __attribute__((noreturn));
+static uint64_t tramp_pml4;              /* the trampoline's page table (kept, as its page: for waking up) */
+static uint64_t wake_ctx[8], wake_as, wake_tsc;   /* suspend: s3_save's registers, CR3, the TSC */
+static int64_t tsc_fix;                  /* after waking: added to each CPU's TSC (it started again from 0) */
+static void s3_wake(void) __attribute__((noreturn));
 
-/* Where each new CPU arrives in C, in 64-bit mode, on its own stack. */
+/* Where each new CPU arrives in C, in 64-bit mode, on its own stack (CPU
+ * 0 too, waking from a suspend). */
 void ap_main(cpu_t *c)
 {
+    if (c == cpus[0]) s3_wake();
     write_cr3(c->cur_as = kernel_as);    /* leave the trampoline's page table */
     uint64_t cr4;                        /* then keep kernel translations across CR3 changes */
     asm volatile("mov %%cr4, %0; or $0x80, %0; mov %0, %%cr4" : "=r"(cr4));
+    if (tsc_fix) wrmsr(0x10, rdtsc() + tsc_fix);
     cpu_setup(c);
     lapic_setup();
     c->online = 1;
     idle();
 }
 
+/* The trampoline at TRAMP, for CPU c on that stack. */
+static void tramp(cpu_t *c, uint64_t stack)
+{
+    memcpy(P2V(TRAMP), ap_start, ap_end - ap_start);
+    *(uint32_t *)P2V(TRAMP + (ap_cr3 - ap_start)) = tramp_pml4;
+    *(uint64_t *)P2V(TRAMP + (ap_stack - ap_start)) = stack;
+    *(uint64_t *)P2V(TRAMP + (ap_cpu - ap_start)) = (uint64_t)c;
+}
+static void init_all(void)               /* INIT resets the other CPUs, all at once; 10 ms before the SIPIs */
+{
+    ipi_all_others(0x4500);
+    for (uint64_t t = rdtsc(); rdtsc() - t < tsc_hz / 100; ) asm volatile("pause");   /* (TSC: the PIT may be off) */
+}
+static int ap_boot(cpu_t *c)             /* SIPI: c starts at 0x8000 -> 0: it runs idle() */
+{
+    tramp(c, c->a.idle_stack);
+    /* A second SIPI if it has not answered after 1 ms (the standard asks
+     * for two; one is enough on most machines). */
+    for (int s = 0; s < 2 && !c->online; s++) {
+        send_ipi(c->a.apic_id, 0x4600 | TRAMP >> 12);
+        for (uint64_t end = rdtsc() + ns_to_ticks(s ? 100000000 : 1000000); !c->online && rdtsc() < end; )
+            arch_lock_wait(cpus[0]);    /* (the CPUs already started may ask us for a shootdown) */
+    }
+    if (!c->online) kprintf("mk: CPU with APIC id %d did not start\n", c->a.apic_id);
+    return c->online ? 0 : -1;
+}
+
 void smp_start(void)
 {
     /* The trampoline needs its own page to be mapped where it runs (at
-     * 0x8000, "identity") when it turns paging on: a temporary page table
-     * with the kernel's upper half and boot.S's first-GiB identity map. */
-    uint64_t pml4 = page_alloc(1);
-    memcpy((uint64_t *)P2V(pml4) + 256, boot_pml4 + 256, 256 * 8);
-    ((uint64_t *)P2V(pml4))[0] = ((uint64_t)pdpt_low - KVMA) | PTE_P | PTE_W;
-    memcpy(P2V(TRAMP), ap_start, ap_end - ap_start);
-    *(uint32_t *)P2V(TRAMP + (ap_cr3 - ap_start)) = pml4;
-
-    /* INIT resets the other CPUs, all at once; they need 10 ms before the
-     * start-up message (SIPI), then each starts in microseconds. */
-    if (napic > 1) {                    /* (10 ms of TSC: the PIT may be off) */
-        ipi_all_others(0x4500);
-        for (uint64_t t = rdtsc(); rdtsc() - t < tsc_hz / 100; ) asm volatile("pause");
-    }
+     * 0x8000, "identity") when it turns paging on: a page table with the
+     * kernel's upper half and boot.S's first-GiB identity map. */
+    tramp_pml4 = page_alloc(1);
+    memcpy((uint64_t *)P2V(tramp_pml4) + 256, boot_pml4 + 256, 256 * 8);
+    ((uint64_t *)P2V(tramp_pml4))[0] = ((uint64_t)pdpt_low - KVMA) | PTE_P | PTE_W;
+    if (napic > 1) init_all();
     for (int i = 0; i < napic; i++) {
         if (apic_ids[i] == cpus[0]->a.apic_id) continue;
         cpu_t *c = cpu_alloc();
@@ -360,20 +389,73 @@ void smp_start(void)
 #endif
         c->id = ncpu;
         c->a.apic_id = apic_ids[i];
-        *(uint64_t *)P2V(TRAMP + (ap_stack - ap_start)) = (uint64_t)P2V(stack) + PAGE;
-        *(uint64_t *)P2V(TRAMP + (ap_cpu - ap_start)) = (uint64_t)c;
-
-        /* SIPI: start at 0x8000. A second one if it has not answered after
-         * 1 ms (the standard asks for two; one is enough on most machines). */
-        for (int s = 0; s < 2 && !c->online; s++) {
-            send_ipi(c->a.apic_id, 0x4600 | TRAMP >> 12);
-            for (uint64_t end = rdtsc() + ns_to_ticks(s ? 100000000 : 1000000); !c->online && rdtsc() < end; )
-                arch_lock_wait(cpus[0]);    /* (the CPUs already started may ask us for a shootdown) */
-        }
-        if (!c->online) { kprintf("mk: CPU with APIC id %d did not start\n", c->a.apic_id); continue; }
+        c->a.idle_stack = (uint64_t)P2V(stack) + PAGE;
+        if (ap_boot(c)) continue;
         cpus[ncpu] = c;                  /* (it already runs idle(): the others see it from now on) */
         __atomic_store_n(&ncpu, ncpu + 1, __ATOMIC_RELEASE);
     }
-    page_free(pml4, 1);
-    page_free(TRAMP, 1);                 /* the trampoline is not needed any more */
+}
+
+/* ---- Suspend to RAM (ACPI S3; task.c has stopped the other CPUs). What
+ * the sleep loses on CPU 0 is saved: its registers (s3_save), the I/O
+ * APICs' entries, its FPU registers (into the thread's area). On waking the
+ * firmware jumps to the trampoline in real mode, which climbs to ap_main and
+ * s3_wake: the address space, the TSC carried on from where it was (time
+ * does not count the sleep), GDT/IDT/TSS/MSRs/PAT/FPU (cpu_setup), the
+ * local APIC; then back in arch_suspend, the other CPUs start as at boot,
+ * and the I/O APICs' entries come back. */
+__attribute__((cold)) static void s3_wake(void)   /* (CPU 0, the trampoline's stack and page table) */
+{
+    write_cr3(wake_as);
+    serial_init();
+    uint64_t cr4;
+    asm volatile("mov %%cr4, %0; or $0x80, %0; mov %0, %%cr4" : "=r"(cr4));
+    int64_t d = (int64_t)(wake_tsc - rdtsc());
+    tsc_fix = d > 0 ? d : 0;
+    if (tsc_fix) wrmsr(0x10, rdtsc() + tsc_fix);
+    uint16_t io = cpus[0]->a.tss->iomap;  /* (the thread's I/O rights: cpu_setup clears them) */
+    cpu_setup(cpus[0]);
+    cpus[0]->a.tss->iomap = io;
+    wrmsr(0xC0000100, cpus[0]->a.fs_loaded);
+    lapic_setup();
+    s3_jump(wake_ctx);
+}
+void arch_park(volatile int *park)       /* (another CPU, CPU 0 about to sleep: its caches, then stopped) */
+{
+    asm volatile("wbinvd" : : : "memory");
+    *park = 3;
+    arch_halt_forever();
+}
+__attribute__((cold)) long arch_suspend(int n)
+{
+    static uint64_t saved[MAXIRQ];
+    long r = acpi_sleep(3, TRAMP, 1);
+    if (r || !n) return r;
+    cpu_t *c = cpus[0];
+    spin_lock(&io_lock);
+    for (int irq = 1, pin, a; irq < MAXIRQ; irq++)        /* the I/O APICs' entries saved, then all masked */
+        if ((a = io_find(irq, &pin)) >= 0) {
+            saved[irq] = io_read(a, 0x10 + 2 * pin) | (uint64_t)io_read(a, 0x11 + 2 * pin) << 32;
+            io_write(a, 0x10 + 2 * pin, 1 << 16);
+        }
+    spin_unlock(&io_lock);
+    fpu_flush(c, cur);
+    uint64_t mtrr = rdmsr(0x2FF);                          /* (the firmware restores the memory types: checked) */
+    wake_as = c->cur_as;
+    tramp(c, (uint64_t)P2V(TRAMP + PAGE));                /* (its stack: the top of its own page) */
+    tsc_fix = 0;
+    if (!s3_save(wake_ctx)) {
+        wake_tsc = rdtsc();
+        r = acpi_sleep(3, TRAMP, 0);                      /* (on waking: s3_save returns 1) */
+    }
+    outb(0x21, 0xFF); outb(0xA1, 0xFF);                  /* the 8259s: masked again */
+    kprintf("mk: %s; TSC %s\n", r ? "suspend failed: still awake" : "awake", tsc_fix ? "carried on" : "kept running");
+    if (rdmsr(0x2FF) != mtrr) kprintf("mk: the firmware did not restore the MTRRs (%lx, was %lx): memory may be uncached\n", rdmsr(0x2FF), mtrr);
+    if (n > 1) init_all();
+    for (int i = 1; i < n; i++) { cpus[i]->online = 0; ap_boot(cpus[i]); }
+    spin_lock(&io_lock);
+    for (int irq = 1, pin, a; irq < MAXIRQ; irq++)
+        if ((a = io_find(irq, &pin)) >= 0) { io_write(a, 0x11 + 2 * pin, saved[irq] >> 32); io_write(a, 0x10 + 2 * pin, (uint32_t)saved[irq]); }
+    spin_unlock(&io_lock);
+    return r;
 }

@@ -135,6 +135,8 @@ void atlas_user(int *uid, int *gid, mk_groups_t *g);  /* (atlas.c) the logged-in
 
 /* ---- Settings (settings.c): a window of the desktop: the screen's size,
  * the mouse, the assistant's model. */
+extern acpi_status_t atlas_power;                     /* (atlas.c) battery, AC, lid from port "acpi"; flags 0: none */
+extern int atlas_lid_sleep;                           /* the lid closed: sleep (1) or the screen off (0) */
 #define ATLAS_REVERT 104                              /* message: a new screen size was not kept */
 #define ATLAS_BT 106                                  /* message: Bluetooth's ticker (a scan or a pairing goes on) */
 int  settings_bt_tick(void);                          /* ATLAS_BT: 1 if the window must be drawn again */

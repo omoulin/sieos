@@ -207,6 +207,8 @@ enum {
     INIT_ANSWER,    /* (init's own timer thread: a server's SVC_MAYSTOP answer) -> 0 */
     INIT_PING,      /* (init's own watcher thread) w[1] = the service, w[2] = 1: a ping
                        is going out to it, 0: it answered                    -> 0 */
+    INIT_RESUME,    /* (root: acpid, awake after a suspend) the device drivers are started
+                       anew (killed: init restarts them), but the caller and the desktop -> 0 */
 };
 enum { SVC_ALWAYS, SVC_ON_FAILURE, SVC_NEVER };                 /* restart policies */
 /* Any server started on demand answers this question from init (pid 1)
@@ -470,3 +472,21 @@ typedef struct {
     uint32_t code;                             /* BTP_CONFIRM / BTP_PASSKEY: the 6 digits */
     char chip[48], why[64];                    /* the controller and its firmware; the last failure */
 } bt_status_t;
+/* The ACPI server, port "acpi" (/bin/acpid, x86-64, docs/power.md): power,
+ * battery, AC, lid, buttons. Reply: w[0] = result or -error. */
+enum {
+    ACPI_POWER = 1, /* w[1] = POWER_OFF, POWER_RESTART or POWER_SLEEP (root): the firmware
+                       is told (_PTS), then the kernel (SYS_POWER) -> 0 once awake again */
+    ACPI_STATUS,    /* -> 0, an acpi_status_t in rbuf */
+    ACPI_WAIT,      /* w[1] = the seq last seen: the reply waits until the status changes
+                       (battery, AC, lid, a wake-up) -> 0, an acpi_status_t in rbuf */
+};
+typedef struct {
+    uint32_t seq, flags;                       /* +1 at each change; ACPI_* below */
+    int32_t percent, minutes;                  /* the battery's charge; time to empty or full (-1: unknown) */
+    int32_t rate;                              /* mW (mA if not ACPI_MWH), charging or discharging */
+    uint32_t now, full, design, mv;            /* mWh (or mAh), and its voltage in mV */
+    uint32_t wakes;                            /* times woken from sleep */
+} acpi_status_t;
+enum { ACPI_AC = 1, ACPI_BAT = 2, ACPI_CHARGING = 4, ACPI_LID = 8, ACPI_LID_CLOSED = 16, ACPI_MWH = 32,
+       ACPI_S3 = 64 };                         /* (S3: the machine can sleep) */

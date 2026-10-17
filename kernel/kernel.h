@@ -121,6 +121,7 @@ typedef struct cpu {
     task_t *running;            /* the running thread, 0 while idle ("cur" below) */
     volatile int running_bg;    /* ... it is background work (for other CPUs to see) */
     volatile int evict;         /* asked to move its running thread to a CPU that suits it */
+    volatile int park;          /* suspending (task.c): 1 asked, 2 its threads gone to CPU 0, 3 stopped */
     task_t *last;               /* the thread it just switched away from (finish_switch) */
     int last_dead, last_ready;  /* ... it exited: free its stack; it moves: make it ready */
     uint64_t idle_ksp;          /* the idle loop's saved stack pointer */
@@ -212,6 +213,7 @@ void core_tick(cpu_t *c, int timer);
 void sched_cpus(void);          /* every CPU has started: their kinds, the boot line */
 extern int ecores;              /* how many E-cores (0: all cores alike) */
 long place(int tid, int bg);    /* SYS_PLACE */
+long suspend(void);             /* SYS_POWER POWER_SLEEP: the others parked, CPU 0 sleeps (arch_suspend) */
 /* Measuring stack depth (make STACKCHECK=1): stacks are filled with a
  * pattern when created; the deepest point ever reached is the lowest word
  * that no longer holds it. Reported at power off. */

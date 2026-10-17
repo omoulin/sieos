@@ -102,9 +102,13 @@ void  arch_phys_mapped(uint64_t pa, uint64_t size);     /* SYS_MAP_PHYS gave a d
 /* ---- The platform (platform.c): log output, power, hardware randomness. */
 void arch_putc(char c);                    /* one byte of the kernel log */
 void arch_power(int restart) __attribute__((noreturn));
+long arch_sleep_type(int state, int typ);  /* POWER_SET: ACPI's sleep type of S3 or S5 (x86-64; -ENOSYS) */
+long arch_suspend(int n);                  /* 0: can this machine suspend to RAM? n CPUs: do it (on CPU 0,
+                                              the others stopped), wake, start them again -> 0, or -error */
+void arch_park(volatile int *park) __attribute__((noreturn));   /* a CPU stops for suspend: caches written back, *park = 3 */
 const char *arch_hw_random_init(void);     /* the CPU's generator's name, 0 if none */
 int  arch_hw_random(uint64_t *v);          /* 1 if v got 64 random bits */
 uint32_t arch_hwcap(void);                 /* HWCAP_* (mk/abi.h): features programs may use */
 long arch_fdt(uint64_t ubuf, uint64_t size);   /* SYS_FDT: copy the device tree to the caller (-ENOSYS: none) */
 long arch_screen(uint64_t ubuf);               /* SYS_SCREEN: the firmware's frame buffer (-ENOSYS: none) */
-long arch_acpi(uint64_t ubuf, uint64_t size);  /* SYS_ACPI: copy the DSDT and SSDTs to the caller (-ENOSYS: none) */
+long arch_acpi(uint64_t ubuf, uint64_t size);  /* SYS_ACPI: copy the FADT, DSDT and SSDTs to the caller (-ENOSYS: none) */

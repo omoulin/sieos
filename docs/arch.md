@@ -60,7 +60,7 @@ same C for every processor.
 | Time | `ticks()` (fast counter), `ns_to_ticks`, `now_ns`, `arch_timer_set` (one-shot deadline; `NEVER` = off) |
 | CPUs | `cpu_init` (cpus[0]), `smp_init`, `smp_start`, `this_cpu()`, `arch_cpu_t` first in `cpu_t`; `cpu_setup` sets each CPU's kind (`CPU_P`, `CPU_E`: x86-64 CPUID leaves 7 and 0x1A, AArch64 MIDR_EL1) |
 | Floating point | `fpu_first_use`, `fpu_switch`, `fpu_free`; `fpu_detach`/`fpu_attach` (a signal's function starts with fresh registers, then the thread gets its own back) |
-| Platform | `arch_putc` (log), `arch_power`, `arch_hw_random_init`/`arch_hw_random`, `arch_phys_forbidden`, `arch_phys_screen`, `arch_dma_clean`, `arch_fdt`, `arch_screen` (the frame buffer a UEFI loader left, `SYS_SCREEN`; x86-64) |
+| Platform | `arch_putc` (log), `arch_power`, `arch_sleep_type`, `arch_suspend`/`arch_park` (suspend to RAM: x86-64, [power.md](power.md); -ENOSYS elsewhere), `arch_hw_random_init`/`arch_hw_random`, `arch_phys_forbidden`, `arch_phys_screen`, `arch_dma_clean`, `arch_fdt`, `arch_screen` (the frame buffer a UEFI loader left, `SYS_SCREEN`; x86-64) |
 | Processor features | `arch_hwcap`: what programs may use, in `SYS_INFO`'s `hwcap` (`HWCAP_AVX2`, `HWCAP_FMA`, `HWCAP_AVXVNNI` on x86-64; `HWCAP_DOTPROD`, `HWCAP_LSE` on AArch64, from `ID_AA64ISAR0_EL1`, which programs cannot read) |
 | Spinning, idle | `arch_relax`, `arch_wait_irq`, `arch_irq_window` (idle polling), `arch_halt_forever`, `arch_lock_wait` (answers shootdowns while spinning); optionally `smp_mb`/`store_mb` (x86-64: a locked instruction, `xchg`) |
 | Programs | `ELF_MACHINE` (62 on x86-64, 183 on AArch64) |

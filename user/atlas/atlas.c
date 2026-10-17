@@ -44,6 +44,7 @@
 
 #define ATLAS_INPUT 100             /* from our input thread: con_event_t[] in sbuf */
 #define ATLAS_TICK  102             /* from the clock thread: a new minute */
+#define ATLAS_ACPI  106             /* from the ACPI thread: battery, AC, lid, a wake-up (acpi_status_t) */
 
 #define TCMAX 132                   /* a terminal: up to 132 x 60 characters */
 #define TRMAX 60
@@ -116,7 +117,7 @@ static void geometry(void)
 
 /* ---- Menus: one at a time; entries with an icon, separators. */
 enum { A_SEP = 1, A_TERM, A_SIA, A_FILES, A_EDITOR, A_SETTINGS, A_PINS, A_RUNAPP, A_WINDOW, A_LOGOUT,
-       A_MIN, A_ZOOM, A_SENDWS, A_CLOSE };
+       A_MIN, A_ZOOM, A_SENDWS, A_CLOSE, A_SLEEP };
 #define MAXMENT 28
 #define MENH 36
 #define MENSEP 12
@@ -169,6 +170,43 @@ static void rtc_read(void)
     rtc_t0 = sys_clock();
 }
 static long now_day(void) { return (rtc_day + (sys_clock() - rtc_t0) / 1000000000) % 86400; }
+
+/* ---- Power (port "acpi", user/acpid; x86-64 laptops): the battery in the
+ * Deskbar's tray, the lid (closed: the panel's backlight off, or sleep:
+ * Settings), waking up (the display set up again). A thread waits for the
+ * changes (ACPI_WAIT) and hands them to the main loop. */
+acpi_status_t atlas_power;                               /* (flags 0: no ACPI server) */
+int atlas_lid_sleep;                                     /* /etc/display.conf: lid=sleep */
+static void acpi_thread(void *arg)
+{
+    (void)arg;
+    acpi_status_t s;
+    long p = 0;
+    for (int i = 0; i < 50 && (p = port_find("acpi")) <= 0; i++) sys_sleep(100000000);   /* (5 s: none on this machine) */
+    for (uint32_t seq = ~0u; p > 0; ) {
+        msg_t m = { .w = { ACPI_WAIT, seq }, .rbuf = &s, .rlen = sizeof s };
+        if (ipc_call(p, &m) < 0 || (long)m.w[0] < 0) { sys_sleep(1000000000); p = port_find("acpi"); continue; }   /* (restarted) */
+        seq = s.seq;
+        msg_t a = { .w = { ATLAS_ACPI }, .sbuf = &s, .slen = sizeof s };
+        ipc_call(port, &a);
+    }
+}
+static void power_event(const acpi_status_t *n)
+{
+    int was = atlas_power.flags & ACPI_LID_CLOSED, shut = n->flags & ACPI_LID_CLOSED, woke = atlas_power.flags && n->wakes != atlas_power.wakes;
+    atlas_power = *n;
+    if (woke) {                                          /* the display lost its set-up */
+        say("atlas: awake: the screen set up again\n");
+        rtc_read();
+        if (screen_wake() && scr.resizable) atlas_set_size(PW, PH);
+        if (shut && !atlas_lid_sleep) screen_blank(1);
+        redraw();
+    }
+    if (shut != was) say("atlas: lid %s%s\n", shut ? "closed: " : "open", shut ? (atlas_lid_sleep ? "sleep" : "screen off") : "");
+    if (shut && !was && atlas_lid_sleep) power(POWER_SLEEP);   /* (back here once awake) */
+    else if (shut != was) screen_blank(shut);
+    if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
+}
 
 static void clock_thread(void *arg)                      /* one message a minute, nothing else */
 {
@@ -587,9 +625,16 @@ static void draw_deskbar(void)
     {                                                    /* sia's state: a dot (lit when sia runs), then the words */
         int idle = !strcmp(st, "sia: idle");
         dl_rect(x0 + 18, ty + 15, x0 + 28, ty + 25, 5, idle ? C_LINE : C_ACC);
-        dl_text(x0 + 38, ty + 9, st, strlen(st), S(2), idle ? C_DIM : C_TXT, 0, 0, x1 - 100, SH);
+        dl_text(x0 + 38, ty + 9, st, strlen(st), S(2), idle ? C_DIM : C_TXT, 0, 0, atlas_power.flags & ACPI_BAT ? x1 - 66 - text_w(5, ST) : x1 - 100, SH);
     }
     dl_text(x1 - 16 - text_w(5, ST), ty + 6, ck, 5, ST, C_TXT, 0, 0, SW, SH);   /* (title size) */
+    if (atlas_power.flags & ACPI_BAT) {                  /* the battery: its outline, filled as charged */
+        int bx = x1 - 30 - text_w(5, ST) - 24, by = ty + 14, pc = atlas_power.percent < 0 ? 0 : atlas_power.percent;
+        uint32_t c = atlas_power.flags & ACPI_CHARGING ? C_ACC : pc < 15 ? C_ERR : C_TXT;
+        dl_frame(bx, by, bx + 22, by + 12, 2, 1, c);
+        dl_rect(bx + 22, by + 4, bx + 25, by + 8, 0, c);
+        dl_rect(bx + 2, by + 2, bx + 2 + 18 * pc / 100, by + 10, 0, c);
+    }
     int ry = ty + DB_TRAY;                               /* the apps */
     dl_rect(x0 + 10, ry, x1 - 10, ry + 1, 0, C_LINE);
     for (int k = 0; k < NDB; k++) {
@@ -1288,6 +1333,7 @@ static void main_menu(void)                              /* the Deskbar's: start
         menu_add(t, A_WINDOW, a, win_icon(w));
     }
     menu_add("", A_SEP, 0, -1);
+    if (atlas_power.flags & ACPI_S3) menu_add("Sleep", A_SLEEP, 0, -1);
     menu_add("Log out", A_LOGOUT, 0, -1);
     menu_show(DBX + DBW - 340, M + DB_MENU + 2);
 }
@@ -1368,6 +1414,7 @@ static void menu_do(int k)
     case A_RUNAPP: app_start(arg); return;
     case A_WINDOW: { int v = 0; for (const char *p = arg; *p; p++) v = v * 10 + *p - '0'; show_win(v); settle(); return; }
     case A_LOGOUT: logout(); redraw(); return;
+    case A_SLEEP: redraw(); say("atlas: sleep\n"); power(POWER_SLEEP); return;
     case A_MIN: min_win(w); settle(); return;
     case A_ZOOM: wm_toggle_max(w); settle(); return;
     case A_SENDWS: wm_send(w, arg[0] - '0'); if (focus == w) focus = wm_top(); settle(); return;
@@ -1717,6 +1764,7 @@ int main(int argc, char **argv)
         while (p && !same_n(p, "size=", 5)) { p = strchr(p, '\n'); if (p) p++; }
         if (p) { for (p += 5; *p >= '0' && *p <= '9'; p++) w = w * 10 + *p - '0'; if (*p == 'x') for (p++; *p >= '0' && *p <= '9'; p++) h = h * 10 + *p - '0'; }
         if (w >= 1024 && w <= 3840 && h >= 600 && h <= 2400) { PW = w; PH = h; }
+        for (p = dc; p; p = strchr(p, '\n') ? strchr(p, '\n') + 1 : 0) atlas_lid_sleep |= same_n(p, "lid=sleep", 9);
         free(dc);
     }
     if (screen_init(&scr) && (PW != 1920 || PH != 1080)) { PW = 1920; PH = 1080; }   /* (that size failed: the default) */
@@ -1749,6 +1797,7 @@ int main(int argc, char **argv)
     say("atlas: greeter (%dx%d, full frame %lu us)\n", PW, PH, (unsigned long)frame_us);
     thread_start(input_thread, 0, 16384);
     thread_start(clock_thread, 0, 4096);
+    thread_start(acpi_thread, 0, 4096);
     panel_init(port);
     settings_init(port);
     pins_init(port);
@@ -1822,6 +1871,11 @@ int main(int argc, char **argv)
         if (m.pid == self && m.w[0] == ATLAS_ANIM) {     /* the next frame of the tabs that move */
             reply_val(from, 0);
             if (mode == SESSION && wm_tick()) settle();   /* (a window has opened: all of it, its places logged) */
+            continue;
+        }
+        if (m.pid == self && m.w[0] == ATLAS_ACPI && m.rlen == sizeof(acpi_status_t)) {
+            reply_val(from, 0);
+            power_event((const acpi_status_t *)buf);
             continue;
         }
         if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the Deskbar's tray */

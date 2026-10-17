@@ -5,6 +5,9 @@
  * climbs the same steps as boot.S: 32-bit protected mode, then 64-bit
  * mode with paging, and calls ap_main(cpu) on its own stack.
  *
+ * The same code brings the first processor back from a suspend (ACPI S3:
+ * the firmware jumps here, real mode, smp.c's s3_wake).
+ *
  * The code runs at 0x8000, not where it is linked, so every address is
  * computed relative to ap_start: TR(x) is where x is once copied.
  * smp.c fills in ap_cr3, ap_stack and ap_cpu before each start.
@@ -74,3 +77,33 @@ ap_cr3:   .quad 0
 ap_stack: .quad 0
 ap_cpu:   .quad 0
 ap_end:
+
+/* Suspending (smp.c): s3_save(ctx) keeps the registers a function call must
+ * keep, the stack and where it returns -> 0. Waking up, s3_jump(ctx) goes
+ * back there: s3_save returns again, 1. */
+    .text
+    .global s3_save, s3_jump
+s3_save:
+    mov  %rbx, (%rdi)
+    mov  %rbp, 8(%rdi)
+    mov  %r12, 16(%rdi)
+    mov  %r13, 24(%rdi)
+    mov  %r14, 32(%rdi)
+    mov  %r15, 40(%rdi)
+    lea  8(%rsp), %rax
+    mov  %rax, 48(%rdi)
+    mov  (%rsp), %rax
+    mov  %rax, 56(%rdi)
+    xor  %eax, %eax
+    ret
+s3_jump:
+    mov  (%rdi), %rbx
+    mov  8(%rdi), %rbp
+    mov  16(%rdi), %r12
+    mov  24(%rdi), %r13
+    mov  32(%rdi), %r14
+    mov  40(%rdi), %r15
+    mov  48(%rdi), %rsp
+    mov  56(%rdi), %rcx
+    mov  $1, %eax
+    jmp  *%rcx

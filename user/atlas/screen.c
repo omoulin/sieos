@@ -182,6 +182,8 @@ static int simplefb(screen_t *s)
 
 int screen_native(int *w, int *h) { (void)w; (void)h; return 0; }
 int screen_backlight(int pct) { (void)pct; return -1; }
+int screen_wake(void) { return -1; }
+void screen_blank(int off) { (void)off; }
 
 int screen_init(screen_t *s)
 {
