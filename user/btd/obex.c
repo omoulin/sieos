@@ -9,7 +9,10 @@
  *             "continue" before the next; done on its "success"
  *   receiving a bonded, encrypted device opens our channel (OPP_CH, in our
  *             SDP record): CONNECT, PUTs into a file (file_open: the desktop
- *             user's ~/Downloads, btd.c), DISCONNECT. Nothing is asked.
+ *             user's ~/Downloads, btd.c), DISCONNECT. The first body waits
+ *             for the user (file_ask: Atlas's Accept / Decline, or bt
+ *             accept): taken, or "forbidden" if declined or not answered
+ *             in 30 s
  * Packets: an opcode or answer code, a 16-bit length, headers (Name in
  * UTF-16, Length, Body, End of Body). Ours are at most OBMAX bytes.
  *
@@ -20,7 +23,8 @@
 #define OBMAX 8192
 enum { O_IDLE, O_LINK, O_SDP, O_RFC, O_CONNECT, O_READY, O_PUT, O_LAST, O_DONE, O_FAIL, O_RX };
 static struct {
-    int st, left, n, peer, hdr, file;            /* left: seconds before giving up; n: bytes of a packet so far */
+    int st, left, n, peer, hdr, file, ask, held; /* left: seconds before giving up; n: bytes of a packet so far */
+                                                 /* ask: 1 the user is asked (held: the packet's length), 2 accepted */
     btdev_t *dev;                                /* peer: the largest packet it takes; hdr: name and length sent */
     conn_t *c;
     uint32_t size, done;
@@ -120,12 +124,19 @@ static void reply(int code)
     ob.buf[0] = (uint8_t)code; ob.buf[1] = 0; ob.buf[2] = 3;
     rf_send(ob.buf, 3);
 }
+static int take(void)                            /* a file's first bytes: 0 opened, 4 the user is asked, 2 refused */
+{
+    if (!ob.c->enc || !ob.name[0]) return 2;
+    if (ob.ask == 2) return file_open(ob.c->dev, ob.name, ob.size) ? 2 : (ob.file = 1, 0);
+    if (!ob.ask) { ob.ask = 1; ob.left = 30; file_ask(ob.c->dev, ob.name, ob.size); }
+    return 4;
+}
 static void request(int len)
 {
     int op = ob.buf[0], bad = 0;
     if (op == 0x80) { reply(0x80); return; }
     if (op == 0x81) { reply(0xA0); return; }             /* DISCONNECT */
-    if (op == 0xFF) { if (ob.file) { file_close(0); ob.file = 0; } reply(0xA0); return; }   /* ABORT */
+    if (op == 0xFF) { if (ob.file) { file_close(0); ob.file = 0; } ob.ask = 0; reply(0xA0); return; }   /* ABORT */
     if ((op & 0x7F) != 0x02) { reply(0xD1); return; }    /* not implemented */
     for (int i = 3, hl; i < len && !bad; i += hl) {       /* the headers */
         int hi = ob.buf[i], two = hi >> 6 < 2;            /* two: a 16-bit length follows */
@@ -146,27 +157,37 @@ static void request(int len)
         }
         if (hi == 0xC3 && !ob.file) ob.size = (uint32_t)v[0] << 24 | v[1] << 16 | v[2] << 8 | v[3];
         if (hi == 0x48 || hi == 0x49) {                   /* Body, End of Body */
-            if (!ob.file && (bad = !ob.c->enc || !ob.name[0] || file_open(ob.c->dev, ob.name, ob.size) ? 2 : 0)) break;
-            ob.file = 1;
+            if (!ob.file && (bad = take())) break;
             if (file_write(v, hl - 3) != hl - 3) bad = 3;
             ob.done += (uint32_t)(hl - 3);
         }
     }
-    if (op == 0x82 && !bad && !ob.file)                   /* (an empty file) */
-        bad = !ob.c->enc || !ob.name[0] || file_open(ob.c->dev, ob.name, ob.size) ? 2 : (ob.file = 1, 0);
+    if (op == 0x82 && !bad && !ob.file) bad = take();     /* (an empty file) */
+    if (bad == 4) { ob.held = len; return; }              /* (the answer waits for the user's) */
     if (bad) {
         bt_log("bt: OBEX: %s from %s refused (%s)\n", ob.name, ob.c->dev->d.name, bad == 2 ? "not taken" : bad == 3 ? "cannot write it" : "bad packet");
         if (ob.file) file_close(0);
-        ob.file = 0; ob.name[0] = 0;
+        ob.file = ob.ask = 0; ob.name[0] = 0;
         reply(bad == 2 ? 0xC3 : bad == 3 ? 0xD0 : 0xC0);
         return;
     }
     if (op == 0x82) {                                     /* final */
         file_close(1);
         bt_log("bt: OBEX: %s received from %s (%u bytes)\n", ob.name, ob.c->dev->d.name, (unsigned)ob.done);
-        ob.file = 0; ob.name[0] = 0;
+        ob.file = ob.ask = 0; ob.name[0] = 0;
     }
     reply(op == 0x82 ? 0xA0 : 0x90);
+}
+int opp_answer(int ok)
+{
+    if (ob.st != O_RX || ob.ask != 1) return -ENOENT;
+    bt_log("bt: OBEX: %s from %s %s\n", ob.name, ob.c->dev->d.name, ok ? "accepted" : "declined");
+    ob.ask = ok ? 2 : 0;
+    if (ok) { request(ob.held); return 0; }               /* (the held packet, again: now taken) */
+    file_close(-1);
+    ob.name[0] = 0;
+    reply(0xC3);                                          /* forbidden */
+    return 0;
 }
 
 /* ---- From RFCOMM. */
@@ -178,12 +199,13 @@ void ob_open(conn_t *c, int out)
         ob.st = O_CONNECT;
         rf_send(con, 7);
     } else if (!out && (ob.st == O_IDLE || ob.st == O_DONE || ob.st == O_FAIL)) {
-        ob.st = O_RX; ob.file = 0; ob.name[0] = 0;
+        ob.st = O_RX; ob.file = ob.ask = 0; ob.name[0] = 0;
         bt_log("bt: OBEX: %s connects to send a file\n", c->dev->d.name);
     } else rf_close();
 }
 void ob_recv(const uint8_t *p, int n)
 {
+    if (ob.ask == 1) return;                              /* (asking: the device waits for our answer) */
     if (ob.n + n > OBMAX) { ob.n = 0; if (ob.st == O_RX) reply(0xCD); else fail("a packet too big"); return; }
     memcpy(ob.buf + ob.n, p, n);
     ob.n += n;
@@ -195,11 +217,12 @@ void ob_recv(const uint8_t *p, int n)
 void ob_close(void)
 {
     if (ob.st == O_RX) {
-        if (ob.file) { file_close(0); bt_log("bt: OBEX: %s from %s broke off\n", ob.name, ob.c->dev->d.name); }
-        ob.file = 0; ob.st = O_IDLE;
+        if (ob.file || ob.ask == 1) { file_close(ob.file - 1); bt_log("bt: OBEX: %s from %s broke off\n", ob.name, ob.c->dev->d.name); }
+        ob.file = ob.ask = 0; ob.st = O_IDLE;
     } else if (ob.st >= O_RFC && ob.st < O_DONE) { ob.st = O_FAIL; strlcpy(bt.why, "the link was lost", sizeof bt.why); bt_log("bt: OBEX: the link was lost\n"); }
 }
 void opp_tick(void)
 {
     if (ob.st >= O_LINK && ob.st < O_DONE && !--ob.left) fail("the device does not answer");
+    if (ob.ask == 1 && !--ob.left) { bt_log("bt: OBEX: no answer from the user\n"); opp_answer(0); }
 }

@@ -12,7 +12,8 @@
  *   a2dp.c   headphones and speakers: AVDTP, the media channel (RTP, SBC)
  *   sbc.c    the SBC encoder
  *   rfcomm.c RFCOMM: one multiplexer and data channel, for OBEX
- *   obex.c   file transfer: OBEX Object Push, both ways
+ *   obex.c   file transfer: OBEX Object Push, both ways (the user asked first)
+ *   avrcp.c  remote control: the headset's buttons, absolute volume
  * All but btd.c and uart.c are the stack: they touch no hardware
  * and are also built on the host (tests/bt), driven by scripted traces.
  * One lock (btd.c) covers the stack: the receiving thread, the clients'
@@ -35,9 +36,11 @@ void bt_log(const char *fmt, ...);                      /* a line in the log */
 void bt_random(void *p, int n);
 void bonds_save(void);                                  /* the bonded devices changed */
 struct btdev;
-int  file_open(const struct btdev *from, const char *name, uint32_t size);   /* a file comes (obex.c) -> 0 to take it */
+void file_ask(const struct btdev *from, const char *name, uint32_t size);   /* a file is offered: ask the user (the answer: opp_answer) */
+int  file_open(const struct btdev *from, const char *name, uint32_t size);   /* it comes (obex.c) -> 0 to take it */
 int  file_write(const void *p, int n);                  /* -> n */
-void file_close(int ok);                                /* complete, or broken off (deleted) */
+void file_close(int ok);                                /* 1 complete, 0 broken off (deleted), -1 declined (none opened) */
+void to_audiod(int op, int arg);                        /* AUDIO_VOL, AUDIO_OUT or AUDIO_KEY for audiod (sent outside the lock) */
 
 /* ---- Devices: found by a scan, or bonded (kept in /etc/bluetooth.keys). */
 typedef struct btdev {
@@ -143,12 +146,12 @@ void input_gone(conn_t *c);
 #define PCM_RING (32 << 10)
 extern uint8_t pcm_ring[PCM_RING];
 extern uint32_t pcm_w, pcm_r;
-extern volatile int a2dp_new;                   /* a sink is ready: audiod should play to it */
 void a2dp_init(void);
 void a2dp_link(conn_t *c);                      /* an audio device's link is encrypted */
 void a2dp_tick(void);
 int  a2dp_put(uint32_t at, int n, int vol);     /* n bytes landed at pcm_w (at) -> n, or -ENOENT: no sink */
 int64_t a2dp_pump(int64_t now);                 /* send what is due -> ns until the next packet, 0: none waiting */
+void a2dp_suspend(void);                        /* streaming: Suspend */
 const char *a2dp_sink(void);                    /* the ready sink's name, or 0 */
 
 /* rfcomm.c (calls ob_open, ob_recv, ob_close) and obex.c */
@@ -162,9 +165,16 @@ void ob_close(void);
 int  opp_send(const uint8_t *addr, const char *name, uint32_t size);
 int  opp_data(const uint8_t *p, int n, int last);
 int  opp_link(conn_t *c);                       /* a link is encrypted: 1 if a file waits for it */
+int  opp_answer(int ok);                        /* the user's answer to file_ask -> 0, -ENOENT: no question */
 void opp_tick(void);
 
-/* sdp.c: our records (A2DP source, Object Push on RFCOMM channel OPP_CH);
+/* avrcp.c */
+void avrcp_init(void);
+void avrcp_link(conn_t *c);                     /* A2DP is ready: open the control channel if the sink does not */
+void avrcp_tick(void);
+int  avrcp_vol(int vol);                        /* SIEOS's volume (AUDIO_VOL's) -> 1: the sink scales the sound (absolute volume) */
+
+/* sdp.c: our records (A2DP source, Object Push on RFCOMM channel OPP_CH, AVRCP target and controller);
  * sdp_query: one at a time, done(c, 0) if the device has no such service. */
 #define OPP_CH 9
 typedef struct { int psm, avdtp, ch, mapn; const uint8_t *map; } sdp_res_t;   /* L2CAP PSM, AVDTP version, RFCOMM channel, HID report map */

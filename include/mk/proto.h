@@ -431,13 +431,18 @@ enum {
     AUDIO_OUT,        /* w[1] = output (0 speakers, 1... HDMI/DP monitors with sound, then
                          Bluetooth headphones), AUDIO_BT (the Bluetooth one), or AUDIO_ASK
                          -> w[0] the one playing, w[1] how many; rbuf: their names, one a line */
+    AUDIO_KEY,        /* w[1] = a media key (MK_...; btd: a headset's buttons). Pause holds the
+                         writer's AUDIO_WRITE until play; stop, next, previous: its next reply
+                         has w[1] = the key (nothing taken); volume up/down: +-5      -> 0 */
 };
+enum { MK_VOLUP = 0x41, MK_VOLDOWN, MK_PLAY = 0x44, MK_STOP, MK_PAUSE, MK_NEXT = 0x4B, MK_PREV };   /* (AV/C's operation ids, as AVRCP sends them) */
 #define AUDIO_MUTE 0x100
 #define AUDIO_ASK  0x200
 #define AUDIO_BT   0x400
 /* btd's port "btaudio", for audiod only (root): AUDIO_WRITE, w[1] = the volume
  * (as AUDIO_VOL's), sbuf = frames -> bytes taken (the reply waits for room),
- * -ENOENT: no headphones; AUDIO_OUT -> rbuf: the headphones' name, or -ENOENT. */
+ * -ENOENT: no headphones; AUDIO_VOL, w[1]: the volume changed (headphones with
+ * absolute volume are told) -> 0; AUDIO_OUT -> rbuf: the headphones' name, or -ENOENT. */
 
 /* Bluetooth (docs/bluetooth.md). A USB adapter's HCI pipe, port "bthci"
  * (the USB server, user/usb/btusb.c; btd is its only client). Reply: w[0]. */
@@ -468,11 +473,14 @@ enum {
                          why); w[1] = 1 and no bytes: the end -> -EAGAIN until delivered, 0 */
     BT_USER,          /* (root: Atlas) w[1] = the desktop's user, -1: none. Files received
                          go to that user's ~/Downloads (none: root's)               -> 0 */
+    BT_ACCEPT,        /* (root: Atlas, bt accept) w[1] = 1: take the file a device offers,
+                         0: decline it                    -> 0, -ENOENT: none offered */
 };
 #define BT_CHUNK 8000
 typedef struct { uint8_t addr[6], _pad[2]; uint32_t size; char name[64]; } bt_send_t;
 #define ATLAS_NOTE 120 /* to Atlas's port "atlas" (root only): sbuf = a line to show for a while
-                          (btd: a file received)                                     -> 0 */
+                          (btd: a file received); w[1] = 1: a question, shown with Accept
+                          and Decline until answered (BT_ACCEPT) or the next line    -> 0 */
 enum { BTS_OFF, BTS_STARTING, BTS_ON, BTS_FAILED };            /* bt_status_t.state */
 enum { BTP_NONE, BTP_BUSY, BTP_CONFIRM, BTP_PASSKEY, BTP_DONE, BTP_FAILED };   /* .pair: CONFIRM:
                          does the code match the device's? PASSKEY: type the code on the device */

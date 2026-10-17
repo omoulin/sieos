@@ -138,7 +138,7 @@ $(B)/user/lib/aml.o: UCFLAGS += -Os
 
 # Bluetooth (user/btd, docs/bluetooth.md): the server (its stack: hci, l2cap, smp, input; the Pis'
 # UART: uart.c) and the command (user/bt).
-BTD     := btd hci l2cap smp input sdp a2dp sbc rfcomm obex uart
+BTD     := btd hci l2cap smp input sdp a2dp avrcp sbc rfcomm obex uart
 $(B)/btd.elf: $(BTD:%=$(B)/user/btd/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(BTD:%=$(B)/user/btd/%.o) $(ULIB)
 $(B)/user/btd/%.o: user/btd/%.c user/btd/btd.h user/lib/hidrep.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
@@ -666,7 +666,7 @@ crypto-test: $(B)/host/crypto-test
 # ---- Bluetooth (docs/bluetooth.md): btd's stack on the host, driven by
 # scripted HCI traces (tests/bt/hcitest.c: classic pairing and HID, LE SMP
 # and HID over GATT); hidrep.c and the stand-in mk.h copied beside it.
-BT_STACK := $(patsubst %,user/btd/%.c,hci l2cap smp input sdp a2dp sbc rfcomm obex)
+BT_STACK := $(patsubst %,user/btd/%.c,hci l2cap smp input sdp a2dp avrcp sbc rfcomm obex)
 $(B)/host/bt-test: tests/bt/hcitest.c tests/bt/btmk.h $(BT_STACK) user/btd/btd.h user/lib/hidrep.c user/lib/hidrep.h lib/btcrypt.c lib/aes.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c include/mk/*.h
 	@mkdir -p $(B)/host/bt
 	cp user/lib/hidrep.c user/lib/hidrep.h $(B)/host/bt/ && cp tests/bt/btmk.h $(B)/host/bt/mk.h
