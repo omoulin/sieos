@@ -1,0 +1,18 @@
+{
+  "_comment": "ICU's data for SIEOS's WebKit (docs/webkit-plan.md): everything but what the web does not need from ICU: languages other than English and French, legacy converters (WebKit decodes the web's encodings itself; UTF-8, Latin-1 and Windows-1252 kept), the CJK/Thai/Khmer line-breaking dictionaries and models, transliteration, spellout, confusables, character names, StringPrep.",
+  "localeFilter": {
+    "filterType": "language",
+    "includelist": ["en", "fr"]
+  },
+  "featureFilters": {
+    "brkitr_dictionaries": "exclude",
+    "brkitr_lstm": "exclude",
+    "brkitr_adaboost": "exclude",
+    "conversion_mappings": { "includelist": ["ibm-5348_P100-1997", "ibm-1252_P100-2000", "iso-8859_1-1998"] },
+    "translit": "exclude",
+    "rbnf_tree": "exclude",
+    "confusables": "exclude",
+    "unames": "exclude",
+    "stringprep": "exclude"
+  }
+}

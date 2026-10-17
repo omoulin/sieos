@@ -880,6 +880,25 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     }
     case SYS_statx:      return -ENOSYS;               /* (musl then uses fstatat) */
     case SYS_fallocate:  return -EOPNOTSUPP;           /* (callers then just write) */
+    case SYS_fadvise64:  return 0;                     /* (advice: taken as read) */
+    case SYS_statfs: case SYS_fstatfs: {               /* one file system: SieFS ("SIEF") */
+        struct kstatfs { long type, bsize; unsigned long blocks, bfree, bavail, files, ffree; int fsid[2]; long namelen, frsize, flags, spare[4]; };
+        struct kstatfs *k = A(b);
+        memset(k, 0, sizeof *k);
+        k->type = 0x53494546; k->bsize = k->frsize = 4096; k->namelen = 255;
+        return n == SYS_fstatfs ? (fd_get(a) ? 0 : -EBADF) : 0;
+    }
+#ifdef SYS_link
+    case SYS_link:       e = 0; d = b; c = AT_FDCWD; b = a; a = AT_FDCWD; /* fall through */
+#endif
+    case SYS_linkat: {
+        if ((r = at_path(a, A(b), p)) || (r = at_path(c, A(d), q))) return r;
+        size_t l = strlen(p) + 1;
+        char two[FS_PATH * 2];
+        memcpy(two, p, l); memcpy(two + l, q, strlen(q) + 1);
+        msg_t m = { .w = { FS_LINK }, .sbuf = two, .slen = l + strlen(q) + 1 };
+        return fs(&m);
+    }
     case SYS_prctl:                                    /* thread names and the like: nothing to do */
         if (a == 16 && b) memcpy(A(b), "sieos", 6);    /* (PR_GET_NAME) */
         return 0;
