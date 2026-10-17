@@ -97,8 +97,8 @@ $(WB)/stamp/zlib: $(WB)/toolchain.stamp
 	cd $(WB)/src/zlib && CC=$(CURDIR)/$(WB)/bin/cc AR=$(CURDIR)/$(LLVM)/bin/llvm-ar CFLAGS=-Os ./configure --static --prefix=/usr >/dev/null
 	$(MAKE) -s -C $(WB)/src/zlib libz.a example && $(MAKE) -s -C $(WB)/src/zlib install DESTDIR=$(SR) >/dev/null
 	touch $@
-$(WB)/wtest-zlib-example: $(WB)/stamp/zlib             # (zlib's own test)
-	cp $(WB)/src/zlib/example $@
+$(WB)/wtest-zlib-example: $(WB)/stamp/zlib $(SYSROOT)/usr/lib/libc.a   # (zlib's own test, linked again when libposix changes)
+	rm -f $(WB)/src/zlib/example && $(MAKE) -s -C $(WB)/src/zlib example && cp $(WB)/src/zlib/example $@
 
 # ---- libffi (GObject's generic marshaller)
 FFI_VER   := 3.8.0

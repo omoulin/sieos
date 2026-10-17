@@ -15,9 +15,9 @@ WK_OFF    := WPE_LEGACY_API WPE_PLATFORM_DRM WPE_PLATFORM_WAYLAND WPE_QT_API VID
 WK_USE_OFF := GBM LIBDRM ATK AVIF JPEGXL LCMS WOFF2 LIBHYPHEN LIBBACKTRACE SYSPROF_CAPTURE SKIA_OPENTYPE_SVG \
              FLITE VULKAN HEADER_MAPS GSTREAMER SYSTEM_SYSPROF_CAPTURE
 WK_OPTS   := -DPORT=WPE -DWEBKIT_STATIC_LIBRARY=ON -DDEVELOPER_MODE=OFF -DENABLE_WPE_PLATFORM=ON \
-             -DENABLE_WPE_PLATFORM_HEADLESS=ON -DUSE_SYSTEM_MALLOC=OFF -DENABLE_JIT=ON \
+             -DENABLE_WPE_PLATFORM_HEADLESS=ON -DUSE_SYSTEM_MALLOC=$(WK_SYSMALLOC) -DENABLE_JIT=ON \
              $(WK_OFF:%=-DENABLE_%=OFF) $(WK_USE_OFF:%=-DUSE_%=OFF) \
-             -DCMAKE_C_FLAGS_MINSIZEREL="$(WK_FLAGS)" -DCMAKE_CXX_FLAGS_MINSIZEREL="$(WK_FLAGS)" \
+             -DCMAKE_C_FLAGS_MINSIZEREL="$(WK_FLAGS)" -DCMAKE_CXX_FLAGS_MINSIZEREL="$(WK_FLAGS)" -DJSC_CXX_FLAGS="$(JSC_CXX_FLAGS)" \
              -DCMAKE_C_FLAGS="-D_caches=_wk_xdg_caches -D_xdg_binary_or_text_fallback=_wk_xdg_binary_or_text_fallback"
 # (WebKit's copy of xdgmime and GIO's share two global names its prefix misses:
 #  linked statically together, WebKit's are renamed)
@@ -30,7 +30,7 @@ WK_DEPS   := $(WEBDEPS:%=$(WB)/stamp/%)
 # unifdef, run on the host (WebKit's own copy would be built for SIEOS)
 $(WKT)/bin/unifdef: $(WB)/stamp/webkit-src
 	gcc -O2 -w -o $@ $(WB)/src/webkit/Source/ThirdParty/unifdef/unifdef.c
-$(WB)/stamp/webkit: $(WB)/stamp/webkit-src $(WK_DEPS) $(SYSROOT)/usr/lib/libc.a user/web/webkit.mk | $(WKT)/bin/unifdef
+$(WB)/stamp/webkit: $(WB)/stamp/webkit-src $(WK_DEPS) $(SYSROOT)/usr/lib/libc.a user/web/webkit.mk user/web/jsc.mk | $(WKT)/bin/unifdef
 	cd $(WB)/src/webkit && $(PKGENV) $(CMAKE) -G Ninja -DCMAKE_MAKE_PROGRAM=$(NINJA) -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/$(WB)/toolchain.cmake \
 	    -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_INSTALL_PREFIX=/usr -S . -B $(CURDIR)/$(WB)/build/webkit $(WK_OPTS) \
 	    -DCMAKE_CXX_STANDARD_LIBRARIES="$$($(PKGENV) $(PKGCONF) --static --libs $(WK_PKGS))" >$(CURDIR)/$(WB)/build/webkit.log
