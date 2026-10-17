@@ -108,7 +108,7 @@ static void acl_rx(const uint8_t *p, int n)
 }
 
 /* ---- Devices. */
-static btdev_t *dev_find(const uint8_t *addr)
+btdev_t *dev_find(const uint8_t *addr)
 {
     for (int i = 0; i < bt.ndev; i++) if (!memcmp(bt.dev[i].d.addr, addr, 6)) return &bt.dev[i];
     return 0;
@@ -129,6 +129,12 @@ static conn_t *conn_dev(btdev_t *d)
 {
     for (int i = 0; i < MAXCONN; i++) if (bt.conn[i].dev == d) return &bt.conn[i];
     return 0;
+}
+static void page(btdev_t *d)                     /* Create Connection (classic) */
+{
+    uint8_t p[13];
+    memcpy(p, d->d.addr, 6); p16(p + 6, 0xCC18); p[8] = d->psrm; p[9] = 0; p16(p + 10, d->clkoff | 0x8000); p[12] = 1;
+    cmd(0x0405, p, 13);
 }
 static int cod_kind(const uint8_t *c)
 {
@@ -297,14 +303,17 @@ static void le_meta(const uint8_t *e, int len)
 static void conn_complete(const uint8_t *e)
 {
     btdev_t *d = dev_find(e + 3);
+    int want = d && d == bt.cdev;                         /* (bt connect, bt send) */
+    if (want) bt.cdev = 0;
     if (e[0]) {
         if (d && d == bt.pdev) pair_end(0, "the device did not answer");
+        bt_log("bt: no connection to %s (%02x)\n", hex6(e + 3), e[0]);
         return;
     }
     if (!d) d = dev_add(e + 3, BTT_CLASSIC);
     conn_t *c = d ? conn_new(g16(e + 1), d, 0) : 0;
     if (!c) { uint8_t p[3] = { e[1], e[2], 0x13 }; cmd(0x0406, p, 3); return; }
-    c->out = d == bt.pdev && bt.pair == BTP_BUSY;
+    c->out = (d == bt.pdev && bt.pair == BTP_BUSY) || want;
     c->master = 1;
     bt_log("bt: connected to %s (%s), handle %d\n", hex6(d->d.addr), d->d.name, c->handle);
     uint8_t p[2]; p16(p, c->handle);
@@ -317,10 +326,10 @@ static void disconnected(const uint8_t *e)
     if (!c) return;
     btdev_t *d = c->dev;
     bt_log("bt: %s disconnected (reason %02x)\n", hex6(d->d.addr), e[3]);
-    if (c->le && bt.le_mtu) bt.le_free += c->inflight; else bt.acl_free += c->inflight;
     l2_gone(c);
     input_gone(c);
     smp_end(c);
+    if (c->le && bt.le_mtu) bt.le_free += c->inflight; else bt.acl_free += c->inflight;   /* (after: closing may send) */
     if (pairing(d)) pair_end(0, "the device disconnected");
     d->d.flags &= ~(BTF_CONNECTED | BTF_INPUT);
     c->dev = 0;
@@ -388,6 +397,15 @@ static void cmd_failed(int op, int st)
     }
 }
 
+/* A classic link is encrypted: what the device is for. */
+static void services(conn_t *c)
+{
+    int k = c->dev->d.kind;
+    if (opp_link(c)) return;                              /* a file to send it */
+    if (k == BTK_AUDIO) a2dp_link(c);
+    else if (c->out && k != BTK_PHONE && k != BTK_COMPUTER) hidp_start(c);
+}
+
 void bt_rx(int type, const uint8_t *p, int n)
 {
     if (type == H4_ACL) { acl_rx(p, n); return; }
@@ -444,7 +462,7 @@ void bt_rx(int type, const uint8_t *p, int n)
         if (c->le && c->smp) smp_encrypted(c, c->enc);
         else if (c->le && c->enc) hogp_start(c);
         else if (c->le) { bt_log("bt: %s has lost our keys: forget it and pair again\n", hex6(c->dev->d.addr)); bt_disconnect(c, 0x05); }
-        else if (c->enc && c->out) hidp_start(c);
+        else if (c->enc) services(c);
         break;
     case 0x17: link_key(e, 0); break;
     case 0x18: link_key(e, 1); break;
@@ -459,11 +477,16 @@ void bt_ready(void)
 {
     bt.state = BTS_ON;
     input_init();
+    sdp_init();
+    a2dp_init();
+    rf_init();
     bt_power(bt.on);
 }
 
 void bt_tick(void)
 {
+    a2dp_tick();
+    opp_tick();
     if (bt.scan_left && !--bt.scan_left) { uint8_t p[2] = { 0 }; cmd(0x200C, p, 2); }
     if (bt.pair_left && !--bt.pair_left && bt.pair != BTP_DONE && bt.pair != BTP_FAILED) {
         conn_t *c = conn_dev(bt.pdev);
@@ -506,11 +529,8 @@ int bt_pair(const bt_dev_t *want)
     scan_stop();
     bt.pdev = d; bt.pair = BTP_BUSY; bt.pair_left = 60; bt.code = 0; bt.why[0] = 0;
     bt_log("bt: pairing with %s (%s)\n", hex6(d->d.addr), d->d.name);
-    if (d->d.type == BTT_CLASSIC) {
-        uint8_t p[13];
-        memcpy(p, d->d.addr, 6); p16(p + 6, 0xCC18); p[8] = d->psrm; p[9] = 0; p16(p + 10, d->clkoff | 0x8000); p[12] = 1;
-        cmd(0x0405, p, 13);
-    } else if (bt.le_busy == 1) cmd(0x200E, 0, 0);       /* cancel the auto-connection; le_conn() goes on */
+    if (d->d.type == BTT_CLASSIC) page(d);
+    else if (bt.le_busy == 1) cmd(0x200E, 0, 0);       /* cancel the auto-connection; le_conn() goes on */
     else if (!bt.le_busy) { le_create(d); bt.le_busy = 2; }
     return 0;
 }
@@ -553,6 +573,26 @@ int bt_power(int on)
         for (int i = 0; i < MAXCONN; i++) if (bt.conn[i].dev) bt_disconnect(&bt.conn[i], 0x15);
     }
     bt_log("bt: %s\n", on ? "on" : "off");
+    return 0;
+}
+
+conn_t *bt_link(btdev_t *d)
+{
+    conn_t *c = conn_dev(d);
+    if (c) return c->enc ? c : 0;
+    if (bt.cdev != d) { scan_stop(); page(d); bt.cdev = d; }
+    return 0;
+}
+
+int bt_connect(const bt_dev_t *want, int on)
+{
+    btdev_t *d = dev_find(want->addr);
+    conn_t *c = d ? conn_dev(d) : 0;
+    if (bt.state != BTS_ON || !bt.on) return -EAGAIN;
+    if (!d || !(d->d.flags & BTF_BONDED) || d->d.type != BTT_CLASSIC) return -ENOENT;
+    bt_log("bt: %s %s\n", on ? "connecting to" : "disconnecting", hex6(d->d.addr));
+    if (!on) { if (c) bt_disconnect(c, 0x13); return c ? 0 : -ENOTCONN; }
+    if ((c = bt_link(d))) { c->out = 1; services(c); }
     return 0;
 }
 

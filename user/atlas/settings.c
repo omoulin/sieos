@@ -35,7 +35,7 @@
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
        S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130, S_OUT = 140, S_KBL = 150, S_KBLC = 160,
        S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET,
-       S_BPOW = 260, S_BSCAN = 262, S_BPAIR, S_BFORGET, S_BYES, S_BNO, S_BDEV = 270 };
+       S_BPOW = 260, S_BSCAN = 262, S_BPAIR, S_BFORGET, S_BYES, S_BNO, S_BCONN, S_BDEV = 270 };
 enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
 
 static const int sizes[][2] = { { 1280, 720 }, { 1366, 768 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 } };
@@ -65,7 +65,7 @@ static wifi_status_t wstat;
 static wifi_net_t wnets[WIFI_MAXNET];
 
 /* The Bluetooth section's: the server's status, its devices, the one picked. */
-static int bt_have, bt_sel = -1, bt_n;
+static int bt_have, bt_sel = -1, bt_n, bt_wait;       /* bt_wait: half seconds to follow a connection */
 static volatile int bt_busy, bt_ticking;
 static bt_status_t bst;
 static bt_dev_t bdev[BT_MAXDEV];
@@ -88,7 +88,7 @@ static void bt_refresh(void)
     long n = bt_have ? bt_call(&l) : 0;
     bt_n = n > 0 ? (int)n : 0;
     if (bt_sel >= bt_n) bt_sel = -1;
-    bt_busy = bt_have && (bst.scanning || bst.pair == BTP_BUSY || bst.pair == BTP_CONFIRM || bst.pair == BTP_PASSKEY);
+    bt_busy = bt_have && (bst.scanning || bst.pair == BTP_BUSY || bst.pair == BTP_CONFIRM || bst.pair == BTP_PASSKEY || bt_wait-- > 0);
 }
 static void bt_ticker(void *a)                           /* twice a second while something goes on */
 {
@@ -97,7 +97,8 @@ static void bt_ticker(void *a)                           /* twice a second while
     bt_ticking = 0;
 }
 static void bt_follow(void) { bt_refresh(); if (!bt_ticking) { bt_ticking = 1; thread_start(bt_ticker, 0, 4096); } }
-int settings_bt_tick(void) { bt_refresh(); return 1; }
+static long audio_call(uint64_t op, uint64_t v);
+int settings_bt_tick(void) { bt_refresh(); if (vol >= 0) audio_call(AUDIO_OUT, AUDIO_ASK); return 1; }   /* (headphones: a new output) */
 
 /* The audio server (it starts when first used): its volume; its outputs
  * (names, one a line). */
@@ -369,7 +370,8 @@ static void wifi_forget(void)
 /* ---- The Bluetooth section's actions. */
 static void bt_do(int req, uint64_t arg, int sel, const char *done)
 {
-    if (req != BT_SCAN && req != BT_CONFIRM && !check_root()) return;
+    if (req != BT_SCAN && req != BT_CONFIRM && req != BT_CONNECT && !check_root()) return;
+    if (req == BT_CONNECT) bt_wait = 20;
     bt_dev_t d = sel >= 0 ? bdev[sel] : (bt_dev_t){ 0 };
     msg_t m = { .w = { (uint64_t)req, arg }, .sbuf = &d, .slen = sel >= 0 ? sizeof d : 0 };
     long r = bt_call(&m);
@@ -619,12 +621,16 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
             static const char *names[BT_MAXDEV];
             for (int i = 0; i < bt_n; i++) {
                 p = lbl[i] + strlcpy(lbl[i], bdev[i].name[0] ? bdev[i].name : "(no name)", 33);
-                strlcpy(p, bdev[i].flags & BTF_INPUT ? " (in use)" : bdev[i].flags & BTF_BONDED ? " (paired)" : "", 12);
+                strlcpy(p, bdev[i].flags & (BTF_INPUT | BTF_AUDIO) ? " (in use)" : bdev[i].flags & BTF_BONDED ? " (paired)" : "", 12);
                 names[i] = lbl[i];
             }
             choices("Devices", names, bt_n, bt_sel, S_BDEV);
         }
-        if (bt_sel >= 0 && fits(42)) { int x = pill(cx, cy, "Pair", 1, H_SET, S_BPAIR); pill(x + 10, cy, "Forget", 0, H_SET, S_BFORGET); }
+        if (bt_sel >= 0 && fits(42)) {
+            int x = pill(cx, cy, "Pair", 1, H_SET, S_BPAIR), on = bdev[bt_sel].flags & BTF_CONNECTED;
+            x = pill(x + 10, cy, "Forget", 0, H_SET, S_BFORGET);
+            if (bdev[bt_sel].flags & BTF_BONDED && !bdev[bt_sel].type) pill(x + 10, cy, on ? "Disconnect" : "Connect", 0, H_SET, S_BCONN);
+        }
         if (bt_sel >= 0) cy += ROW;
     }
 
@@ -684,6 +690,7 @@ int settings_click(int kind, int arg)
     else if (arg >= S_BDEV && arg < S_BDEV + bt_n) { bt_sel = arg - S_BDEV; msg[0] = 0; }
     else if (arg == S_BPAIR && bt_sel >= 0) bt_do(BT_PAIR, 0, bt_sel, "Pairing...");
     else if (arg == S_BFORGET && bt_sel >= 0) bt_do(BT_FORGET, 0, bt_sel, "Forgotten.");
+    else if (arg == S_BCONN && bt_sel >= 0) { int on = !(bdev[bt_sel].flags & BTF_CONNECTED); bt_do(BT_CONNECT, on, bt_sel, on ? "Connecting..." : "Disconnected."); }
     else if (arg == S_BYES || arg == S_BNO) bt_do(BT_CONFIRM, arg == S_BYES, -1, arg == S_BYES ? "Confirmed." : "Refused.");
     else if (arg == S_APPLY) apply_sia();
     else if (arg == S_BODY) field = -1;

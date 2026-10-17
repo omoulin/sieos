@@ -90,9 +90,11 @@ void l2_close(l2ch_t *h)
     h->state = CH_FREE;                                   /* (the answer finds no channel: fine) */
 }
 
-void l2_gone(conn_t *c)
+void l2_gone(conn_t *c)                          /* (all closed first: their users send nothing on the dead link) */
 {
-    for (int i = 0; i < MAXCH; i++) if (ch[i].state && ch[i].c == c) ch_end(&ch[i]);
+    uint8_t was[MAXCH];
+    for (int i = 0; i < MAXCH; i++) { was[i] = ch[i].state && ch[i].c == c; if (was[i]) ch[i].state = CH_FREE; }
+    for (int i = 0; i < MAXCH; i++) if (was[i] && ch[i].ops->close) ch[i].ops->close(&ch[i]);
 }
 
 static void sig_rx(conn_t *c, int code, int id, const uint8_t *d, int n)

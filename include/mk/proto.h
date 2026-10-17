@@ -424,12 +424,16 @@ enum {
     AUDIO_READ,       /* w[1] = rbuf's size; recording starts, and runs while someone
                          reads -> bytes in rbuf (waits for some)                 */
     AUDIO_VOL,        /* w[1] = volume 0-100, | AUDIO_MUTE; AUDIO_ASK: no change -> the same */
-    AUDIO_OUT,        /* w[1] = output (0 speakers, 1... HDMI/DP monitors with sound), or
-                         AUDIO_ASK -> w[0] the one playing, w[1] how many; rbuf: their
-                         names, one a line                                        */
+    AUDIO_OUT,        /* w[1] = output (0 speakers, 1... HDMI/DP monitors with sound, then
+                         Bluetooth headphones), AUDIO_BT (the Bluetooth one), or AUDIO_ASK
+                         -> w[0] the one playing, w[1] how many; rbuf: their names, one a line */
 };
 #define AUDIO_MUTE 0x100
 #define AUDIO_ASK  0x200
+#define AUDIO_BT   0x400
+/* btd's port "btaudio", for audiod only (root): AUDIO_WRITE, w[1] = the volume
+ * (as AUDIO_VOL's), sbuf = frames -> bytes taken (the reply waits for room),
+ * -ENOENT: no headphones; AUDIO_OUT -> rbuf: the headphones' name, or -ENOENT. */
 
 /* Bluetooth (docs/bluetooth.md). A USB adapter's HCI pipe, port "bthci"
  * (the USB server, user/usb/btusb.c; btd is its only client). Reply: w[0]. */
@@ -452,7 +456,19 @@ enum {
     BT_CONFIRM,       /* (root) w[1] = 1: the code matches, 0: it does not          -> 0 */
     BT_FORGET,        /* (root) sbuf = bt_dev_t (addr): disconnect, delete its keys -> 0 */
     BT_POWER,         /* (root) w[1] = 1 on, 0 off (kept in /etc/bluetooth.keys)    -> 0 */
+    BT_CONNECT,       /* sbuf = bt_dev_t (addr) of a bonded classic device: w[1] = 1 connect
+                         (headphones: then audiod's Bluetooth output), 0 disconnect   -> 0 */
+    BT_SEND,          /* sbuf = bt_send_t: start sending a file (OBEX Object Push)  -> 0 */
+    BT_DATA,          /* (the sender) sbuf = the file's next bytes, at most BT_CHUNK -> bytes
+                         taken, -EAGAIN: not ready (again later), -EIO: failed (BT_STATUS's
+                         why); w[1] = 1 and no bytes: the end -> -EAGAIN until delivered, 0 */
+    BT_USER,          /* (root: Atlas) w[1] = the desktop's user, -1: none. Files received
+                         go to that user's ~/Downloads (none: root's)               -> 0 */
 };
+#define BT_CHUNK 8000
+typedef struct { uint8_t addr[6], _pad[2]; uint32_t size; char name[64]; } bt_send_t;
+#define ATLAS_NOTE 120 /* to Atlas's port "atlas" (root only): sbuf = a line to show for a while
+                          (btd: a file received)                                     -> 0 */
 enum { BTS_OFF, BTS_STARTING, BTS_ON, BTS_FAILED };            /* bt_status_t.state */
 enum { BTP_NONE, BTP_BUSY, BTP_CONFIRM, BTP_PASSKEY, BTP_DONE, BTP_FAILED };   /* .pair: CONFIRM:
                          does the code match the device's? PASSKEY: type the code on the device */
@@ -461,6 +477,7 @@ enum { BTT_CLASSIC, BTT_LE_PUBLIC, BTT_LE_RANDOM };             /* bt_dev_t.type
 #define BTF_BONDED    1
 #define BTF_CONNECTED 2
 #define BTF_INPUT     4                        /* its keyboard / mouse is in use */
+#define BTF_AUDIO     8                        /* its headphones / speakers are ready */
 typedef struct { uint8_t addr[6], type, kind, flags; int8_t rssi; char name[32]; } bt_dev_t;
 typedef struct {
     uint8_t state, scanning, pair, _pad;

@@ -989,6 +989,13 @@ static void close_win(int w)
     settle();
 }
 
+static void bt_user(void)                               /* Bluetooth: whose ~/Downloads files received go to */
+{
+    msg_t m = { .w = { BT_USER, (uint64_t)uid } };
+    long p = port_find("bt");
+    if (p > 0) ipc_call(p, &m);
+}
+
 static void logout(void)
 {
     for (int t = 0; t < MAXTERM; t++) if (terms[t].used) { tty_hangup(&terms[t].tty); sys_kill(terms[t].pid); close_term(&terms[t]); }
@@ -1002,6 +1009,7 @@ static void logout(void)
     nitems = 0;
     mode = GREETER;
     uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = home[0] = 0; gfield = 0;
+    bt_user();
     nres = nfound = 0; strip_on = 0; mn.on = pr.on = 0; focus = -1; last_term = -1;
     wm_reset();
     mouse_load();                                       /* (uid -1: the default mouse) */
@@ -1076,6 +1084,7 @@ static void login(void)
         return;
     }
     say("atlas: login %s: ok\n", user);
+    bt_user();
     gmsg[0] = 0;
     mode = SESSION;
     rescan();
@@ -1819,6 +1828,13 @@ int main(int argc, char **argv)
             reply_val(from, 0);
             if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
             if (mode == SESSION && wm_top() < 0) { int x0, y0, x1, y1; rest_box(&x0, &y0, &x1, &y1); redraw_box(x0, y0, x1, y1); }   /* (the resting clock) */
+            continue;
+        }
+        if (m.w[0] == ATLAS_NOTE && !m.uid) {            /* btd: a file received */
+            reply_val(from, 0);
+            buf[m.rlen < sizeof buf ? m.rlen : sizeof buf - 1] = 0;
+            strlcpy(toast, buf, sizeof toast);
+            if (mode == SESSION) settle();
             continue;
         }
         if (m.w[3] == MAIL_CHAN) {                       /* Mail's helper, as the user */
