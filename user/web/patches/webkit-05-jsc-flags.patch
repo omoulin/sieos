@@ -1,0 +1,23 @@
+JavaScriptCore with flags of its own (JSC_CXX_FLAGS): on arm64 the rest of
+WebKit is built with -Os, JavaScriptCore with -O2 (built with -Os, the
+JIT's code crashes there).
+
+--- a/Source/JavaScriptCore/CMakeLists.txt
++++ b/Source/JavaScriptCore/CMakeLists.txt
+@@ -1859,6 +1859,16 @@
+ 
+ WEBKIT_FRAMEWORK(JavaScriptCore)
+ 
++# (SIEOS: JSC_CXX_FLAGS, JavaScriptCore's own flags, after the build type's)
++if (JSC_CXX_FLAGS)
++    separate_arguments(_jsc_flags UNIX_COMMAND "${JSC_CXX_FLAGS}")
++    foreach (_t JavaScriptCore JavaScriptCoreJIT)
++        if (TARGET ${_t})
++            target_compile_options(${_t} PRIVATE ${_jsc_flags})
++        endif ()
++    endforeach ()
++endif ()
++
+ if (USE_APPLE_INTERNAL_SDK)
+     WEBKIT_TARGET_USE_PGO(JavaScriptCore PROFILE JavaScriptCore)
+ endif ()

@@ -18,13 +18,23 @@ $(WB)/stamp/webkit-src: $(WB)/toolchain.stamp $(WK_PATCHES)
 	touch $@
 
 # The JIT, all its tiers (LLInt, baseline, DFG, FTL on B3: upstream's Linux
-# default; without the FTL this release does not build); musl's malloc (no bmalloc,
-# libpas, Gigacage); no sampling profiler (it stops threads with signals),
-# inspector, API tests. -O2: speed matters here.
+# default; without the FTL this release does not build); no sampling
+# profiler (it stops threads with signals), inspector, API tests. Measured
+# (WK_* serve webkit.mk too):
+# - malloc: on x86-64 WebKit's own (bmalloc/libpas: bench.js 25% faster than
+#   with musl's, pages as fast; its 16-byte atomics inline: cmpxchg16b); on
+#   arm64 musl's (emulated, libpas made pages load 2x slower, bench.js only
+#   13% faster). WK_SYSMALLOC=OFF tries libpas there (the Pi 5 decides).
+# - -Os everywhere (on x86-64 as fast as -O2: the JIT's code is the same;
+#   WebKit 9 MB smaller), but JavaScriptCore on arm64: -O2 (JSC_CXX_FLAGS,
+#   patch 05: built with -Os, the JIT's code crashes there, either malloc)
+WK_SYSMALLOC ?= $(if $(filter x86_64,$(ARCH)),OFF,ON)
+WK_FLAGS  := -Os -DNDEBUG $(if $(filter x86_64,$(ARCH)),-mcx16)
+JSC_CXX_FLAGS := $(if $(filter x86_64,$(ARCH)),,-O2)
 JSC_OPTS  := -DPORT=JSCOnly -DENABLE_STATIC_JSC=ON -DEVENT_LOOP_TYPE=Generic -DDEVELOPER_MODE=OFF \
-             -DENABLE_API_TESTS=OFF -DUSE_SYSTEM_MALLOC=ON -DENABLE_SAMPLING_PROFILER=OFF \
+             -DENABLE_API_TESTS=OFF -DUSE_SYSTEM_MALLOC=$(WK_SYSMALLOC) -DENABLE_SAMPLING_PROFILER=OFF \
              -DENABLE_REMOTE_INSPECTOR=OFF -DUSE_LIBBACKTRACE=OFF -DENABLE_FUZZILLI=OFF -DUSE_HEADER_MAPS=OFF \
-             -DCMAKE_C_FLAGS_RELEASE="-O2 -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG"
+             -DCMAKE_C_FLAGS_RELEASE="$(WK_FLAGS)" -DCMAKE_CXX_FLAGS_RELEASE="$(WK_FLAGS)" -DJSC_CXX_FLAGS="$(JSC_CXX_FLAGS)"
 JSC_JOBS  ?= 16
 $(WB)/jsc: $(WB)/stamp/webkit-src $(WB)/stamp/icu $(SYSROOT)/usr/lib/libc.a user/web/jsc.mk
 	cd $(WB)/src/webkit && $(PKGENV) $(CMAKE) -G Ninja -DCMAKE_MAKE_PROGRAM=$(NINJA) -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/$(WB)/toolchain.cmake \

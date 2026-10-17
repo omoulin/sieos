@@ -17,10 +17,11 @@
  */
 #include "sieos_spawn.h"
 
-/* ---- Program images in shared memory, by path (and size and time: a
- * program rewritten is read again). */
+/* ---- Program images in shared memory, by file (its inode: the names linked
+ * to one program share it; and size and time: a program rewritten is read
+ * again). */
 #define NIMG 8
-static struct { char path[FS_PATH]; uint64_t size; int64_t mtime; void *at; uint64_t id; } img[NIMG];
+static struct { uint64_t ino; uint64_t size; int64_t mtime; void *at; uint64_t id; } img[NIMG];
 static int img_next;
 static long image(const char *path, void **at, uint64_t *size)
 {
@@ -31,7 +32,7 @@ static long image(const char *path, void **at, uint64_t *size)
     if (!(st.mode & 0111)) return -EACCES;
     lock();
     for (int i = 0; i < NIMG; i++)
-        if (img[i].at && !strcmp(img[i].path, path) && img[i].size == st.size && img[i].mtime == st.mtime) {
+        if (img[i].at && img[i].ino == st.ino && img[i].size == st.size && img[i].mtime == st.mtime) {
             *at = img[i].at; *size = st.size;
             unlock();
             return 0;
@@ -53,7 +54,7 @@ static long image(const char *path, void **at, uint64_t *size)
     lock();
     int k = img_next++ % NIMG;
     if (img[k].at) S3(SYS_MUNMAP, img[k].at, img[k].size, 0);   /* (an older image goes) */
-    memcpy(img[k].path, path, strlen(path) + 1);
+    img[k].ino = st.ino;
     img[k].size = st.size; img[k].mtime = st.mtime; img[k].at = (void *)a; img[k].id = id;
     unlock();
     *at = (void *)a; *size = st.size;

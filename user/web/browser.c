@@ -160,8 +160,12 @@ static gboolean key(WPEToplevel *tl, guint k, WPEModifiers m, gpointer data)
 
 static void closed(WPEView *v, gpointer data) { (void)v; (void)data; g_main_loop_quit(loop); }
 
+int sieos_webkit_process(int argc, char **argv, int *status);   /* (multicall.cpp) */
+
 int main(int argc, char **argv)
 {
+    int status;
+    if (sieos_webkit_process(argc, argv, &status)) return status;   /* started as WebKit's WebProcess or NetworkProcess */
     setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1);   /* no GL on SIEOS (user/web/patches/webkit-04-no-gl.patch) */
     setenv("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1", 1);
     loop = g_main_loop_new(NULL, FALSE);
