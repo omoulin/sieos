@@ -45,6 +45,7 @@
 #define ATLAS_INPUT 100             /* from our input thread: con_event_t[] in sbuf */
 #define ATLAS_TICK  102             /* from the clock thread: a new minute */
 #define ATLAS_ACPI  106             /* from the ACPI thread: battery, AC, lid, a wake-up (acpi_status_t) */
+#define ATLAS_HPD   108             /* from the hot-plug thread: a monitor plugged in or out */
 
 #define TCMAX 132                   /* a terminal: up to 132 x 60 characters */
 #define TRMAX 60
@@ -206,6 +207,20 @@ static void power_event(const acpi_status_t *n)
     if (shut && !was && atlas_lid_sleep) power(POWER_SLEEP);   /* (back here once awake) */
     else if (shut != was) screen_blank(shut);
     if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
+}
+
+static void hpd_thread(void *arg)                        /* the Intel display's hot-plug pins, twice a second: */
+{                                                        /* a change that lasts 200 ms (not a bounce) -> ATLAS_HPD */
+    (void)arg;
+    for (int was = screen_hpd(), now;;) {
+        sys_sleep(500000000);
+        if ((now = screen_hpd()) == was) continue;
+        sys_sleep(200000000);
+        if (screen_hpd() != now) continue;
+        was = now;
+        msg_t m = { .w = { ATLAS_HPD } };
+        ipc_call(port, &m);
+    }
 }
 
 static void clock_thread(void *arg)                      /* one message a minute, nothing else */
@@ -1807,6 +1822,7 @@ int main(int argc, char **argv)
     thread_start(input_thread, 0, 16384);
     thread_start(clock_thread, 0, 4096);
     thread_start(acpi_thread, 0, 4096);
+    if (screen_hpd() >= 0) thread_start(hpd_thread, 0, 4096);
     panel_init(port);
     settings_init(port);
     pins_init(port);
@@ -1885,6 +1901,11 @@ int main(int argc, char **argv)
         if (m.pid == self && m.w[0] == ATLAS_ACPI && m.rlen == sizeof(acpi_status_t)) {
             reply_val(from, 0);
             power_event((const acpi_status_t *)buf);
+            continue;
+        }
+        if (m.pid == self && m.w[0] == ATLAS_HPD) {      /* light or turn off monitors (the same picture: nothing to draw) */
+            reply_val(from, 0);
+            screen_plug();
             continue;
         }
         if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the Deskbar's tray */

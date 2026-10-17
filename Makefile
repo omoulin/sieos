@@ -429,7 +429,7 @@ git-test: all
 	python3 tools/gittest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # audio-test: sound (docs/audio.md) on QEMU's intel-hda + hda-duplex, output to a WAV file:
 # vol, play (the tone checked in QEMU's file), mute, rec (tools/audiotest.py); first the HDMI codec test (hdmi-test)
-audio-test: all hdmi-test
+audio-test: all hdmi-test igfx-test
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	python3 tools/audiotest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
@@ -683,12 +683,20 @@ $(B)/host/aml-test: tests/aml/test.c user/lib/aml.c user/lib/aml.h
 	gcc $(HOSTCFLAGS) -DAML_HOST -Iuser/lib -o $@ tests/aml/test.c user/lib/aml.c
 # ---- audiod's codec side (codec.c, eld.h) on the host: the laptop's real
 # codecs (their /proc/asound dumps) answered by a fake, two real EDIDs (tests/hdmi)
-$(B)/host/hdmi-test: tests/hdmi/test.c user/audiod/codec.c user/lib/eld.h
+$(B)/host/hdmi-test: tests/hdmi/test.c tests/hdmi/edid.h user/audiod/codec.c user/lib/eld.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -Iuser/lib -o $@ tests/hdmi/test.c
 hdmi-test: $(B)/host/hdmi-test
 	$(B)/host/hdmi-test tests/hdmi
 .PHONY: hdmi-test
+# ---- the Intel display's monitor hot-plug (igfx.c's screen_plug) on the host:
+# QEMU has no Intel GPU, so a fake display engine and monitors (tests/igfx)
+$(B)/host/igfx-test: tests/igfx/test.c tests/igfx/mk.h tests/hdmi/edid.h user/atlas/igfx.c user/lib/eld.h
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -DIGFX_HOST -Itests/igfx -Iuser/lib -o $@ tests/igfx/test.c
+igfx-test: $(B)/host/igfx-test
+	$(B)/host/igfx-test
+.PHONY: igfx-test
 aml-test: $(B)/host/aml-test
 	sh tests/aml/check.sh $(B)/host/aml-test
 .PHONY: aml-test

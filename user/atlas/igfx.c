@@ -33,6 +33,11 @@
  *      voltage swing, DP link training (or the TMDS buffer for HDMI), timings,
  *      M/N, pipe, scaler, DBUF share and watermarks, plane 1; the panel's power
  *      and backlight (the PCH's PWM; screen_backlight() for Settings).
+ * Hot-plug: Atlas reads the PCH's detect pins twice a second (screen_hpd); a
+ * monitor plugged in later is probed and lit as at the start, on the next
+ * free pipe, in a mode the CDCLK carries as it is (the panel is never
+ * touched but for its DBUF share); one unplugged has its pipe, port, DPLL
+ * and sound turned off (screen_plug).
  * Everything is logged (the console, and /etc/igfx.log: registers, modes,
  * link training). A failure before step 2 leaves the firmware's screen as it
  * was; after it, the panel is set up again once with its slowest mode. A
@@ -49,8 +54,10 @@
 
 /* ---- Registers (BAR0), time, the log. */
 static volatile uint32_t *mm;
+#ifndef IGFX_HOST                                        /* (tests/igfx: a fake display's) */
 static uint32_t rd(uint32_t r) { return mm[r >> 2]; }
 static void wr(uint32_t r, uint32_t v) { mm[r >> 2] = v; }
+#endif
 static __attribute__((noinline)) void rmw(uint32_t r, uint32_t clr, uint32_t set) { wr(r, (rd(r) & ~clr) | set); }
 static void us(long n) { if (n >= 1000) sys_sleep(n * 1000); else for (long t = sys_clock() + n * 1000; sys_clock() < t; ) ; }
 #define ANY 0xFFFFFFFFu                                  /* poll(): any bit of the mask set */
@@ -89,7 +96,7 @@ static void save(void)
 /* ---- The outputs. */
 typedef struct { int clock, hd, hss, hse, ht, vd, vss, vse, vt, flags; } mode_t;   /* kHz; flags: 1 +hsync, 2 +vsync */
 typedef struct {
-    int port, kind, aux, ddc, rev;   /* DDI (0 = A, 3-6 = TC1-TC4); 'e' eDP, 'd' DP, 'h' HDMI; AUX channel, GMBUS pin, lane reversal */
+    int port, kind, vk, aux, ddc, rev;   /* DDI (0 = A, 3-6 = TC1-TC4); 'e' eDP, 'd' DP, 'h' HDMI (vk: as the VBT says); AUX channel, GMBUS pin, lane reversal */
     int pipe, on;
     uint8_t dpcd[16];
     int rates[8], nrates, edp14;     /* DP: link rates (port clock, kHz); eDP 1.4 rate table (LINK_RATE_SET) */
@@ -98,8 +105,8 @@ typedef struct {
     int eldn;                        /* a monitor with sound: its ELD (eld.h) for the HDMI codec */
     uint8_t eld[ELD_MAX];
 } out_t;
-static out_t out[3];
-static int nout, ref, cdmax, fbw, fbh, stride, a4, active, failed;
+static out_t out[5];                                     /* the panel, then the VBT's monitor ports */
+static int nout, ref, cdmax, fbw, fbh, stride, a4, active, failed, boot;
 static uint32_t surf;
 static int t_up, t_down, t_cycle, t8, t9;               /* the panel's delays: 100 us units (PP registers), ms */
 static int blc, blmax, blmin, blhz, blfw;               /* backlight PWM controller, period, lowest duty, VBT Hz, firmware's on */
@@ -253,7 +260,7 @@ static int fits(out_t *o, const mode_t *m)
     if (o->kind == 'h') { o->clk = m->clock; o->lanes = 4; return m->clock <= 340000 && !pll(m->clock, 0, &a, &b); }
     for (int r = 0; r < o->nrates; r++)                  /* the slowest link that carries it: 24 bits a pixel, 8b/10b */
         for (int l = 1; l <= (o->dpcd[2] & 31) && l <= 4; l *= 2)
-            if (m->clock * 3L <= (long)o->rates[r] * l && !pll(o->rates[r], 1, &a, &b)) {
+            if (m->clock * 3L <= (long)o->rates[r] * l && (o->rates[r] <= 594000 || cdmax > 326400) && !pll(o->rates[r], 1, &a, &b)) {
                 o->clk = o->rates[r]; o->lanes = l; o->rsel = r;
                 return 1;
             }
@@ -275,12 +282,13 @@ static int pick(out_t *o, const mode_t *c, int n, int slow)   /* the biggest tha
 }
 
 /* ---- Probe an output: DPCD, EDID, modes -> 0 if something is there */
-static mode_t modes[3][12];
-static int nmodes[3];
+static mode_t modes[5][12];
+static int nmodes[5];
 static int probe(out_t *o, int i)
 {
     uint8_t e[256];
-    o->rsel = -1;
+    o->rsel = -1; o->nrates = 0;
+    if (o->vk) o->kind = o->vk;                          /* (a DP++ port: DP first again) */
     if (o->kind != 'h') {
         rmw(0x45444, 0, 2u << 2 * o->aux);               /* PWR_WELL_CTL_AUX2: this AUX channel's power */
         poll(0x45444, 1u << 2 * o->aux, 1u << 2 * o->aux, 2);
@@ -363,8 +371,9 @@ static void vbt(void)
         int auxch = c[25] == 0x40 ? 0 : c[25] == 0x50 ? 6 : c[25] >> 4 ? (c[25] >> 4) + 2 : (int)p;   /* (adls_aux_ch_map) */
         int ddc = c[19] == 1 ? 1 : c[19] >= 2 && c[19] <= 5 ? c[19] + 7 : 0;                        /* (adls_ddc_pin_map) */
         lg("VBT child: type %04x port %u aux %02x ddc %u%s%s%s\n", type, p, c[25], c[19], dp ? " DP" : "", hdmi ? " HDMI" : "", c[23] & 2 ? " reversed" : "");
-        out_t *o = type & 1 << 12 && dp ? &out[0] : nout < 3 ? &out[nout++] : 0;   /* internal: the panel */
-        if (o) *o = (out_t){ .port = p, .kind = o == out ? 'e' : dp ? 'd' : 'h', .aux = auxch, .ddc = hdmi ? ddc : 0, .rev = c[23] >> 1 & 1 };
+        out_t *o = type & 1 << 12 && dp ? &out[0] : nout < 5 ? &out[nout++] : 0;   /* internal: the panel */
+        int k = o == out ? 'e' : dp ? 'd' : 'h';
+        if (o) *o = (out_t){ .port = p, .kind = k, .vk = k, .aux = auxch, .ddc = hdmi ? ddc : 0, .rev = c[23] >> 1 & 1 };
     }
 }
 
@@ -600,12 +609,50 @@ static void avi(uint32_t T)                              /* (hsw_write_infoframe
     rmw(T + 0x60200, 0, 1u << 12);
 }
 
+/* ---- DBUF: pipe p's share when the pipes of mask run (tgl_allowed_dbufs: S1 =
+ * blocks 0-1023, S2 = 1024-2047) -> its PLANE_BUF_CFG; written with the
+ * watermarks: level 0 (and SAGV) as large as the share, so the plane always
+ * fetches early. */
+static uint32_t share(int p, int mask)
+{
+    int n = (mask & 1) + (mask >> 1 & 1) + (mask >> 2 & 1), s0 = 0, s1 = 2048;
+    if (n > 1) { if (p == 2 || (p == 0 && mask == 3)) s0 = 1024; else { s1 = 1024; if (n == 3) { if (p) s0 = 512; else s1 = 512; } } }
+    return (uint32_t)(s1 - 1) << 16 | s0;
+}
+static void ddb(int p, uint32_t b)
+{
+    uint32_t T = p * 0x1000, wm = 1u << 31 | 1u << 30 | ((b >> 16) - (b & 0x7FF));   /* enabled, lines ignored, blocks */
+    wr(T + 0x7027C, b);
+    wr(T + 0x70240, wm); wr(T + 0x70258, wm);
+    for (int l = 1; l < 8; l++) wr(T + 0x70240 + 4 * l, 0);
+    wr(T + 0x70268, 0); wr(T + 0x7025C, 0); wr(T + 0x7017C, 0);
+}
+static int runs(int p) { return rd(p * 0x1000 + 0x70008) >> 31; }
+/* The running pipes' shares for a new set of pipes: each moved (at its next
+ * frame, armed by PLANE_SURF) only once it overlaps no other's blocks. */
+static void rebuf(int mask)
+{
+    for (int k = 0; k < 3; k++)
+        for (int p = 0, q; p < 3; p++) {
+            uint32_t b = share(p, mask), c;
+            if (!(mask >> p & 1) || !runs(p) || rd(p * 0x1000 + 0x7027C) == b) continue;
+            for (q = 0; q < 3; q++)
+                if (q != p && runs(q) && (c = rd(q * 0x1000 + 0x7027C), (b & 0x7FF) <= c >> 16 && (c & 0x7FF) <= b >> 16)) break;
+            if (q < 3) continue;
+            ddb(p, b);
+            wr(p * 0x1000 + 0x7019C, surf);
+            us(50000);
+            lg("pipe %c: DBUF blocks %u-%u\n", 'A' + p, b & 0x7FF, b >> 16);
+        }
+}
+
 /* ---- One output on (the PRM's "Enable sequence" for DP / HDMI). */
 static int enable(out_t *o, int mask)
 {
     int p = o->pipe, dp = o->kind != 'h', ph = o->port ? o->port - 2 : 0;
     uint32_t T = p * 0x1000, B = 0x64000 + o->port * 0x100, e = pll_en(p), c0, c1, cf = p < 2 ? 0x164284 + 8 * p : p == 2 ? 0x164294 : 0x1642C0;
     const mode_t *m = &o->m;
+    o->on = 0;
     if (pll(o->clk, dp, &c0, &c1)) return lg("no DPLL setting for %d kHz\n", o->clk);
     rmw(0x45454, 0, 2u << 2 * o->port);                  /* 1. PWR_WELL_CTL_DDI2: the DDI's IO power */
     if (poll(0x45454, 1u << 2 * o->port, 1u << 2 * o->port, 2)) return lg("DDI %d IO power well\n", o->port);
@@ -641,15 +688,7 @@ static int enable(out_t *o, int mask)
     source(o);
     wr(0x45270 + 4 * p, (uint32_t)(((long)m->ht * 8000 + m->clock - 1) / m->clock) & 0x1FF);   /* WM_LINETIME: 1/8 us */
     wr(T + 0x7003C, 16u << 20 | 1u << 17 | 1u << 16 | 2u << 14 | 12u << 8 | 2);   /* PIPE_MBUS_DBOX_CTL (tgl credits) */
-    /* DBUF share (tgl_allowed_dbufs: S1 = blocks 0-1023, S2 = 1024-2047), watermarks:
-     * level 0 (and SAGV) as large as the share, so the plane always fetches early */
-    int n = (mask & 1) + (mask >> 1 & 1) + (mask >> 2 & 1), s0 = 0, s1 = 2048;
-    if (n > 1) { if (p == 2 || (p == 0 && mask == 3)) s0 = 1024; else { s1 = 1024; if (n == 3) { if (p) s0 = 512; else s1 = 512; } } }
-    wr(T + 0x7027C, (uint32_t)(s1 - 1) << 16 | s0);      /* PLANE_BUF_CFG */
-    uint32_t wm = 1u << 31 | 1u << 30 | (s1 - s0 - 1);   /* enabled, lines ignored, blocks */
-    wr(T + 0x70240, wm); wr(T + 0x70258, wm);
-    for (int l = 1; l < 8; l++) wr(T + 0x70240 + 4 * l, 0);
-    wr(T + 0x70268, 0); wr(T + 0x7025C, 0); wr(T + 0x7017C, 0);
+    ddb(p, share(p, mask));
     if (!dp && o->eldn) avi(T);
     wr(T + 0x60404, 0); wr(T + 0x60400, f | 1u << 31);  /* the DDI function on, then the transcoder */
     rmw(T + 0x70008, 0, 1u << 31);
@@ -711,13 +750,11 @@ static int modeset(void)
     wr(0x45504, 0);                                      /* DC_STATE_EN: no DC5/DC6 while we drive it */
     rmw(0x44FE8, 0, 1u << 31); rmw(0x44300, 0, 1u << 31);   /* DBUF slices S1, S2 */
     if (poll(0x44FE8, 1u << 30, 1u << 30, 2) || poll(0x44300, 1u << 30, 1u << 30, 2)) return lg("DBUF power\n");
-    int snd = 0;
-    for (int i = 1; i < nout; i++) snd |= out[i].m.clock && out[i].eldn;
-    if (snd) {                                           /* display audio (i915_audio_component_get_power, codec_wake_override) */
+    if (nout > 1) {                                      /* display audio (i915_audio_component_get_power, codec_wake_override), */
         wr(0x65900, 0x8010);                             /* AUD_FREQ_CNTRL: 8T, 96 MHz BCLK (AUD_FREQ_GEN12) */
         rmw(0x48414, 0, 1u << 31);                       /* AUD_PIN_BUF_CTL: on */
         rmw(0x65F10, 1u << 15, 0); us(1000);             /* AUD_CHICKENBIT: the codec's wake signal, left on, */
-        rmw(0x65F10, 0, 1u << 15); us(1000);             /* so the HDA link finds the HDMI codec after its resets */
+        rmw(0x65F10, 0, 1u << 15); us(1000);             /* so the HDA link finds the HDMI codec after its resets (and a monitor plugged later) */
         lg("display audio on: AUD_FREQ_CNTRL %08x, AUD_PIN_BUF_CTL %08x, AUD_CHICKENBIT %08x\n", rd(0x65900), rd(0x48414), rd(0x65F10));
     }
     int nd = 0, cd = cdclk_now(), hbr3 = 0;
@@ -742,8 +779,47 @@ int screen_wake(void)
     lg("awake: modeset again\n");
     int r = modeset();
     dump(r ? "after waking: FAILED" : "after waking");
-    save();
+    screen_plug();                                       /* (monitors plugged in or out while asleep) */
     return r;
+}
+
+/* ---- Hot-plug: the PCH's detect pins (SDE; i915: tgl_hpd_pin, hpd_icp): TC1-TC4
+ * on SDEISR bits 24-27, their live levels (SHOTPLUG_CTL_TC: detection on). */
+int screen_hpd(void) { return active ? (int)(rd(0xC4000) >> 24 & 15) : -1; }
+static int monitor(out_t *o, int i)                      /* probed, its mode chosen -> 0 */
+{
+    if (rd(phy(o->port) + 0x100) >> 31 && !probe(o, i) && !pick(o, modes[i], nmodes[i], 0)) return 0;
+    o->m.clock = 0;
+    return -1;
+}
+static int pipes(void) { int m = 0; for (int i = 0; i < nout; i++) if (out[i].on) m |= 1 << out[i].pipe; return m; }
+void screen_plug(void)                                   /* each monitor port as its pin says */
+{
+    if (!active) return;
+    if (ln > sizeof lb - 4096) { ln = boot; lg("(older hot-plug lines dropped)\n"); }
+    for (int i = 1, hp = screen_hpd(); i < nout; i++) {
+        out_t *o = &out[i];
+        int in, m = pipes(), cd = cdmax;
+        if (o->port < 3 || (in = hp >> (o->port - 3) & 1) == o->on) continue;
+        lg("port %d: monitor %s\n", o->port, in ? "plugged in" : "unplugged");
+        if (in && (m & 6) == 6) { lg("  no free pipe\n"); continue; }
+        if (in) {
+            o->pipe = m & 2 ? 2 : 1;
+            cdmax = cdclk_now();                         /* (a mode the CDCLK carries as it is) */
+            int r = monitor(o, i);
+            cdmax = cd;
+            if (r) { lg("  no answer, or no mode: left off\n"); continue; }
+            rebuf(m | 1 << o->pipe);
+            if (!enable(o, m | 1 << o->pipe)) continue;
+            lg("port %d left off\n", o->port);
+        }
+        pipe_off(o->pipe); pll_off(o->pipe);
+        rmw(0x45454, 2u << 2 * o->port, 0);              /* the DDI's IO power */
+        o->on = o->m.clock = 0;
+        lg("pipe %c off\n", 'A' + o->pipe);
+        rebuf(pipes());
+    }
+    save();
 }
 
 int igfx_init(const mk_screen_t *g)                      /* -> 0: ours; -1: not here (or failed); 1: ours, PW x PH refused */
@@ -808,10 +884,12 @@ int igfx_init(const mk_screen_t *g)                      /* -> 0: ours; -1: not 
     if (probe(&out[0], 0) || pick(&out[0], modes[0], nmodes[0], 0)) return lg("the panel cannot be set up: firmware screen kept\n"), save(), -1;
     if (!PW) native(&PW, &PH);
     if (PW > fbw || PH > fbh) { PW = fbw; PH = fbh; }
+    wr(0xC4038, 0xF8); rmw(0xC4034, 0, 0x8888);          /* hot-plug: 250 us filter (SHPD_FILTER_CNT), TC1-TC4 detection */
+    lg("hot-plug pins TC1-TC4: %x (SHOTPLUG_CTL_TC %08x)\n", rd(0xC4000) >> 24 & 15, rd(0xC4034));
     int k = 1;
     for (int i = 1; i < nout; i++) {                     /* monitors: those that answer, two at most */
         out[i].pipe = k;
-        if (k < 3 && rd(phy(out[i].port) + 0x100) >> 31 && !probe(&out[i], i) && !pick(&out[i], modes[i], nmodes[i], 0)) k++;
+        if (k < 3 && !monitor(&out[i], i)) k++;
         else out[i].m.clock = 0;
     }
     wr(0xC7208, (uint32_t)t_up << 16 | 1);               /* PP_ON/OFF_DELAYS (backlight delays: ours, by hand) */
@@ -832,6 +910,7 @@ int igfx_init(const mk_screen_t *g)                      /* -> 0: ours; -1: not 
     dump("now");
     active = !r;
     lg(r ? "FAILED: the screen may stay dark; the next start keeps the firmware's screen\n" MARK : "done\n");
+    boot = ln;
     save();
     return r ? -1 : 0;
 }

@@ -477,6 +477,22 @@ between processes.
   the firmware's, fitted by each pipe's scaler; the panel's brightness in
   Settings; a monitor with speakers gets its sound turned on (HDMI mode,
   the ELD for the HDMI codec: [audio.md](audio.md#hdmi-and-displayport)).
+  **Hot-plug:** a thread of Atlas reads the PCH's hot-plug pins (SDEISR,
+  one bit per port TC1-TC4) twice a second; a change that still holds
+  200 ms later (not a bounce) makes Atlas go over the monitor ports: one
+  plugged in is probed and lit as at the start (EDID, mode, the next free
+  pipe, B or C; sound if it has speakers) in a mode the CDCLK carries as
+  it is, since changing CDCLK would blank the panel; one unplugged has its
+  pipe, port, DPLL, IO power and sound turned off. The panel is never
+  touched but for its DBUF share: the shares follow i915's table for the
+  pipes now running (the panel alone: both slices; with one monitor, half;
+  with two, a quarter), each pipe moved at its next frame and only once its
+  new blocks are free, so no two pipes ever share blocks. A third monitor
+  finds no pipe (logged). DP "short pulses" (a sink asking for link
+  retraining) are not handled: unplug and plug again. Each step is logged
+  (`port 3: monitor plugged in`, `pipe A: DBUF blocks 1024-2047`, `pipe B
+  on: ...`, `pipe B off`) to the console and `/etc/igfx.log`; past 12 KB
+  the older hot-plug lines are dropped (the start's are kept).
   The picture stays in the firmware's frame buffer (already in
   the GGTT; cached RAM would need flushing for the display engine). It logs
   registers, modes and link training to the console and `/etc/igfx.log`
@@ -499,7 +515,8 @@ between processes.
   pixels a cell, shown twice as large (12 x 22) on the desktop; bold is
   the text drawn twice, a pixel apart.
 - **Nothing runs when nothing happens:** no animation, no timer except
-  the clock thread, which sleeps until the next minute. Atlas looks at the
+  the clock thread, which sleeps until the next minute (and, on the Intel
+  display only, the hot-plug thread: one register read twice a second). Atlas looks at the
   files again when a terminal's shell asks for its next line (a command
   has just run), so a new file shows at once, with no polling.
 - **Login:** the login screen first (the password goes to `auth`, which
@@ -563,6 +580,17 @@ the tabs, boxes, Deskbar rows, workspaces, files and Settings' controls,
 and the time of each full frame; nothing is logged without it. `make
 gui-test-real` does the same with the real sia and a model on the test
 disk.
+
+`make igfx-test` (on the host; part of `audio-test`): QEMU has no Intel
+GPU, so `igfx.c`'s hot-plug runs against a fake display engine (power
+wells, DPLLs, transcoders, DDI buffers, pcode, the hot-plug pins, DP AUX
+and GMBUS answered as the hardware does) and two real monitors' EDIDs (a
+Dell U2718Q on DP, a Samsung C24F390 on HDMI): a DP monitor plugged in, an
+HDMI one on a DP++ port that does not answer at first, both at once, a
+third with no pipe left, one unplugged, the other port given a DP monitor
+again, everything unplugged; each time the pipes, DPLLs, sound and DBUF
+shares are checked, and that no two running pipes ever share DBUF blocks
+and no write changes the panel's pipe, port or clocks.
 
 `make mail-test` (both architectures; 75 s on x86-64) runs Mail against
 two servers of `tools/mailserver.py` on the host (IMAP, POP3 and SMTP over

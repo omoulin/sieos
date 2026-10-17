@@ -101,7 +101,9 @@ In the log (serial console or log viewer), `acpid:` lines:
    control 1804/0, sleep type 5/0`; press the power button: `mk: awake; TSC
    carried on`, `acpid: awake`, `PCI: .. registers written back`, `init:
    ... started anew after the sleep`, `atlas: awake: the screen set up
-   again` (and in `/etc/igfx.log`, the modeset after waking).
+   again` (and in `/etc/igfx.log`, the modeset after waking, then the
+   monitor ports gone over: one unplugged during the sleep turned off, one
+   plugged in lit).
 
 Untested on the laptop: all of it. Expected weak points: the display after
 waking (igfx sets it up again from the state kept at start, but the
