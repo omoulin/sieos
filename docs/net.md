@@ -159,6 +159,9 @@ network costs no CPU.
   retransmit (RFC 5681); out-of-order segments kept (32 per connection);
   zero-window probes; FIN, RST, TIME_WAIT (10 s). Listening sockets with a
   backlog; ports below 1024 only for root.
+- **Readiness** (`NET_POLL`): what a socket is ready for (data, room, a
+  connection to accept, an error); if nothing, netd notes the caller
+  (`SYS_NOTE`) once it is: libposix's `poll` ([webkit-plan.md](webkit-plan.md)).
 - **Owners**: every socket belongs to the process that opened it. Every 2 s
   netd checks that owners are alive; a dead owner's connections are reset.
 - **Restart**: if netd dies, init restarts it (DHCP again); programs' calls

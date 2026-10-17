@@ -971,6 +971,8 @@ proc_t *proc_new(uint64_t src_as, const uint8_t *img, uint64_t len, const char *
     p->quota = quota;
     if (!(p->as = vm_new())) goto fail;
 
+    int share = driver & PN_SHARE;       /* (SPAWN_SHARE: read-only segments from the image's own pages) */
+    driver &= ~PN_SHARE;
     uint64_t end = 0;
     for (int i = 0; i < h.phnum; i++) {
         elf_ph ph;
@@ -978,6 +980,17 @@ proc_t *proc_new(uint64_t src_as, const uint8_t *img, uint64_t len, const char *
         if (ph.type != 1) continue;      /* PT_LOAD */
         if (ph.off + ph.filesz > len || ph.filesz > ph.memsz || ph.vaddr + ph.memsz > MMIO_BASE) { *err = -EINVAL; goto fail; }
         uint64_t fl = VM_U | (ph.flags & 2 ? VM_W : 0) | (ph.flags & 1 ? 0 : VM_NX);
+        void *o;
+        uint64_t off, src = (uint64_t)img + (ph.off & ~(PAGE - 1));
+        if (share && !(ph.flags & 2) && ph.filesz == ph.memsz && ph.off % PAGE == ph.vaddr % PAGE && (uint64_t)img % PAGE == 0 &&
+            vm_shm_page(src, &o, &off)) {   /* the image's pages themselves, shared: nothing copied */
+            for (uint64_t va = ph.vaddr & ~(PAGE - 1); va < ph.vaddr + ph.memsz; va += PAGE, src += PAGE) {
+                if (va != (ph.vaddr & ~(PAGE - 1)) && !vm_shm_page(src, &o, &off)) { *err = -EINVAL; goto fail; }
+                if (vm_shm_share(p, va, o, off, fl)) goto fail;
+            }
+            if (ph.vaddr + ph.memsz > end) end = ph.vaddr + ph.memsz;
+            continue;
+        }
         for (uint64_t va = ph.vaddr & ~(PAGE - 1); va < ph.vaddr + ph.memsz; va += PAGE) {
             uint64_t pa = (!quota || p->pages < quota) ? page_alloc(1) : 0;
             if (!pa) goto fail;
@@ -1009,6 +1022,7 @@ proc_t *proc_new(uint64_t src_as, const uint8_t *img, uint64_t len, const char *
     return p;
 fail:
     if (p->as) vm_free(p->as);
+    vm_regions_free(p);
     kfree(p);
     return 0;
 }

@@ -92,11 +92,12 @@ PX_LIBS   := $(SYSROOT)/usr/lib/crt1.o $(SYSROOT)/usr/lib/libc.a $(PX_RT)
 MUSL_DROP := src/thread/$(MARCH)/clone.s src/thread/$(MARCH)/__set_thread_area.s src/thread/$(MARCH)/__set_thread_area.c \
              src/thread/$(MARCH)/syscall_cp.s src/thread/$(MARCH)/__unmapself.s src/signal/$(MARCH)/restore.s \
              src/process/$(MARCH)/vfork.s
-$(PXB)/musl/lib/libc.a: user/posix/syscall_arch.h user/posix/musl/*.c | $(LLVM)/bin/clang
+$(PXB)/musl/lib/libc.a: user/posix/syscall_arch.h user/posix/sieos_spawn.h user/posix/musl/*/*.c | $(LLVM)/bin/clang
 	$(call fetch,https://musl.libc.org/releases/musl-$(MUSL_VER).tar.gz,musl-$(MUSL_VER).tar.gz,$(MUSL_SHA))
 	rm -rf $(PXB)/musl && mkdir -p $(PXB) && tar xzf .hosttools/dl/musl-$(MUSL_VER).tar.gz -C $(PXB) && mv $(PXB)/musl-$(MUSL_VER) $(PXB)/musl
-	cd $(PXB)/musl && rm -f $(MUSL_DROP) && cp $(CURDIR)/user/posix/musl/*.c src/thread/$(MARCH)/ && \
-	    cp $(CURDIR)/user/posix/syscall_arch.h arch/$(MARCH)/syscall_arch.h
+	cd $(PXB)/musl && rm -f $(MUSL_DROP) && for d in thread process network; do mkdir -p src/$$d/$(MARCH) && \
+	    cp $(CURDIR)/user/posix/musl/$$d/*.c src/$$d/$(MARCH)/ || exit 1; done && \
+	    cp $(CURDIR)/user/posix/sieos_spawn.h src/process/$(MARCH)/ && cp $(CURDIR)/user/posix/syscall_arch.h arch/$(MARCH)/syscall_arch.h
 	cd $(PXB)/musl && ./configure --target=$(TRIPLE) --prefix=/usr --disable-shared CC="$(PX_CC)" \
 	    AR=$(CURDIR)/$(LLVM)/bin/llvm-ar RANLIB=$(CURDIR)/$(LLVM)/bin/llvm-ranlib CFLAGS="-Os -ffunction-sections -fdata-sections" >/dev/null
 	$(MAKE) -s -C $(PXB)/musl ARCH=$(MARCH) lib/libc.a
@@ -105,8 +106,8 @@ $(PXB)/musl/lib/libc.a: user/posix/syscall_arch.h user/posix/musl/*.c | $(LLVM)/
 $(SYSROOT)/usr/lib/libc.a: $(PXB)/musl/lib/libc.a $(PXB)/linux.o $(wildcard user/posix/include/*/*.h)
 	mkdir -p $(@D) && cp $< $@ && $(LLVM)/bin/llvm-ar rs $@ $(PXB)/linux.o && cp -r user/posix/include/. $(SYSROOT)/usr/include/
 	for l in m pthread rt dl util xnet resolv crypt; do rm -f $(@D)/lib$$l.a && $(LLVM)/bin/llvm-ar rc $(@D)/lib$$l.a; done   # (all in libc.a, as musl does)
-$(PXB)/linux.o: user/posix/linux.c include/mk/*.h siefs/siefs.h $(PXB)/musl/lib/libc.a
-	$(PX_CC) $(PX_CFLAGS) -Wno-missing-field-initializers -Iinclude -Isiefs -DEPOCH=$(shell date +%s) -c $< -o $@
+$(PXB)/linux.o: user/posix/linux.c user/posix/sock.c user/posix/spawn.c user/posix/sieos_spawn.h include/mk/*.h siefs/siefs.h $(PXB)/musl/lib/libc.a
+	$(PX_CC) $(PX_CFLAGS) -Wno-missing-field-initializers -Wno-sign-compare -Iinclude -Isiefs -c $< -o $@
 $(SYSROOT)/usr/lib/crt1.o: user/posix/start.c $(PXB)/musl/lib/libc.a
 	mkdir -p $(@D) && $(PX_CC) $(PX_CFLAGS) -c $< -o $@
 posix: $(SYSROOT)/usr/lib/libc.a $(SYSROOT)/usr/lib/crt1.o

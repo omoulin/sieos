@@ -240,6 +240,7 @@ typedef struct sock {
     /* UDP */
     struct dgram { struct dgram *next; uint32_t ip; uint16_t port, len; uint8_t data[]; } *dq, *dqt;
     int ndq;
+    int watcher;                               /* NET_POLL: the process to note when it is ready */
 } sock_t;
 static sock_t *socks[MAXSOCK];
 static long next_handle = 1;
@@ -1083,6 +1084,32 @@ static int64_t timers(void)
 /* ---- Client requests: the result to reply, unless `deferred` is set. */
 static int deferred;                           /* the request answers (or keeps) the reply itself */
 
+/* NET_POLL: what a socket is ready for (NET_IN: data, a connection to
+ * accept, or the end; NET_OUT: room to send; NET_ERR: failed or reset).
+ * Watched sockets are looked at after each message; a ready one's watcher
+ * is noted once. */
+static int watched;                            /* some socket has a watcher */
+static int readiness(sock_t *s)
+{
+    if (s->type == NET_UDP) return (s->dq ? NET_IN : 0) | NET_OUT;
+    if (s->state == T_LISTEN) return s->naccq ? NET_IN : 0;
+    int r = s->rcv.len || s->eof || (s->state == T_CLOSED && s->rcv.b) ? NET_IN : 0;
+    if ((s->state == T_ESTAB || s->state == T_CLOSE_WAIT) && s->snd.len < s->snd.size) r |= NET_OUT;
+    if (s->err || (s->state == T_CLOSED && s->rcv.b)) r |= NET_ERR | NET_OUT;
+    return r;
+}
+static void note_watchers(void)
+{
+    if (!watched) return;
+    watched = 0;
+    for (int i = 0; i < MAXSOCK; i++) {
+        sock_t *s = socks[i];
+        if (!s || !s->watcher) continue;
+        if (readiness(s)) { sys_note(s->watcher); s->watcher = 0; }
+        else watched = 1;
+    }
+}
+
 static long request(long from, msg_t *m, const uint8_t *data, size_t dlen)
 {
     sock_t *s = 0;
@@ -1092,6 +1119,11 @@ static long request(long from, msg_t *m, const uint8_t *data, size_t dlen)
         if (!s) return -EBADF;
     }
     switch (op) {
+    case NET_POLL: {
+        int r = readiness(s);
+        if (!r) { s->watcher = m->pid; watched = 1; }
+        return r;
+    }
     case NET_SOCKET: {
         if (m->w[1] != NET_TCP && m->w[1] != NET_UDP) return -EINVAL;
         sock_t *n = sock_new((int)m->w[1], m->pid, m->uid);
@@ -1324,6 +1356,7 @@ int main(int argc, char **argv)
             nheld = 0;
         }
         int64_t next = timers();
+        note_watchers();
         if (tick_token && next) {
             int64_t d = next - now();
             msg_t t = { .w = { (uint64_t)(d > 0 ? d : 1) } };

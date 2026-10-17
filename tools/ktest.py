@@ -82,7 +82,7 @@ def ok(name, cond, detail=""):
 
 if what == "kernel":
     for prog in ("ktest", "ktest-sicc"):
-        for t in (["fpu", "24"], ["avx", "24"], ["tls", "16"], ["quota"], ["ipc"], ["log"], ["vm"], ["futex"]):
+        for t in (["fpu", "24"], ["avx", "24"], ["tls", "16"], ["quota"], ["ipc"], ["log"], ["vm"], ["futex"], ["shm"]):
             if t[0] == "avx" and (prog == "ktest-sicc" or A64):   # (AVX: x86-64, built by gcc)
                 continue
             r = run(f"{prog} {' '.join(t)}", 120)
@@ -99,9 +99,34 @@ if what == "kernel":
     run("", 10)
 
 elif what in ("posix", "cxx"):                   # programs built on libposix (docs/webkit-plan.md)
+    import socket, threading
+    def echo_servers():
+        # TCP and UDP echo servers on the host (port, port + 1), for ptest-net
+        while True:
+            t = socket.socket(); t.bind(("127.0.0.1", 0)); port = t.getsockname()[1]
+            u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try: u.bind(("127.0.0.1", port + 1)); break
+            except OSError: t.close(); u.close()
+        t.listen(8)
+        def tcp():
+            while True:
+                c, _ = t.accept()
+                def one(c):
+                    while (d := c.recv(4096)): c.sendall(d)
+                    c.close()
+                threading.Thread(target=one, args=(c,), daemon=True).start()
+        def udp():
+            while True:
+                d, a = u.recvfrom(4096); u.sendto(d, a)
+        threading.Thread(target=tcp, daemon=True).start()
+        threading.Thread(target=udp, daemon=True).start()
+        return port
     for t in __import__("os").environ["PTESTS"].split():
         prog = f"ptest-{t}" if what == "posix" else f"cxxtest-{t}"
-        r = run(f"{prog} one two", 300)
+        args = "one two"
+        if t == "net":                               # (QEMU forwards 10.0.2.2:port to the host's 127.0.0.1:port)
+            args = f"10.0.2.2 {echo_servers()}"
+        r = run(f"{prog} {args}", 300)
         lines = [l.strip() for l in r.splitlines() if l.strip().startswith(("ptest ", "cxxtest ", "posix:"))]
         for l in lines[:-1]: print("   ", l)
         ok(prog, f"{prog.split('-')[0]} {t}: ok" in r, lines[-1] if lines else r.strip()[-300:])

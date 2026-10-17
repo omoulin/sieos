@@ -199,23 +199,33 @@ timeouts; the thread-exit wake), on both architectures. `test`,
 
 ### Phase 2: kernel, sharing (1-2 weeks)
 
-1. **Shared memory objects**: `SYS_SHM_CREATE(size)` → an id;
-   `SYS_SHM_GRANT(id, pid)`; `SYS_SHM_MAP(id, addr, prot)`. Pages
-   counted once (on the creator's quota), freed with the last mapping.
-   Also the `SYS_GRANT` of [gpu-plan.md](gpu-plan.md) phase 3, by another
-   road: one mechanism, not two.
-2. **Notes**: `SYS_NOTE(port, bits)`: any process may OR bits into a
-   port's pending note (never blocks, coalesced, the kernel's `NOTE_*`
-   path); `SYS_RECV` with a deadline. The base of `poll`.
-3. **Shared program images**: `SYS_SPAWN` from a shared memory object
-   holding an ELF file: read-only segments mapped from it (shared),
-   writable ones copied. `/bin/web` is read once and its 50+ MB of code
-   is in RAM once, however many processes run it. Spawn arguments grow
-   from 256 bytes to a page (argv and the environment).
+1. **Shared memory objects**: `SYS_SHM_CREATE(id, size)`, where id is a
+   random 63-bit number the creator chose: knowing it is the right to
+   use the object (`SYS_SHM_MAP`, `SYS_SHM_HOLD` for another process,
+   `SYS_SHM_CLOSE`), so a program passes it like a file descriptor and no
+   grant list is needed. Pages zeroed, counted once (on the creator's
+   quota), freed when the last hold and mapping are gone. Also the
+   `SYS_GRANT` of [gpu-plan.md](gpu-plan.md) phase 3, by another road: one
+   mechanism, not two.
+2. **Notes**: `SYS_NOTE_WORD(addr)`: a process names a 32-bit word of its
+   own; `SYS_NOTE(pid)` adds one to that word and wakes its futex waiters
+   (root, or the same user). The base of `poll`: the waiter sleeps with a
+   futex time limit, so no receive deadline was needed (the earlier idea:
+   port notes and `SYS_RECV` with a deadline).
+3. **Shared program images**: `SYS_SPAWN` with `SPAWN_SHARE` from an ELF
+   file the caller holds in a shared memory object: read-only segments are
+   mapped from the object's pages (shared), writable ones copied.
+   `/bin/web` is read once and its code is in RAM once, however many
+   processes run it. Arguments and the environment travel through unixd
+   (phase 3), so the kernel's 256-byte argument string stays as it is.
+4. **The wall clock**: `SYS_TIME`: the real-time clock read once (x86-64:
+   the CMOS clock; arm64: a PL031 if the device tree has one; the Pis: 0,
+   and root sets it), plus the monotonic clock.
 
-*Tests:* `ktest shm` (two processes see each other's writes; a futex
-across processes; freed when both end), `ktest note`, `ktest spawnshm`
-(two children of one image: memory used grows by the writable part only).
+*Tests:* `ktest shm`: two processes see each other's writes and a futex
+across them; the memory comes back when both are done; a note wakes its
+word's waiter; the wall clock is after 2026; two processes started from
+one image share its code (measured below).
 
 ### Phase 3: the Linux personality and musl: libposix (3-5 weeks)
 
@@ -436,6 +446,12 @@ Honest, for focused work, phases in order (1 and 0 can overlap):
 | 3 (first part) | **done** (2026-10-16): **libposix** (`make posix`): musl 1.2.6 from its release with its system calls replaced (`user/posix/syscall_arch.h`, and `clone`, the thread pointer and cancellation in `user/posix/musl/`), the Linux personality (`user/posix/linux.c`, 770 lines: the fd table on the terminal, the file server and `/dev/null`, `/dev/zero`, `/dev/urandom`; files, directories, links, stat, `getdents64`; `mmap` (anonymous and private file copies), `mprotect`, `madvise`, `brk`, `mremap`'s stack probe; threads through `clone`, `futex`, `set_tid_address`; clocks and sleeps; identity; `uname`, `getrandom`, `sysinfo`, `sched_getaffinity`), the start-up code (`user/posix/start.c`: the Linux initial stack, an 8 MiB main stack given on first touch). Installed with musl's headers in `$(B)/posix/sysroot/usr`. `make posix-test` (stdio, files, threads, memory: 4 programs, 42 checks) passes on x86-64 and arm64. Sizes: the personality 14.4 KB of code; a C "hello" 46.9 KB (stripped), the tests ~100 KB. Not yet: pipes and unix sockets (`unixd`), sockets on netd, `poll`, `posix_spawn`, signals through `rt_sigaction`, a kernel wall clock (`CLOCK_REALTIME` is the build date plus the time since boot) |
 | 4 (first part) | **done** (2026-10-16): the C++ runtime (`make cxx`): libc++, libc++abi (no demangler in `terminate`: -98 KB), libunwind and compiler-rt's builtins, built by CMake from LLVM 23.1.3's sources for each processor (2,300 files, ~2 minutes). `make cxx-test` (strings, containers, virtual calls, RTTI, exceptions through 20 frames, rethrow, 16 `std::thread`s with mutex and condition variable, atomics, chrono, iostreams, `std::filesystem`, a static destructor at exit) and `cxxtest-stress` (200 rounds of 16 `std::thread`s with a mutex and a condition variable) pass on x86-64 and arm64. The stress test found the personality's one real bug so far: musl's condition variables hand a woken waiter on with `FUTEX_REQUEUE` and have no fallback when it fails, so requeueing is done as a wake (a hang about one run in eight on arm64, none since in 12 runs). A C++ "hello" with `std::vector<std::string>`: 101 KB stripped; the test (iostreams, filesystem): 490 KB |
 
-Next: phase 2 (shared memory, notes, shared program images), then the rest
-of phase 3 (`unixd`, sockets, `poll`, `posix_spawn`, signals, `SYS_TIME`),
-then the dependencies of phase 4.
+| 2 | **done** (2026-10-17): shared memory objects, notes, shared program images, the wall clock (`kernel/vm.c`, `kernel/arch/*/rtc.c`, `SYS_SHM_CREATE/MAP/HOLD/CLOSE`, `SYS_NOTE_WORD`, `SYS_NOTE`, `SYS_TIME`, `SPAWN_SHARE`). `ktest shm` passes on both architectures (gcc and sicc builds): ktest's own 46 KiB image, 35 pages for a process of its own, 26 for each of two sharing it (its 9 pages of code once). Kernel code: 62,787 → 67,427 bytes on x86-64 (+4.6 KB), 87,032 → 91,656 on arm64 (+4.6 KB): `vm.o` 4.0 → 7.3 KB, `rtc.o` 0.6 KB |
+| 3 | **done** (2026-10-17): the rest of libposix. **unixd** (`user/unixd`, 455 lines, 33 KB, port "unix", on demand): pipes, unix socket pairs (stream and seqpacket), descriptors passed in messages (socket ends and memfds: SCM_RIGHTS), what posix_spawn hands a child (a stash claimed with a cookie), `UNIX_POLL`, holders that end without a word found every 2 s. **The personality** (`linux.c` 870 lines, `sock.c` 500, `spawn.c` 300; 31 KB of code): pipes, `socketpair`, `sendmsg`/`recvmsg` with `SCM_RIGHTS`, memfd (`memfd_create`, `ftruncate`, `mmap(MAP_SHARED)`), eventfd, TCP and UDP sockets on netd (non-blocking connect by a thread of its own, `getsockopt(SO_ERROR)`), `poll`, `ppoll`, `select`, `pselect6` (each server asked once, `NET_POLL` added to netd; nothing ready: sleep on the note word), `posix_spawn`/`posix_spawnp` (file actions, folder, environment; the image cached in shared memory per path), `wait4`, `rt_sigaction` (a trampoline over `SYS_SIGNAL`), `CLOCK_REALTIME` from `SYS_TIME`; musl's resolver asks the DNS server netd learnt. `make posix-test`: 6 programs (stdio, files, threads, memory, ipc: 18 checks, net: 6 checks against echo servers on the host and a DNS lookup) pass on x86-64 and arm64. A C "hello": 46.9 → 63.4 KB (the personality grew); the fd table is now mapped memory given on first touch, not 80 KB of every program's `.bss`. Not yet: named unix sockets (`bind` to a path), passing files or netd sockets between processes, `fork`/`exec` (never: `posix_spawn` instead), `epoll`, signal masks |
+
+Next: phase 4's libraries, in the order of its table: zlib, libffi, PCRE2,
+GLib, ICU (its data trimmed), HarfBuzz, FreeType, Expat and Fontconfig,
+libpng, libjpeg-turbo, libwebp, SQLite, libxml2, libgpg-error and
+libgcrypt, libtasn1, libepoxy, libxkbcommon, libpsl, nghttp2, libsoup, and
+the GIO TLS module on `tls.c`, each from its pinned release, with Meson and
+pkgconf fetched as phase 0 fetched CMake.

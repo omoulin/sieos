@@ -302,8 +302,24 @@ For big ported programs (the browser: [webkit-plan.md](webkit-plan.md)),
   that follows a timed-out wait may end early: callers loop anyway.
 - **Thread ids:** `SYS_THREAD_SELF(clear)`: the caller's id; when that thread
   ends, 0 is written at `clear` and one waiter there woken (`pthread_join`).
-- **Cost:** 4.7 KB of kernel code (x86-64; 5.1 KB arm64); nothing on the
-  paths that existed (`ktest vm`, `ktest futex`; IPC round trip unchanged).
+- **Shared memory objects:** `SYS_SHM_CREATE(id, size)` makes zeroed pages
+  named by a random 63-bit number the creator chose; knowing the number is
+  the right to `SYS_SHM_MAP` them (a region whose pages are the object's),
+  to `SYS_SHM_HOLD` the object (for another process too) and to
+  `SYS_SHM_CLOSE` a hold. It lives while held or mapped. Futexes in it
+  work across processes (they are keyed by physical address).
+- **Shared program images:** `SYS_SPAWN` with `SPAWN_SHARE` and an ELF file
+  in a shared memory object: read-only segments map the object's pages,
+  so programs started from one image share its code.
+- **Notes:** `SYS_NOTE_WORD(addr)` names a word of the caller's;
+  `SYS_NOTE(pid)` adds one to it and wakes its futex waiters (root, or the
+  same user): how unixd and netd tell libposix's `poll` to look again.
+- **The wall clock:** `SYS_TIME(0)`: ns since 1970, the real-time clock
+  (x86-64: CMOS; arm64: PL031) read on first use plus the monotonic
+  clock; `SYS_TIME(ns)`: root sets it (the Pis have no clock to read).
+- **Cost:** 9.3 KB of kernel code in all (x86-64; 9.7 KB arm64); nothing on the paths
+  that existed (`ktest vm`, `ktest futex`, `ktest shm`; IPC round trip
+  unchanged).
 
 ## Several processors, time, floating point
 

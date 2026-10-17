@@ -33,6 +33,10 @@
  *                         writing after mprotect read-only)
  *   ktest futex           a futex mutex shared by 8 threads, time limits,
  *                         waking many waiters, a thread's end waking its joiner
+ *   ktest shm             shared memory between two processes (and a futex in
+ *                         it), freed when closed; a note waking its word's
+ *                         waiter; the wall clock; two processes started from
+ *                         one image in shared memory share its code
  *   ktest hang spin|sleep|read|net   wait forever (for Ctrl-C)
  * Prints "ktest NAME: ok" or "... FAIL"; exit status 0 if all went well.
  * Built twice for the tests: by gcc (ktest), and by sicc (ktest-sicc,
@@ -700,6 +704,87 @@ static int test_futex(void)
     return fails;
 }
 
+/* ---- Shared memory objects, notes, the wall clock, shared program images. */
+static uint64_t shm_id(void) { uint64_t id = 0; while (sys_random(&id, sizeof id) < 0) sys_sleep(1000000); return id >> 1 | 1; }
+static int shm_child(const char *idtxt)          /* ktest shm-child ID: add to the object, wake the parent */
+{
+    uint64_t id = 0;
+    for (const char *p = idtxt; *p; p++) id = id * 16 + (*p <= '9' ? *p - '0' : *p - 'a' + 10);
+    volatile uint32_t *m = sys_shm_map(id, 0, PROT_READ | PROT_WRITE);
+    if ((long)m < 0) return 2;
+    if (m[0] != 0x5eed) return 3;
+    m[1] = 0xbeef;                                  /* seen by the parent */
+    __atomic_store_n(&m[2], 1, __ATOMIC_RELEASE);
+    sys_futex(FUTEX_WAKE, &m[2], 1, 0);             /* a futex across processes */
+    return 0;
+}
+static int shm_sleeper(void) { sys_sleep(300000000); return 0; }
+static volatile uint32_t note_w;
+static void note_thread(void *a)
+{
+    (void)a;
+    mk_ident_t id;
+    sys_ident(0, &id);
+    sys_sleep(20000000);
+    sys_note(id.pid);
+}
+static int test_shm(void)
+{
+    int fails = 0;
+    vm_name = "shm";
+    mk_info_t in0, in1;
+    uint64_t id = shm_id();
+    sys_info(&in0);
+    fails += vm_check("create 4 MiB", sys_shm_create(id, 4 << 20) == 0 && sys_shm_create(id, 4096) == -EEXIST);
+    volatile uint32_t *m = sys_shm_map(id, 0, PROT_READ | PROT_WRITE);
+    m[0] = 0x5eed;
+    char args[48] = "ktest shm-child ", *a = args + 16;
+    for (int i = 60; i >= 0; i -= 4) *a++ = "0123456789abcdef"[id >> i & 15];
+    *a = 0;
+    long pid = spawn_file("/bin/ktest", args, -1, -1, 0);
+    uint32_t v;
+    while ((v = __atomic_load_n(&m[2], __ATOMIC_ACQUIRE)) == 0) sys_futex(FUTEX_WAIT, &m[2], 0, 0);
+    int st = -1;
+    if (pid > 0) sys_wait(pid, &st, 0);
+    fails += vm_check("another process maps it, writes, wakes our futex", pid > 0 && st == 0 && m[1] == 0xbeef);
+    sys_munmap((void *)m, 4 << 20, 0);
+    sys_shm_close(id);
+    sys_info(&in1);
+    fails += vm_check("closed and unmapped: its memory back", in1.pages_free + 64 >= in0.pages_free && sys_shm_map(id, 0, PROT_READ) == (void *)(long)-ENOENT);
+    /* notes */
+    sys_note_word(&note_w);
+    thread_start(note_thread, 0, 16384);
+    uint64_t t = sys_clock();
+    long r = sys_futex(FUTEX_WAIT, &note_w, 0, 2000000000);
+    fails += vm_check("a note wakes the note word's waiter", r == 0 && note_w == 1 && sys_clock() - t < 1000000000);
+    /* the wall clock */
+    int64_t now = sys_time(0);
+    fails += vm_check("the wall clock is after 2026-01-01", now > 1767225600LL * 1000000000);
+    /* two processes from one image in shared memory */
+    long h = fs_open("/bin/ktest", FS_RDONLY, 0);
+    siefs_stat_t sst;
+    fs_fstat(h, &sst);
+    uint64_t iid = shm_id();
+    sys_shm_create(iid, sst.size);
+    char *img = sys_shm_map(iid, 0, PROT_READ | PROT_WRITE);
+    fs_read(h, 0, img, sst.size);
+    fs_close(h);
+    mk_spawn_t o = { .flags = SPAWN_SHARE };
+    long p1 = sys_spawn(img, sst.size, "ktest shm-sleep", -1, -1, &o), p2 = sys_spawn(img, sst.size, "ktest shm-sleep", -1, -1, &o);
+    long p3 = sys_spawn(img, sst.size, "ktest shm-sleep", -1, -1, 0);
+    sys_sleep(50000000);
+    long pg[3] = { 0 };
+    long pids[3] = { p1, p2, p3 };
+    for (int i = 0; i < 3; i++) { mk_task_t tk; if (sys_tasks(&tk, 1, (int)pids[i] - 1) == 1) pg[i] = (long)tk.pages; }
+    for (int i = 0; i < 3; i++) if (pids[i] > 0) sys_wait((int)pids[i], &st, 0);
+    printf("ktest shm: a %lu KiB image: %ld pages copied for a process of its own, %ld and %ld for two sharing it\n",
+           (unsigned long)sst.size / 1024, pg[2], pg[0], pg[1]);
+    fails += vm_check("two processes share one image's code", p1 > 0 && p2 > 0 && pg[0] > 0 && pg[0] + (long)sst.size / 8192 < pg[2]);
+    sys_munmap(img, sst.size, 0);
+    sys_shm_close(iid);
+    return fails;
+}
+
 /* ktest sigwait: for the console tests (tools/sigtest.py), each step after
  * a Ctrl-C: SIGINT caught in a busy loop, in a sleep, in a console read;
  * then it cleans up and ends normally. */
@@ -743,6 +828,8 @@ int main(int argc, char **argv)
     if (!strcmp(what, "place-child")) return busy_place(0, 300, 0);   /* (background: its parent said so) */
     if (!strcmp(what, "sig-group")) return sig_group();
     if (!strcmp(what, "vm-child")) return vm_child(argc > 2 ? argv[2] : "");
+    if (!strcmp(what, "shm-child")) return shm_child(argc > 2 ? argv[2] : "");
+    if (!strcmp(what, "shm-sleep")) return shm_sleeper();
     if (!strcmp(what, "sigwait")) return sig_wait();
     if (!strcmp(what, "spin")) return hang("spin");
     if (!strcmp(what, "hang")) return hang(argc > 2 ? argv[2] : "spin");
@@ -759,7 +846,8 @@ int main(int argc, char **argv)
     else if (!strcmp(what, "sig")) fails = test_sig();
     else if (!strcmp(what, "vm")) fails = test_vm();
     else if (!strcmp(what, "futex")) fails = test_futex();
-    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|place|log|sig|vm|futex [threads]\n"); return 2; }
+    else if (!strcmp(what, "shm")) fails = test_shm();
+    else { printf("usage: ktest fpu|avx|tls|quota|ipc|ipcmany|place|log|sig|vm|futex|shm [threads]\n"); return 2; }
     printf("ktest %s: %s\n", what, fails ? "FAIL" : "ok");
     return fails != 0;
 }

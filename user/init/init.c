@@ -130,6 +130,9 @@ static svc_t svc[MAXSVC] = {
      * keyboards and mice come back; with no adapter it ends with 0 */
     { .i = { "bt",    0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/btd", "btd", .watch = "bt" },
     { .i = { "netd",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "net", 10 * MIN },  "/bin/netd", "netd" },
+    /* pipes and unix sockets for programs built on libposix (docs/webkit-plan.md):
+     * started by the first, stopped when no end is held */
+    { .i = { "unixd", 0, 0, 0, 0, SVC_ALWAYS, 0, 0, "unix", 10 * MIN }, "/bin/unixd", "unixd" },
     /* the SSH server (docs/ssh.md): only where /etc/ssh/sshd_config exists, else it
      * ends with 0 at once and is not started again; it listens, so it starts the
      * network at boot */
