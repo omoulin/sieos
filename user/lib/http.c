@@ -98,41 +98,73 @@ void http_close(http_t *h)
     h->tls = 0; h->sock = 0;
 }
 
+/* extra names this header? ("User-Agent:": the caller's replaces ours) */
+static int has(const char *extra, const char *name)
+{
+    size_t n = strlen(name);
+    for (const char *p = extra; p && *p; p = strchr(p, '\n') ? strchr(p, '\n') + 1 : "") {
+        size_t i = 0;
+        while (i < n && lower(p[i]) == lower(name[i])) i++;
+        if (i == n) return 1;
+    }
+    return 0;
+}
+
+/* (its buffers on the heap: a caller's headers may be long, a Cookie of a
+ * few KiB, and several threads may make requests at once) */
+typedef struct { url_t u; char cur[1300]; char req[]; } scratch_t;
+static long request(http_t *h, const char *method, const char *url, const char *extra,
+                    const void *body, size_t blen, int flags, unsigned timeout_ms, scratch_t *sc, size_t rsize);
+
 long http_request(http_t *h, const char *method, const char *url, const char *extra,
                   const void *body, size_t blen, int flags, unsigned timeout_ms)
 {
-    static url_t u;
-    static char cur[1300], req[3072];
-    strlcpy(cur, url, sizeof cur);
+    size_t rsize = 3072 + (extra ? strlen(extra) : 0);
+    scratch_t *sc = malloc(sizeof *sc + rsize);
+    if (!sc) return -ENOMEM;
+    long e = request(h, method, url, extra, body, blen, flags, timeout_ms, sc, rsize);
+    free(sc);
+    return e;
+}
+
+static long request(http_t *h, const char *method, const char *url, const char *extra,
+                    const void *body, size_t blen, int flags, unsigned timeout_ms, scratch_t *sc, size_t rsize)
+{
+    url_t *u = &sc->u;
+    char *cur = sc->cur, *req = sc->req;
+    strlcpy(cur, url, sizeof sc->cur);
     for (int hops = 0; ; hops++) {
         memset(h, 0, sizeof *h);
         h->timeout_ms = timeout_ms ? timeout_ms : 30000;
-        long e = url_parse(&u, cur);
+        long e = url_parse(u, cur);
         if (e) return e;
         uint32_t ip;
-        if ((e = net_resolve(u.host, &ip, h->timeout_ms)) < 0) return e;
-        long s = net_connect(ip, u.port, h->timeout_ms);
+        if ((e = net_resolve(u->host, &ip, h->timeout_ms)) < 0) return e;
+        long s = net_connect(ip, u->port, h->timeout_ms);
         if (s < 0) return s;
         h->sock = s;
-        if (u.tls && !(h->tls = tls_connect(s, u.host, flags, &e))) { h->sock = 0; return e; }
+        if (u->tls && !(h->tls = tls_connect(s, u->host, flags, &e))) { h->sock = 0; return e; }
         char num[24];
         req[0] = 0;
-        append(req, sizeof req, method); append(req, sizeof req, " ");
-        append(req, sizeof req, u.path); append(req, sizeof req, " HTTP/1.1\r\nHost: ");
-        append(req, sizeof req, u.host);
-        if (u.port != (u.tls ? 443 : 80)) {
+        append(req, rsize, method); append(req, rsize, " ");
+        append(req, rsize, u->path); append(req, rsize, " HTTP/1.1\r\nHost: ");
+        append(req, rsize, u->host);
+        if (u->port != (u->tls ? 443 : 80)) {
             char *p = num + sizeof num - 1; *p = 0;
-            unsigned v = u.port; do *--p = (char)('0' + v % 10); while (v /= 10);
-            append(req, sizeof req, ":"); append(req, sizeof req, p);
+            unsigned v = u->port; do *--p = (char)('0' + v % 10); while (v /= 10);
+            append(req, rsize, ":"); append(req, rsize, p);
         }
-        append(req, sizeof req, "\r\nUser-Agent: SIEOS/1\r\nAccept: */*\r\nConnection: close\r\n");
+        append(req, rsize, "\r\n");
+        if (!has(extra, "user-agent:")) append(req, rsize, "User-Agent: SIEOS/1\r\n");
+        if (!has(extra, "accept:")) append(req, rsize, "Accept: */*\r\n");
+        append(req, rsize, "Connection: close\r\n");
         if (body || !strcmp(method, "POST")) {
             char *p = num + sizeof num - 1; *p = 0;
             size_t v = blen; do *--p = (char)('0' + v % 10); while (v /= 10);
-            append(req, sizeof req, "Content-Length: "); append(req, sizeof req, p); append(req, sizeof req, "\r\n");
+            append(req, rsize, "Content-Length: "); append(req, rsize, p); append(req, rsize, "\r\n");
         }
-        if (extra) append(req, sizeof req, extra);
-        append(req, sizeof req, "\r\n");
+        if (extra) append(req, rsize, extra);
+        append(req, rsize, "\r\n");
         if ((e = send_all(h, req, strlen(req))) < 0 || (blen && (e = send_all(h, body, blen)) < 0)) { http_close(h); return e; }
         /* the status line and headers */
         char line[1024];
@@ -156,15 +188,15 @@ long http_request(http_t *h, const char *method, const char *url, const char *ex
             if (v[0] == '/') {                   /* relative: same scheme, host and port */
                 char base[300];
                 base[0] = 0;
-                append(base, sizeof base, u.tls ? "https://" : "http://");
-                append(base, sizeof base, u.host);
-                if (u.port != (u.tls ? 443 : 80)) {
+                append(base, sizeof base, u->tls ? "https://" : "http://");
+                append(base, sizeof base, u->host);
+                if (u->port != (u->tls ? 443 : 80)) {
                     char *p = num + sizeof num - 1; *p = 0;
-                    unsigned pv = u.port; do *--p = (char)('0' + pv % 10); while (pv /= 10);
+                    unsigned pv = u->port; do *--p = (char)('0' + pv % 10); while (pv /= 10);
                     append(base, sizeof base, ":"); append(base, sizeof base, p);
                 }
-                strlcpy(cur, base, sizeof cur); append(cur, sizeof cur, v);
-            } else strlcpy(cur, v, sizeof cur);
+                strlcpy(cur, base, sizeof sc->cur); append(cur, sizeof sc->cur, v);
+            } else strlcpy(cur, v, sizeof sc->cur);
             continue;
         }
         return 0;

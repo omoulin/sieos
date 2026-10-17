@@ -8,9 +8,10 @@ ACPI tables. The driver, `/bin/i2chid` (`user/i2chid`, x86-64), started
 by init at boot, finds it there, drives the controller and feeds the
 console like a USB mouse (`CON_INJECT`). A 2-in-1's touch screen is the
 same kind of device: i2chid drives up to two (each on its own
-controller), the screen as an absolute pointer like a USB tablet
-([ice-lake.md](ice-lake.md#touchpad-and-touch-screen)). With no such
-device it ends at once and is not started again.
+controller), the screen as an absolute pointer like a USB tablet. With
+no such device it ends at once and is not started again. (A Surface's
+touchpad is on its USB Type Cover and its touch screen behind Intel's ME:
+[surface-pro-7.md](surface-pro-7.md).)
 
 | File | What it does |
 |---|---|

@@ -89,7 +89,7 @@ static int last_term = -1;          /* the terminal used last (the Deskbar shows
 static char toast[128];             /* a short message under the strip (until the next action) */
 static int bt_ask;                  /* it is btd's question: Accept / Decline (until answered) */
 int atlas_debug;                     /* /tmp/atlas.debug exists: log places (tests) */
-char clip[4096];
+char clip[16384];
 int clip_n;
 
 /* ---- Session state. */
@@ -1596,7 +1596,7 @@ static void click(int x, int y)
 
 static void key(int c)
 {
-    if (focus != W_MAIL || strip_on || mode != SESSION)  /* (Ctrl+Enter, Ctrl+Shift+letter: Mail's only) */
+    if ((focus != W_MAIL && focus < W_CLIENT0) || strip_on || mode != SESSION)  /* (Ctrl+Enter, Ctrl+Shift+letter: Mail's and other programs' only) */
         c = c == KEY_CRET ? '\n' : c >= KEY_CSA ? c - KEY_CSA + 1 : c;
     if (mode == GREETER) {
         if (first_start) { setup_key(c); redraw(); return; }
@@ -1618,6 +1618,7 @@ static void key(int c)
         return;
     }
     /* shortcuts, wherever the keys go */
+    if (focus >= W_CLIENT0 && !strip_on && (c == 6 || c == 22)) { client_key(focus, c); return; }      /* Ctrl+F, Ctrl+V: other programs' own */
     if (c == 0 || c == 6) { strip_on = 1; mn.on = 0; search(); say("atlas: strip\n"); redraw(); return; }   /* Ctrl+Space, Ctrl+F */
     if (c == 20) { new_term(); return; }                                                                  /* Ctrl+T */
     if (c == 22) { paste(); return; }                                                                     /* Ctrl+V */
@@ -1878,7 +1879,7 @@ int main(int argc, char **argv)
     mk_info_t in;
     sys_info(&in);
     int self = in.self_pid;
-    static char buf[4096];
+    static char buf[16384];                              /* (a client's clipboard, ATLAS_WIN_CLIP_SET, fits) */
     for (;;) {
         msg_t m = { .rbuf = buf, .rlen = sizeof buf };
         long from = ipc_recv(port, &m);
@@ -1969,7 +1970,7 @@ int main(int argc, char **argv)
             if (mode == SESSION) settle();
             continue;
         }
-        if (m.w[0] >= ATLAS_WIN_OPEN && m.w[0] <= ATLAS_WIN_CLOSE) {   /* another program's window (client.c) */
+        if (m.w[0] >= ATLAS_WIN_OPEN && m.w[0] <= ATLAS_WIN_CLIP_SET) {   /* another program's window (client.c) */
             client_msg(from, &m, buf, mode == SESSION ? uid : -1);
             continue;
         }

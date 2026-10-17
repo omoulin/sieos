@@ -99,7 +99,7 @@ void client_draw(int w, int x0, int y0, int x1, int y1, int focused)
     int z = draw_zoom_get();                          /* (its pixels are the screen's: the picture is zoomed) */
     int iw = (int)(((int64_t)c->cx1 * z >> 16) - ((int64_t)c->cx0 * z >> 16)), ih = (int)(((int64_t)c->cy1 * z >> 16) - ((int64_t)c->cy0 * z >> 16));
     if (iw < 1 || ih < 1) return;
-    if (iw != c->sw || ih != c->sh) { c->sw = iw; c->sh = ih; post(c, ATW_SIZE, 0, iw, ih, 0); }
+    if (iw != c->sw || ih != c->sh) { c->sw = iw; c->sh = ih; post(c, ATW_SIZE, atlas_zoom_get(), iw, ih, 0); }
     hitbox(c->cx0, c->cy0, c->cx1, c->cy1, H_CLIENT, w);
     if (!c->px) { dl_rect(c->cx0, c->cy0, c->cx1, c->cy1, 0, 0xffffff); return; }
     dl_image(c->cx0, c->cy0, c->cx1, c->cy1, c->px, c->bw, c->bh);
@@ -161,6 +161,18 @@ void client_msg(long from, msg_t *m, const char *data, int uid)
         say("atlas: window %d opened by pid %d: %s\n", W_CLIENT0 + i, m->pid, c->title);
         reply_val(from, W_CLIENT0 + i);
         atlas_client_show(W_CLIENT0 + i);
+        return;
+    }
+    if (m->w[0] == ATLAS_WIN_CLIP_GET) {                /* the clipboard (atlas.c's: a terminal's selection, or a program's) */
+        msg_t r = { .w = { (uint64_t)clip_n }, .sbuf = clip, .slen = (uint64_t)clip_n };
+        ipc_reply(from, &r);
+        return;
+    }
+    if (m->w[0] == ATLAS_WIN_CLIP_SET) {
+        clip_n = m->rlen < sizeof clip ? (int)m->rlen : (int)sizeof clip;
+        memcpy(clip, data, (size_t)clip_n);
+        say("atlas: copied %d bytes\n", clip_n);
+        reply_val(from, 0);
         return;
     }
     client_t *c = of((int)m->w[1]);

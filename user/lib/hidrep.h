@@ -19,13 +19,15 @@ typedef struct {
     /* a keyboard: its report, modifier bits, key array (6 keys used); the keys held */
     int krid, kpos, kkeys, kn;
     uint8_t kprev[8];
-    /* a precision touchpad: its report, fingers, button; its "input mode" feature */
-    int trid, nf, fsz, tbpos, mrid, msz;
+    /* a precision touchpad: its report, fingers, button; its "input mode" feature, its "surface and button switches" feature */
+    int trid, nf, fsz, tbpos, mrid, msz, srid;
     int ftip[HID_FINGERS], fok[HID_FINGERS], fx[HID_FINGERS], fy[HID_FINGERS];
     int32_t txmax;
     /* the touchpad's state: fingers down, most of them, moved, last place, remainders */
     int n, maxn, moved, click, lx, ly, rx, ry, sacc, btn;
     int64_t t0;
+    /* consumer keys (volume, as a Surface Type Cover's top row sends them): their report, the usage array; the one held */
+    int crid, cpos, csz, cprev;
 } hidrep_t;
 
 void hid_parse(hidrep_t *h, const uint8_t *desc, int n);   /* the report descriptor */

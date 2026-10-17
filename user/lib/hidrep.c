@@ -39,7 +39,7 @@ static const uint16_t usage_sc[0x53] = {
     0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,                      /* 1..0 */
     0x1C, 0x01, 0x0E, 0x0F, 0x39, 0x0C, 0x0D, 0x1A, 0x1B, 0x2B, 0x2B, 0x27, 0x28, 0x29, 0x33, 0x34, 0x35,
     0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x57, 0x58,   /* caps, F1..F12 */
-    [0x4A] = 0x147, 0x149, 0x153, 0x14F, 0x151, 0x14D, 0x14B, 0x150, 0x148,           /* home pgup del end pgdn → ← ↓ ↑ */
+    [0x49] = 0x152, 0x147, 0x149, 0x153, 0x14F, 0x151, 0x14D, 0x14B, 0x150, 0x148,    /* insert home pgup del end pgdn → ← ↓ ↑ */
 };
 /* The modifier bits: left ctrl, shift, alt, gui; right ctrl, shift, alt, gui. */
 static const uint16_t mod_sc[8] = { 0x1D, 0x2A, 0x38, 0, 0x11D, 0x36, 0x138, 0 };
@@ -132,10 +132,11 @@ void hid_parse(hidrep_t *h, const uint8_t *p, int n)
             int u0 = nu ? usages[0] : umin;
             if (tag == 10) {                                 /* a collection: the application's, a finger's */
                 if (!depth) app = page << 16 | u0;
-                if (page == 0x0D && u0 == 0x22 && h->nf < HID_FINGERS) finger = h->nf++, fdepth = depth;
+                if (page == 0x0D && u0 == 0x22 && (app == 0x0D0005 || app == 0x0D0004) && h->nf < HID_FINGERS) finger = h->nf++, fdepth = depth;
                 depth++;
             } else if (tag == 12) { if (--depth == fdepth) finger = -1; }
             else if (tag == 11 && page == 0x0D && u0 == 0x52) { h->mrid = rid; h->msz = size; }   /* the touchpad's input mode */
+            else if (tag == 11 && page == 0x0D && u0 == 0x57) h->srid = rid;                  /* its surface and button switches */
             else if (tag == 8 && !(v & 1)) {                 /* an input, data (not padding) */
                 for (int k = 0; k < count; k++) {
                     int u = k < nu ? usages[k] : nu ? usages[nu - 1] : umin + k, at = pos + k * size;
@@ -148,6 +149,8 @@ void hid_parse(hidrep_t *h, const uint8_t *p, int n)
                     } else if (app == 0x010006) {            /* a keyboard */
                         if (page == 7 && (v & 2) && size == 1 && u == 0xE0) { h->kpos = at; h->krid = rid; }
                         if (page == 7 && !(v & 2) && size == 8 && !k && !h->kn) { h->kkeys = at; h->kn = count; }
+                    } else if (app == 0x0C0001) {            /* consumer keys: an array of usages (volume, play...) */
+                        if (page == 0x0C && !(v & 2) && size >= 8 && !k && !h->csz) { h->cpos = at; h->csz = size; h->crid = rid; }
                     } else if (app == 0x0D0004) {            /* a touch screen's first finger: a tablet (unless a mouse came first) */
                         if (!h->screen) { if (h->xsz || h->bn) continue; h->screen = h->absolute = 1; h->rid = rid; }
                         if (finger > 0 || rid != h->rid) continue;
@@ -218,9 +221,34 @@ static void touchpad(hidrep_t *h, const uint8_t *r, int len)
     h->btn = k == 2 ? 0 : v[0].buttons;
 }
 
+/* A consumer key pressed: volume, play/pause, next, previous, mute go to
+ * the audio server (AUDIO_KEY, AUDIO_VOL), as a headset's buttons do. */
+static void media(hidrep_t *h, const uint8_t *r, int len)
+{
+    static long audio;
+    static int paused;
+    int u = bits(r, len, h->cpos, h->csz > 16 ? 16 : h->csz, 0), k = 0;
+    if (u == h->cprev) return;
+    h->cprev = u;
+    if (u == 0xE9) k = MK_VOLUP;
+    else if (u == 0xEA) k = MK_VOLDOWN;
+    else if (u == 0xCD) k = (paused = !paused) ? MK_PAUSE : MK_PLAY;
+    else if (u == 0xB5) k = MK_NEXT;
+    else if (u == 0xB6) k = MK_PREV;
+    else if (u == 0xB7) k = MK_STOP;
+    msg_t m = { .w = { AUDIO_KEY, (uint64_t)k } };
+    if (u == 0xE2) {                                         /* mute: on or off */
+        m.w[0] = AUDIO_VOL; m.w[1] = AUDIO_ASK;
+        if (call_named(&audio, "audio", &m, 1) < 0 || (long)m.w[0] < 0) return;
+        m = (msg_t){ .w = { AUDIO_VOL, (m.w[0] & 0xFF) | (~m.w[0] & AUDIO_MUTE) } };
+    } else if (!k) return;
+    call_named(&audio, "audio", &m, 1);
+}
+
 void hid_input(hidrep_t *h, const uint8_t *r, int len)
 {
     if (h->trid && len > 0 && r[0] == h->trid) { touchpad(h, r + 1, len - 1); return; }
+    if (h->csz && (h->crid ? len > 0 && r[0] == h->crid : !h->kn && !h->xsz)) { media(h, r + !!h->crid, len - !!h->crid); return; }
     if (h->kn && (!h->krid || (len > 0 && r[0] == h->krid))) {   /* a keyboard: into the boot layout */
         if (h->krid) r++, len--;
         uint8_t b[8] = { (uint8_t)bits(r, len, h->kpos, 8, 0) };

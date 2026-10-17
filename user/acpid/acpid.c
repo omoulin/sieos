@@ -40,6 +40,7 @@
  */
 #include "aml.h"
 #include "pci.h"
+#include "ssam.h"
 
 enum { TICK = 0x7e10 };                         /* our timer thread's message */
 static long port;
@@ -48,7 +49,7 @@ static const uint8_t *fadt;
 static uint16_t pm1a, pm1b, pm1len, gpe0, gpelen, ec_data, ec_sc;   /* ports; gpelen: status bytes */
 static uint8_t gpe_en[16], gpe_wk[16];          /* the GPEs we enabled; those that wake us */
 static uint16_t hits[128];                      /* each one's events since the last tick */
-static int ec = -1, ec_gpe = -1, bat = -1, ac = -1, lid = -1, pwrb = -1, sci = -1, ihid = -1, vbtn = -1;
+static int ec = -1, ec_gpe = -1, bat = -1, ac = -1, lid = -1, pwrb = -1, sci = -1, ihid = -1, vbtn = -1, sbtn_dev = -1;
 static int s3, bif = 1, button, dirty;          /* ACPI_S3 if it can sleep; read the battery's capacities again; the power button
                                                    was pressed; read all again */
 static int wdev[3], nwdev;                      /* the devices that wake us (their _PRW) */
@@ -59,15 +60,15 @@ static acpi_status_t st;
 static long waiters[8];
 static int nwait;
 
-static struct { char b[199]; size_t n; } line;  /* (what SYS_DEBUG takes) */
-static void line_put(void *c, char ch) { (void)c; if (line.n < sizeof line.b) line.b[line.n++] = ch; }
+typedef struct { char b[199]; size_t n; } line_t;  /* (what SYS_DEBUG takes; on the stack: two threads log) */
+static void line_put(void *c, char ch) { line_t *l = c; if (l->n < sizeof l->b) l->b[l->n++] = ch; }
 void log_line(const char *fmt, ...)
 {
     va_list ap;
+    line_t l = { "acpid: ", 7 };
     va_start(ap, fmt);
-    memcpy(line.b, "acpid: ", 7); line.n = 7;
-    vformat(line_put, 0, fmt, ap);
-    sys_debug(line.b, line.n);
+    vformat(line_put, &l, fmt, ap);
+    sys_debug(l.b, l.n);
     va_end(ap);
 }
 
@@ -135,7 +136,7 @@ static void notify(int dev, int64_t v)
 {
     if (dev < 0) return;
     if (dev == bat) { if (v == 0x81) bif = 1; }
-    else if ((dev == pwrb && v == 0x80) || (dev == ihid && v == 0xCE) || (dev == vbtn && v == 0xC0)) button = 1;
+    else if ((dev == pwrb && v == 0x80) || (dev == ihid && v == 0xCE) || (dev == vbtn && v == 0xC0) || (dev == sbtn_dev && v == 0xC6)) button = 1;
     else if (dev == ihid || dev == vbtn) {
         if (v != 0xCF && v != 0xC1) log_line("Intel %s: event %x%s\n", dev == ihid ? "HID" : "buttons", (int)v, v == 0xCC ? ": tablet mode" : v == 0xCD ? ": laptop mode" : "");
         return;
@@ -145,6 +146,8 @@ static void notify(int dev, int64_t v)
 
 /* ---- The status: battery, charger, lid. Changes wake the waiters. */
 static uint32_t known(int64_t x) { return x < 0 || x >= 0x7FFFFFFF ? 0 : (uint32_t)x; }    /* (0xFFFFFFFF: unknown) */
+enum { SAMDEV = 1 << 30 };                       /* bat, ac: the Surface Aggregator's (ssam.c) */
+static int beval(int d, const char *m, int64_t *v, int max) { return d == SAMDEV ? sam_battery(m, v, max) : aml_eval(d, m, 0, 0, v, max); }
 static void refresh(void)
 {
     acpi_status_t s = st;
@@ -152,12 +155,12 @@ static void refresh(void)
     int n;
     dirty = 0;
     s.flags = s3;
-    if (ac >= 0 && aml_eval(ac, "_PSR", 0, 0, v, 1) == 1 && v[0]) s.flags |= ACPI_AC;
+    if (ac >= 0 && beval(ac, "_PSR", v, 1) == 1 && v[0]) s.flags |= ACPI_AC;
     if (lid >= 0) s.flags |= ACPI_LID | (aml_eval(lid, "_LID", 0, 0, v, 1) == 1 && !v[0] ? ACPI_LID_CLOSED : 0);
-    if (bat >= 0 && (aml_eval(bat, "_STA", 0, 0, v, 1) != 1 || v[0] & 0x10)) {
-        if (bif && (n = aml_eval(bat, "_BIX", 0, 0, v, 4)) == 4) unit_mwh = !v[1], design = known(v[2]), full = known(v[3]), bif = 0;
+    if (bat >= 0 && (beval(bat, "_STA", v, 1) != 1 || v[0] & 0x10)) {
+        if (bif && (n = beval(bat, "_BIX", v, 4)) == 4) unit_mwh = !v[1], design = known(v[2]), full = known(v[3]), bif = 0;
         else if (bif && (n = aml_eval(bat, "_BIF", 0, 0, v, 3)) == 3) unit_mwh = !v[0], design = known(v[1]), full = known(v[2]), bif = 0;
-        if (aml_eval(bat, "_BST", 0, 0, v, 4) == 4) {
+        if (beval(bat, "_BST", v, 4) == 4) {
             s.flags |= ACPI_BAT | (v[0] & 2 ? ACPI_CHARGING : 0) | (unit_mwh ? ACPI_MWH : 0);
             s.rate = (int32_t)known(v[1]); s.now = known(v[2]); s.mv = known(v[3]);
             s.full = full ? full : design; s.design = design;
@@ -360,6 +363,57 @@ static void ticker(void *arg)
     for (;;) { sys_sleep(30000000000L); msg_t m = { .w = { TICK } }; ipc_call(port, &m); }
 }
 
+/* ---- A Surface (ssam.c, and its buttons). One thread, every 50 ms:
+ *  - What the Surface Aggregator sent (its events: the battery or charger
+ *    changed): read again (and once more 5 s later, as SAM's battery state
+ *    lags behind the charger's, which Linux's surface_battery knows).
+ *  - The buttons (MSHW0040, Surface Pro 5 to 7, Book 2): power, volume up,
+ *    volume down on three GPIO pads (its _CRS's GpioInts, in that order,
+ *    active low; Linux: soc_button_array), their level (DW0's RX state,
+ *    before any inversion). The power button powers off, the volume buttons
+ *    go to the audio server (held: again every 150 ms after 450 ms). */
+static volatile uint32_t *sbtn[3];
+static void surface(void *arg)
+{
+    (void)arg;
+    long audio = 0, again = 0;
+    int was = 0, held = 0;
+    for (;;) {
+        sys_sleep(50000000);
+        sam_poll();
+        int news = sam_news;
+        if (news) __atomic_and_fetch(&sam_news, ~news, __ATOMIC_RELAXED);
+        if (news || (again && sys_clock() > again)) {
+            msg_t m = { .w = { TICK, (uint64_t)(2 | (news & 2) << 1) } };
+            ipc_call(port, &m);
+            again = news ? sys_clock() + 5000000000L : 0;
+        }
+        int now = 0;
+        for (int i = 0; i < 3; i++) if (sbtn[i] && !(*sbtn[i] & 2)) now |= 1 << i;
+        if (now & ~was & 1) { msg_t m = { .w = { TICK, 1 } }; ipc_call(port, &m); }
+        held = now & 6 && (now & 6) == (was & 6) ? held + 1 : 0;
+        if ((now & 6 & ~was) || (held >= 9 && held % 3 == 0)) {
+            if (!held) log_line("volume %s\n", now & 2 ? "up" : "down");
+            msg_t m = { .w = { AUDIO_KEY, now & 2 ? MK_VOLUP : MK_VOLDOWN } };
+            call_named(&audio, "audio", &m, 1);
+        }
+        was = now;
+    }
+}
+static void surface_buttons_start(int dev)
+{
+    aml_hid_t r;
+    aml_gpio_t g;
+    static const char *what[3] = { "power", "volume up", "volume down" };
+    if (aml_res(dev, "_CRS", &r) || r.npins < 1) { log_line("Surface buttons: no GPIO pins (notifications only)\n"); return; }
+    for (int i = 0; i < 3 && i < r.npins; i++) {
+        volatile uint8_t *cm;
+        if (aml_gpio(r.pins[i], &g) || (long)(cm = map_phys(g.base, 8192)) < 0) { log_line("Surface buttons: %s: pin %d unknown\n", what[i], r.pins[i]); continue; }
+        sbtn[i] = (volatile uint32_t *)(cm + g.pad);
+        log_line("Surface buttons: %s: pin %d, group %d pad %d, DW0 %08x (%s)\n", what[i], r.pins[i], g.group, g.bit, *sbtn[i], *sbtn[i] & 2 ? "up" : "pressed");
+    }
+}
+
 static int dev(const char *hid, const char *what)    /* the first device present with this id, or -1 */
 {
     int k;
@@ -424,6 +478,9 @@ int main(int argc, char **argv)
     if ((ihid = dev("INT33D5", "Intel HID events")) >= 0)    /* (on: its events, and the power button's) */
         aml_eval(ihid, "HDSM", 1, &one, &x, 1), aml_eval(ihid, "BTNL", 0, 0, &x, 1);
     if ((vbtn = dev("INT33D6", "Intel virtual buttons")) >= 0) aml_eval(vbtn, "VBDL", 0, 0, &x, 1);
+    if ((sbtn_dev = dev("MSHW0040", "Surface buttons")) >= 0) surface_buttons_start(sbtn_dev);
+    int sam = bat < 0 ? dev("MSHW0084", "Surface Aggregator") : -1;
+    if (sam >= 0 && !sam_start(sam)) { bat = ac = SAMDEV; log_line("battery, AC adapter: the Surface Aggregator's\n"); }
     for (int i = 0, d[3] = { lid, pwrb, ec }, g; i < 3; i++)       /* what wakes us from S3 */
         if (d[i] >= 0 && (g = aml_wake(d[i], 3, -1)) >= 0 && g < 8 * gpelen) {
             gpe_wk[g / 8] |= (uint8_t)(1 << g % 8); wdev[nwdev++] = d[i];
@@ -441,6 +498,7 @@ int main(int argc, char **argv)
     arm();
     refresh();
     thread_start(ticker, 0, 4096);
+    if (sbtn[0] || sbtn[1] || sbtn[2] || sam_on) thread_start(surface, 0, 8192);
 
     static acpi_status_t out;
     for (;;) {
@@ -457,7 +515,12 @@ int main(int argc, char **argv)
                 if (m.w[1] == st.seq && nwait < 8) { waiters[nwait++] = from; from = 0; break; }
                 /* fall through */
             case ACPI_STATUS: out = st; r.sbuf = &out; r.slen = sizeof out; break;
-            case TICK: if (m.pid != self) r.w[0] = -EPERM; else dirty = 1, memset(hits, 0, sizeof hits); break;
+            case TICK:                              /* (w[1] 1: a Surface's power button, 2: its battery, 4: capacities) */
+                if (m.pid != self) r.w[0] = -EPERM;
+                else if (m.w[1] == 1) log_line("power button (Surface)\n"), button = 1;
+                else if (m.w[1] & 2) dirty = 1, bif |= (int)(m.w[1] >> 2 & 1);   /* (the Surface Aggregator's news) */
+                else dirty = 1, memset(hits, 0, sizeof hits);
+                break;
             default: r.w[0] = -ENOSYS;
             }
             if (from) ipc_reply(from, &r);

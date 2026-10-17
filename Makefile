@@ -47,7 +47,7 @@ SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the
 BINS    += unixd                        # pipes and unix sockets for libposix (docs/webkit-plan.md)
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
 BINS    += kblight                     # a keyboard's light (the USB server's kbl.c)
-BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid install)   # install: SIEOS onto a PC's NVMe drive (UEFI)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
+BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid ipts install)   # install: SIEOS onto a PC's NVMe drive (UEFI)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
 ULIBOBJ += $(if $(filter x86_64,$(ARCH)),aml)       # the AML interpreter they share
 BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    += btd bt                       # Bluetooth: the server and the command
@@ -128,6 +128,14 @@ $(B)/vnet.elf: $(B)/user/vnet.o $(VNET_X) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) u
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(VNET_X) $(ULIB)
 $(B)/user/vnet.o: user/vnet/nic.h
 $(B)/user/vnet/%.o: user/vnet/%.c user/vnet/nic.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(UCFLAGS) -c $< -o $@
+
+# The ACPI server (x86-64) and its Surface Aggregator client (ssam.c: a Surface's battery and charger over a UART).
+$(B)/acpid.elf: $(B)/user/acpid.o $(B)/user/acpid/ssam.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(B)/user/acpid/ssam.o $(ULIB)
+$(B)/user/acpid.o: user/acpid/ssam.h user/lib/aml.h
+$(B)/user/acpid/%.o: user/acpid/%.c user/acpid/ssam.h user/lib/aml.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
@@ -245,6 +253,7 @@ include user/posix/posix.mk
 include user/web/deps.mk
 include user/web/jsc.mk
 include user/web/webkit.mk
+include user/scriptures/scriptures.mk
 
 # ---- the disk: a SieFS image of rootfs/ plus the programs in /bin.
 # build/rootfs is the staging copy. The image is made once (mkfs.siefs);
@@ -259,12 +268,13 @@ ROOTFS  := $(shell find rootfs -type f)
 # SIEOS's own programs that SIEOS builds itself (make + cc): their sources
 # in /src/sieos, next to its Makefile (rootfs/src/sieos, docs/make.md)
 SELF_SRC := $(foreach p,hello sh make,user/$(p)/$(p).c)
-$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB) $(WEB_ROOTFS_DEPS)
+$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB) $(ROOTFS_FONTS) $(WEB_ROOTFS_DEPS)
 	rm -rf $(B)/rootfs && mkdir -p $(B)/rootfs && cp -R rootfs/. $(B)/rootfs/ && cp $(SELF_SRC) $(B)/rootfs/src/sieos/
 	mkdir -p $(B)/rootfs/bin $(B)/rootfs/home $(B)/rootfs/tmp
 	mkdir -p $(B)/rootfs/lib/sicc/include/mk && cp cc/include/*.h user/lib/mk.h user/lib/gpio.h siefs/siefs.h $(B)/rootfs/lib/sicc/include/ && \
 	    cp include/mk/*.h $(B)/rootfs/lib/sicc/include/mk/ && cp $(SICC_LIB) $(B)/rootfs/lib/sicc/
 	for p in $(BINS); do cp $(B)/$$p.elf $(B)/rootfs/bin/$$p; done
+	mkdir -p $(B)/rootfs/lib/fonts && cp $(ROOTFS_FONTS) $(B)/rootfs/lib/fonts/
 	$(if $(filter atlas,$(KARCH_NOBINS)),cp $(B)/noscreen.elf $(B)/rootfs/bin/atlas)
 	for l in $(LINKS); do ln -s $${l%/*} $(B)/rootfs/bin/$${l#*/}; done
 	$(if $(WEB),$(WEB_ROOTFS))
@@ -770,6 +780,34 @@ $(B)/host/camera-test: tests/camera/test.c user/usb/uvc.c user/usb/kbl.c
 camera-test: $(B)/host/camera-test
 	$(B)/host/camera-test tests/camera
 .PHONY: camera-test
+# ---- USB keyboards with a touchpad on one interface (user/usb/hid.c,
+# user/lib/hidrep.c) on the host: a Surface Type Cover's kind of report
+# descriptor (tests/hid), the protocol and touchpad mode chosen, its reports.
+$(B)/host/hid-test: tests/hid/test.c tests/hid/mk.h user/usb/hid.c user/usb/usb.h user/lib/hidrep.c user/lib/hidrep.h include/mk/*.h
+	@mkdir -p $(B)/host/hid
+	cp user/usb/hid.c user/usb/usb.h user/lib/hidrep.c user/lib/hidrep.h tests/hid/mk.h $(B)/host/hid/
+	gcc $(HOSTCFLAGS) -I$(B)/host/hid -o $@ tests/hid/test.c $(B)/host/hid/hidrep.c
+hid-test: $(B)/host/hid-test
+	$(B)/host/hid-test tests/hid
+.PHONY: hid-test
+# ---- the Surface Aggregator's protocol (user/acpid/ssam.c) on the host,
+# against a pretend SAM (tests/ssam): requests, ACKs, NAKs, lost and bad
+# frames, frames sent twice, events.
+$(B)/host/ssam-test: tests/ssam/test.c user/acpid/ssam.c user/acpid/ssam.h
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -DSSAM_HOST -Iuser/acpid -o $@ tests/ssam/test.c user/acpid/ssam.c
+ssam-test: $(B)/host/ssam-test
+	$(B)/host/ssam-test
+.PHONY: ssam-test
+# ---- a Surface's touch screen (user/ipts: the iTouch MEI, HBM, the IPTS
+# client) on the host, against a pretend ME (tests/ipts).
+$(B)/host/ipts-test: tests/ipts/test.c tests/hid/mk.h user/ipts/ipts.c user/lib/hidrep.c user/lib/hidrep.h include/mk/*.h
+	@mkdir -p $(B)/host/ipts
+	cp user/lib/hidrep.c user/lib/hidrep.h tests/hid/mk.h $(B)/host/ipts/
+	gcc $(HOSTCFLAGS) -I$(B)/host/ipts -Iuser/ipts -o $@ tests/ipts/test.c $(B)/host/ipts/hidrep.c
+ipts-test: $(B)/host/ipts-test
+	$(B)/host/ipts-test
+.PHONY: ipts-test
 
 # ---- sicc, the SIEOS C compiler (cc/, docs/cc.md): compiler, assembler and
 # linker in one program, written for SIEOS.

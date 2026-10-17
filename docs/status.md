@@ -24,9 +24,9 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Install onto a PC's drive (UEFI) | yes, in QEMU with OVMF (`install-test`); untested on the laptops | no (no UEFI loader) | no | no |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `power-test`, `install-test` (x86-64), `grow-test`, `gpt-test`, `sig-test`, `posix-test`, `cxx-test`, `webdeps-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
+`kernel-test`, `power-test`, `install-test` (x86-64), `scriptures-test`, `grow-test`, `gpt-test`, `sig-test`, `posix-test`, `cxx-test`, `webdeps-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
-`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`, `igfx-test`,
+`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`, `igfx-test`, `hid-test`, `ssam-test`, `ipts-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
 
@@ -47,23 +47,22 @@ checklist in [raspberrypi.md](raspberrypi.md).
   ([bluetooth.md](bluetooth.md)), ACPI power: off, restart, sleep, battery,
   lid ([power.md](power.md)); then NVIDIA compute
   ([gpu-plan.md](gpu-plan.md)).
-- The second laptop (an Ice Lake 2-in-1, [ice-lake.md](ice-lake.md)): its
-  sound, touch screen, power and disk are written and wait for a boot;
-  then, if wanted, the DSP's microphones (SOF), the sensor hub (rotation),
-  s2idle and Ice Lake's display in igfx.
-- The second laptop (Ice Lake): its Intel display (full modeset, Type-C
-  and Thunderbolt monitors) waits for a boot from the USB key; its other
-  devices are to be listed from its `lspci`.
+- The second laptop, a Surface Pro 7 ([surface-pro-7.md](surface-pro-7.md)):
+  its Type Cover, buttons, battery (the Surface Aggregator), lid, touch
+  screen (one finger, IPTS), sound (ALC274), Intel display, Wi-Fi and
+  disk are written and wait for a boot from the USB key; then, if wanted,
+  the pen and multi-touch (IPTS raw mode), the sensor hub (rotation),
+  s2idle.
 
 ## The laptops
 
 | | The target laptop | The second laptop |
 |---|---|---|
-| Processor | Raptor Lake-HX (Lenovo Legion, 83LY) | Ice Lake-LP ("10th gen" Core, 10 nm) |
-| Intel display | UHD Graphics, 8086:a788, display version 12; eDP panel 2560 x 1600 | Iris Plus Graphics G4/G7, 8086:8a52 and kin, display version 11; eDP panel (1920 x 1200 or 3840 x 2400) |
-| Monitor ports (igfx) | TC1-TC4 as the VBT lists them (combo PHYs) | DDI B (combo PHY) if wired; Type-C ports C-F: the Thunderbolt 3 / USB-C ports (DP-alt, TBT) |
+| Processor | Raptor Lake-HX (Lenovo Legion, 83LY) | Ice Lake-LP ("10th gen" Core, 10 nm): Microsoft Surface Pro 7 |
+| Intel display | UHD Graphics, 8086:a788, display version 12; eDP panel 2560 x 1600 | Iris Plus Graphics G4/G7, 8086:8a52 and kin, display version 11; eDP panel 2736 x 1824 |
+| Monitor ports (igfx) | TC1-TC4 as the VBT lists them (combo PHYs) | the USB-C port (DP alternate mode) |
 | Other GPU | GeForce RTX 5060 Laptop | none |
-| Other devices | 2 NVMe, RTL8168h, AX210 (Wi-Fi, Bluetooth), HDA (ALC257, HDMI codec), I2C touchpad (ELAN06FA), UVC camera, ITE 8258 keyboard light | not yet known |
+| Other devices | 2 NVMe, RTL8168h, AX210 (Wi-Fi, Bluetooth), HDA (ALC257, HDMI codec), I2C touchpad (ELAN06FA), UVC camera, ITE 8258 keyboard light | NVMe, AX201 (Wi-Fi, Bluetooth), HDA (ALC274, HDMI codec), USB Type Cover (keyboard, touchpad), IPTS touch screen (through the ME), Surface Aggregator (battery, charger) on a UART, GPIO buttons, IPU4 cameras, sensor hub |
 - A web browser: WPE WebKit on a musl-based POSIX layer, phase by phase
   ([webkit-plan.md](webkit-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
@@ -364,8 +363,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
   ([bluetooth.md](bluetooth.md)); the usb server takes the chipset's xHCI
   (00:14.0) over the CPU's Thunderbolt one. Untested on hardware. Sizes:
   iwl.o +1.4 KB of code, btd.o +0.5 KB, usb's pci.o +77 bytes.
-- **2026-10-17, later.** The second laptop, an Ice Lake 2-in-1 (likely a
-  Dell XPS 13 7390; [ice-lake.md](ice-lake.md)). Sound on its Smart Sound
+- **2026-10-17, later.** The second laptop, an Ice Lake 2-in-1 (then
+  thought a Dell XPS 13 7390; it is a Surface Pro 7: [surface-pro-7.md](surface-pro-7.md)). Sound on its Smart Sound
   controller (8086:34c8) in HDA mode: Ice Lake taken for a PCH, not an old
   ICH (snooping, clock gating); the DSP's processing pipe off if left on,
   the multi-link clock from 6 to 24 MHz (as Linux's `intel_init_lctl`);
@@ -442,3 +441,57 @@ checklist in [raspberrypi.md](raspberrypi.md).
   on a 1 GiB key, `siefs-test` cuts the power at every write of two grows.
   Sizes (text): space.o +1.4 KB, check.o +0.3 KB, vblk +1.0 KB + gpt.o
   1.6 KB (its 20 KB table buffer malloc'd during the start only).
+- **2026-10-17, later.** The second laptop is a **Microsoft Surface Pro 7**
+  ([surface-pro-7.md](surface-pro-7.md), which replaces ice-lake.md). Its
+  Type Cover (USB 045e:09c0: keyboard, mouse, consumer keys and a precision
+  touchpad on one boot-keyboard interface): the USB server reads such a
+  keyboard in the report protocol through its descriptor (up to 2 KiB),
+  switches the touchpad to its fingers (input mode 3, the surface and
+  button switches) as hid-multitouch does, and sends volume and media keys
+  to audiod (`hidrep.c`). Its buttons (`MSHW0040`: three GPIO pads, read
+  every 50 ms by acpid); `aml_gpio` finds a pin's pad in Ice Lake's GPIO
+  tables (first pin at index 6) as well as Tiger Lake's (8), shared with
+  i2chid; the AML reader also returns every `GpioInt` and a
+  `UartSerialBus`. Its battery and charger: `ssam.c` in acpid speaks the
+  Surface Serial Hub protocol to the Surface Aggregator Module over the
+  LPSS UART at 00:1e.0 (DesignWare 16550, the LPSS fractional clock at 16
+  x the speed, RTS/CTS; frames, CRC-16-CCITT, ACK/NAK, retries; firmware
+  version, D0 entry, display on, battery events; `_STA`/`_BIX`/`_BST`/
+  `_PSR` equivalents into acpid's battery model). Its lid needed nothing
+  (GPE 0x4D, checked on its real tables). Its touch screen: `/bin/ipts`, a
+  new driver for the iTouch MEI (00:16.4, 8086:34e4): MEI rings and reset,
+  HBM (version, clients, connect, flow control), the IPTS client
+  (`GET_DEVICE_INFO`, `SET_MODE`, `SET_MEM_WINDOW`, `READY_FOR_DATA`,
+  `FEEDBACK`) in event mode, whose single-touch HID reports hidrep reads
+  as a touch screen. Its sound: Realtek ALC274 in HDA mode (no DMIC in the
+  NHLT): Linux's `alc294_init` in audiod; the Dell handling stays keyed to
+  Dell's subsystem id. acpid's log is safe from two threads. New tests on
+  the host: `hid-test` (a Type Cover-family descriptor), `ssam-test` (a
+  pretend SAM), `ipts-test` (a pretend ME); `hdmi-test` checks the ALC274.
+  Untested on the machine. Not done, with estimates: the pen and several
+  fingers (IPTS raw mode: 2-3 and 4-6 agent hours, plus hardware rounds),
+  the sensor hub, the cameras, s2idle. Sizes (x86-64, text): acpid.elf
+  +7.4 KB (ssam.o 4.8 KB, buttons and `aml_gpio` the rest), usb.elf
+  +2.4 KB, ipts.elf 26 KB (ipts.o 5.8 KB, the rest the library and
+  hidrep), audiod.o +0.5 KB.
+- **2026-10-17, later.** Scriptures ([scriptures.md](scriptures.md)): the
+  user's app to read the scriptures offline (footnotes, full-text search,
+  highlights, notes and tags, tabs, Church Account sync; ~7,100 lines of
+  C written for Linux and SDL2 with SIEOS in mind) ported as
+  `/bin/scriptures` and the **Scriptures** app: its portable core
+  unchanged; a window through atlas's protocol for other programs'
+  windows (`plat_sieos.c`), HTTPS over `http.c` and `tls.c`
+  (`net_sieos.c`), the C library the core asks for on SIEOS's own
+  (`libc.c`: files, directories, UTC time, threads and futex mutexes;
+  formatting from `/bin/cc`'s `fmt.c`), DejaVu Sans Mono and its bold in
+  `/lib/fonts` rendered by stb_truetype (the oblique slanted, not stored).
+  Built by gcc and by sicc (both architectures), in the default image:
+  +251 KB text (x86-64; 312 KB arm64) + 673 KB of fonts. Atlas: Ctrl+F,
+  Ctrl+V, Ctrl+Enter and Ctrl+Shift+letter go to other programs' windows;
+  the clipboard for them (`ATLAS_WIN_CLIP_GET`/`SET`, 16 KiB, was 4);
+  `ATW_SIZE` carries the zoom. `http.c`: the request on the heap (long
+  Cookie headers, threads at once), the caller's User-Agent and Accept.
+  `make scriptures-test`: a stand-in for the content API over HTTPS on
+  the host; download, a chapter, a footnote, search, a highlight, a note,
+  the window closed and opened again with all of it back. Not yet tried
+  against the real site or a Church Account.

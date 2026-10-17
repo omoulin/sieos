@@ -16,7 +16,7 @@ built and booted (UEFI loader, `make usb`) is in [usb.md](usb.md).
 | `user/usb/xhci.c` | the controller: rings, contexts, commands, event ring, interrupts or polling, transfers |
 | `user/usb/usb.c` | enumeration, control transfers, Configure Endpoint, hubs, hotplug, the `usb` port (`USB_DISKS`, `USB_DISK`) |
 | `user/usb/msc.c` | mass storage: Bulk-Only Transport + SCSI, one `usbdiskN` port per disk |
-| `user/usb/hid.c` | boot keyboards, mice and tablets (report descriptor parsed by `user/lib/hidrep.c`, shared with I2C touchpads: [touchpad.md](touchpad.md)) → `CON_INJECT` |
+| `user/usb/hid.c` | boot keyboards, mice and tablets (report descriptor parsed by `user/lib/hidrep.c`, shared with I2C touchpads: [touchpad.md](touchpad.md)) → `CON_INJECT`; a keyboard with more on its interface (a Surface Type Cover's touchpad and volume keys) in the report protocol, its touchpad switched to fingers ([surface-pro-7.md](surface-pro-7.md#the-type-cover)) |
 | `user/usb/uvc.c` | cameras (USB video class): YUY2 frames over isochronous transfers, port `camera` |
 | `user/usb/kbl.c` | the Legion laptop's keyboard light (ITE 8258, 048d:c195), port `kblight` |
 | `include/mk/gpt.h` | GPT layout and the SieFS partition type GUID (shared with `tools/mkusb.py`) |

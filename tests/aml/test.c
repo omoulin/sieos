@@ -76,7 +76,7 @@ int main(int argc, char **argv)
             unsigned long o = strtoul(argv[++i], &e, 0);
             ec[o & 255] = (uint8_t)strtoul(e + 1, 0, 0);
         } else if (!strcmp(argv[i], "-w")) writes = 1;
-        else if ((!strcmp(argv[i], "-v") || !strcmp(argv[i], "-d") || !strcmp(argv[i], "-W")) && i + 1 < argc) ask = 1, i++;
+        else if ((!strcmp(argv[i], "-v") || !strcmp(argv[i], "-d") || !strcmp(argv[i], "-W") || !strcmp(argv[i], "-r")) && i + 1 < argc) ask = 1, i++;
         else {
             FILE *f = fopen(argv[i], "rb");
             if (!f) { perror(argv[i]); return 2; }
@@ -100,6 +100,18 @@ int main(int argc, char **argv)
             }
             continue;
         }
+        if (!strcmp(argv[i], "-r")) {                           /* a resource template: its GpioInt pins (each one's pad), its UART */
+            aml_hid_t r;
+            aml_gpio_t g;
+            if (aml_res(0, argv[++i], &r)) { printf("%s: (none)\n", argv[i]); continue; }
+            printf("%s:", argv[i]);
+            if (r.baud) printf(" UART %u baud%s", r.baud, r.flow ? ", RTS/CTS" : "");
+            for (int j = 0; j < r.npins; j++)
+                if (!aml_gpio(r.pins[j], &g)) printf(" pin %d: group %d pad %d at 0x%lx (own +%x, GPE status +%x)", r.pins[j], g.group, g.bit, (long)(g.base + g.pad), g.own, g.sts);
+                else printf(" pin %d: no pad", r.pins[j]);
+            printf("\n");
+            continue;
+        }
         if (strcmp(argv[i], "-v")) continue;
         snprintf(p, sizeof p, "%s", argv[++i]);
         if ((a = strchr(p, ':'))) for (*a++ = 0; *a && na < 7; a += *a == ',') args[na++] = strtoll(a, &a, 0);
@@ -119,13 +131,8 @@ int main(int argc, char **argv)
         if (d[i].bus[0]) aml_int(p, 0, 0, &adr);
         printf("%s %s addr=0x%x speed=%u bus=%s adr=0x%lx pin=%d%s gpio=%s irq=%d desc=%d\n", d[i].path, d[i].hid, d[i].addr,
                d[i].speed, d[i].bus, (long)adr, d[i].pin, d[i].pin_low ? "(low)" : "", d[i].gpio, d[i].irq, d[i].desc);
-        for (int64_t g = 0, a[2], n, first, at; g < 32; g++) {     /* the pin's pad, as i2chid finds it */
-            a[0] = g; a[1] = 1;
-            if (aml_int("\\_SB.GINF", 2, a, &n) || (a[1] = 8, aml_int("\\_SB.GINF", 2, a, &first))) break;
-            if (d[i].pin < first || d[i].pin >= first + n || (a[1] = 2, aml_int("\\_SB.GADR", 2, a, &at))) continue;
-            printf("  GPIO group %ld pad %ld at 0x%lx\n", (long)g, (long)(d[i].pin - first), (long)(at + (d[i].pin - first) * 16));
-            break;
-        }
+        aml_gpio_t g;                                           /* the pin's pad, as i2chid finds it */
+        if (!aml_gpio(d[i].pin, &g)) printf("  GPIO group %d pad %d at 0x%lx\n", g.group, g.bit, (long)(g.base + g.pad));
     }
     return 0;
 }

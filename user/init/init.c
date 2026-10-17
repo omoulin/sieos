@@ -106,6 +106,8 @@ static svc_t svc[MAXSVC] = {
     { .i = { "acpi",  0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/acpid", "acpid", .watch = "acpi" },
     /* a laptop's I2C touchpad (a driver, from the ACPI tables); with none it ends with 0 */
     { .i = { "i2chid", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/i2chid", "i2chid" },
+    /* a Surface's touch screen (IPTS, through Intel's ME, a driver); with no iTouch MEI it ends with 0 */
+    { .i = { "ipts", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/ipts", "ipts" },
 #endif
     /* the desktop (screen: a driver); with no display card it ends with 0: not restarted */
     { .i = { "atlas", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/atlas", "atlas", .watch = "atlas" },
