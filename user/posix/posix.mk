@@ -121,7 +121,7 @@ RTB       := $(PXB)/runtimes
 CMAKE     := $(CURDIR)/$(WKT)/bin/cmake
 NINJA     := $(CURDIR)/$(WKT)/bin/ninja
 RT_OFF    := SANITIZERS XRAY LIBFUZZER PROFILE MEMPROF ORC CTX_PROFILE GWP_ASAN
-$(SYSROOT)/usr/lib/libc++.a: $(LLSRC)/runtimes/CMakeLists.txt | $(SYSROOT)/usr/lib/libc.a $(SYSROOT)/usr/lib/crt1.o $(WKT)/bin/cmake $(WKT)/bin/ninja
+$(SYSROOT)/usr/lib/libc++.a: $(LLSRC)/runtimes/CMakeLists.txt user/posix/posix.mk | $(SYSROOT)/usr/lib/libc.a $(SYSROOT)/usr/lib/crt1.o $(WKT)/bin/cmake $(WKT)/bin/ninja
 	rm -rf $(RTB) && $(CMAKE) -G Ninja -S $(LLSRC)/runtimes -B $(RTB) -DCMAKE_MAKE_PROGRAM=$(NINJA) \
 	    -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=$(MARCH) \
 	    $(foreach l,C CXX ASM,-DCMAKE_$(l)_COMPILER_TARGET=$(TRIPLE)) -DCMAKE_ASM_COMPILER=$(CURDIR)/$(LLVM)/bin/clang \
