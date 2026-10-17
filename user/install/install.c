@@ -126,12 +126,6 @@ static const char *type_name(const uint8_t *t)
     return "other";
 }
 
-static uint32_t crc32(uint32_t c, const void *p, size_t n)   /* CRC-32 (the GPT's), bit by bit: a few KiB */
-{
-    c = ~c;
-    for (const uint8_t *b = p; n--; ) { c ^= *b++; for (int k = 0; k < 8; k++) c = c >> 1 ^ (0xEDB88320 & -(c & 1)); }
-    return ~c;
-}
 
 /* ---- The GPT: read, checked in every way; the partitions in order; the gaps. */
 static gpt_header_t h1, h2;
@@ -145,7 +139,7 @@ static int hdr_ok(gpt_header_t *h, uint64_t self, uint64_t alt)
 {
     gpt_header_t c = *h;
     c.hcrc = 0;
-    return !memcmp(h->sig, "EFI PART", 8) && h->hsize == 92 && crc32(0, &c, 92) == h->hcrc && h->self == self &&
+    return !memcmp(h->sig, "EFI PART", 8) && h->hsize == 92 && gpt_crc(&c, 92) == h->hcrc && h->self == self &&
            h->alt == alt && h->entsize == 128 && h->nentries && h->nentries <= 1024 &&
            h->first_usable <= h->last_usable && h->last_usable < ns - 1;
 }
@@ -172,7 +166,7 @@ static int read_gpt(void)
     if (h1.entries_lba < 2 || h1.entries_lba + esect > h1.first_usable || !hdr_ok(&h2, ns - 1, 1) ||
         h2.entries_lba <= h1.last_usable || h2.entries_lba + esect > ns - 1 ||
         disk_rd(h1.entries_lba, esect, ents) || disk_rd(h2.entries_lba, esect, ents2) ||
-        crc32(0, ents, h1.nentries * 128) != h1.entcrc || memcmp(ents, ents2, (uint64_t)esect * bs) ||
+        gpt_crc(ents, h1.nentries * 128) != h1.entcrc || memcmp(ents, ents2, (uint64_t)esect * bs) ||
         memcmp(h1.guid, h2.guid, 16) || h1.nentries != h2.nentries || h1.entcrc != h2.entcrc ||
         h1.first_usable != h2.first_usable || h1.last_usable != h2.last_usable) {
         strlcpy(why, "its GPT is damaged, or its two copies differ", sizeof why);
@@ -448,10 +442,10 @@ static void entry_of(gpt_entry_t *e, const uint8_t *type, uint64_t first, uint64
 static void write_gpt(void)
 {
     static uint8_t s[4096];
-    h1.entcrc = h2.entcrc = crc32(0, ents, h1.nentries * 128);
+    h1.entcrc = h2.entcrc = gpt_crc(ents, h1.nentries * 128);
     h1.hcrc = h2.hcrc = 0;
-    h1.hcrc = crc32(0, &h1, 92);
-    h2.hcrc = crc32(0, &h2, 92);
+    h1.hcrc = gpt_crc(&h1, 92);
+    h2.hcrc = gpt_crc(&h2, 92);
     printf("step: writing the partition table (backup, then primary)\n");
     disk_wr(h2.entries_lba, esect, ents);
     memset(s, 0, bs); memcpy(s, &h2, 92);

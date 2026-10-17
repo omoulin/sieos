@@ -44,6 +44,9 @@ Blocks are 4 KiB, numbers are little-endian.
  data_start ...  tree nodes and file data, anywhere
 ```
 
+(A grown volume has its bitmap copies elsewhere, among the data: see
+Growing.)
+
 A bitmap block covers 32768 blocks (128 MiB); an index block holds 1024
 checksums. A 256 MiB volume needs 11 blocks of layout in all (0.02 %).
 
@@ -205,6 +208,37 @@ Allocation is next-fit (it continues after the last allocation) and asks
 for runs of up to 32 blocks, so files and the nodes of a commit land
 together.
 
+## Growing
+
+`siefs_grow(fs, nblocks)` makes a mounted volume bigger, up to the
+device's size (`env.nblocks`): SIEOS's images are small and grow to fill
+the USB key or SD card they are written to ([usb.md](usb.md#small-image-grown-on-the-first-start)).
+The file server calls it at mount when the disk is bigger than the volume;
+the host tool has `siefs IMAGE grow [SIZE]`.
+
+The bitmap copies are sized for the old volume (one block per 128 MiB), so
+growing moves them: both copies and their indexes go to the start of the
+new space, the new blocks become free, and the old copies are freed like
+any block (usable after the next commit: the previous superblock still
+points at them). It is **one commit**, written in the usual order: the new
+copy of this slot's bitmap (whole), its index, then the superblock with
+the new size and the new places. A power cut before that superblock lands
+leaves the old volume, whole (nothing it uses was touched); after, the
+grown one; the next commit writes the other slot's copy whole at its new
+place. After a grow, `data_start` is 3: the bitmap copies are among the
+data, where the superblock says (`bm[]`, `idx[]`; checked at mount to lie
+inside the volume). An older SieFS refuses to mount a grown volume
+rather than misread it. Growing again moves the copies again. Shrinking is
+not supported.
+
+The cost: ~170 lines of code all told (the grow ~40 in `space.c`, the
+checker's 4, the GPT and MBR part in the disk server). `make siefs-test`
+grows a volume twice (600 -> 34,000 -> 70,000 blocks: 1, 2, then 3
+bitmap blocks a copy) with a power cut at every write of each grow (and
+the unflushed writes kept, dropped or torn): the volume always comes back
+old or grown, with the same files, checks clean, and grows after; then
+files fill the new space and read back.
+
 ## Checksums
 
 CRC-32C, computed with tables 8 bytes at a time (no special instructions:
@@ -345,6 +379,7 @@ siefs disk.img ls /         siefs disk.img cat /etc/motd
 siefs disk.img put notes.txt /home/notes.txt
 siefs disk.img attr /home/notes.txt project SIEOS
 siefs disk.img find project SIEOS                   every object with that attribute
+siefs disk.img grow 8G                              make the image 8 GiB and the volume with it
 ```
 
 ## Tests
@@ -365,6 +400,7 @@ siefs disk.img find project SIEOS                   every object with that attri
   disk (contents, names, small files, attributes), locked after a mount,
   the wrong key refused, a new password, a changed block refused by its
   tag. The snapshot test also runs inside an encrypted volume.
+- **A grow test:** see Growing.
 - **A crash test:** about 6,000 simulated power cuts, at every write of a
   transaction, half the scenarios with snapshots taken, deleted and
   restored, a third inside an encrypted volume. Unflushed writes are randomly kept, dropped or torn. The

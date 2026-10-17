@@ -47,7 +47,7 @@ QEMU emulates the processors on your PC: expect it to be slow.
 
 ## Try it on a real Pi 4 or Pi 5
 
-You need: the board, a micro-SD card (2 GB or more; **everything on it is
+You need: the board, a micro-SD card (1 GB or more; **everything on it is
 erased**), its power supply, an HDMI screen (optional), and a **USB to
 3.3 V serial adapter** (TTL level: never connect RS-232 levels or 5 V).
 
@@ -78,8 +78,13 @@ make ARCH=arm64 PI=4 sdcard FIRMWARE=~/rpi-fw     # build-arm64/sieos-pi4.img
 make ARCH=arm64 PI=5 sdcard FIRMWARE=~/rpi-fw     # build-arm64/sieos-pi5.img
 ```
 
-`SDDISK=8G` makes SIEOS's partition bigger (default 2G; the image is sparse).
-The image holds two partitions:
+The image is small, 513 MiB (it was 2.3 GB): the SieFS partition holds
+256 MiB (640 MiB with `SDMODEL=1`), and SIEOS extends it to the card's end
+on the first start (the MBR's last entry, then the file system: `fs: grew
+the root partition from 256 MiB to ... MiB`, once; [usb.md](usb.md#small-image-grown-on-the-first-start)
+has the details, `make ARCH=arm64 grow-test` tests it on QEMU's raspi4b).
+`SDDISK=7G` makes a full-size partition instead, as before (the image is
+sparse). The image holds two partitions (an MBR):
 
 1. **FAT32, 256 MiB** (the firmware reads it): `config.txt` (written for the
    board: see `tools/mksdcard.py`), `kernel8.img` (SIEOS's kernel),

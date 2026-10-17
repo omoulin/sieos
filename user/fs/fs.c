@@ -682,6 +682,16 @@ int main(int argc, char **argv)
         for (long from = ipc_recv(port, &m); ; from = from > 0 ? ipc_reply_recv(from, port, &m) : ipc_recv(port, &m))
             m = (msg_t){ .w = { -EIO } };
     }
+    /* The disk is bigger than the file system (a small image written to a
+     * big key or card; vblk extended its partition): take the rest, once. */
+    siefs_statfs_t sf;
+    siefs_statfs(fs, &sf);
+    if (env.nblocks > sf.blocks) {
+        uint64_t was = sf.blocks;
+        if ((r = siefs_grow(fs, env.nblocks))) printf("fs: cannot grow the root file system (error %ld)\n", -r);
+        else if (!siefs_statfs(fs, &sf) && sf.blocks > was)
+            printf("fs: grew the root partition from %lu MiB to %lu MiB\n", (unsigned long)(was >> 8), (unsigned long)(sf.blocks >> 8));
+    }
 
     /* Files deleted while open, left over from the last run: delete them. */
     uint64_t vc = 0, root, od;

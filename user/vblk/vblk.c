@@ -187,6 +187,64 @@ static long io(int op, uint64_t blk, uint32_t bytes)
     return request(op, first + blk, bytes);
 }
 
+static long flush(void) { return has_flush || backend != B_VIRTIO ? io(T_FLUSH, 0, 0) : 0; }
+
+/* ---- Growing: SIEOS's images are small (docs/usb.md); written to a
+ * bigger USB key or SD card, the SieFS partition is extended to the end
+ * of it here, once, before the file server grows the file system into it.
+ * A GPT (user/lib/gpt.c) when its backup is not at the disk's end (the
+ * image's end), an MBR (the Pis' cards) on a card or USB key; only the
+ * last partition. The partition table's sectors go through whole blocks. */
+static int sec_io(int w, uint64_t lba, uint32_t n, uint8_t *buf)
+{
+    uint32_t per = DISK_BS / sector;
+    while (n) {
+        uint64_t b = lba / per;
+        uint32_t at = lba % per, k = per - at < n ? per - at : n;
+        if (io(T_IN, b, DISK_BS)) return -1;
+        if (w) { memcpy(data + at * sector, buf, k * sector); if (io(T_OUT, b, DISK_BS)) return -1; }
+        else memcpy(buf, data + at * sector, k * sector);
+        lba += k; n -= k; buf += k * sector;
+    }
+    return 0;
+}
+static int s_read(void *c, uint64_t lba, uint32_t n, void *b) { (void)c; return sec_io(0, lba, n, b); }
+static int s_write(void *c, uint64_t lba, uint32_t n, const void *b) { (void)c; return sec_io(1, lba, n, (uint8_t *)b); }
+static int s_flush(void *c) { (void)c; return flush() != 0; }
+
+/* (the partition with this unique GUID: SIEOS's) -> 1 grown */
+static int gpt_extend(uint64_t total, const uint8_t *guid)
+{
+    gpt_t *g = malloc(sizeof *g);
+    int r = 0;
+    if (!g) return 0;
+    memset(g, 0, sizeof *g);
+    g->read = s_read; g->write = s_write; g->flush = s_flush;
+    g->sector = sector; g->sectors = total * (DISK_BS / sector);
+    if (!gpt_read(g))
+        for (uint32_t i = 0; i < g->h.nentries; i++)
+            if (!memcmp(((gpt_entry_t *)g->ents + i)->guid, guid, 16)) { r = gpt_grow(g, i) == 1; break; }
+    free(g);
+    return r;
+}
+
+/* (data holds block 0, the MBR; e is the SieFS partition's entry in it) */
+static void mbr_extend(uint8_t *e, uint64_t total)
+{
+    uint32_t lba, n, o, on;
+    uint64_t mib = (1 << 20) / sector, end = total * (DISK_BS / sector) / mib * mib;
+    memcpy(&lba, e + 8, 4); memcpy(&n, e + 12, 4);
+    if (end > 0xFFFFFFFFu) end = 0xFFFFFFFFu / mib * mib;
+    for (int i = 0; i < 4; i++) {                       /* the last partition? */
+        memcpy(&o, data + 446 + 16 * i + 8, 4); memcpy(&on, data + 446 + 16 * i + 12, 4);
+        if (data + 446 + 16 * i != e && on && o >= lba) return;
+    }
+    if ((backend != B_SD && backend != B_USB) || end < (uint64_t)lba + n + mib) return;
+    n = (uint32_t)(end - lba);
+    memcpy(e + 12, &n, 4);
+    if (!io(T_OUT, 0, DISK_BS)) flush();
+}
+
 /* Where SieFS is on the disk: a GPT's SieFS partition, an MBR's type 0x5E
  * partition, or the whole disk if its block 1 is a SieFS superblock.
  * -> 1 found (first, nblocks set), 0 not. Partitions must start on a 4 KiB
@@ -209,6 +267,7 @@ static int find_siefs(void)
                 if (memcmp(e.type, type, 16) || (has_root && memcmp(e.guid, root, 16))) continue;
                 uint64_t a = e.first * sector, z = (e.last + 1) * sector;
                 if (a % DISK_BS || z <= a || z / DISK_BS > total) continue;
+                if (gpt_extend(total, e.guid)) return find_siefs();   /* (grown: read it again) */
                 first = a / DISK_BS;
                 nblocks = (z - a) / DISK_BS;
                 return 1;
@@ -223,6 +282,9 @@ static int find_siefs(void)
             uint32_t n = e[12] | e[13] << 8 | e[14] << 16 | (uint32_t)e[15] << 24;
             uint64_t a = (uint64_t)lba * sector, z = a + (uint64_t)n * sector;
             if (e[4] == 0x5E && a % DISK_BS == 0 && z / DISK_BS <= total) {
+                mbr_extend((uint8_t *)e, total);
+                memcpy(&n, e + 12, 4);
+                z = a + (uint64_t)n * sector;
                 first = a / DISK_BS;
                 nblocks = (z - a) / DISK_BS;
                 return 1;
@@ -378,7 +440,7 @@ int main(int argc, char **argv)
             if (!n || bytes > DISK_MAX || blk + n > nblocks || m.rlen != bytes) r = -EINVAL;
             else r = io(T_OUT, blk, bytes);            /* the data arrived in `data` */
             break;
-        case DISK_FLUSH: r = has_flush || backend != B_VIRTIO ? io(T_FLUSH, 0, 0) : 0; break;
+        case DISK_FLUSH: r = flush(); break;
         default:         r = -ENOSYS;
         }
         uint64_t w1 = 0;

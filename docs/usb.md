@@ -15,6 +15,7 @@ Nothing on the PC's own disks is touched.
   │      SIEOS/INIT.ELF ...     the boot modules (init, con, usb, vblk, fs)
   │      SIEOS/BOOT.CFG         module= lines (init first), screen=WxH, root=GUID
   └── 2. SieFS (the rest of the key): SIEOS's disk, read and written
+         (256 MiB in the image; extended to the key's end on the first start)
          type 5E1E0500-51EF-4153-9E05-534945465331, found by its own
          GUID (BOOT.CFG's root=); /boot holds the boot files, and the
          snapshot "factory" the system as built (what the installer copies)
@@ -27,8 +28,8 @@ started from this key.
 ## Make the image
 
 ```sh
-make usb                      # build/sieos-usb.img, 7 GiB, so it fits a key sold as "8 GB" (sparse: it takes little room)
-make usb USBDISK=16G          # the key's size (at most your key's: a key sold as "8 GB" is 7.5 GiB)
+make usb                      # build/sieos-usb.img: 322 MiB, any key of 512 MB or more (it grows to fill the key)
+make usb USBDISK=7G           # a full-size image instead, as before (at most your key's size: "8 GB" is 7.5 GiB)
 make usb USBMODEL=1           # with the assistant's model in /models (1 GB)
 make usb USBSCREEN=2560x1600  # the screen size the loader asks for first
 make run-usb                  # try it in QEMU first (UEFI firmware, the image as a USB stick)
@@ -37,6 +38,33 @@ make usb-test                 # the automatic test (below)
 
 The image holds a fresh SieFS: **making it again starts from an empty
 disk**; on the key itself your files stay, since you write the image once.
+
+## Small image, grown on the first start
+
+The image is only as big as its files need, plus room: the 64 MiB EFI
+partition and a SieFS partition of 256 MiB (more if the files need it:
+their size + a quarter + 128 MiB), 322 MiB in all, of which ~14 MB is data.
+Writing it takes seconds instead of minutes, and it fits any key. On the
+first start, like Raspberry Pi OS, SIEOS takes the rest of the key:
+
+1. **The partition** (the disk server, `user/vblk`, with `user/lib/gpt.c`):
+   when the GPT's backup copy is not at the key's last sector (it is at the
+   image's end), and SIEOS's partition is the last one, the partition is
+   extended to the key's end (1 MiB aligned) and the GPT written again: its
+   backup at the key's end first, then the primary. A disk whose backup is
+   at its end (a GPT someone laid out, free space on purpose) is left
+   alone, as is any other partition. A Pi's card (an MBR) gets its last
+   entry extended, on SD cards and USB keys only.
+2. **The file system** (the file server): the disk is bigger than SieFS,
+   so `siefs_grow` takes the new blocks (its free-space bitmaps move to
+   the new space, [siefs.md](siefs.md#growing)), in one commit. It logs
+   `fs: grew the root partition from 256 MiB to 7647 MiB`, once.
+
+A power cut at any moment is safe: the GPT has a valid copy at all times
+(the primary until the new backup is whole, then the backup, from which
+the primary is rewritten on the next start), and SieFS changes its size
+in a single commit. The next start finishes whatever was left.
+`make grow-test` checks all of it (below).
 
 ## Write it to a key
 
@@ -56,7 +84,8 @@ system and data.
    sudo dd if=build/sieos-usb.img of=/dev/sdX bs=4M conv=fsync status=progress
    ```
    (macOS: `of=/dev/rdiskN bs=4m`; first `diskutil unmountDisk /dev/diskN`.)
-   The image is sparse, but `dd` writes all of it (the key's full size).
+   `dd` writes all of the image: 322 MiB (about 15-30 s on a USB 3 key; the
+   former 7 GiB image took 5-10 minutes).
 3. Eject the key properly before removing it.
 
 ## Start the PC from the key
@@ -99,8 +128,11 @@ system and data.
 
 ## Tests
 
-`make usb-test` makes a 512 MiB key image and boots it in QEMU with UEFI
-firmware (OVMF): the first start on the firmware's screen, accounts created
+`make usb-test` makes a small key image (a 64 MiB SieFS partition), makes
+it 1 GiB like a bigger key, and boots it in QEMU with UEFI firmware (OVMF):
+the partition and file system grow to the key's end (958 MiB), checked on
+the host after (the GPT valid, its backup at the end); the first start on
+the firmware's screen, accounts created
 there, a file written; a second boot logs in with the same accounts; then the
 key's SieFS partition is checked on the host (`fsck.siefs`, the file read
 back). Measured (KVM): the kernel starts 0.64 s after power-on (the firmware's
@@ -111,6 +143,20 @@ USB storage): the firmware boots from it, then SIEOS's USB driver (`user/usb`)
 serves it and `vblk` takes its SieFS partition, exactly as on a real PC.
 `USBBUS=virtio` attaches it as a plain disk instead; the test passes both ways
 (over USB: the kernel at 0.87 s, the welcome screen at 1.48 s).
+
+`make grow-test` (x86-64 and arm64) is the grow's own test, on a 64 MiB
+SieFS partition in a 1 GiB disk: the GPT code alone on the host
+(`tests/gpt`: a power cut after each of its 67 sector writes, each time a
+valid table, old or grown, grown fully after); then in QEMU (a USB key
+image as a virtio disk; on arm64 also a Pi 4 card, an MBR, on raspi4b):
+QEMU killed as the disk server starts, a little after, and after the
+file system grew, each time the table valid, `fsck` clean and the next
+start finishing the grow; a whole run (`df` shows the new size, an 80 MiB
+file written, more than the old file system held); a second start does
+not grow again and reads the file back; on the host the table checked
+(`tools/gptcheck.py`; `sgdisk -v` agrees), the other partitions
+unchanged, `fsck -d` clean. The SieFS side has its own crash test in
+`make siefs-test` (a power cut at every write of two successive grows).
 
 ## The PC's NVMe drives
 

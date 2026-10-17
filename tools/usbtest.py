@@ -10,7 +10,7 @@ Usage: usbtest.py CPUS HOSTTOOLS IMAGE SHOTS QEMU-COMMAND...
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import atexit, json, os, select, socket, struct, subprocess, sys, tempfile, time
-import qserial                                      # (tools/qserial.py: typing on the console)
+import qserial, gptcheck                            # (tools/qserial.py: typing on the console; the GPT)
 
 cpus, host, image, shots, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 os.makedirs(shots, exist_ok=True)
@@ -102,7 +102,9 @@ def power_off():
         fail("did not power off")
 
 
-# ---- 1: first start on the firmware's screen
+# ---- 1: first start on the firmware's screen; the image (small) on a bigger key
+first0, last0 = gptcheck.siefs_part(image)
+os.truncate(image, max(os.path.getsize(image), 1 << 30))
 t0 = time.time()
 boot()
 wait("SIEOS loader: starting the kernel", 60)
@@ -115,6 +117,7 @@ while got.startswith("root "):              # (the key's partition GUID, BOOT.CF
 if "SieFS partition" not in got:
     fail(f"the disk driver did not take the key's SieFS partition: {got}")
 disk = got
+grew = wait("fs: grew the root partition from ")
 got = wait("atlas: screen: ")
 if not got.startswith("firmware screen (UEFI)"):
     fail(f"atlas does not use the firmware's screen: {got}")
@@ -128,6 +131,7 @@ v = min(255, ((0x0a * 77 + 0x0f * 150 + 0x1c * 29) >> 8) * 5 // 4)
 desk = bytes(c * v // 255 for c in (0x46, 0xff, 0x7a))
 if px.count(desk) < 100000:
     fail("the welcome screen does not look right")
+print(f"ok: the small image grew to the key's end: {grew}")
 print(f"ok: UEFI boot from the key ({disk}): kernel after {t_kernel:.2f} s, welcome screen after {t_screen:.2f} s ({got})")
 type_text("rootpass1\trootpass1\n"); wait("atlas: setup: step 2")
 type_text("alice\tAlice Example\talicepass1\talicepass1\n"); wait("atlas: setup: step 3")
@@ -146,6 +150,8 @@ boot()
 wait("atlas: greeter", 60)
 if b"accounts needed" in full:
     fail("the second boot asked for the first start again: the accounts were not kept")
+if b"fs: grew" in full:
+    fail("the second boot grew the partition again")
 type_text("alice\talicepass1\n")
 wait("fs: /home/alice unlocked")                   # her password opened her encrypted home
 wait("atlas: login alice: ok")
@@ -153,34 +159,23 @@ print("ok: second boot: the accounts were kept (alice logged in, her encrypted h
 power_off()
 
 # ---- 3: the key on the host: its SieFS partition checked, the file read back
-with open(image, "rb") as f:
-    f.seek(512); h = f.read(92)
-    lba, n, size = struct.unpack_from("<QII", h, 72)
-    f.seek(lba * 512); ents = f.read(n * size)
-    first = last = None
-    for i in range(n):
-        e = ents[i * size:(i + 1) * size]
-        if e[:16] == bytes.fromhex("00051e5eef5153419e05534945465331"):     # SieFS's partition type
-            first, last = struct.unpack_from("<QQ", e, 32)
-    if first is None:
-        fail("no SieFS partition on the key")
-    with tempfile.NamedTemporaryFile(dir=os.path.dirname(image), delete=True) as part:
-        f.seek(first * 512)
-        left = (last + 1 - first) * 512
-        while left:                                   # (a sparse copy: zeros stay holes)
-            b = f.read(min(1 << 20, left))
-            if b.strip(b"\0"): part.write(b)
-            else: part.seek(len(b), 1)
-            left -= len(b)
-        part.truncate((last + 1 - first) * 512); part.flush()
-        r = subprocess.run([os.path.join(host, "fsck.siefs"), part.name], capture_output=True, text=True)
-        if r.returncode:
-            fail(f"fsck.siefs: {r.stdout}{r.stderr}")
-        c = subprocess.run([os.path.join(host, "siefs"), part.name, "cat", "/home/alice/keep.txt"], capture_output=True, text=True)
-        if "written on the key" in c.stdout or "permission denied" not in c.stdout + c.stderr:   # her home is encrypted
-            fail(f"alice's file is readable without her password: {c.stdout}{c.stderr}")
-        part.seek(0)
-        if b"written on the key" in part.read():
-            fail("alice's file is on the key in clear")
+kind, parts, bad = gptcheck.table(image)
+if bad or kind != "gpt":
+    fail(f"the key's GPT after the grow: {kind} {bad}")
+first, last = gptcheck.siefs_part(image)
+if first != first0 or last != (os.path.getsize(image) // 512 - 34) // 2048 * 2048 - 1:
+    fail(f"the SieFS partition was not extended to the key's end: {first0}..{last0} -> {first}..{last}")
+with tempfile.NamedTemporaryFile(dir=os.path.dirname(image), delete=True) as part:
+    gptcheck.extract(image, part.name, first, last)
+    r = subprocess.run([os.path.join(host, "fsck.siefs"), part.name], capture_output=True, text=True)
+    if r.returncode:
+        fail(f"fsck.siefs: {r.stdout}{r.stderr}")
+    c = subprocess.run([os.path.join(host, "siefs"), part.name, "cat", "/home/alice/keep.txt"], capture_output=True, text=True)
+    if "written on the key" in c.stdout or "permission denied" not in c.stdout + c.stderr:   # her home is encrypted
+        fail(f"alice's file is readable without her password: {c.stdout}{c.stderr}")
+    part.seek(0)
+    if b"written on the key" in part.read():
+        fail("alice's file is on the key in clear")
+print(f"ok: the key's GPT is valid, its backup at the key's end; the SieFS partition fills it ({(last + 1 - first) >> 11} MiB)")
 print(f"ok: the key's SieFS partition checks clean ({r.stdout.strip().splitlines()[-1].split(': ')[-1]}); alice's home is encrypted (not readable without her password)")
 print("PASS")

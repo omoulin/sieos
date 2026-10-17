@@ -234,6 +234,10 @@ long siefs_check(siefs_t *fs, int data, void (*report)(void *, const char *), vo
     memset(c.tab, 0, c.cap * sizeof *c.tab);
     for (uint64_t b = 0; b < fs->sb.nbm * BPB; b++)          /* the layout and the end: in use */
         if (b < fs->sb.data_start || b >= nb) c.reach[b >> 3] |= 1 << (b & 7);
+    for (int s = 0; s < 2; s++) {                           /* the bitmap copies (among the data, once grown) */
+        for (uint64_t b = fs->sb.idx[s]; b < fs->sb.idx[s] + fs->sb.nidx; b++) c.reach[b >> 3] |= 1 << (b & 7);
+        for (uint64_t b = fs->sb.bm[s]; b < fs->sb.bm[s] + fs->sb.nbm; b++) c.reach[b >> 3] |= 1 << (b & 7);
+    }
     if (fs->ndirty && report) report(ctx, "note: changes not committed yet: checking memory, not the disk");
 
     walk(&c, 0, &fs->rt.root, -1, 0, 0);

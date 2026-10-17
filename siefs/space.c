@@ -377,12 +377,15 @@ int siefs_format(const siefs_env_t *env, const char *label)
     return e;
 }
 
+static int inside(const sb_t *sb, uint64_t b, uint64_t n) { return b >= 3 && b + n <= sb->nblocks; }
 static int sb_valid(const siefs_env_t *env, sb_t *sb)
 {
     return sb->magic == SB_MAGIC && sb->version == 1 && sb->bs == BS && sb->csum == sb_sum(sb) &&
            sb->nblocks <= env->nblocks && sb->nbm == (sb->nblocks + BPB - 1) / BPB &&
            sb->nidx == (sb->nbm + SUMS_PER_IDX - 1) / SUMS_PER_IDX && sb->nidx <= MAX_IDX &&
-           sb->data_start == 3 + 2 * (sb->nidx + sb->nbm) && sb->data_start < sb->nblocks;
+           (sb->data_start == 3 + 2 * (sb->nidx + sb->nbm) || sb->data_start == 3) && sb->data_start < sb->nblocks &&
+           inside(sb, sb->idx[0], sb->nidx) && inside(sb, sb->bm[0], sb->nbm) &&
+           inside(sb, sb->idx[1], sb->nidx) && inside(sb, sb->bm[1], sb->nbm);
 }
 
 /* Load the state a superblock describes: its bitmap copy (every block
@@ -463,6 +466,47 @@ int siefs_unmount(siefs_t *fs)
 }
 
 int siefs_sync(siefs_t *fs) { return commit(fs, 0); }
+
+/* ---- Growing: the device became bigger (a small image written to a big
+ * USB key or SD card, its partition then extended). The bitmap copies are
+ * sized for the old volume, so both move to the start of the new space,
+ * and the old ones are freed like any block (usable after the next commit:
+ * the previous superblock still points at them). One commit does it all:
+ * a crash before its superblock lands leaves the old volume whole; after,
+ * the grown one. A grown volume's data area starts at block 3 (its bitmap
+ * copies sit among the data); the superblock says where they are. */
+int siefs_grow(siefs_t *fs, uint64_t nb)
+{
+    sb_t *sb = &fs->sb;
+    uint64_t on = sb->nblocks, onbm = sb->nbm, nbm = (nb + BPB - 1) / BPB, nidx = (nbm + SUMS_PER_IDX - 1) / SUMS_PER_IDX;
+    uint64_t lay = 2 * (nidx + nbm);
+    int e;
+    if (nb > fs->env.nblocks || nidx > MAX_IDX) return E(EINVAL);
+    if (nb < on + lay + 256) return 0;                 /* (not worth it: less than 1 MiB to gain) */
+    if ((e = commit(fs, 0))) return e;                  /* nothing pending: this commit only grows */
+    size_t mb = nbm * BS, ob = onbm * BS, db = (nbm + 7) / 8;
+    void *a[7] = { fs->env.alloc(mb), fs->env.alloc(mb), fs->env.alloc(mb), fs->env.alloc(db), fs->env.alloc(db),
+                   fs->env.alloc(nbm * 4), fs->env.alloc(nbm * 4) };
+    void **old[7] = { (void **)&fs->map, (void **)&fs->busy, (void **)&fs->fresh, (void **)&fs->bmdirty[0],
+                      (void **)&fs->bmdirty[1], (void **)&fs->bmsum[0], (void **)&fs->bmsum[1] };
+    for (int i = 0; i < 7; i++) if (!a[i]) { for (int j = 0; j < 7; j++) fs->env.free(a[j]); return E(ENOMEM); }
+    for (int i = 0; i < 7; i++) {
+        size_t n = i < 3 ? mb : i < 5 ? db : nbm * 4;
+        memset(a[i], i == 3 || i == 4 ? 0xFF : 0, n);   /* (both copies: written whole) */
+        if (i < 3) memcpy(a[i], *old[i], ob);
+        fs->env.free(*old[i]);
+        *old[i] = a[i];
+    }
+    for (uint64_t b = on; b < nbm * BPB; b++)          /* the new blocks free, past the end in use, */
+        if (b < nb && b >= on + lay) { set0(fs->map, b); set0(fs->busy, b); }
+        else { set1(fs->map, b); set1(fs->busy, b); }  /* the new bitmap copies too */
+    fs->nfree += nb - on - lay;
+    if (sb->data_start > 3) blk_free(fs, 3, sb->data_start - 3);   /* the old copies */
+    else for (int s = 0; s < 2; s++) { blk_free(fs, sb->idx[s], sb->nidx); blk_free(fs, sb->bm[s], onbm); }
+    sb->nblocks = nb; sb->nbm = nbm; sb->nidx = (uint32_t)nidx; sb->data_start = 3;
+    sb->idx[0] = on; sb->bm[0] = on + nidx; sb->idx[1] = on + nidx + nbm; sb->bm[1] = on + 2 * nidx + nbm;
+    return commit(fs, 1);
+}
 
 int siefs_tick(siefs_t *fs)
 {

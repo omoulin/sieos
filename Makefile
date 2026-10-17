@@ -34,7 +34,7 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall vm random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead aes x25519 ed25519 pubkey btcrypt net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
+ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead aes x25519 ed25519 pubkey btcrypt net http tls x509 ssh sha1 zlib gpt   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
 BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git mail audiod play   # programs on the disk, in /bin
@@ -472,7 +472,10 @@ distclean:
 # SIEOS): fetched once into .hosttools/rpi/ for QEMU; on a real card the
 # firmware files are added from FIRMWARE (see docs/raspberrypi.md).
 PI      ?= 4
-SDDISK  ?= 2G
+# SDDISK: the SieFS partition's size on the card image: small (256 MiB; 640 MiB
+# with SDMODEL=1), SIEOS extends it to the card's end on the first start;
+# SDDISK=7G makes a full-size image as before.
+SDDISK  ?= $(if $(SDMODEL),640M,256M)
 PIMODEL ?= smollm2-360m-instruct-q8_0.gguf
 .hosttools/rpi/%.dtb:
 	mkdir -p $(@D) && curl -sfL -o $@ https://raw.githubusercontent.com/raspberrypi/firmware/master/boot/$*.dtb
@@ -540,11 +543,15 @@ sdhci-bench: all $(B)/host/fsck.siefs
 #   make run-usb      that key in QEMU, booting through UEFI like a real PC
 #   make usb-test     a fresh key in QEMU: first start on the screen, files
 #                     written, a second boot finds them; the key is checked
-# USBDISK: the key's size (the image is sparse); USBMODEL=1: with the
-# assistant's model (models/$(MODEL)); USBSCREEN: the preferred screen size.
+# The image is small (its files + room, about 330 MiB): SIEOS extends its SieFS
+# partition to the key's end on the first start. USBDISK=7G: a full-size image
+# instead (the key's size; sparse). USBMODEL=1: with the assistant's model
+# (models/$(MODEL)); USBSCREEN: the preferred screen size. run-usb makes the
+# image RUNDISK big first, like a key (it grows on its first start).
 # USBBUS: how QEMU attaches the key: usb (QEMU's xHCI and USB storage: the
 # real case) or virtio (the image as a plain disk).
-USBDISK   ?= 7G
+USBDISK   ?=
+RUNDISK   ?= 7G
 USBSCREEN ?= 1920x1080
 USBBUS    ?= usb
 # UEFI firmware for the virtual PC (the key boots like on a real PC), one file
@@ -563,7 +570,7 @@ $(B)/uefi/BOOTX64.EFI: boot/uefi/start.S boot/uefi/loader.c boot/uefi/efi.h boot
 	python3 tools/elf2efi.py $(@D)/loader-0x10000000.elf $(@D)/loader-0x20000000.elf $@
 # (a new key each time: what you wrote on the previous image is lost; on the
 # real key it stays, since you write the image once)
-USBMAKE = python3 tools/mkusb.py $(1) --size $(2) --efi $(B)/uefi/BOOTX64.EFI --kernel $(B)/kernel.bin \
+USBMAKE = python3 tools/mkusb.py $(1) $(2) --efi $(B)/uefi/BOOTX64.EFI --kernel $(B)/kernel.bin \
           --module $(B)/init.elf --module $(B)/con.elf --module $(B)/usb.elf --module $(B)/vblk.elf --module $(B)/fs.elf \
           --mkfs $(B)/host/mkfs.siefs --siefs-tool $(B)/host/siefs --rootfs $(B)/rootfs --screen $(USBSCREEN)
 # The Intel Wi-Fi firmware (not part of SIEOS: Intel's, under its own
@@ -586,7 +593,7 @@ BTFW := $(patsubst %,.hosttools/bt/ibt-%,0041-0041.sfi 0041-0041.ddc 19-0-4.sfi 
 	mkdir -p $(@D) && curl -sfL -o $@.part $(if $(filter BCM%,$*),$(BCMFW_URL),$(BTFW_URL))/$*
 	echo "$$(grep ' $*$$' tools/bt-firmware.sha256 | cut -d' ' -f1)  $@.part" | sha256sum -c --quiet && mv $@.part $@
 usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW) $(BTFW)
-	$(call USBMAKE,$(B)/sieos-usb.img,$(USBDISK)) $(if $(USBMODEL),--put models/$(MODEL) /models/$(MODEL)) \
+	$(call USBMAKE,$(B)/sieos-usb.img,$(if $(USBDISK),--size $(USBDISK))) $(if $(USBMODEL),--put models/$(MODEL) /models/$(MODEL)) \
 	    $(foreach f,$(IWLFW) $(BTFW),--put $(f) /lib/firmware/$(notdir $(f)))
 QEMU_UEFI = qemu-system-x86_64 -smp $(SMP) -m $(MEM) $(ACCEL) -no-reboot \
            -bios $(UEFI_FW) \
@@ -596,11 +603,12 @@ QEMU_UEFI = qemu-system-x86_64 -smp $(SMP) -m $(MEM) $(ACCEL) -no-reboot \
            -netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-modern=on,addr=5
 , := ,
 run-usb: $(B)/sieos-usb.img
+	[ $$(stat -c %s $<) -ge $$(numfmt --from=iec $(RUNDISK)) ] || truncate -s $(RUNDISK) $<
 	$(call QEMU_UEFI,$(B)/sieos-usb.img) -display $(WINDOW) $(SERIAL)
 $(B)/sieos-usb.img:
 	$(MAKE) usb
 usb-test: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(B)/host/fsck.siefs
-	$(call USBMAKE,$(B)/usb-test.img,512M)
+	$(call USBMAKE,$(B)/usb-test.img,--siefs 64)
 	python3 tools/usbtest.py $(SMP) $(B)/host $(B)/usb-test.img $(B)/screens $(call QEMU_UEFI,$(B)/usb-test.img) -display none -serial stdio
 # run-bt: this PC's own Intel Bluetooth (8087:0032) passed into QEMU, with the
 # firmware on the disk (docs/bluetooth.md). Linux loses its Bluetooth while it
@@ -617,7 +625,7 @@ run-bt: all $(BTFW)
 # used, everything else hashed), the refusals, the boot entry, the installed
 # system started alone; a whole drive erased from the window (tools/installtest.py)
 install-test: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(B)/host/fsck.siefs
-	$(call USBMAKE,$(B)/install-usb.img,768M)
+	$(call USBMAKE,$(B)/install-usb.img,)
 	python3 tools/installtest.py $(SMP) $(B)/host $(B)/install-usb.img $(B)/install-test $(ACCEL)
 .PHONY: install-test
 
@@ -643,6 +651,29 @@ nvme-test: all $(B)/host/fsck.siefs $(B)/host/siefs $(if $(filter arm64,$(ARCH))
 	rm -f $(B)/nvme-siefs.img && $(B)/host/mkfs.siefs -s 256M -L SIEOS -d $(B)/rootfs $(B)/nvme-siefs.img >/dev/null
 	python3 tools/nvmetest.py $(B)/host $(B)/nvme-siefs.img $(NVMEMIB) $(USBDEV_QEMU_$(ARCH)) -display none -serial stdio
 .PHONY: nvme-test
+
+# grow-test: a small image on a bigger disk (GROWDISK) grows to fill it on the
+# first start (tools/growtest.py; docs/usb.md): power cuts during the grow, then
+# a whole run; x86-64 and arm64 (virt): a USB key image (GPT) as a virtio disk;
+# arm64 also a Pi 4 card (MBR) on raspi4b. gpt-test: user/lib/gpt.c on the host.
+GROWDISK ?= 1G
+$(B)/host/gpt-test: tests/gpt/test.c user/lib/gpt.c include/mk/gpt.h
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -Iinclude -o $@ tests/gpt/test.c user/lib/gpt.c
+gpt-test: $(B)/host/gpt-test
+	$(B)/host/gpt-test
+GROWKEY = python3 tools/mkusb.py $(B)/grow.img --siefs 64 --efi $(if $(filter x86_64,$(ARCH)),$(B)/uefi/BOOTX64.EFI,$(B)/kernel.bin) \
+          --kernel $(B)/kernel.bin $(foreach m,init con usb vblk fs,--module $(B)/$(m).elf) \
+          --mkfs $(B)/host/mkfs.siefs --siefs-tool $(B)/host/siefs --rootfs $(B)/rootfs >/dev/null
+grow-test: all gpt-test $(B)/host/mkfs.siefs $(B)/host/siefs $(B)/host/fsck.siefs $(if $(filter x86_64,$(ARCH)),$(B)/uefi/BOOTX64.EFI,$(B)/modules.img .hosttools/rpi/bcm2711-rpi-4-b.dtb)
+	rm -f $(B)/grow.img && $(GROWKEY)
+	python3 tools/growtest.py $(SMP) $(B)/host $(B)/grow.img $(GROWDISK) $(subst $(B)/disk.img,$(B)/grow.img,$(QEMU)) -display none -vga none -serial stdio
+ifeq ($(ARCH),arm64)
+	rm -f $(B)/grow-siefs.img $(B)/grow.img && $(B)/host/mkfs.siefs -s 64M -L SIEOS -d $(B)/rootfs $(B)/grow-siefs.img >/dev/null
+	python3 tools/mksdcard.py $(B)/grow.img --pi 4 --kernel $(B)/kernel.bin --initrd $(B)/modules.img --siefs $(B)/grow-siefs.img --fat 64 --pow2 >/dev/null
+	python3 tools/growtest.py 4 $(B)/host $(B)/grow.img $(GROWDISK) $(QEMU_PI4) -drive file=$(B)/grow.img,if=sd,format=raw -display none -serial stdio
+endif
+.PHONY: grow-test gpt-test
 
 # ---- SieFS, the file system (siefs/): host tools, tests, and a check that
 # the library also builds the way SIEOS programs are built.

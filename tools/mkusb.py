@@ -15,8 +15,12 @@ The key holds a GPT partition table and two partitions:
      files in /boot, and a snapshot "factory" of the whole system as built:
      what the installer (user/install) copies onto a PC's drive.
 
-The image is sparse: only what is written takes space. Usage:
-  mkusb.py OUT --size BYTES --efi BOOTX64.EFI --kernel K --module M... \
+Without --size, the image is just big enough for its files and some room
+(256 MiB of SieFS at least): written to a key, SIEOS extends the SieFS
+partition and its file system to the key's end on the first start (the
+backup GPT is then moved to the key's end). The image is sparse: only what
+is written takes space. Usage:
+  mkusb.py OUT [--size BYTES | --siefs MiB] --efi BOOTX64.EFI --kernel K --module M... \
            --mkfs MKFS --siefs-tool SIEFS --rootfs DIR [--put SRC DST]... [--esp MiB] [--screen WxH]
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -70,7 +74,8 @@ def copy_sparse(src, dst, offset):
 
 def main():
     a = argparse.ArgumentParser()
-    a.add_argument("out"); a.add_argument("--size", required=True, help="bytes, or with K, M, G")
+    a.add_argument("out"); a.add_argument("--size", help="the key's size, bytes or with K, M, G (default: just what the files need)")
+    a.add_argument("--siefs", type=int, help="without --size: the SieFS partition's size, MiB (default: the files + room)")
     a.add_argument("--efi", required=True); a.add_argument("--kernel", required=True)
     a.add_argument("--module", action="append", required=True)
     a.add_argument("--mkfs", required=True); a.add_argument("--siefs-tool", required=True)
@@ -78,14 +83,21 @@ def main():
     a.add_argument("--esp", type=int, default=64, help="the EFI partition's size, MiB")
     a.add_argument("--screen", default="1920x1080")
     o = a.parse_args()
-    o.size = int(o.size[:-1]) << {"K": 10, "M": 20, "G": 30}[o.size[-1].upper()] if o.size[-1].isalpha() else int(o.size)
+    if o.size:
+        o.size = int(o.size[:-1]) << {"K": 10, "M": 20, "G": 30}[o.size[-1].upper()] if o.size[-1].isalpha() else int(o.size)
+    else:   # a small image: SIEOS grows its partition to the key's end on the first start (user/vblk, siefs_grow)
+        files = [os.path.join(d, f) for d, _, fs in os.walk(o.rootfs) for f in fs] + [p for p, _ in o.put] + \
+                [o.efi, o.kernel] + o.module
+        need = sum((os.path.getsize(p) + 4095) // 4096 * 4096 for p in files if os.path.isfile(p))
+        mib = o.siefs or max(256, (need * 5 // 4 >> 20) + 128)    # the files + a quarter + 128 MiB
+        o.size = (2 + o.esp + mib) << 20                   # (+1 MiB before, 1 MiB for the backup GPT)
 
     total = o.size // SECTOR
     esp_first = 2048                                   # 1 MiB: the usual alignment
     esp_last = esp_first + o.esp * 2048 - 1
     fs_first = esp_last + 1                            # (1 MiB-aligned too)
-    fs_last = (total - 34) // 8 * 8 - 1                # before the backup GPT, whole 4 KiB blocks
-    if fs_last - fs_first < 64 * 2048:
+    fs_last = (total - 34) // 2048 * 2048 - 1          # before the backup GPT, whole MiB
+    if fs_last - fs_first < 32 * 2048:
         sys.exit("mkusb: the key is too small (USBDISK)")
 
     # The boot configuration; the SieFS partition's GUID tells the system its disk.

@@ -85,6 +85,7 @@ int  siefs_mount(const siefs_env_t *env, siefs_t **fs);
 int  siefs_unmount(siefs_t *fs);            /* commits, then frees everything */
 int  siefs_sync(siefs_t *fs);               /* commit now */
 int  siefs_tick(siefs_t *fs);               /* commit if commit_ns has passed: call it now and then */
+int  siefs_grow(siefs_t *fs, uint64_t nblocks);  /* the device grew (up to env.nblocks): take the new blocks, in one commit */
 
 /* Names. */
 int  siefs_lookup(siefs_t *fs, uint64_t dir, const char *name, uint64_t *ino);

@@ -11,6 +11,7 @@
  *   siefs IMAGE attr PATH [NAME [VALUE]]   list, show, or set attributes
  *   siefs IMAGE rmattr PATH NAME   siefs IMAGE find NAME VALUE
  *   siefs IMAGE df
+ *   siefs IMAGE grow [SIZE]        take the whole image file (made SIZE bytes first)
  *   siefs IMAGE snap NAME          a snapshot of "/" (mkusb.py: "factory", the installer's source)
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -20,6 +21,7 @@
 #include "host.h"
 
 static siefs_t *fs;
+static image_t im;
 static char buf[128 << 10];
 
 static int fail(const char *what, long e) { fprintf(stderr, "%s: %s\n", what, host_err(e)); return 1; }
@@ -59,6 +61,14 @@ static int run(int argc, char **argv)
         printf("\"%s\": %llu blocks of 4 KiB, %llu free, %llu freed (usable after the next commits), %llu objects, commit %llu\n",
                s.label, (unsigned long long)s.blocks, (unsigned long long)s.free, (unsigned long long)s.pending,
                (unsigned long long)s.inodes, (unsigned long long)s.commits);
+        return 0;
+    }
+    if (!strcmp(cmd, "grow")) {
+        siefs_statfs_t s, t;
+        siefs_statfs(fs, &s);
+        if ((e = siefs_grow(fs, im.nblocks))) return fail("grow", e);
+        siefs_statfs(fs, &t);
+        printf("%llu MiB -> %llu MiB\n", (unsigned long long)s.blocks >> 8, (unsigned long long)t.blocks >> 8);
         return 0;
     }
     if (!strcmp(cmd, "find") && b) {
@@ -151,8 +161,15 @@ static int run(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-    image_t im;
     if (argc < 3) { fprintf(stderr, "usage: siefs IMAGE COMMAND [ARGUMENTS] (see tools/siefs/siefs.c)\n"); return 2; }
+    if (argc > 3 && !strcmp(argv[2], "grow")) {          /* the file made bigger first */
+        FILE *f = fopen(argv[1], "rb+");
+        uint64_t n = parse_size(argv[3]);
+        int bad = !f || fseek(f, 0, SEEK_END) || (uint64_t)ftell(f) > n ||
+                  ((uint64_t)ftell(f) < n && (fseek(f, (long)(n - 1), SEEK_SET) || fputc(0, f) == EOF));
+        if (f) fclose(f);
+        if (bad) { fprintf(stderr, "%s: cannot make it %s\n", argv[1], argv[3]); return 1; }
+    }
     if (!(fs = host_mount(argv[1], &im))) return 1;
     int r = run(argc, argv);
     long e = siefs_unmount(fs);

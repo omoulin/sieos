@@ -35,3 +35,29 @@ typedef struct {                         /* one partition */
     uint64_t first, last, attr;          /* first and last sectors, inclusive */
     uint16_t name[36];                   /* UTF-16 */
 } __attribute__((packed)) gpt_entry_t;
+
+/* ---- Reading, writing and growing a GPT (user/lib/gpt.c), through the
+ * caller's sector I/O. Shared by the disk server (growing a small image's
+ * last partition to fill the USB key it was written to) and installers. */
+#define GPT_ENTS_MAX 16384               /* the entries array: 128 of 128 bytes (the usual) */
+typedef struct {
+    /* the caller sets these */
+    int (*read)(void *ctx, uint64_t lba, uint32_t n, void *buf);         /* n sectors -> 0 */
+    int (*write)(void *ctx, uint64_t lba, uint32_t n, const void *buf);
+    int (*flush)(void *ctx);
+    void *ctx;
+    uint32_t sector;                     /* bytes: 512 or 4096 */
+    uint64_t sectors;                    /* the disk's size */
+    /* gpt_read fills these; gpt_write writes them */
+    gpt_header_t h;                      /* the primary header */
+    uint8_t ents[GPT_ENTS_MAX];          /* its entries */
+    uint8_t sec[4096];                   /* (one sector) */
+} gpt_t;
+uint32_t gpt_crc(const void *p, unsigned n);   /* the CRC-32 a GPT uses (zlib's) */
+int gpt_read(gpt_t *g);                  /* the primary table, else the backup (the primary is then
+                                            rewritten from it); checked -> 0, or -1 none / odd */
+int gpt_write(gpt_t *g);                 /* the backup at the disk's end, flush, then the primary
+                                            (and the protective MBR's size), flush -> 0 */
+int gpt_grow(gpt_t *g, uint32_t i);      /* entry i to the disk's end (1 MiB aligned) if it is the
+                                            last partition and the backup is not at the end (an
+                                            image written to a bigger disk) -> 1 grown, 0 not, -1 */

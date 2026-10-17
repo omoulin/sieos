@@ -805,6 +805,91 @@ static void crash(int seeds)
            runs, newer, runs - newer);
 }
 
+/* Growing (siefs_grow): a small volume on a bigger device grows twice (the
+ * bitmap copies move each time), with a power cut at every write of each
+ * grow: the volume must come back old or grown, same files, checked clean,
+ * and grow afterwards; then files fill the new space and read back. */
+static void grow(void)
+{
+    static const uint64_t size[3] = { 600, 34000, 70000 };     /* bitmap: 1, 2, then 3 blocks a copy */
+    mem_t m;
+    siefs_env_t env;
+    siefs_t *fs;
+    siefs_statfs_t st;
+    long runs = 0;
+    mem_init(&m, size[2]);
+    env = env_of(&m);
+    env.nblocks = size[0];
+    clk = 0; encd = snaps = 0;
+    CHECK(siefs_format(&env, "grow") == 0 && siefs_mount(&env, &fs) == 0);
+    siefs_create(fs, SIEFS_ROOT, "dir", SIEFS_IFDIR | 0755, 0, 0, &(uint64_t){ 0 });
+    ops_batch(fs, 4242, 60);
+    CHECK(siefs_unmount(fs) == 0);
+    for (int g = 1; g <= 2 && !fails; g++) {
+        env.nblocks = size[g];
+        uint8_t *a_img = malloc(m.nb * BS);
+        memcpy(a_img, m.cur, m.nb * BS);
+        CHECK(siefs_mount(&env, &fs) == 0);
+        uint32_t sa = sig(fs);
+        long w0 = m.writes, total;
+        CHECK(siefs_grow(fs, size[g]) == 0);
+        total = m.writes - w0;
+        siefs_unmount(fs);
+        for (long cut = 0; cut <= total && !fails; cut++)
+            for (int v = 0; v < (cut < total ? 3 : 1); v++) {
+                memcpy(m.cur, a_img, m.nb * BS); memcpy(m.dur, a_img, m.nb * BS); m.npend = 0;
+                CHECK(siefs_mount(&env, &fs) == 0);
+                m.cut = m.writes + cut;
+                siefs_grow(fs, size[g]);
+                fs->broken = 1;
+                siefs_unmount(fs);
+                mem_crash(&m);
+                if (siefs_mount(&env, &fs)) { CHECK(!"mount after a cut grow"); continue; }
+                siefs_statfs(fs, &st);
+                CHECK(sig(fs) == sa && (st.blocks == size[g - 1] || st.blocks == size[g]));
+                if (cut == total) CHECK(st.blocks == size[g]);
+                CHECK(siefs_check(fs, 1, quiet, 0) == 0);
+                CHECK(siefs_grow(fs, size[g]) == 0 && siefs_check(fs, 1, quiet, 0) == 0);   /* grown, then */
+                ops_batch(fs, 99, 10);
+                CHECK(siefs_sync(fs) == 0 && siefs_check(fs, 1, quiet, 0) == 0);
+                siefs_unmount(fs);
+                runs++;
+            }
+        memcpy(m.cur, a_img, m.nb * BS); memcpy(m.dur, a_img, m.nb * BS);
+        free(a_img);
+        CHECK(siefs_mount(&env, &fs) == 0 && siefs_grow(fs, size[g]) == 0);
+        CHECK(siefs_grow(fs, size[g]) == 0);                       /* (twice: nothing to do) */
+        siefs_unmount(fs);
+    }
+    /* fill the grown volume: files land past the old ends, and read back */
+    CHECK(siefs_mount(&env, &fs) == 0);
+    siefs_statfs(fs, &st);
+    CHECK(st.blocks == size[2] && st.free > size[2] - size[1]);
+    static uint8_t blk[EXT_MAX * BS];
+    uint64_t ino, n = 0;
+    char name[16];
+    for (int f = 0; !fails; f++) {
+        sprintf(name, "big%d", f);
+        if (siefs_create(fs, SIEFS_ROOT, name, SIEFS_IFREG | 0644, 0, 0, &ino)) break;
+        long r = 0;
+        for (uint64_t off = 0; off < (64 << 20); off += sizeof blk) {
+            memset(blk, f + 1, sizeof blk);
+            if ((r = siefs_write(fs, ino, off, blk, sizeof blk)) < 0) break;
+            n += sizeof blk;
+        }
+        if (r < 0) break;
+    }
+    siefs_statfs(fs, &st);
+    CHECK(n > (size[2] - size[1]) * BS && st.free < 1000 && siefs_sync(fs) == 0);   /* (past both old ends) */
+    siefs_unmount(fs);
+    CHECK(siefs_mount(&env, &fs) == 0 && siefs_check(fs, 1, quiet, 0) == 0);
+    CHECK(siefs_walk(fs, "/big3", &ino) == 0 && siefs_read(fs, ino, 1 << 20, blk, BS) == BS && blk[0] == 4 && blk[BS - 1] == 4);
+    siefs_unmount(fs);
+    mem_free(&m);
+    printf("grow test: %lu -> %lu -> %lu blocks, %ld power cuts during the grows, all came back whole; %lu MiB written after\n",
+           (unsigned long)size[0], (unsigned long)size[1], (unsigned long)size[2], runs, (unsigned long)(n >> 20));
+}
+
 /* ================================================================ 4. damage */
 static void damage(void)
 {
@@ -968,6 +1053,7 @@ int main(int argc, char **argv)
     snapshots(quick ? 40 : 150, 1);
     encryption();
     crash(quick ? 3 : 30);
+    grow();
     damage();
     if (!fails) measure();
     printf(fails ? "SieFS tests: %ld FAILURES\n" : "SieFS tests: all passed\n", fails);

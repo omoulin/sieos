@@ -24,7 +24,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Install onto a PC's drive (UEFI) | yes, in QEMU with OVMF (`install-test`); untested on the laptops | no (no UEFI loader) | no | no |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `power-test`, `install-test` (x86-64), `sig-test`, `posix-test`, `cxx-test`, `webdeps-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
+`kernel-test`, `power-test`, `install-test` (x86-64), `grow-test`, `gpt-test`, `sig-test`, `posix-test`, `cxx-test`, `webdeps-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`, `igfx-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -420,3 +420,25 @@ checklist in [raspberrypi.md](raspberrypi.md).
   library and its check the rest), atlas +8.6 KB (inst.o 7.5), vblk
   +1.7 KB, the kernel +0.2 KB, BOOTX64.EFI 10.5 -> 14 KB. Not yet run on
   the laptops.
+- **2026-10-17, later.** Small images that grow on the first start, like
+  Raspberry Pi OS ([usb.md](usb.md#small-image-grown-on-the-first-start)):
+  `make usb` makes a 322 MiB image (was 7 GiB) and `make ARCH=arm64 PI=4
+  sdcard` a 513 MiB one (was 2.3 GB), ~14 MB of data each; `dd` now
+  writes them in about 15-30 s on a USB 3 key or a class-10 card instead
+  of 5-10 minutes (estimated at 10-25 MB/s; not timed on a real key), and
+  they fit any key or card of 1 GB. `USBDISK=7G` / `SDDISK=7G` still make
+  full-size images. On the first start the disk server extends the SieFS
+  partition to the medium's end (a GPT whose backup is not at the end, via
+  the new `user/lib/gpt.c`, which the installer's CRC now shares; or the
+  Pi's MBR), and the file server grows SieFS into it (`siefs_grow`: the
+  bitmap copies move to the new space, one commit), logging `fs: grew the
+  root partition from 256 MiB to N MiB` once. Crash-safe by write order
+  (the GPT's backup, then its primary; a single superblock for SieFS).
+  `siefs IMAGE grow [SIZE]` on the host. Tests: `make grow-test` (both
+  architectures; the GPT code alone with a power cut after each of its
+  sector writes, QEMU killed during the grow, a whole run with a file
+  bigger than the old file system, the second start not growing again;
+  arm64 also a Pi 4 card on raspi4b), `usb-test` now boots a small image
+  on a 1 GiB key, `siefs-test` cuts the power at every write of two grows.
+  Sizes (text): space.o +1.4 KB, check.o +0.3 KB, vblk +1.0 KB + gpt.o
+  1.6 KB (its 20 KB table buffer malloc'd during the start only).
