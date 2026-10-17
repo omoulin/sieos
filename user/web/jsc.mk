@@ -18,13 +18,16 @@ $(WB)/stamp/webkit-src: $(WB)/toolchain.stamp $(WK_PATCHES)
 	touch $@
 
 # The JIT, all its tiers (LLInt, baseline, DFG, FTL on B3: upstream's Linux
-# default; without the FTL this release does not build); musl's malloc (no bmalloc,
-# libpas, Gigacage); no sampling profiler (it stops threads with signals),
-# inspector, API tests. -O2: speed matters here.
+# default; without the FTL this release does not build); WebKit's own malloc
+# (bmalloc/libpas: 25% faster than musl's on bench.js); no sampling profiler
+# (it stops threads with signals), inspector, API tests. -Os: as fast as -O2
+# here (the JIT's code is the same), 4.8 MB smaller. WK_FLAGS (webkit.mk):
+# libpas wants 16-byte atomics inline (x86-64: cmpxchg16b)
+WK_FLAGS  := -Os -DNDEBUG $(if $(filter x86_64,$(ARCH)),-mcx16)
 JSC_OPTS  := -DPORT=JSCOnly -DENABLE_STATIC_JSC=ON -DEVENT_LOOP_TYPE=Generic -DDEVELOPER_MODE=OFF \
-             -DENABLE_API_TESTS=OFF -DUSE_SYSTEM_MALLOC=ON -DENABLE_SAMPLING_PROFILER=OFF \
+             -DENABLE_API_TESTS=OFF -DUSE_SYSTEM_MALLOC=OFF -DENABLE_SAMPLING_PROFILER=OFF \
              -DENABLE_REMOTE_INSPECTOR=OFF -DUSE_LIBBACKTRACE=OFF -DENABLE_FUZZILLI=OFF -DUSE_HEADER_MAPS=OFF \
-             -DCMAKE_C_FLAGS_RELEASE="-O2 -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG"
+             -DCMAKE_C_FLAGS_RELEASE="$(WK_FLAGS)" -DCMAKE_CXX_FLAGS_RELEASE="$(WK_FLAGS)"
 JSC_JOBS  ?= 16
 $(WB)/jsc: $(WB)/stamp/webkit-src $(WB)/stamp/icu $(SYSROOT)/usr/lib/libc.a user/web/jsc.mk
 	cd $(WB)/src/webkit && $(PKGENV) $(CMAKE) -G Ninja -DCMAKE_MAKE_PROGRAM=$(NINJA) -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/$(WB)/toolchain.cmake \

@@ -7,6 +7,7 @@
 #                   then kill servers while they work and check that everything carries on
 #   make crash-test only that second part
 #   make newdisk    recreate build/disk.img from rootfs/ (DISK=64M: its size); your files on it are lost
+#   make WEB=1 newdisk   (or usb, sdcard) with the web browser (/bin/web, about 90 MB; built first: make webkit web)
 #   make STACKCHECK=1  a kernel that measures its stacks' deepest use (shown at power off)
 #   make ARCH=arm64 DIAG_TEST=n   a kernel that faults on purpose after boot step n (tests the Pi's boot-step screen)
 #   make clean
@@ -258,7 +259,7 @@ ROOTFS  := $(shell find rootfs -type f)
 # SIEOS's own programs that SIEOS builds itself (make + cc): their sources
 # in /src/sieos, next to its Makefile (rootfs/src/sieos, docs/make.md)
 SELF_SRC := $(foreach p,hello sh make,user/$(p)/$(p).c)
-$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB)
+$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB) $(WEB_ROOTFS_DEPS)
 	rm -rf $(B)/rootfs && mkdir -p $(B)/rootfs && cp -R rootfs/. $(B)/rootfs/ && cp $(SELF_SRC) $(B)/rootfs/src/sieos/
 	mkdir -p $(B)/rootfs/bin $(B)/rootfs/home $(B)/rootfs/tmp
 	mkdir -p $(B)/rootfs/lib/sicc/include/mk && cp cc/include/*.h user/lib/mk.h user/lib/gpio.h siefs/siefs.h $(B)/rootfs/lib/sicc/include/ && \
@@ -266,6 +267,7 @@ $(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atla
 	for p in $(BINS); do cp $(B)/$$p.elf $(B)/rootfs/bin/$$p; done
 	$(if $(filter atlas,$(KARCH_NOBINS)),cp $(B)/noscreen.elf $(B)/rootfs/bin/atlas)
 	for l in $(LINKS); do ln -s $${l%/*} $(B)/rootfs/bin/$${l#*/}; done
+	$(if $(WEB),$(WEB_ROOTFS))
 	chmod -R u=rwX,go=rX $(B)/rootfs && chmod 755 $(B)/rootfs/bin/* && chmod 1777 $(B)/rootfs/tmp
 	touch $@
 $(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs

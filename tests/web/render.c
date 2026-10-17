@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysinfo.h>
+#include <unistd.h>
 #include <wpe/webkit.h>
 #include <wpe/headless/wpe-headless.h>
 
@@ -22,6 +24,13 @@ static int fails, nprobes;
 static char **probes;
 static const char *out;
 static gint64 t0;
+static long used0;
+
+static long used_kib(void)              /* the whole system's memory in use */
+{
+    struct sysinfo si;
+    return sysinfo(&si) ? 0 : (long)((si.totalram - si.freeram) * si.mem_unit / 1024);
+}
 
 static void check(const char *what, int ok) { printf("web render: %s: %s\n", what, ok ? "ok" : "FAIL"); fails += !ok; }
 
@@ -61,6 +70,7 @@ static void snapshot_done(GObject *o, GAsyncResult *r, gpointer data)
     printf("web render: %dx%d, %lld ms after the load began; title \"%s\"\n", w, h, (long long)(g_get_monotonic_time() - t0) / 1000,
            webkit_web_view_get_title(WEBKIT_WEB_VIEW(o)) ? webkit_web_view_get_title(WEBKIT_WEB_VIEW(o)) : "");
     check("written to PNG", write_png(out, px, w, h, stride) == 0);
+    printf("web render: memory: %ld KiB more in use than before (this program, the WebProcess, the NetworkProcess)\n", used_kib() - used0);
     for (int i = 0; i < nprobes; i++) {
         int x, y, near = 0;
         unsigned rgb;
@@ -111,13 +121,18 @@ static gboolean timeout(gpointer data)
     return FALSE;
 }
 
+int sieos_webkit_process(int argc, char **argv, int *status);   /* (user/web/multicall.cpp) */
+
 int main(int argc, char **argv)
 {
+    int status;
+    if (sieos_webkit_process(argc, argv, &status)) return status;   /* (also WebKit's processes, in web-test) */
     if (argc < 3) { printf("usage: web-render URL OUT.png [X,Y=RRGGBB]...\nweb render: FAIL\n"); return 2; }
     out = argv[2]; probes = argv + 3; nprobes = argc - 3;
     setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1);   /* no GL on SIEOS: Skia on the CPU, no compositor */
     setenv("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1", 1);   /* (user/web/patches/webkit-04-no-gl.patch) */
     t0 = g_get_monotonic_time();
+    used0 = used_kib();
     loop = g_main_loop_new(0, FALSE);
     GError *err = 0;
     WPEDisplay *display = wpe_display_headless_new();
