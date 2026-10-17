@@ -2,8 +2,10 @@
  * sdp.c - SDP (Core spec Vol 3 Part B), L2CAP PSM 1: what we offer, and
  * what a device offers.
  *
- *   server   two records: A2DP source (AVDTP on PSM 0x19) and Object Push
- *            (RFCOMM channel OPP_CH, OBEX). Service Search, Service
+ *   server   four records: A2DP source (AVDTP on PSM 0x19), Object Push
+ *            (RFCOMM channel OPP_CH, OBEX), AVRCP 1.4 target (category 1:
+ *            the headset's buttons) and controller (category 2: its
+ *            volume), both AVCTP on PSM 0x17. Service Search, Service
  *            Attribute and Service Search Attribute requests; the answer
  *            cut to the asker's size with a 2-byte continuation (an offset)
  *   client   one query at a time: Service Search Attribute for one UUID,
@@ -65,7 +67,16 @@ static const uint8_t rec_opp[] = {
     0x09, 0, 5, 0x35, 3, 0x19, 0x10, 0x02,
     0x09, 0, 9, 0x35, 8, 0x35, 6, 0x19, 0x11, 0x05, 0x09, 1, 0,   /* profile: OPP 1.0 */
     0x09, 3, 3, 0x35, 2, 0x08, 0xFF };                            /* formats: any */
-static const struct { const uint8_t *p; int n; } rec[2] = { { rec_a2dp, sizeof rec_a2dp }, { rec_opp, sizeof rec_opp } };
+#define AVCTP 0x09, 0, 4, 0x35, 16, 0x35, 6, 0x19, 1, 0, 0x09, 0, 0x17, 0x35, 6, 0x19, 0, 0x17, 0x09, 1, 3,   /* L2CAP 0x17, AVCTP 1.3 */ \
+              0x09, 0, 5, 0x35, 3, 0x19, 0x10, 0x02, 0x09, 0, 9, 0x35, 8, 0x35, 6, 0x19, 0x11, 0x0E, 0x09, 1, 4   /* AVRCP 1.4 */
+static const uint8_t rec_tg[] = {
+    0x09, 0, 0, 0x0A, 0, 1, 0, 3, 0x09, 0, 1, 0x35, 3, 0x19, 0x11, 0x0C, AVCTP,   /* handle 0x10003: remote control target */
+    0x09, 3, 0x11, 0x09, 0, 1 };                                  /* features: category 1 (player) */
+static const uint8_t rec_ct[] = {
+    0x09, 0, 0, 0x0A, 0, 1, 0, 4, 0x09, 0, 1, 0x35, 6, 0x19, 0x11, 0x0E, 0x19, 0x11, 0x0F, AVCTP,   /* 0x10004: remote control (controller) */
+    0x09, 3, 0x11, 0x09, 0, 2 };                                  /* category 2 (amplifier): the volume */
+static const struct { const uint8_t *p; int n; } rec[] = { { rec_a2dp, sizeof rec_a2dp }, { rec_opp, sizeof rec_opp }, { rec_tg, sizeof rec_tg }, { rec_ct, sizeof rec_ct } };
+#define NREC (int)(sizeof rec / sizeof rec[0])
 
 static int matches(int r, const uint8_t *pat, int n)   /* has record r every UUID of the pattern? */
 {
@@ -114,17 +125,17 @@ static void srv_recv(l2ch_t *h, const uint8_t *p, int n)
     }
     if (pdu == 0x02) {                                    /* Service Search: the handles */
         if (q + 3 > e) goto bad;
-        for (int i = 0; i < 2; i++) if (matches(i, pat, patn) && k < be(q, 2)) { o[4 + 4 * k] = 0; o[5 + 4 * k] = 1; o[6 + 4 * k] = 0; o[7 + 4 * k] = (uint8_t)(i + 1); k++; }
+        for (int i = 0; i < NREC; i++) if (matches(i, pat, patn) && k < be(q, 2)) { o[4 + 4 * k] = 0; o[5 + 4 * k] = 1; o[6 + 4 * k] = 0; o[7 + 4 * k] = (uint8_t)(i + 1); k++; }
         o[0] = 0; o[1] = (uint8_t)k; o[2] = 0; o[3] = (uint8_t)k; o[4 + 4 * k] = 0;
         k = 5 + 4 * k;
     } else if (pdu == 0x04 || pdu == 0x06) {              /* Service (Search) Attribute: the attributes */
         int max = q + 2 <= e ? be(q, 2) : 0, ih = de(q + 2, (int)(e - q - 2), &t, &l);
         if (max < 7 || !ih) goto bad;
         const uint8_t *ids = q + 2 + ih, *cont = ids + l;
-        if (pdu == 0x04) { int i = be(pat, 4) - 0x10001; if (i < 0 || i > 1) goto bad; an = attrs(all, i, ids, l); }
+        if (pdu == 0x04) { int i = be(pat, 4) - 0x10001; if (i < 0 || i >= NREC) goto bad; an = attrs(all, i, ids, l); }
         else {
-            uint8_t b[300];
-            for (int i = 0; i < 2; i++) if (matches(i, pat, patn)) k += attrs(b + k, i, ids, l);
+            uint8_t b[400];
+            for (int i = 0; i < NREC; i++) if (matches(i, pat, patn)) k += attrs(b + k, i, ids, l);
             an = seq(all, k); memcpy(all + an, b, k); an += k;
         }
         int off = cont < e && *cont == 2 && cont + 3 <= e ? be(cont + 1, 2) : 0;

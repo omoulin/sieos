@@ -23,7 +23,7 @@ or to Bluetooth headphones (see [Bluetooth](#bluetooth)).
 
 | | |
 |---|---|
-| `play FILE.wav` | plays a WAV file (48 kHz, 16-bit, stereo PCM; others are refused) |
+| `play FILE.wav...` | plays WAV files (48 kHz, 16-bit, stereo PCM; others are refused), one after the other; media keys pause it, skip, stop it |
 | `rec FILE.wav [SECONDS]` | records that long (default 5 s) into a WAV file |
 | `vol [0-100\|mute]` | shows or sets the volume; a number also unmutes |
 | `vol out [N]` | lists the outputs (0 the speakers, then each monitor with sound, then connected Bluetooth headphones, by name; `*` the one playing), or plays to output N |
@@ -39,7 +39,7 @@ speakers the next time the outputs are asked.
 
 `user/audiod/audiod.c` (controllers, streams, the port) and `codec.c`
 (the codecs, through verbs only), port `"audio"` (protocol in
-`include/mk/proto.h`: `AUDIO_WRITE`, `AUDIO_READ`, `AUDIO_VOL`, `AUDIO_OUT`). init starts it when a program
+`include/mk/proto.h`: `AUDIO_WRITE`, `AUDIO_READ`, `AUDIO_VOL`, `AUDIO_OUT`, `AUDIO_KEY`). init starts it when a program
 first looks the port up, and keeps it (the volume lives there; it is not
 saved across a reboot). With no controller it ends with status 2 and init
 gives up on it: clients get "no sound card".
@@ -70,6 +70,15 @@ gives up on it: clients get "no sound card".
   (what the codec still buffers). Recording runs while someone reads and
   stops when the ring is nearly full (nobody reads). A write that finds
   no room waits for the next period.
+- **Media keys** (`AUDIO_KEY`, `MK_...`: the AV/C operation ids, so btd
+  passes a headset's buttons on unchanged; [bluetooth.md](bluetooth.md#remote-control-avrcp)).
+  Pause: the writer's next `AUDIO_WRITE` is held (nothing taken; the
+  stream drains and stops, btd suspends its own), play lets it go. Stop,
+  next, previous: the writer's next write is answered with nothing taken
+  and the key in `w[1]`; `play` then ends, goes to the next file, or the
+  one before (or the same again). Volume up/down: 5 points. The keys are
+  for the process writing then: a write from another one forgets them (a
+  new `play` is not paused by an old key).
 
 Sizes (x86-64, gcc -O2): audiod.o 10.5 KB of code with HDMI/DP and two
 controllers (6.4 KB before them; the program 24 KB with the library),
@@ -148,11 +157,15 @@ controller stops and each `AUDIO_WRITE` goes on to btd's port `btaudio`
 from where they landed in audiod's ring into btd's, the one copy more
 than for the speakers. btd encodes them (SBC), paces them by the media
 clock and holds the answer while its 170 ms ring is full, which paces
-the client. The volume is applied in the encoder. If btd says the
+the client. The volume is applied in the encoder, or, when the headset
+has absolute volume (AVRCP), by the headset: audiod sends each change on
+(`AUDIO_VOL` to `btaudio`), and the headset's own changes come back as
+`AUDIO_VOL` from btd. If btd says the
 headphones are gone, audiod goes back to the speakers and the client's
 write is answered 0 (sent again, to the speakers). With no HDA codec but
 a Bluetooth adapter (the Pis), audiod now stays up for headphones only
-(writes get -ENOENT until some connect). Sizes: audiod +1.0 KB.
+(writes get -ENOENT until some connect). Sizes: audiod +1.0 KB; media
+keys and the volume to btd +0.6 KB, play +0.3 KB.
 
 ## Tests
 

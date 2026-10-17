@@ -84,7 +84,8 @@ static int focus = -1;              /* the window with the keys, or -1 */
 static int strip_on;                /* the sia strip has the keys */
 static int sia_on, set_on, files_on, pins_on, repo_on, cam_on;   /* those windows exist */
 static int last_term = -1;          /* the terminal used last (the Deskbar shows it) */
-static char toast[96];              /* a short message under the strip (until the next action) */
+static char toast[128];             /* a short message under the strip (until the next action) */
+static int bt_ask;                  /* it is btd's question: Accept / Decline (until answered) */
 int atlas_debug;                     /* /tmp/atlas.debug exists: log places (tests) */
 char clip[4096];
 int clip_n;
@@ -700,7 +701,8 @@ static void draw_strip(void)
     if (query[0]) dl_text(qx, y0 + 13, query, strlen(query), S(2), C_TXT, x0, y0, nx - 20, y1);
     else label(qx, y0 + 13, strip_on ? "a file, an app, or a question" : "Ask sia, open a file, run an app...  Ctrl+Space", 2, C_DIM);
     if (strip_on) { int cw = tw(strlen(query), 2); dl_rect(qx + 2 + cw, y0 + 11, qx + 12 + cw, y0 + 35, 0, C_ACC); }
-    if (toast[0]) dl_text(x0 + 24, y1 + 6, toast, strlen(toast), S(2), C_ACCT, 0, 0, x1, SH);
+    int tx = bt_ask ? pill(pill(x0 + 24, y1 + 6, "Accept", 1, H_BTASK, 1) + 12, y1 + 6, "Decline", 0, H_BTASK, 0) + 20 : x0 + 24;
+    if (toast[0]) dl_text(tx, y1 + 6 + 10 * bt_ask, toast, strlen(toast), S(2), C_ACCT, 0, 0, x1, SH);
     if (!strip_on || (!nres && !nfound)) return;
     int rx1 = x0 + 900 < x1 ? x0 + 900 : x1, y = y1 + 6, last = 0, h = 16;
     for (int i = 0; i < nres; i++) h += 46 + (res[i].kind != last ? 32 : 0), last = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
@@ -1049,12 +1051,13 @@ static void close_win(int w)
     settle();
 }
 
-static void bt_user(void)                               /* Bluetooth: whose ~/Downloads files received go to */
+static void bt_call(int op, int v)                      /* Bluetooth: whose ~/Downloads files go to (BT_USER); a file taken or not */
 {
-    msg_t m = { .w = { BT_USER, (uint64_t)uid } };
+    msg_t m = { .w = { (uint64_t)op, (uint64_t)v } };
     long p = port_find("bt");
     if (p > 0) ipc_call(p, &m);
 }
+static void bt_user(void) { bt_call(BT_USER, uid); }
 
 static void logout(void)
 {
@@ -1068,7 +1071,7 @@ static void logout(void)
     mail_close();
     nitems = 0;
     mode = GREETER;
-    uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = home[0] = 0; gfield = 0;
+    uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = home[0] = 0; gfield = bt_ask = 0;
     bt_user();
     nres = nfound = 0; strip_on = 0; mn.on = pr.on = 0; focus = -1; last_term = -1;
     wm_reset();
@@ -1516,7 +1519,9 @@ static void click(int x, int y)
     if (mn.on && (i < 0 || hit[i].kind != H_MENU)) { mn.on = 0; redraw(); return; }
     if (i < 0) return;
     int a = hit[i].arg, k = hit[i].kind;
-    toast[0] = 0;
+    if (k == H_BTASK) { say("atlas: bluetooth file %s\n", a ? "accepted" : "declined"); bt_call(BT_ACCEPT, a); bt_ask = 0; }
+    if (!bt_ask) toast[0] = 0;                          /* (btd's question stays until answered) */
+    if (k == H_BTASK) { redraw(); return; }
     if (k >= H_PANEL && k <= H_PMODE) focus_win(W_SIA);   /* the assistant's window (its buttons */
     if (panel_click(k, a)) { redraw(); return; }           /* may then put something else in focus) */
     switch (k) {
@@ -1914,10 +1919,12 @@ int main(int argc, char **argv)
             if (mode == SESSION && wm_top() < 0) { int x0, y0, x1, y1; rest_box(&x0, &y0, &x1, &y1); redraw_box(x0, y0, x1, y1); }   /* (the resting clock) */
             continue;
         }
-        if (m.w[0] == ATLAS_NOTE && !m.uid) {            /* btd: a file received */
+        if (m.w[0] == ATLAS_NOTE && !m.uid) {            /* btd: a file offered (a question), received */
             reply_val(from, 0);
             buf[m.rlen < sizeof buf ? m.rlen : sizeof buf - 1] = 0;
             strlcpy(toast, buf, sizeof toast);
+            bt_ask = m.w[1] == 1 && mode == SESSION;
+            say("atlas: note%s: %s\n", bt_ask ? " (asks)" : "", toast);
             if (mode == SESSION) settle();
             continue;
         }

@@ -1,6 +1,8 @@
 /*
  * play - Sound, one program under three names (docs/audio.md):
- *   play FILE.wav             plays a WAV file: 48 kHz, 16-bit, stereo
+ *   play FILE.wav...          plays WAV files: 48 kHz, 16-bit, stereo; a
+ *                             headset's pause holds it, next and previous
+ *                             skip, stop ends it (audiod's AUDIO_KEY)
  *   rec FILE.wav [SECONDS]    records that long (5 s if not said) from the
  *                             microphone or line in, in that format
  *   vol [0-100|mute]          shows or sets the volume (a number unmutes)
@@ -30,7 +32,7 @@ static int fail(const char *me, long e)
     return 1;
 }
 
-static int play(const char *path)
+static int play(const char *path)                /* -> 0 played, 1 failed, or the key that ended it (MK_...) */
 {
     long f = fs_open(path, FS_RDONLY, 0), n = f < 0 ? f : fs_read(f, 0, buf, 4096);
     if (n < 12 || memcmp(buf, "RIFF", 4) || memcmp(buf + 8, "WAVE", 4)) { printf("play: %s: not a WAV file\n", path); return 1; }
@@ -51,6 +53,7 @@ static int play(const char *path)
             msg_t m = { .w = { AUDIO_WRITE }, .sbuf = buf + at, .slen = (uint64_t)(n - at) & ~3ull };
             long r = call(&m);
             if (r < 0) return fail("play", r);
+            if (m.w[1]) { fs_close(f); return (int)m.w[1]; }
             at += r;
         }
     }
@@ -99,6 +102,9 @@ int main(int argc, char **argv)
         printf("volume %ld%%%s\n", v & 0xFF, v & AUDIO_MUTE ? ", muted" : "");
         return 0;
     }
-    if (argc < 2) { printf("usage: play FILE.wav | rec FILE.wav [SECONDS] | vol [0-100|mute|out [N]]\n"); return 1; }
-    return !strcmp(me, "rec") ? rec(argv[1], argc > 2 ? strnum(argv[2]) : 5) : play(argv[1]);
+    if (argc < 2) { printf("usage: play FILE.wav... | rec FILE.wav [SECONDS] | vol [0-100|mute|out [N]]\n"); return 1; }
+    if (!strcmp(me, "rec")) return rec(argv[1], argc > 2 ? strnum(argv[2]) : 5);
+    for (int i = 1, k; i < argc; i += k == MK_PREV ? -(i > 1) : 1)   /* (previous: the one before, or again) */
+        if ((k = play(argv[i])) == 1 || k == MK_STOP) return k == 1;
+    return 0;
 }

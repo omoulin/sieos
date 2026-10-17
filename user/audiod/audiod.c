@@ -7,6 +7,8 @@
  * an HDMI / DisplayPort monitor with sound (AUDIO_OUT), on its controller,
  * or to Bluetooth headphones: then each write goes on to btd (its port
  * "btaudio", straight from where it landed here) with the volume.
+ * Media keys (AUDIO_KEY: a headset's buttons) pause the writer (its
+ * write waits), let it go, or tell it to stop or skip.
  *
  *   A controller: reset, then commands to a codec through the CORB (a ring
  *   we write) and answers through the RIRB (one it writes), polled.
@@ -59,7 +61,8 @@ typedef struct {
 
 static hda_t hc[2];
 static int nh, bt;                               /* bt: playing to Bluetooth headphones */
-static long btp;
+static int paused, skip;                         /* media keys, for the writer kpid */
+static long btp, wpid, kpid;                     /* (wpid: the last writer) */
 static stream_t out, in;
 
 static long bt_call(msg_t *m)                    /* btd's port "btaudio" -> w[0] or -error */
@@ -67,6 +70,15 @@ static long bt_call(msg_t *m)                    /* btd's port "btaudio" -> w[0]
     long e = btp > 0 || (btp = port_find("btaudio")) > 0 ? ipc_call(btp, m) : -ENOENT;
     if (e < 0) btp = 0;
     return e < 0 ? e : (long)m->w[0];
+}
+
+static void volume(int v)                        /* (as AUDIO_VOL's w[1]) */
+{
+    vol = v < 0 ? 0 : v & (AUDIO_MUTE | 0xFF);
+    if ((vol & 0xFF) > 100) vol = (vol & AUDIO_MUTE) | 100;
+    set_vol();
+    msg_t f = { .w = { AUDIO_VOL, (uint64_t)vol } };   /* (headphones with absolute volume) */
+    if (bt) bt_call(&f);
 }
 
 static uint8_t  r8(int r)              { return h->regs[r]; }
@@ -268,18 +280,22 @@ int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
     if (setup()) { printf("audiod: no sound card\n"); return 2; }
-    long port = port_create("audio"), from = 0, r = 0;
+    long port = port_create("audio"), from = 0, r = 0, r1 = 0;
     for (int i = 0; i < nh; i++) if (irq_bind(hc[i].irq, port)) return 2;
     for (int answer = 0;; ) {
         uint32_t room = RING - out.n < RING - out.pos ? RING - out.n : RING - out.pos;
-        msg_t m = { .w = { r }, .rbuf = out.ring + out.pos, .rlen = room };
+        msg_t m = { .w = { r, r1 }, .rbuf = out.ring + out.pos, .rlen = room };
         from = answer ? ipc_reply_recv(from, port, &m) : ipc_recv(port, &m);
-        answer = 0;
+        answer = 0; r1 = 0;
         if (from <= 0) { if (!from) interrupt(); continue; }
-        uint32_t take = m.w[0] == AUDIO_WRITE ? m.rlen & ~3u : 0;   /* whole frames */
+        if (m.w[0] == AUDIO_WRITE && m.pid != kpid) paused = skip = 0;   /* (the keys were for another writer) */
+        uint32_t take = m.w[0] == AUDIO_WRITE && !paused && !skip ? m.rlen & ~3u : 0;   /* whole frames */
         memset(out.ring + out.pos + take, 0, m.rlen - take);   /* (the rest: the room stays silent) */
         switch (m.w[0]) {
         case AUDIO_WRITE:
+            wpid = m.pid;
+            if (skip) { r1 = skip; skip = r = 0; break; }   /* stop, next, previous: the writer is told */
+            if (paused) { if (!out.tok) { out.tok = from; continue; } r = -EBUSY; break; }   /* (held until play) */
             if (bt) {                                /* on to btd, from where it landed */
                 msg_t f = { .w = { AUDIO_WRITE, (uint64_t)vol }, .sbuf = out.ring + out.pos, .slen = take };
                 if ((r = bt_call(&f)) < 0) { output(!ach); r = 0; }   /* gone: back to the speakers (sent again) */
@@ -305,13 +321,19 @@ int main(int argc, char **argv)
             if (in.n) reply_read();
             continue;
         case AUDIO_VOL:
-            if (!(m.w[1] & AUDIO_ASK)) {
-                vol = m.w[1] & (AUDIO_MUTE | 0xFF);
-                if ((vol & 0xFF) > 100) vol = (vol & AUDIO_MUTE) | 100;
-                set_vol();
-            }
+            if (!(m.w[1] & AUDIO_ASK)) volume((int)m.w[1]);
             r = vol;
             break;
+        case AUDIO_KEY: {
+            int k = (int)m.w[1];
+            r = 0;
+            if (k == MK_VOLUP || k == MK_VOLDOWN) { volume((vol & 0xFF) + (k == MK_VOLUP ? 5 : -5)); break; }
+            kpid = wpid; paused = k == MK_PAUSE;
+            skip = k == MK_STOP || k == MK_NEXT || k == MK_PREV ? k : 0;
+            msg_t a = { .w = { 0, (uint64_t)skip } };   /* a held writer: goes on, or is told */
+            if (!paused && out.tok) { ipc_reply(out.tok, &a); out.tok = 0; skip = 0; }
+            break;
+        }
         case AUDIO_OUT: {                        /* (scanned again: a monitor or headphones gone send the sound back to analog) */
             char names[9 + 4 * 17 + 33] = "Speakers\n", *e = names + 9;
             int k = m.w[1] & AUDIO_ASK ? -1 : (int)m.w[1];

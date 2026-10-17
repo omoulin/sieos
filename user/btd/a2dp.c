@@ -16,7 +16,8 @@
  *                the packet), as many frames as the sink's MTU takes
  *   sound        audiod's writes land in pcm_ring (btd.c, port "btaudio");
  *                a2dp_pump sends each packet when the media clock says,
- *                from the time streaming began (or caught up after a gap)
+ *                from the time streaming began (or caught up after a gap);
+ *                the volume in the encoder, or the sink's (avrcp.c)
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -36,7 +37,6 @@ static struct {
 } av;
 uint8_t pcm_ring[PCM_RING];
 uint32_t pcm_w, pcm_r;
-volatile int a2dp_new;
 
 static void sig(int type, int id, const uint8_t *d, int n, int label)
 {
@@ -151,7 +151,8 @@ static void ch_open(l2ch_t *h)
     }
     av.st = A_OPEN;                                       /* the media channel: ready */
     av.c->dev->d.flags |= BTF_AUDIO;
-    a2dp_new = 1;
+    to_audiod(AUDIO_OUT, AUDIO_BT);                       /* (audiod plays to it) */
+    avrcp_link(av.c);
     int fl = sbc_len(av.sbc.bitpool), k = ((h->rmtu < L2_MTU ? h->rmtu : L2_MTU) - 13) / fl;
     bt_log("bt: %s: A2DP ready: %d SBC frames a packet (MTU %d), %d kbit/s\n", av.c->dev->d.name, k > 15 ? 15 : k, h->rmtu, fl * 8 * 375 / 1000);
 }
@@ -184,8 +185,9 @@ void a2dp_tick(void)
     if (av.wait && !--av.wait && !av.c && av.later->dev && av.later->enc) start(av.later);
     if (av.st < A_OPEN || ++av.idle < 3) return;
     if (av.st == A_OPEN) pcm_r = pcm_w;                   /* not started in 3 s: what waits is dropped */
-    else if (av.idle >= 5 && !av.want) cmd_seid(0x09, av.seid);   /* no sound for 5 s: Suspend */
+    else if (av.idle >= 5) a2dp_suspend();               /* no sound for 5 s */
 }
+void a2dp_suspend(void) { if (av.st == A_STREAM && !av.want) cmd_seid(0x09, av.seid); }
 const char *a2dp_sink(void) { return av.st >= A_OPEN ? av.c->dev->d.name : 0; }
 
 int a2dp_put(uint32_t at, int n, int vol)
@@ -193,7 +195,7 @@ int a2dp_put(uint32_t at, int n, int vol)
     if (av.st < A_OPEN) return -ENOENT;
     if (at != pcm_w) return 0;                            /* (the ring was emptied meanwhile) */
     pcm_w += (uint32_t)n; av.idle = 0;
-    av.sbc.gain = vol & AUDIO_MUTE ? 0 : (vol & 0xFF) * (vol & 0xFF) * 65536 / 10000;
+    av.sbc.gain = vol & AUDIO_MUTE ? 0 : avrcp_vol(vol) ? 65536 : (vol & 0xFF) * (vol & 0xFF) * 65536 / 10000;   /* (absolute volume: the sink scales) */
     if (av.st == A_OPEN && !av.want) cmd_seid(0x07, av.seid);   /* Start */
     return n;
 }

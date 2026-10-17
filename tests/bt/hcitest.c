@@ -21,10 +21,16 @@
  *            RTP headers, SBC frame headers and CRCs, the frames decoded (a
  *            float decoder here, and the host's libsbc if there) and compared
  *            to the input (SNR); suspend when the sound stops
+ *   AVRCP    we open the control channel; absolute volume (registered, the
+ *            interim answer, SetAbsoluteVolume, the headset's change to
+ *            audiod and registered again); UNIT INFO, GetCapabilities; the
+ *            buttons (pass through) to audiod, pause suspending the stream
  *   SDP      a phone asks our records: Object Push's channel, a cut answer
  *            and its continuation, Service Search, one attribute
  *   OBEX     a phone pushes a file (RFCOMM: multiplexer, PN, DLC, MSC,
- *            credits; OBEX connect, put in two packets): the file checked;
+ *            credits; OBEX connect, put in two packets; the user asked, the
+ *            answer held until accepted): the file checked; two more
+ *            declined (by the user; no answer in 30 s);
  *            then we send one to it (SDP finds its channel, RFCOMM with few
  *            credits, PUTs as big as it takes): every byte checked
  *
@@ -57,9 +63,13 @@ void bonds_save(void) { saves++; }
 static char fname[64];                                    /* the file received */
 static uint8_t fdata[4096];
 static int fn, fstate;                                    /* 1 open, 2 complete, 3 broken off */
+static char asked[64];                                    /* the file the user is asked about */
+static int nasked, keys[16], nkeys, avol = -1, aout;      /* (to audiod: the headset's keys, its volume; headphones ready) */
+void file_ask(const btdev_t *from, const char *name, uint32_t size) { (void)from; (void)size; strlcpy(asked, name, sizeof asked); nasked++; }
 int file_open(const btdev_t *from, const char *name, uint32_t size) { (void)from; (void)size; strlcpy(fname, name, sizeof fname); fn = 0; fstate = 1; return 0; }
 int file_write(const void *p, int n) { if (fn + n > (int)sizeof fdata) return -1; memcpy(fdata + fn, p, n); fn += n; return n; }
-void file_close(int ok) { fstate = ok ? 2 : 3; }
+void file_close(int ok) { fstate = ok > 0 ? 2 : ok ? 4 : 3; }
+void to_audiod(int op, int arg) { if (op == AUDIO_VOL) avol = arg; else if (op == AUDIO_OUT) aout = arg == AUDIO_BT; else if (nkeys < 16) keys[nkeys++] = arg; }
 long call_named(long *port, const char *name, msg_t *m, int repeat)
 {
     (void)port; (void)name; (void)repeat;
@@ -469,10 +479,13 @@ static int avdtp(int sig, int *label, int id)              /* the next AVDTP com
     return taken - 1;
 }
 
+static int remote(int h);
+static void buttons(int h, int c, int sig);
 static void audio(void)
 {
-    printf("A2DP: headphones: SDP, AVDTP, SBC media\n");
+    printf("A2DP: headphones: SDP, AVDTP, SBC media; AVRCP\n");
     const int h = 0x50;
+    int rc;
     bonded(HP, BTK_AUDIO, "Headphones");
     bt_dev_t want = { 0 };
     memcpy(want.addr, HP, 6);
@@ -514,10 +527,11 @@ static void audio(void)
     avdtp(0x71, &label, 0x06);                              /* Open */
     ok[0] = (uint8_t)(label << 4 | 2); ok[1] = 6;
     acl_in(h, sig, ok, 2);
-    a2dp_new = 0;
+    aout = 0;
     open_out(h, 0x19, 0x72, 672);
-    check("the media channel: headphones ready (audiod told)", a2dp_sink() && !strcmp(a2dp_sink(), "Headphones") && a2dp_new);
+    check("the media channel: headphones ready (audiod told)", a2dp_sink() && !strcmp(a2dp_sink(), "Headphones") && aout);
     check("  in use", dev_find(HP)->d.flags & BTF_AUDIO);
+    rc = remote(h);
 
     static int16_t in[2 * 9000], out[2 * 9000];
     for (int i = 0; i < 9000; i++) { in[2 * i] = (int16_t)(10000 * sin(2 * M_PI * 1000 * i / 48000.0)); in[2 * i + 1] = (int16_t)(7000 * sin(2 * M_PI * 3100 * i / 48000.0)); }
@@ -571,8 +585,87 @@ static void audio(void)
     check("  suspended after 5 s without sound", 1);
     ok[0] = (uint8_t)(label << 4 | 2); ok[1] = 9;
     acl_in(h, sig, ok, 2);
+    buttons(h, rc, sig);
     EVT(0x05, 0, (uint8_t)h, 0, 0x13);
     check("disconnected: no headphones", !a2dp_sink() && a2dp_put(pcm_w, 4, 100) == -ENOENT);
+}
+
+/* ---- AVRCP, the headset's side: our frames on its channel 0x73. */
+static const uint8_t *avc(int ctype, int op, int pdu, int *len, const char *what)   /* ours: AVCTP (110E), AV/C ctype, opcode, PDU */
+{
+    const uint8_t *p = frame(0x73, len, what);
+    int ok = p && *len >= 8 && p[1] == 0x11 && p[2] == 0x0E && p[3] == ctype && p[5] == op &&
+             (op || (*len >= 13 && !memcmp(p + 6, "\0\x19\x58", 3) && p[9] == pdu && *len == 13 + p[12]));
+    if (!ok) printf("  (wanted ctype %x, opcode %x, PDU %x; got %d bytes: %x %x %x)\n", ctype, op, pdu, p ? *len : 0, p ? p[3] : 0, p ? p[5] : 0, p && *len > 9 ? p[9] : 0);
+    check("  its AVCTP and AV/C headers", ok);
+    return ok ? p : 0;
+}
+static int remote(int h)                                    /* -> our cid */
+{
+    int len;
+    const uint8_t *p;
+    bt_tick();
+    check("AVRCP: no control channel yet: we wait", taken == nsent);
+    bt_tick();
+    int c = open_out(h, 0x17, 0x73, 672);                   /* (2 s: we open it) */
+    p = avc(3, 0, 0x31, &len, "AVRCP: register for volume changes (NOTIFY)");
+    check("  event 0D, a command", p && p[13] == 0x0D && !(p[0] & 2));
+    ACL(h, c, 0x12, 0x11, 0x0E, 0x0F, 0x48, 0, 0, 0x19, 0x58, 0x31, 0, 0, 2, 0x0D, 0x40);   /* INTERIM: 0x40 */
+    check("  interim: absolute volume (SIEOS's not known yet: nothing sent)", taken == nsent && avrcp_vol(50) == 1);
+    p = avc(0, 0, 0x50, &len, "SetAbsoluteVolume (CONTROL)");
+    check("  50% is 0x40", p && p[13] == 0x40);
+    check("  the same volume again: nothing sent", avrcp_vol(50) == 1 && taken == nsent);
+    ACL(h, c, 0x22, 0x11, 0x0E, 0x09, 0x48, 0, 0, 0x19, 0x58, 0x50, 0, 0, 1, 0x40);   /* (accepted) */
+    ACL(h, c, 0x12, 0x11, 0x0E, 0x0D, 0x48, 0, 0, 0x19, 0x58, 0x31, 0, 0, 2, 0x0D, 0x20);   /* CHANGED: its buttons, 0x20 */
+    check("the headset's volume: 0x20 is 25% for audiod", avol == 25);
+    avc(3, 0, 0x31, &len, "  registered again");
+    check("  audiod's echo: nothing sent", avrcp_vol(25) == 1 && taken == nsent);
+    avrcp_vol(100);
+    p = avc(0, 0, 0x50, &len, "SetAbsoluteVolume 100%");
+    check("  0x7F", p && p[13] == 0x7F);
+    ACL(h, c, 0x30, 0x11, 0x0E, 0x01, 0xFF, 0x30, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);   /* UNIT INFO */
+    p = avc(0x0C, 0x30, 0, &len, "UNIT INFO answered");
+    check("  a panel, label kept", p && len == 11 && p[0] == 0x32 && p[6] == 0x07 && p[7] == 0x48);
+    ACL(h, c, 0x40, 0x11, 0x0E, 0x01, 0x48, 0, 0, 0x19, 0x58, 0x10, 0, 0, 1, 3);   /* GetCapabilities: events */
+    p = avc(0x0C, 0, 0x10, &len, "GetCapabilities (events) answered");
+    check("  none", p && p[13] == 3 && p[14] == 0);
+    ACL(h, c, 0x50, 0x11, 0x0E, 0x01, 0x48, 0, 0, 0x19, 0x58, 0x20, 0, 0, 1, 0);   /* GetElementAttributes: not ours */
+    avc(0x0A, 0, 0x20, &len, "another PDU: rejected");
+    ACL(h, c, 0x60, 0x11, 0x0F, 0x00, 0x48, 0x7C, 0x44, 0);  /* (another profile) */
+    p = frame(0x73, &len, "another profile: invalid");
+    check("  (IPID, header only)", p && len == 3 && p[0] == 0x63);
+    return c;
+}
+static void press(int h, int c, int id, int up)
+{
+    uint8_t b[8] = { 0x70, 0x11, 0x0E, 0x00, 0x48, 0x7C, (uint8_t)(id | up << 7), 0 };
+    acl_in(h, c, b, 8);
+}
+static void buttons(int h, int c, int sig)
+{
+    int len, label;
+    const uint8_t *p;
+    nkeys = 0;
+    press(h, c, MK_PLAY, 0);
+    p = avc(0x09, 0x7C, 0, &len, "pass through: play accepted");
+    check("  echoed", p && len == 8 && p[6] == MK_PLAY);
+    press(h, c, MK_PLAY, 1);
+    avc(0x09, 0x7C, 0, &len, "  released");
+    press(h, c, MK_NEXT, 0); avc(0x09, 0x7C, 0, &len, "next");
+    press(h, c, MK_VOLUP, 0); avc(0x09, 0x7C, 0, &len, "volume up");
+    press(h, c, 0x47, 0); avc(0x08, 0x7C, 0, &len, "record: not implemented");
+    check("audiod given play, next, volume up (once each)", nkeys == 3 && keys[0] == MK_PLAY && keys[1] == MK_NEXT && keys[2] == MK_VOLUP);
+    check("more sound", a2dp_put(pcm_w, 7 * 512, 100) == 7 * 512);
+    avdtp(0x71, &label, 0x07);                              /* Start */
+    uint8_t ok[2] = { (uint8_t)(label << 4 | 2), 7 };
+    acl_in(h, sig, ok, 2);
+    press(h, c, MK_PAUSE, 0);
+    avdtp(0x71, &label, 0x09);
+    check("pause: the stream suspended at once", 1);
+    avc(0x09, 0x7C, 0, &len, "  accepted");
+    check("  audiod given pause", nkeys == 4 && keys[3] == MK_PAUSE);
+    ok[0] = (uint8_t)(label << 4 | 2); ok[1] = 9;
+    acl_in(h, sig, ok, 2);
 }
 
 /* RFCOMM, the phone's side. */
@@ -638,12 +731,23 @@ static void obex_in(int h, int rf)                          /* phone -> us */
     put[k++] = 0x48; put[k++] = 0; put[k++] = 9; memcpy(put + k, "hello ", 6); k += 6;
     put[2] = (uint8_t)k;
     rf_in(h, rf, 1, 18, 0xEF, put, k, -1);
+    check("OBEX: the first PUT: the user asked, the answer waits", nasked == 1 && !strcmp(asked, "hello.txt") && taken == nsent && !fstate);
+    check("  accepted (Atlas)", !opp_answer(1) && opp_answer(1) == -ENOENT);
     p = rf_out(0x61, &dl, &ctl, &n, &cr, "OBEX: the first PUT answered");
     check("  continue; the file opened as hello.txt", p && p[0] == 0x90 && fstate == 1 && !strcmp(fname, "hello.txt"));
     static const uint8_t fin[11] = { 0x82, 0, 11, 0x49, 0, 8, 'w', 'o', 'r', 'l', 'd' };
     rf_in(h, rf, 1, 18, 0xEF, fin, 11, -1);
     p = rf_out(0x61, &dl, &ctl, &n, &cr, "OBEX: the final PUT answered");
     check("  success; the file complete: \"hello world\"", p && p[0] == 0xA0 && fstate == 2 && fn == 11 && !memcmp(fdata, "hello world", 11));
+    for (int t = 0; t < 2; t++) {                           /* two more: declined; not answered */
+        static const uint8_t one[17] = { 0x82, 0, 17, 0x01, 0, 11, 0, 'x', 0, '.', 0, 'y', 0, 0, 0x49, 0, 3 };
+        fstate = 0;
+        rf_in(h, rf, 1, 18, 0xEF, one, 17, -1);
+        check(t ? "a file nobody answers for: asked" : "a file the user declines: asked", nasked == 2 + t && !strcmp(asked, "x.y") && taken == nsent);
+        if (t) for (int i = 0; i < 30; i++) opp_tick(); else opp_answer(0);
+        p = rf_out(0x61, &dl, &ctl, &n, &cr, t ? "  30 s: answered" : "  answered");
+        check("  forbidden, no file", p && p[0] == 0xC3 && fstate == 4 && opp_answer(1) == -ENOENT);
+    }
     rf_in(h, rf, 1, 18, 0x53, 0, 0, -1);                    /* DISC 18 */
     p = rf_out(0x61, &dl, &ctl, &n, &cr, "RFCOMM: DISC answered");
     check("  UA", p && dl == 18 && ctl == 0x63);
@@ -752,6 +856,10 @@ static void phone(void)
     acl_in(h, sdp, ss, 13);
     const uint8_t *p = frame(0x60, &len, "SDP: Service Search for an audio source (110A)");
     check("  one handle: 10001", p && p[0] == 0x03 && p[6] == 1 && p[8] == 1 && g16(p + 9) == 0x0100 && p[12] == 1);
+    static const uint8_t rc[13] = { 0x02, 0, 12, 0, 8, 0x35, 3, 0x19, 0x11, 0x0E, 0, 5, 0 };
+    acl_in(h, sdp, rc, 13);
+    p = frame(0x60, &len, "SDP: Service Search for AVRCP (110E)");
+    check("  two: 10003 (target), 10004 (controller)", p && p[0] == 0x03 && p[6] == 2 && p[8] == 2 && p[12] == 3 && p[16] == 4);
     static const uint8_t sa[17] = { 0x04, 0, 11, 0, 12, 0, 1, 0, 1, 0, 100, 0x35, 3, 0x09, 0, 4, 0 };
     acl_in(h, sdp, sa, 17);
     p = frame(0x60, &len, "SDP: its attribute 4 (protocols)");

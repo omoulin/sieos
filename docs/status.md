@@ -252,6 +252,20 @@ checklist in [raspberrypi.md](raspberrypi.md).
   text): btd +21.7 KB (sdp 4.0, a2dp 4.3, sbc 2.8, rfcomm 2.8, obex 4.4,
   btd.c +2.3, hci +1.1), bt +1.2 KB, audiod +1.0 KB, Atlas +0.7 KB; btd's
   RAM +58 KB (the 32 KB sound ring, 8 KB OBEX packet, 8 KB request buffer).
+- **2026-10-17, later.** Bluetooth remote control and a prompt for files
+  ([bluetooth.md](bluetooth.md#remote-control-avrcp)): AVRCP 1.4 over AVCTP
+  (PSM 0x17, two SDP records: target and controller). A headset's buttons
+  (play, pause, stop, next, previous, volume) go to audiod as media keys
+  (`AUDIO_KEY`, AV/C's own operation ids): pause holds the writer and
+  suspends the stream, next/previous/stop reach `play` (now several
+  files); absolute volume both ways (SetAbsoluteVolume, the headset's
+  changes as SIEOS's volume), the encoder then at full scale. Files pushed
+  by a phone wait for the user: Atlas shows Accept / Decline under the
+  strip (`bt accept` / `bt decline` as root), declined or 30 s unanswered:
+  "forbidden". btd's tick thread now also wakes for what goes to audiod
+  and Atlas. `make bt-test` 342 checks. Untested on hardware. Sizes
+  (x86-64, text): btd +3.4 KB (avrcp 1.9, obex +0.5, btd.c +0.6, sdp
+  +0.2), audiod +0.6 KB, play +0.3 KB, bt +0.2 KB, Atlas +0.4 KB.
 - **2026-10-16, later.** The laptop's camera and keyboard light, in the
   USB server ([usb-stack.md](usb-stack.md#cameras)). xHCI isochronous IN
   transfers (40 queued, an interrupt per 8); USB video class: the YUY2
