@@ -348,7 +348,7 @@ crash-test: all $(B)/host/fsck.siefs
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/crashtest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # power-test (x86-64): ACPI in QEMU (tools/powertest.py, user/acpid): suspend to RAM and
-# waking up (twice: once while fsloop works), the network and files after; reboot; the power button
+# waking up (three times: by the monitor, again while fsloop works, by the clock: `suspend 3`), the network and files after; reboot; the power button
 power-test: all $(B)/host/fsck.siefs
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/powertest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio

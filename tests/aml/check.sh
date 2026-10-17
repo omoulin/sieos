@@ -1,7 +1,7 @@
 #!/bin/sh
 # tests/aml/check.sh aml-test: the AML interpreter on laptop.aml (made by
 # iasl from laptop.asl), with the firmware's variables set three ways; then
-# on power.aml (from power.asl): what user/acpid evaluates.
+# on power.aml (from power.asl): what user/acpid evaluates, waking included.
 # Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 t=$1; a=$(dirname "$0")/laptop.aml
 out=$( { "$t" -m 0x40001010=0x01 -m 0x40001008=0xE0000000 "$a"; "$t" -m 0x40001010=0xF002 "$a"; "$t" "$a"; } 2>/dev/null)
@@ -28,7 +28,7 @@ E='\_SB.PC00.LPCB.EC0'
 out=$("$t" -w $m -d PNP0C09 -d PNP0C0A -d ACPI0003 -d PNP0C0D -v '\_S3' -v '\_S5' -v "$E._GPE" -v "$E._REG:3,1" -v "$E.BAT0._STA" \
       -v "$E.BAT0._BIX" -v "$E.BAT0._BST" -v '\_SB.ADP0._PSR' -v '\_SB.LID0._LID' -v "$E._Q15" -v '\_SB.LID0._LID' -v '\_PTS:3' \
       -v '\_WAK:3' -v '\_SB.PC00.RP01.PXSX.CMDR' -v '\_SB.MISC' "$p" 2>&1 | grep -v 'BAT0._BIX')
-exp='71 named objects
+exp='85 named objects
 PNP0C09: \_SB_.PC00.LPCB.EC0_
 PNP0C0A: \_SB_.PC00.LPCB.EC0_.BAT0
 ACPI0003: \_SB_.ADP0
@@ -58,3 +58,18 @@ read pci 02:00.0 04/4
 bix=$("$t" $m -v "$E._REG:3,1" -v "$E.BAT0._BIX" "$p" 2>&1 | tail -1 | cut -d' ' -f3-7)
 if [ "$out" = "$exp" ] && [ "$bix" = "0x1 0x0 0x18696 0x186a0 0x1" ]; then echo "aml-test: ok (power)"
 else printf 'aml-test: power FAILED, got:\n%s\n_BIX %s\n' "$out" "$bix"; exit 1; fi
+
+# waking from S3 (_PRW, armed by _DSW / _PSW): S3 allowed, then S4 only (GPRW's
+# FindSetLeftBit), then neither
+W="-W PNP0C0D -W PNP0C0C -W PNP0C09 -W PNP0C0E"
+out=$( { "$t" -w -m 0x40002000=0x100 $W "$p"; "$t" -m 0x40002004=1 -W PNP0C0D -v '\_SB.LID0._PRW' "$p"; "$t" -W PNP0C0D "$p"; } 2>&1 | grep -v named)
+exp='write ec 0x60/1 = 0x2
+\_SB_.LID0 wakes from S3: GPE 110
+write io 0x80/2 = 0x701
+\_SB_.PWRB wakes from S3: GPE 110
+\_SB_.PC00.LPCB.EC0_ wakes from S3: GPE -1
+\_SB_.SLPB wakes from S3: GPE -1
+\_SB_.LID0 wakes from S3: GPE 110
+\_SB.LID0._PRW = 0x6e 0x4
+\_SB_.LID0 wakes from S3: GPE -1'
+if [ "$out" = "$exp" ]; then echo "aml-test: ok (wake)"; else printf 'aml-test: wake FAILED, got:\n%s\n' "$out"; exit 1; fi
