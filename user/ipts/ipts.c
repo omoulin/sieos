@@ -71,7 +71,8 @@ static int mei_reset(void)
     uint32_t h = rd(H_CSR);
     if (h & RST) wr(H_CSR, h & ~(uint32_t)(RST | IS));
     wr(H_CSR, ((rd(H_CSR) | RST | IG | IS) & ~(uint32_t)IE));
-    for (int64_t t = sys_clock() + 2000000000; !(rd(ME_CSR) & RDY); sys_sleep(1000000))
+    for (int64_t t = sys_clock() + 200000000; rd(ME_CSR) & RDY && sys_clock() < t; ) sys_sleep(1000000);   /* (the ME takes the reset: not ready...) */
+    for (int64_t t = sys_clock() + 2000000000; !(rd(ME_CSR) & RDY); sys_sleep(1000000))                  /* (... then ready again) */
         if (sys_clock() > t) { log_line("MEI: the ME is not ready (ME_CSR %08x)\n", rd(ME_CSR)); return -1; }
     h = rd(H_CSR);
     wr(H_CSR, (h & ~(uint32_t)(RST | IS)) | IG);   /* out of reset */
@@ -243,22 +244,28 @@ static int ipts_start(void)
     if (!dsize || dsize > (1 << 20) || fsize > (1 << 20)) return -1;
     uint8_t mode[16] = { 0 };                       /* event mode: single touch, as a HID report */
     if (call(SET_MODE, mode, 16)) { log_line("SET_MODE failed (%d)\n", ans[4]); return -1; }
-    uint32_t w[80] = { 0 };                         /* SET_MEM_WINDOW: data, upper halves, work queue, doorbell, feedback, ... */
+    static uint32_t w[80];                          /* SET_MEM_WINDOW: data, upper halves, work queue, doorbell, feedback, ... */
+    static uint32_t had;                            /* (the buffers' size: kept when the ME is started again) */
     uint64_t pa;
-    for (int k = 0; k < NBUF; k++) {
+    for (int k = 0; k < NBUF && had != dsize; k++) {
         if ((long)(data[k] = dma_alloc((dsize + 4095) & ~4095u, &pa)) < 0) return -1;
         w[k] = (uint32_t)pa; w[16 + k] = (uint32_t)(pa >> 32);
         if ((long)dma_alloc((fsize + 4095) & ~4095u, &pa) < 0) return -1;
         w[36 + k] = (uint32_t)pa; w[52 + k] = (uint32_t)(pa >> 32);
     }
-    if ((long)dma_alloc(4096, &pa) < 0) return -1;  /* the work queue */
-    w[32] = (uint32_t)pa; w[33] = (uint32_t)(pa >> 32);
-    if ((long)(doorbell = dma_alloc(4096, &pa)) < 0) return -1;
-    w[34] = (uint32_t)pa; w[35] = (uint32_t)(pa >> 32);
-    if ((long)dma_alloc((fsize + 4095) & ~4095u, &pa) < 0) return -1;   /* hid2me */
-    w[68] = (uint32_t)pa; w[69] = (uint32_t)(pa >> 32); w[70] = fsize;
-    w[71] = 16 << 8 | 8192u << 16;                  /* (reserved, item size 16, work queue 8192) */
+    if (had != dsize) {
+        if ((long)dma_alloc(4096, &pa) < 0) return -1;   /* the work queue */
+        w[32] = (uint32_t)pa; w[33] = (uint32_t)(pa >> 32);
+        if ((long)(doorbell = dma_alloc(4096, &pa)) < 0) return -1;
+        w[34] = (uint32_t)pa; w[35] = (uint32_t)(pa >> 32);
+        if ((long)dma_alloc((fsize + 4095) & ~4095u, &pa) < 0) return -1;   /* hid2me */
+        w[68] = (uint32_t)pa; w[69] = (uint32_t)(pa >> 32); w[70] = fsize;
+        w[71] = 16 << 8 | 8192u << 16;              /* (reserved, item size 16, work queue 8192) */
+        had = dsize;
+    }
+    *doorbell = 0;
     if (call(SET_MEM_WINDOW, w, 320)) { log_line("SET_MEM_WINDOW failed (%d)\n", ans[4]); return -1; }
+    rep = (hidrep_t){ 0 };
     hid_parse(&rep, single_touch, sizeof single_touch);
     log_line("event mode (one finger), %d buffers of %u bytes\n", NBUF, dsize);
     return command(READY_FOR_DATA, 0, 0);
