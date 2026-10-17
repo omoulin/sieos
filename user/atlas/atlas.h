@@ -46,10 +46,26 @@
 void redraw(void);
 void redraw_box(int x0, int y0, int x1, int y1);
 
+/* ---- Windows of other programs (client.c, mk/atlas.h): ids W_CLIENT0 + 0..7. */
+#define W_CLIENT0 16
+void client_msg(long from, msg_t *m, const char *data, int uid);   /* ATLAS_WIN_...; uid: the user's (-1: none) */
+int  client_used(int w);
+void client_title(int w, char *t, size_t cap);
+void client_info(int w, char *t, size_t cap);
+void client_draw(int w, int x0, int y0, int x1, int y1, int focused);
+void client_key(int w, int k);
+void client_focus(int w, int in);
+int  client_pointer(int w, int x, int y, int buttons, int wheel);  /* 1: it was over (or held from) its insides */
+void client_closed(int w);                            /* the user closed it */
+void client_logout(void);
+void atlas_client_show(int w);                        /* (atlas.c) a new window in front; -1: redraw */
+void atlas_client_gone(int w);                        /* (atlas.c) its program ended or closed it */
+int  atlas_client_visible(int w);
+
 /* ---- Click boxes: what a click at (x, y) means; searched from the last. */
 enum { H_BTN = 1, H_WIN, H_STRIP, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,
        H_PANEL, H_PIN, H_PSEND, H_PSTOP, H_PSUG, H_PACT, H_PCLOSE, H_PMODE, H_SETUP,
-       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL, H_CAM, H_BTASK };
+       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL, H_CAM, H_BTASK, H_CLIENT };
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg);
 int  pill(int x, int y, const char *s, int on, int kind, int arg);   /* -> its right edge */
 void label(int x, int y, const char *s, int k, uint32_t c);
@@ -205,7 +221,7 @@ void logo(int x, int y, int scale);
 /* ---- The windows (wm.c): a title tab as wide as the title (close, zoom),
  * moved by its tab, resized by its grip or edges; 4 workspaces. Window ids
  * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files, 12 Pins, 13 Git, 14 Mail, 15 Camera. */
-#define WM_MAX 16
+#define WM_MAX 24                                     /* (16..23: other programs' windows, client.c) */
 #define WM_EDIT 8                                     /* (atlas's W_EDIT: opens bigger) */
 #define WM_SIA 9
 #define WM_SET 10

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!-- The web browser's toolbar (user/web/browser.c): a page of its own, above
+     the page shown. It talks to the browser with messages ("browser"); the
+     browser calls ui.update(). Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only -->
+<html><head><meta charset="utf-8"><title>toolbar</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #141a28; font: 15px sans-serif; color: #e6ecf5; }
+  #bar { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px; }
+  button { width: 32px; height: 28px; border: 0; border-radius: 6px; background: #1e2638; color: #e6ecf5; font: 16px sans-serif; }
+  button:disabled { color: #5a6478; }
+  button:hover:not(:disabled) { background: #2a3550; }
+  #url { flex: 1; height: 26px; border: 1px solid #2a3550; border-radius: 6px; background: #0a0f1c; color: #e6ecf5;
+         font: 15px sans-serif; padding: 0 10px; outline: none; }
+  #url:focus { border-color: #4be3c1; }
+  #lock { width: 18px; text-align: center; color: #4be3c1; }
+  #progress { position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: #4be3c1; }
+</style></head>
+<body><div id="bar">
+  <button id="back" title="Back" disabled>&#8592;</button>
+  <button id="fwd" title="Forward" disabled>&#8594;</button>
+  <button id="reload" title="Reload">&#8635;</button>
+  <span id="lock"></span>
+  <input id="url" spellcheck="false" autocomplete="off" placeholder="An address, or words to search">
+</div><div id="progress"></div>
+<script>
+const $ = id => document.getElementById(id);
+const send = m => window.webkit.messageHandlers.browser.postMessage(JSON.stringify(m));
+let loading = false;
+$("back").onclick = () => send({ op: "back" });
+$("fwd").onclick = () => send({ op: "forward" });
+$("reload").onclick = () => send({ op: loading ? "stop" : "reload" });
+$("url").addEventListener("keydown", e => {
+  if (e.key === "Enter") { send({ op: "go", text: $("url").value }); $("url").blur(); }
+  if (e.key === "Escape") { $("url").blur(); send({ op: "page" }); }
+});
+window.ui = {
+  update(uri, progress, back, fwd, busy, secure) {
+    if (document.activeElement !== $("url")) $("url").value = uri;
+    $("progress").style.width = busy ? Math.max(5, progress * 100) + "%" : "0";
+    $("back").disabled = !back; $("fwd").disabled = !fwd;
+    loading = busy; $("reload").innerHTML = busy ? "&#10005;" : "&#8635;";
+    $("lock").textContent = secure ? "\u25cf" : "";   // (a dot: the page came over TLS)
+  },
+  focusUrl() { $("url").focus(); $("url").select(); }
+};
+</script></body></html>
