@@ -20,7 +20,7 @@ QEMU has none of these devices, so the code was checked on the host
 | ACPI: sleep | S3 when the firmware has `\_S3`; without it (Modern Standby only) `suspend` says "not supported" | same |
 | 00:12.0 Integrated Sensor Hub, 8086:34fc | not done (rotation, lid angle): see below | |
 | 00:05.0 Image Signal Processor (IPU4p) | not done (a MIPI camera): see below | |
-| 00:02.0 Iris Plus graphics (display version 11) | the firmware's screen (GOP); igfx drives display version 12 only | [desktop.md](desktop.md#how-it-works) |
+| 00:02.0 Iris Plus graphics (display version 11) | igfx: full modesetting (eDP, DDI B, the Type-C/Thunderbolt ports, hot-plug); untested on hardware | [desktop.md](desktop.md#how-it-works) |
 
 ## Sound
 
@@ -44,8 +44,8 @@ changed in audiod for it:
   its vendor widget at node 2 (audiod used 8 below Tiger Lake's 0x2812;
   Gemini Lake and Cannon Lake use 11): "all pins and converters" now
   reaches it. But a monitor's sink needs its ELD, which the display driver
-  writes, and igfx does not drive Ice Lake's display: no sound on a monitor
-  until it does (and the XPS's monitor ports are Type-C/Thunderbolt only).
+  writes; igfx now drives Ice Lake's display, but sound on a monitor
+  through it (the XPS's monitor ports are Type-C/Thunderbolt only) is untested.
 - **The Realtek codec.** Dell's XPS of that age have an ALC289 or ALC299
   (Dell's "ALC3271"), of Realtek's ALC225 family. As Linux's
   `patch_realtek.c` does: the headphone amplifier at high power and the
@@ -163,10 +163,6 @@ that path tested.
   ones do not cover it), and the IPU needs Intel's signed firmware and a
   closed image-processing library to give a usable picture. Not feasible
   here. If `lsusb` on the machine shows a camera, it is UVC and works.
-- **The display**: Iris Plus is display version 11, which igfx does not
-  set up (combo PHYs A/B, Type-C ports through the TC subsystem and the
-  Thunderbolt controller): the firmware's screen stays, at the firmware's
-  mode. Hence no brightness control from Settings and no monitor sound.
 - The thermal and power controller, ME, SPI, LPC, DRAM controller: nothing
   to do (skipped, as on the other laptop).
 
