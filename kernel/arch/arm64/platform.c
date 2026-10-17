@@ -38,6 +38,7 @@ void arch_putc(char c)
     while (uart[0x18 / 4] & 1 << 5) ;   /* FR.TXFF: transmit FIFO full */
     uart[0] = (uint8_t)c;
 }
+void arch_panic_screen(void) { }      /* (a Pi's screen: diag_halt, before any program ran) */
 
 /* The console's node: /chosen's "stdout-path" ("/pl011@9000000", or an
  * alias like "serial0:115200n8"), else the first PL011. */

@@ -187,6 +187,7 @@ static void start(svc_t *s)
     s->i.state = SVC_RUNNING;
     s->i.starts++;
     if (s->died) say("init: %s restarted in %ld us (restart %d)\n", s->i.name, (sys_clock() - s->died) / 1000, s->i.restarts);
+    else say("init: %s started (pid %ld)\n", s->i.name, pid);   /* (a photo of a screen with no serial port shows how far it got) */
 }
 
 /* Processes init adopted (a session whose login ended): still running? */
