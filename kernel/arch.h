@@ -103,6 +103,7 @@ void  arch_phys_mapped(uint64_t pa, uint64_t size);     /* SYS_MAP_PHYS gave a d
 
 /* ---- The platform (platform.c): log output, power, hardware randomness. */
 void arch_putc(char c);                    /* one byte of the kernel log */
+void arch_panic_screen(void);              /* a panic: the log back on the screen (x86-64: fbcon.c) */
 void arch_power(int restart) __attribute__((noreturn));
 long arch_sleep_type(int state, int typ);  /* POWER_SET: ACPI's sleep type of S3 or S5 (x86-64; -ENOSYS) */
 long arch_suspend(int n);                  /* 0: can this machine suspend to RAM? n CPUs: do it (on CPU 0,

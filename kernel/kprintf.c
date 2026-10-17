@@ -52,6 +52,7 @@ void kprintf(const char *fmt, ...)
 void panic(const char *fmt, ...)   /* (no lock: it may be held; the message matters more) */
 {
     halt_others();                  /* stop the other CPUs first */
+    arch_panic_screen();            /* the log on the screen again, even if a driver had it */
     va_list ap;
     va_start(ap, fmt);
     for (const char *s = "\nmk: PANIC: "; *s; s++) put(0, *s);
