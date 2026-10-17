@@ -240,7 +240,8 @@ typedef struct sock {
     /* UDP */
     struct dgram { struct dgram *next; uint32_t ip; uint16_t port, len; uint8_t data[]; } *dq, *dqt;
     int ndq;
-    int watcher;                               /* NET_POLL: the process to note when it is ready */
+    int watcher, want;                         /* NET_POLL: the process to note when it is ready
+                                                  for what it waits for (or failed) */
 } sock_t;
 static sock_t *socks[MAXSOCK];
 static long next_handle = 1;
@@ -1105,7 +1106,7 @@ static void note_watchers(void)
     for (int i = 0; i < MAXSOCK; i++) {
         sock_t *s = socks[i];
         if (!s || !s->watcher) continue;
-        if (readiness(s)) { sys_note(s->watcher); s->watcher = 0; }
+        if (readiness(s) & (s->want | NET_ERR)) { sys_note(s->watcher); s->watcher = 0; }
         else watched = 1;
     }
 }
@@ -1120,8 +1121,11 @@ static long request(long from, msg_t *m, const uint8_t *data, size_t dlen)
     }
     switch (op) {
     case NET_POLL: {
-        int r = readiness(s);
-        if (!r) { s->watcher = m->pid; watched = 1; }
+        int r = readiness(s), want = m->w[2] ? (int)m->w[2] & (NET_IN | NET_OUT) : NET_IN | NET_OUT;
+        if (!(r & (want | NET_ERR))) {          /* (two threads waiting: both wants) */
+            s->want = s->watcher == m->pid ? s->want | want : want;
+            s->watcher = m->pid; watched = 1;
+        }
         return r;
     }
     case NET_SOCKET: {

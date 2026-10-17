@@ -27,6 +27,12 @@ A64 = "aarch64" in " ".join(cmdline)           # an arm64 system: no AVX test
 copy = image + ".k"
 shutil.copyfile(image, copy)
 cmdline = [a.replace(image, copy) if a.startswith("file=") else a for a in cmdline]
+args = {}                                       # a test's arguments
+if what == "webdeps" and "wtest-soup" in __import__("os").environ.get("WTESTS", ""):   # its web servers on the host
+    import os.path
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "webdeps"))
+    import servers
+    args["wtest-soup"] = servers.start(copy, os.path.join(os.path.dirname(image), "host", "siefs"))
 qemu = subprocess.Popen(cmdline, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 import atexit
 atexit.register(lambda: qemu.poll() is None and qemu.kill())     # never leave a QEMU behind
@@ -135,11 +141,12 @@ elif what in ("posix", "cxx"):                   # programs built on libposix (d
 
 elif what == "webdeps":                          # WebKit's libraries (user/web/deps.mk): our tests and theirs
     for prog in __import__("os").environ["WTESTS"].split():
-        r = run(prog, 300)
+        r = run(f"{prog} {args.get(prog, '')}".strip(), 300)
         lines = [l.strip() for l in r.splitlines() if l.strip().startswith(("wtest ", "posix:"))]
         for l in lines[:-1]: print("   ", l)
-        bad = "exit status" in r or "killed" in r or "FAIL" in r or "not ok" in r
-        ok(prog, not bad and (not lines or lines[-1].endswith(": ok")), lines[-1] if lines else r.strip()[-300:])
+        bad = "exit status" in r or "killed" in r or "ended by" in r or "FAIL" in r or "not ok" in r
+        good = not bad and (not lines or lines[-1].endswith(": ok"))
+        ok(prog, good, lines[-1] if lines and good else r.strip()[-600:])
 
 elif what == "place":
     m = re.search(rb"mk: \d+ CPUs running: (\d+) P-cores, (\d+) E-cores", seen)

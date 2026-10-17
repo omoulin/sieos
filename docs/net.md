@@ -160,8 +160,9 @@ network costs no CPU.
   zero-window probes; FIN, RST, TIME_WAIT (10 s). Listening sockets with a
   backlog; ports below 1024 only for root.
 - **Readiness** (`NET_POLL`): what a socket is ready for (data, room, a
-  connection to accept, an error); if nothing, netd notes the caller
-  (`SYS_NOTE`) once it is: libposix's `poll` ([webkit-plan.md](webkit-plan.md)).
+  connection to accept, an error); if not for what the caller waits for
+  (reading, writing, either), netd notes it (`SYS_NOTE`) once it is:
+  libposix's `poll` ([webkit-plan.md](webkit-plan.md)).
 - **Owners**: every socket belongs to the process that opened it. Every 2 s
   netd checks that owners are alive; a dead owner's connections are reset.
 - **Restart**: if netd dies, init restarts it (DHCP again); programs' calls
@@ -311,6 +312,10 @@ fetches it once (pinned in the `Makefile`, `linux-firmware` commit
   ClientHello offers both (supported_versions 1.3, 1.2). The same API either
   way; `tls_cipher` says which, e.g. `TLS 1.3 TLS_CHACHA20_POLY1305_SHA256`
   or `TLS 1.2 ECDHE-RSA-AES128-GCM-SHA256` (`fetch -v`, `curl -v`).
+  ALPN: `http/1.1`, or `h2` first with `TLS_H2` (`tls_alpn` says which
+  the server chose); `TLS_CHAIN` keeps the server's chain for the caller to
+  judge (`tls_certs`; GIO's TLS for WebKit, `user/web/giotls.c`). Each
+  connection has its own buffers: several threads may handshake at once.
   - 1.3: ChaCha20-Poly1305 (preferred) and AES-128-GCM, with SHA-256. Key
     exchange: X25519, or P-256/P-384 when the server asks
     (HelloRetryRequest). The server's CertificateVerify: ECDSA P-256/P-384,

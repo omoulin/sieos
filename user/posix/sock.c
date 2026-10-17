@@ -222,12 +222,13 @@ static long get_addr(const void *addr, socklen_t len, uint32_t *ip, uint16_t *po
     *port = __builtin_bswap16(a.sin_port);
     return 0;
 }
-static int net_ready(fd_t *f)                          /* NET_IN | NET_OUT | NET_ERR, noting us later if 0 */
+static int net_ready(fd_t *f, int want)               /* NET_IN | NET_OUT | NET_ERR, noting us
+                                                          later if none of want (NET_IN | NET_OUT) */
 {
     conn_t *c = f->obj;
     if (c && !c->done) return 0;
     if (c && c->result < 0) return NET_ERR | NET_OUT;
-    msg_t m = { .w = { NET_POLL, f->id } };
+    msg_t m = { .w = { NET_POLL, f->id, (uint64_t)want } };
     long r = netd(&m);
     return r < 0 ? NET_ERR : (int)r;
 }
@@ -272,7 +273,7 @@ static long sock_send(fd_t *f, const void *buf, size_t n, int flags, uint32_t ip
     if (c && (!c->done || c->result < 0)) return c->done ? c->result : -EAGAIN;
     size_t done = 0;
     while (done < n) {
-        if (((f->flags & O_NONBLOCK) || (flags & MSG_DONTWAIT)) && !(net_ready(f) & NET_OUT)) return done ? (long)done : -EAGAIN;
+        if (((f->flags & O_NONBLOCK) || (flags & MSG_DONTWAIT)) && !(net_ready(f, NET_OUT) & NET_OUT)) return done ? (long)done : -EAGAIN;
         size_t k = n - done < NET_MAX ? n - done : NET_MAX;
         msg_t m = { .w = { NET_SEND, f->id }, .sbuf = (const char *)buf + done, .slen = k };
         long r = netd(&m);
@@ -283,7 +284,7 @@ static long sock_send(fd_t *f, const void *buf, size_t n, int flags, uint32_t ip
 }
 static long sock_recv(fd_t *f, void *buf, size_t n, int flags, uint32_t *ip, uint16_t *port)
 {
-    if (((f->flags & O_NONBLOCK) || (flags & MSG_DONTWAIT)) && !(net_ready(f) & (NET_IN | NET_ERR))) return -EAGAIN;
+    if (((f->flags & O_NONBLOCK) || (flags & MSG_DONTWAIT)) && !(net_ready(f, NET_IN) & (NET_IN | NET_ERR))) return -EAGAIN;
     if (n > NET_MAX) n = NET_MAX;
     msg_t m = { .w = { f->type == SOCK_DGRAM ? NET_RECVFROM : NET_RECV, f->id, n, 0 }, .rbuf = buf, .rlen = n };
     long r = netd(&m);
@@ -325,7 +326,7 @@ static long do_socket_call(long n, long a, long b, long c, long d, long e, long 
     }
     case SYS_accept: case SYS_accept4: {
         if (un) return -EOPNOTSUPP;
-        if ((f->flags & O_NONBLOCK) && !(net_ready(f) & NET_IN)) return -EAGAIN;
+        if ((f->flags & O_NONBLOCK) && !(net_ready(f, NET_IN) & NET_IN)) return -EAGAIN;
         msg_t m = { .w = { NET_ACCEPT, f->id, 0, 0 } };
         long sh = netd(&m);
         if (sh < 0) return sh;
@@ -449,15 +450,16 @@ static long do_poll(struct pollfd *p, unsigned long n, int64_t ns)   /* ns < 0: 
         int nu = 0;
         for (unsigned long i = 0; i < n; i++) {
             int ev = p[i].events | POLLHUP | POLLERR, r = 0;
+            int want = (p[i].events & POLLIN ? NET_IN : 0) | (p[i].events & POLLOUT ? NET_OUT : 0);   /* (0: errors only) */
             p[i].revents = 0;
             if (p[i].fd < 0) continue;
             fd_t *f = fd_get(p[i].fd);
             if (!f) { p[i].revents = POLLNVAL; ready++; continue; }
             switch (f->kind) {
             case F_UNIX:
-                if (nu < 256) { ids[nu] = f->id; where[nu++] = (int)i; }
+                if (nu < 256) { ids[nu] = f->id | (uint64_t)(want ? want : NET_ERR) << 56; where[nu++] = (int)i; }
                 continue;
-            case F_SOCK: r = net_ready(f); break;
+            case F_SOCK: r = net_ready(f, want ? want : NET_ERR); break;
             case F_EVENT: r = (((event_t *)f->obj)->count ? NET_IN : 0) | NET_OUT; break;
             case F_PIDFD: r = ended((long)f->id) ? NET_IN : 0; break;   /* (the kernel notes us when a child ends) */
             default: r = NET_IN | NET_OUT;                /* files, the terminal, devices: always */

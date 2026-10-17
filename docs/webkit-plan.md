@@ -102,9 +102,11 @@ backend. Instead of glib-networking with GnuTLS (GnuTLS + Nettle + GMP +
 p11-kit) or OpenSSL (~4 MB), a small GIO TLS backend (`GTlsBackend`,
 client connections and a `GTlsDatabase` on `/etc/ssl/roots`) wraps
 SIEOS's `tls.c` and `x509.c` (TLS 1.3 and 1.2, already used by
-`fetch`, mail and git). tls.c needs a transport callback (today it owns
-a netd socket) and ALPN (`h2`, `http/1.1`) for HTTP/2. Fallback, if that
-stalls: glib-networking with OpenSSL, from its release.
+`fetch`, mail and git). tls.c's transport is `net_send`/`net_recv`
+on the "socket" it is given: the GIO module (`user/web/giotls.c`) defines
+them over the connection's base stream, so tls.c needed no callback, only
+ALPN (`h2`, `http/1.1`) for HTTP/2 and its chain kept for GIO to judge.
+Fallback, had that stalled: glib-networking with OpenSSL.
 
 **7. Fonts through Fontconfig.** Skia's CMake and WebCore's font fallback
 (`FontCacheSkia.cpp`) call Fontconfig directly; replacing it means
@@ -151,7 +153,7 @@ What SIEOS must provide for it, and where it lives:
 Each phase is merged when its tests pass, on x86-64 first; arm64 (QEMU
 `virt`, then the Pi 5) follows from phase 4 on, built by the same clang.
 
-### Phase 0: the host toolchain, without root (1-2 days)
+### Phase 0: the host toolchain, without root (done: ~15 agent minutes)
 
 `make wk-tools` fetches into `.hosttools/` (not in git), each archive
 checked against its SHA-256 in `user/posix/posix.mk`:
@@ -168,7 +170,7 @@ checked against its SHA-256 in `user/posix/posix.mk`:
 `gperf --version` from `.hosttools`; a C file cross-compiled for
 `x86_64-linux-musl` and linked by lld.
 
-### Phase 1: kernel, memory and waiting (1 week)
+### Phase 1: kernel, memory and waiting (done: ~30 agent minutes)
 
 New system calls (`include/mk/abi.h`), each with a `ktest` check:
 
@@ -197,7 +199,7 @@ timeouts; the thread-exit wake), on both architectures. `test`,
 `gui-test`, `kernel-test` unchanged. *Size:* kernel +2-3 KB (measured:
 +4.7 KB of code on x86-64, +5.1 KB on arm64).
 
-### Phase 2: kernel, sharing (1-2 weeks)
+### Phase 2: kernel, sharing (done: ~30 agent minutes)
 
 1. **Shared memory objects**: `SYS_SHM_CREATE(id, size)`, where id is a
    random 63-bit number the creator chose: knowing it is the right to
@@ -227,7 +229,7 @@ across them; the memory comes back when both are done; a note wakes its
 word's waiter; the wall clock is after 2026; two processes started from
 one image share its code (measured below).
 
-### Phase 3: the Linux personality and musl: libposix (3-5 weeks)
+### Phase 3: the Linux personality and musl: libposix (done: ~1 agent hour)
 
 `user/posix/`: musl 1.2.6 unpacked from its release, plus our files:
 `syscall_arch.h` for each processor (the one musl file replaced: calls
@@ -261,7 +263,7 @@ descriptor passed, `poll` on a pipe and a socket, TCP to the host
 `libc-test` (its functional and regression sets) as a list of expected
 passes, grown over time.
 
-### Phase 4: C++ and the dependencies (3-5 weeks)
+### Phase 4: C++ and the dependencies (done: ~2 agent hours)
 
 1. **libc++, libc++abi, libunwind** built by CMake against the musl
    sysroot (static, `LIBCXX_HAS_MUSL_LIBC=ON`, no shared libraries).
@@ -299,7 +301,7 @@ passes, grown over time.
    a smoke test, ICU's `cintltst` subset, libsoup's `uri-parsing`), as
    `make webdeps-test`.
 
-### Phase 5: JavaScriptCore alone (2-3 weeks)
+### Phase 5: JavaScriptCore alone (estimate: 2-4 agent hours)
 
 WebKit configured with `-DPORT=JSCOnly` first (no WebCore: WTF, bmalloc
 off, JavaScriptCore and its `jsc` shell), against the same sysroot. The
@@ -311,7 +313,7 @@ list of expected passes) and the SunSpider/JetStream 2 subsets in QEMU;
 `--useJIT=0` against JIT timings (the JIT's worth, measured). *Size:*
 `jsc` ~15-20 MB.
 
-### Phase 6: WebKit headless (3-6 weeks)
+### Phase 6: WebKit headless (estimate: 4-8 agent hours)
 
 `-DPORT=WPE` with the options above, `ENABLE_WPE_PLATFORM_HEADLESS=ON`.
 The multi-call `/bin/web`; a test program loads a page from a file or
@@ -325,7 +327,7 @@ network in tests); a WebProcess killed mid-page → the UI process sees it
 and reloads. *Measures:* start-up time, time to the first frame,
 memory per process.
 
-### Phase 7: the browser (2-3 weeks)
+### Phase 7: the browser (estimate: 4-8 agent hours)
 
 1. **Atlas client windows** (`user/atlas`): a program asks for a window
    (`ATLAS_WIN_OPEN`: size, title) and gets a shared memory buffer;
@@ -351,7 +353,7 @@ memory per process.
 page and a page from the test's HTTP server, check the screenshot's
 known pixels; type in a form; back and forward.
 
-### Phase 8: speed, arm64, and the rest (2-4 weeks, then as needed)
+### Phase 8: speed, arm64, and the rest (estimate: 2-4 agent hours, then as needed)
 
 The JIT measured on and off; bmalloc/libpas instead of musl's malloc
 (WebKit is malloc-heavy: musl's allocator is small but slow) measured;
@@ -408,20 +410,34 @@ browser and sia's small model at once.
 
 ## Timeline
 
-Honest, for focused work, phases in order (1 and 0 can overlap):
+In agent hours (Claude Code's working time, not a person's weeks): phases
+0-4 were first planned at 9-16 weeks and took about 3.5 hours. The rest
+is estimated the same way.
 
-| Phase | Builds | Effort |
+| Phase | Builds | Agent time |
 |---|---|---|
-| 0 | the host toolchain, fetched | 1-2 days |
-| 1 | kernel: lazy memory, `mprotect`, futexes, thread ids | 1 week |
-| 2 | kernel: shared memory, notes, shared program images | 1-2 weeks |
-| 3 | libposix: musl + the Linux personality, `unixd`, posix-test | 3-5 weeks |
-| 4 | C++ runtime; the ~20 dependencies | 3-5 weeks |
-| 5 | JavaScriptCore and `jsc` | 2-3 weeks |
-| 6 | WPE WebKit headless, pages to PNG | 3-6 weeks |
-| 7 | atlas client windows, the SIEOS platform, the browser | 2-3 weeks |
-| 8 | speed, arm64, the Pi 5 | 2-4 weeks |
-| | **a usable browser (phases 0-7)** | **about 4-6 months** |
+| 0 | the host toolchain, fetched | ~15 min (measured) |
+| 1 | kernel: lazy memory, `mprotect`, futexes, thread ids | ~30 min (measured) |
+| 2 | kernel: shared memory, notes, shared program images | ~30 min (measured) |
+| 3 | libposix: musl + the Linux personality, `unixd`, posix-test | ~1 h (measured) |
+| 4 | C++ runtime; the ~25 dependencies, GIO TLS on `tls.c` | ~2 h (measured) |
+| 5 | JavaScriptCore and `jsc` | 2-4 h |
+| 6 | WPE WebKit headless, pages to PNG | 4-8 h |
+| 7 | atlas client windows, the SIEOS platform, the browser | 4-8 h |
+| 8 | speed, arm64, the Pi 5 | 2-4 h, then as needed |
+| | **a usable browser (phases 0-7)** | **about 15-25 agent hours** |
+
+The real bottlenecks are not the writing but the waiting, counted apart:
+
+- **Compiling** on this 28-core host: JavaScriptCore from scratch
+  ~10-20 minutes per architecture; all of WebKit ~1-1.5 hours per
+  architecture (each from-scratch build of phases 5-8 pays it; incremental
+  builds are minutes). The dependencies: ~10 minutes per architecture.
+- **QEMU test runs**: the full set ~10 minutes on x86-64 (KVM); arm64 is
+  emulated, several times slower, so JavaScriptCore's and WebKit's tests
+  there are subsets.
+- **The user's hardware test**: the laptop (from the USB key) and the Pi 5
+  in phase 8, at the user's pace.
 
 ## What you will be asked to do
 
@@ -432,7 +448,7 @@ Honest, for focused work, phases in order (1 and 0 can overlap):
   and recent enough).
 - Disk space: ~40 GB for WebKit's build directory and the sysroot
   (`build-web/`), outside `build/`.
-- Let the long builds run (phases 5-6: an hour or two each time WebKit is
+- Let the long builds run (phases 5-6: about an hour each time WebKit is
   rebuilt from scratch).
 - Try the browser on the laptop (from the USB key) and the Pi 5 in
   phase 8, and tell which sites matter to you: they become tests.
@@ -457,6 +473,6 @@ Honest, for focused work, phases in order (1 and 0 can overlap):
 
 | 4 (libraries: WebCrypto, GL headers, keys) | **done** (2026-10-17): **libgpg-error 1.61** (115 KB), **libgcrypt 1.12.4** with only what WebCrypto uses (AES; RSA and ECC; SHA-1, SHA-2, and SHA-3, which its message digest code calls unconditionally; PBKDF2): 695 KB instead of 1.49 MB with every algorithm (arm64: 564 KB), a program using it 771 KB instead of 1.57 MB (arm64: 644 KB); **libtasn1 4.21.0** (51 KB). **libepoxy 1.5.10** (EGL only, no GLX, X11; 575 KB of dispatch tables, of which a program keeps what it calls) and **libxkbcommon 1.13.2** (309 KB; no X11, Wayland, keymap files, registry, tools; Bison 3.8.2 built on the host for its parser). Neither can be left out: WPE's build requires both (`find_package(Epoxy)`, `find_package(XkbCommon)` unconditionally), WebKit includes the EGL and OpenGL ES headers directly even with no GL, and its key events are xkb key symbols. The Khronos headers (EGL, GLES2, GLES3, KHR) are taken from Mesa 26.2.5's release, nothing else of it. New checks: wtest-crypto (8: SHA-256, HMAC, AES-GCM against NIST's vector, an ECDSA P-256 key made from SIEOS's random numbers, signed, verified, wrong data refused, DER through libtasn1), wtest-input (7: key names, their characters, a keymap given as text as SIEOS's platform will give it, Shift pressed and released, libepoxy linked). Verified from fresh build directories on both architectures |
 
-Next: the network: libpsl, nghttp2, libsoup and the GIO TLS module on
-`tls.c`, each from its pinned release, with `make webdeps-test` growing with
-each.
+| 4 (libraries: the network) | **done** (2026-10-17): **libpsl 0.23.3** (64 KB; the list built in, no IDNA library), **nghttp2 1.70.0** (127 KB; the library only), **libsoup 3.8.0** (436 KB; no Kerberos, NTLM, Brotli, Zstandard, sysprof), and **GIO's TLS on SIEOS's `tls.c`** (`user/web/giotls.c`, 740 lines: a `GTlsBackend`, client connections with pollable streams, certificates; 99 KB with tls.c, x509.c and their crypto, of which the module 14 KB) instead of glib-networking with GnuTLS or OpenSSL. tls.c gained ALPN (`h2` offered with `TLS_H2`), `TLS_CHAIN` (the chain kept and judged by the caller, so GIO's `accept-certificate` can overrule it; signatures still checked by tls.c), `tls_pending`, and lost its shared buffers (a record buffer per connection; x509.c's chain and pubkey.c's RSA buffers on the stack, its curves made once under a lock): handshakes now run in several threads at once. `tests/net/tls.py`: 31 checks against openssl s_server (4 new: ALPN). New check: wtest-soup (13: against servers on the host, `tests/webdeps/servers.py`: HTTP/1.1; HTTPS with a test CA, TLS 1.3, ALPN, 1 MiB down and 256 KiB up; HTTP/2 by ALPN, 256 KiB up; a self-signed certificate refused, then accepted through `accept-certificate`; public suffixes; cookies kept in SQLite). A program using libsoup over TLS: 3.4 MB stripped. Found: `poll` waiting to read a socket that could be written (or the reverse) never woke: netd and unixd answered "ready" (for the other direction) and so noted no one. `NET_POLL` and `UNIX_POLL` now take what the caller waits for (a new ptest-ipc check). Also found by wtest-soup run 30 times in a row: the GIO streams outliving their connection (libsoup keeps them: now a weak reference), and a pollable source's callback signature. Phase 4 is complete |
+
+Next: phase 5, JavaScriptCore alone.

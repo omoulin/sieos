@@ -309,9 +309,11 @@ enum {
     NET_LINK,       /* (from a network driver) w[2] = its interface; w[1] = 1: the link came up
                        (netd asks DHCP again), 0: it went down               -> 0 */
     NET_SOCKETS,    /* rbuf <- net_sock_t[], every socket                         -> how many */
-    NET_POLL,       /* w[1] = handle -> NET_IN | NET_OUT | NET_ERR, what it is ready for
-                       now; if nothing, netd notes the caller (SYS_NOTE) once it is: the
-                       basis of poll() for libposix's sockets (docs/webkit-plan.md)  */
+    NET_POLL,       /* w[1] = handle, w[2] = what the caller waits for (NET_IN | NET_OUT;
+                       0: either) -> NET_IN | NET_OUT | NET_ERR, what it is ready for
+                       now; if none of what it waits for (or NET_ERR), netd notes the
+                       caller (SYS_NOTE) once it is: the basis of poll() for libposix's
+                       sockets (docs/webkit-plan.md)  */
 };
 enum { NET_IN = 1, NET_OUT = 2, NET_ERR = 4 };
 
@@ -332,8 +334,10 @@ enum {
                        descriptors (now held by the caller); 0 and 0: the end      */
     UNIX_CLOSE,     /* w[1] = end: the caller holds it once less                   -> 0 */
     UNIX_SHUTDOWN,  /* w[1] = end, w[2] = 0 reading, 1 writing, 2 both             -> 0 */
-    UNIX_POLL,      /* sbuf = end numbers (uint64_t); rbuf <- one byte each, NET_IN | NET_OUT
-                       | NET_ERR -> how many are ready; none: the caller is noted later */
+    UNIX_POLL,      /* sbuf = end numbers (uint64_t), each with what the caller waits for
+                       in its top byte (NET_IN | NET_OUT; 0: either); rbuf <- one byte each,
+                       NET_IN | NET_OUT | NET_ERR -> how many are ready for what is waited
+                       for; none: the caller is noted later */
     UNIX_STASH,     /* w[1] = n descriptors; sbuf = them, then bytes -> 0; reply w[1] = a cookie */
     UNIX_CLAIM,     /* w[1] = cookie; rbuf <- descriptors (now the caller's), bytes -> bytes;
                        reply w[1] = n descriptors                                  */

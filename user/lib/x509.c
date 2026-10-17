@@ -220,8 +220,7 @@ int x509_host(const x509_t *c, const char *host)
 int x509_verify_chain(const uint8_t **certs, const size_t *lens, int n, const char *host,
                       int64_t now, const char *roots_path, const char **why)
 {
-    static x509_t chain[10];
-    x509_t root;
+    x509_t chain[10], root;
     if (n < 1 || n > 10) { *why = "no certificate"; return -1; }
     for (int i = 0; i < n; i++)
         if (x509_parse(&chain[i], certs[i], lens[i])) { *why = "unreadable certificate"; return -1; }
