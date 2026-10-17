@@ -230,6 +230,20 @@ int main(int argc, char **argv)
     jack();
     CHECK(sent(0, 1, 0x14, 0x70700, t0) && nt - t0 < 8);   /* (the speaker off; the mode unchanged: not measured again) */
 
+    /* A Surface Pro 7's ALC274 (Realtek's own subsystem id; the ALC257's
+     * graph renamed): the ALC294 family's coefficients and headphone depop,
+     * none of the Dell's headset handling; speaker, headphones, built-in
+     * microphone as the generic walk finds them. */
+    load(&fc[3], dir, "alc257.txt");
+    fc[3].id = 0x10ec0274; fc[3].sub = 0x10ec121e;
+    ach = 0; h = &pch; hs = -1; t0 = nt;
+    CHECK(codec(1) == 0 && ach == &pch && acad == 1 && !alc && alc294);
+    show(t0, "Surface ALC274 set-up");
+    CHECK(sent(0, 1, 0x20, 0x5006E, t0) && sent(0, 1, 0x20, 0x40C25, t0) && sent(0, 1, 0x20, 0x5006B, t0) && sent(0, 1, 0x20, 0x40018, t0));
+    CHECK(sent(0, 1, 0x58, 0x48000, t0) && sent(0, 1, 0x20, 0x4000B, t0) && sent(0, 1, 0x21, 0x70700, t0) && sent(0, 1, 0x21, 0x707C0, t0));
+    CHECK(!sent(0, 1, 0x19, 0x71C3C, t0) && !sent(0, 1, 0x20, 0x50063, t0) && hs == -1);   /* (no Dell pin, no combo jack modes) */
+    CHECK(spk == 0x14 && hp == 0x21 && ipin == 0x12);
+
     printf(fails ? "hdmi-test: %d FAILED\n" : "hdmi-test: all passed (%d verbs)\n", fails ? fails : nt);
     return fails != 0;
 }
