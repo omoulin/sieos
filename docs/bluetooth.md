@@ -4,11 +4,12 @@ Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 One server, `btd` (`user/btd/`), drives the controller and holds the whole
 host stack: HCI, L2CAP, pairing (classic SSP, LE SMP), keyboards and mice
-(classic HID, HID over GATT). Their reports go to the console through the
-same code as USB ones (`user/lib/hidrep.c`). Settings has a Bluetooth
-section; `/bin/bt` does the same from a shell. Stage 2 (A2DP headphones
-through `audiod`, OBEX file push over RFCOMM) builds on the L2CAP channel
-API below.
+(classic HID, HID over GATT), headphones and speakers (A2DP: AVDTP, SBC;
+the sound from `audiod`), file transfer (OBEX Object Push over RFCOMM,
+both ways), with SDP for what each side offers. Keyboard and mouse
+reports go to the console through the same code as USB ones
+(`user/lib/hidrep.c`). Settings has a Bluetooth section; `/bin/bt` does
+the same from a shell.
 
 ## The controllers
 
@@ -40,7 +41,8 @@ The firmware files are fetched once at pinned commits and checked against
   (the patched firmware restarts at 115200), reset, top speed again.
 
 Then for all: address, buffer sizes (classic and LE), every event, Secure
-Simple Pairing, LE host, extended inquiry, a laptop's class, the name
+Simple Pairing, LE host, extended inquiry, a laptop's class (with the
+"capturing", "object transfer" and "audio" service bits), the name
 "SIEOS", Secure Connections. Page scan stays on so bonded classic devices
 can come back.
 
@@ -54,6 +56,11 @@ can come back.
 | `l2cap.c` | basic-mode channels, signalling (connect, configure the MTU, disconnect, info, echo), LE parameter updates |
 | `smp.c` | LE pairing as central: Secure Connections (just works, numeric comparison, passkey shown) and legacy (just works, passkey) for old devices |
 | `input.c` | classic HID (PSM 0x11/0x13, boot protocol) and HID over GATT (a minimal ATT client) |
+| `sdp.c` | SDP server (our two records) and client (one query at a time) |
+| `a2dp.c` | A2DP source: AVDTP signalling, the media channel, pacing |
+| `sbc.c` | the SBC encoder (fixed point) |
+| `rfcomm.c` | RFCOMM: one multiplexer, one data channel, credit flow control |
+| `obex.c` | OBEX Object Push, sending and receiving |
 | `lib/btcrypt.c` | SMP's f4, f5, f6, g2, c1, s1 on AES-CMAC/AES-128, P-256 in SMP's byte order |
 
 **Pairing.** Our IO capability is display + yes/no.
@@ -89,11 +96,96 @@ void    l2_close(l2ch_t *h);
 ```
 
 A channel is open once both directions are configured (our MTU 1017);
-`h->priv` is the user's. AVDTP (PSM 0x19: a signalling channel, then a
-media channel; SBC frames from audiod) and RFCOMM (PSM 3, then OBEX) are
-new files in `user/btd` using these calls; all run under btd's one lock
-(the receiver thread, client requests and the 1 s tick take it). Outgoing
-frames are fragmented and wait for controller buffers in `hci.c`.
+`h->priv` is the user's. SDP (PSM 1), AVDTP (0x19) and RFCOMM (3) use
+these calls; all run under btd's one lock (the receiver thread, client
+requests, the 1 s tick and the sound threads take it). Outgoing frames are
+fragmented and wait for controller buffers in `hci.c`. When a link drops,
+all its channels are marked closed before their users hear of it, so
+nobody sends on the dead link.
+
+When a classic link is encrypted, `hci.c` starts what the device is for:
+a file waiting to be sent to it (OBEX), A2DP for an audio device (class
+of device "audio"), HID for the rest that we connected (not phones nor
+computers).
+
+## SDP
+
+The server answers Service Search, Service Attribute and Service Search
+Attribute requests over two records: A2DP source (handle 0x10001: L2CAP
+PSM 0x19, AVDTP 1.3, A2DP 1.3, "player") and Object Push (0x10002: RFCOMM
+channel 9, OBEX, any format). An answer longer than the asker allows is
+cut, with a 2-byte continuation (the offset). Patterns may use 16, 32 or
+128-bit UUIDs (on the Bluetooth base).
+
+The client asks one UUID, every attribute, follows continuations, then
+walks the data elements once: a uint right after a UUID is that UUID's
+value (0x0100: the L2CAP PSM, 0x0019: AVDTP's version, 0x0003: the RFCOMM
+channel). Logged: `bt: SDP 110b on NAME: found, PSM 19, AVDTP 103, RFCOMM channel 0, 54 bytes`.
+
+## Headphones and speakers (A2DP)
+
+```
+  play ──AUDIO_WRITE──► audiod ──AUDIO_WRITE (w[1]: the volume), from where it landed──► btd, port "btaudio": pcm_ring (32 KiB, 170 ms)
+  btd's pump, when the media clock says ──► SBC ──► RTP ──► the L2CAP media channel ──► headphones
+```
+
+- **Connecting.** `bt connect ADDR` (or Settings' Connect, or pairing an
+  audio device) pages the device; once encrypted: SDP for its audio sink
+  (0x110B), then AVDTP on PSM 0x19: Discover, Get Capabilities of each free
+  sink endpoint until one has SBC (AAC, aptX... ones are skipped), Set
+  Configuration, Open, then the second L2CAP channel (media). A bonded
+  sink that comes back by itself usually does that to us (we answer as
+  acceptor: our one endpoint, SEID 1); if it has not after 3 s, we start.
+- **The configuration.** SBC, 48 kHz, joint stereo, 16 blocks, 8
+  subbands, loudness allocation, bitpool 53 or the sink's highest if
+  lower (53: 119-byte frames, 357 kbit/s). Logged: `bt: NAME: A2DP: SBC 48 kHz
+  joint stereo, 16 blocks, 8 subbands, loudness; bitpool 53 (it takes 2-53),
+  119 bytes a frame` and `A2DP ready: 8 SBC frames a packet (MTU ...)`.
+- **Sound.** When the media channel is up, btd tells audiod (AUDIO_OUT
+  with AUDIO_BT), which then sends each write on to btd's port `btaudio`
+  with the volume: one copy, from audiod's ring (where the client's frames
+  landed) to btd's. The first sound sends Start; packets go as the media
+  clock says (each packet's samples at 48 kHz after the last), from when
+  streaming began, or from now after a gap of more than 100 ms. A write
+  that finds the ring full waits for room. No sound for 5 s: Suspend. A
+  packet the controller has no buffer for is dropped (the radio is
+  behind) rather than delaying all that follows. Headphones gone: audiod
+  goes back to the speakers.
+- **Volume:** in software, in the encoder (gain = volume squared, mute 0);
+  no AVRCP (absolute volume would need AVCTP, AVRCP and their SDP record).
+- **The encoder** (`sbc.c`, 2.8 KB): the analysis filter as the spec
+  writes it (the prototype filter's 41 values, Q20; the 8x16 cosine
+  matrix, Q14; 64-bit sums), scale factors, joint stereo per subband when
+  mid/side costs fewer bits, the loudness bit allocation, the frame and
+  its CRC-8. About 1% of one core for 48 kHz stereo. Checked against
+  libsbc: 63 dB SNR at bitpool 53 on two tones, 58 dB at bitpool 35.
+
+## File transfer (OBEX Object Push)
+
+- **RFCOMM** (PSM 3): one multiplexer and one data channel at a time.
+  Frames with their FCS (CRC-8 over address and control, and the length
+  for all but UIH); PN asks credit-based flow control (7 credits to start;
+  we give the peer more, up to 32, in our data frames or an empty one when
+  it runs low); MSC sent and answered; RPN, RLS, Test, FCon/FCoff echoed;
+  other control messages get NSC. Our frames are at most the L2CAP MTU
+  less 6 bytes, or what PN agreed.
+- **Sending:** `bt send ADDR FILE` reads the file (as its user) and gives
+  it to btd in pieces (BT_SEND, then BT_DATA of up to 8000 bytes; -EAGAIN
+  while the device is not ready). btd pages the device if needed, finds
+  its Object Push channel by SDP (0x1105), opens RFCOMM, OBEX CONNECT,
+  then PUTs: the first with the name (UTF-16) and length, each as big as
+  the device takes (its CONNECT answer; ours: 8 KiB), each waiting for its
+  "continue"; the last one final; DISCONNECT. 30 s without progress: given
+  up. Logged: `bt: OBEX: sending NAME (N bytes) to DEV`, `connected,
+  packets up to N bytes`, `NAME sent to DEV (N bytes)`.
+- **Receiving:** a bonded, encrypted device opens our channel 9 and
+  pushes: the file goes to the desktop user's `~/Downloads` (Atlas tells
+  btd who is logged in, BT_USER; nobody: root's), created as that user,
+  `1-NAME`, `2-NAME`... if taken; names lose `/`, `\`, control
+  characters and a leading dot. Nothing is asked: Atlas shows "Receiving
+  NAME from DEV..." then "Received NAME (Downloads)." (ATLAS_NOTE). A
+  transfer that breaks off is deleted. Logged: `bt: OBEX: into PATH (N
+  bytes)`, `NAME received from DEV (N bytes)`.
 
 ## Using it
 
@@ -104,25 +196,43 @@ bt list
 bt pair AA:BB:CC:DD:EE:FF   (root) shows the code: "Does the device show 123456? [y/n]"
                             or "Type 123456 on the device, then Enter."
 bt forget AA:BB:CC:DD:EE:FF (root)
+bt connect ADDR             a bonded device: headphones then play what audiod plays
+bt disconnect ADDR
+bt send ADDR FILE           to a bonded phone or computer
 bt on | bt off              (root; kept)
 ```
 
 Settings → Bluetooth: On/Off, Scan, the devices (found, paired, in use),
-Pair (the code with Yes/No, or to type), Forget. Root's password is asked
-unless root is logged in.
+Pair (the code with Yes/No, or to type), Forget, and Connect / Disconnect
+for a paired classic device (no password asked). Root's password is asked
+for the others unless root is logged in. Connected headphones are an
+output in Settings → Sound (and `vol out`), chosen when they connect.
 
 ## Tests
 
 - `make crypto-test`: f4, f5, f6, g2, c1, s1 and two P-256 key exchanges
   against the spec's sample data. Classic SSP's f1/f2/f3/g are not in SIEOS:
   the controller computes them.
-- `make bt-test`: the stack on the host with a fake transport (84 checks):
+- `make bt-test`: the stack on the host with a fake transport (279 checks):
   classic scan, pairing (passkey), link key, encryption, both HID channels,
   a key and a mouse move into CON_INJECT, flow control, a bonded device's
   return; LE advertisement, SMP Secure Connections against a responder
   written with `btcrypt.c` (the LTK compared), HOGP discovery, a
   notification moving the pointer, MTU and parameter requests, the accept
-  list reconnecting the device.
+  list reconnecting the device. Stage 2: `bt connect` to bonded
+  headphones, SDP for their sink (the answer in two parts, a continuation),
+  AVDTP Discover (an AAC endpoint skipped, one in use ignored), Get
+  Capabilities, Set Configuration (bitpool 35, the sink's highest), Open,
+  the media channel, audiod told; sound put in, Start, packets paced (one
+  now, the next 18.7 ms later, catching up after a gap), the RTP headers,
+  each SBC frame's header and CRC, the frames decoded by a float decoder in
+  the test (58 dB SNR) and by the host's libsbc if there (dlopen; 58 dB),
+  Suspend after 5 s; a phone asking our SDP records (Object Push's channel
+  in four cut answers, Service Search, one attribute), pushing a file
+  (RFCOMM: SABM, PN, MSC, credits; OBEX CONNECT, two PUTs: the file's name
+  and bytes checked), then us sending it 3000 bytes (SDP, RFCOMM with one
+  credit to start, 4 PUTs of at most 1024 bytes in frames of at most 400,
+  its name in UTF-16, every byte checked, DISCONNECT, DISC).
 - `make run-bt` (not run by the tests): QEMU with this PC's Intel adapter
   passed through (`-device qemu-xhci -device usb-host,vendorid=0x8087,productid=0x0032`)
   and the firmware put on `build/disk.img`. Linux loses its Bluetooth while
@@ -140,9 +250,25 @@ Every step logs a `bt:` line on the serial console / kernel log: send them.
   `patch loaded`, `ready`. If nothing answers: the flow-control polarity
   (Pi 4: `CNTL` = 0xCF), BT_ON, and on the Pi 5 the pin functions.
 
+- Headphones: `bt pair` then `bt connect` (or the headphones' own
+  reconnect): the log should show the SDP line, `A2DP: N free sink
+  endpoints`, the configuration and bitpool, `A2DP ready`, `streaming`
+  when `play x.wav` starts; `vol out` lists them. Listen for gaps
+  (pacing, packets dropped for want of controller buffers) and check the
+  volume. If a sink refuses: the `refuses command N (error)` line.
+- Files: pair a phone (`bt pair`), send a photo to "SIEOS" from the
+  phone, look in `~/Downloads`; `bt send PHONE FILE` the other way. The
+  `bt: RFCOMM` and `bt: OBEX` lines say how far it went.
+
 ## Limits
 
-No SDP (classic HID uses the boot protocol: no consumer keys, a 3-button
-mouse with a wheel byte); no LE privacy (bonded LE devices that use
+Classic HID uses the boot protocol (SDP could now give the report map:
+not done; no consumer keys, a 3-button mouse with a wheel byte). A2DP:
+SBC only, 48 kHz only (audiod's rate), one sink at a time, no AVRCP (no
+absolute volume, no play/pause buttons), no delay reporting; the tail of
+a sound shorter than a packet (under 20 ms) is not sent. OBEX: one
+transfer at a time, Object Push only (no FTP, no GOEP over L2CAP, no SRM),
+no prompt before receiving (bonded, encrypted devices only), no "Send by
+Bluetooth" in the Files window. No LE privacy (bonded LE devices that use
 resolvable private addresses do not come back by themselves: pair again);
 no SCO/isochronous; one adapter; HCI commands time out only at start.
