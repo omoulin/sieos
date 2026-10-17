@@ -470,9 +470,12 @@ static uint64_t now_ns(int clk)                    /* CLOCK_REALTIME: the build 
 static long do_futex(volatile int *addr, int op, int val, const struct timespec *t, int val3)
 {
     int cmd = op & 127;                                /* (FUTEX_PRIVATE_FLAG: all are) */
-    (void)val3;
     if (cmd == 1 || cmd == 10) return S4(SYS_FUTEX, FUTEX_WAKE, addr, val, 0);   /* WAKE, WAKE_BITSET */
-    if (cmd != 0 && cmd != 9) return -ENOSYS;          /* REQUEUE and PI: musl falls back */
+    if (cmd == 3 || cmd == 4) {                        /* REQUEUE, CMP_REQUEUE: the waiters to move */
+        if (cmd == 4 && *addr != val3) return -EAGAIN; /* are woken instead (a wake-up they may treat */
+        return S4(SYS_FUTEX, FUTEX_WAKE, addr, (long)val + (long)(uintptr_t)t, 0);   /* as spurious; musl's condition variables do) */
+    }
+    if (cmd != 0 && cmd != 9) return -ENOSYS;          /* PI futexes */
     uint64_t ns = 0;
     if (t) {
         uint64_t w = ts_ns(t);
