@@ -11,6 +11,10 @@
  * fingers down: the right button). Contacts the pad thinks are a palm
  * (confidence 0) are left out.
  *
+ * A touch screen (digitizer "touch screen", unless it describes a mouse
+ * first: that one is used) is an absolute pointer: its first finger's
+ * place, the left button while it touches.
+ *
  * Keyboards: each report (the boot layout) is compared with the previous
  * one for the presses and releases (PS/2 set-1 scancodes); a key held 0.5 s
  * repeats (keyboards do not). A keyboard described by its report
@@ -144,7 +148,13 @@ void hid_parse(hidrep_t *h, const uint8_t *p, int n)
                     } else if (app == 0x010006) {            /* a keyboard */
                         if (page == 7 && (v & 2) && size == 1 && u == 0xE0) { h->kpos = at; h->krid = rid; }
                         if (page == 7 && !(v & 2) && size == 8 && !k && !h->kn) { h->kkeys = at; h->kn = count; }
-                    } else if (app >> 16 == 1) {             /* a mouse, a tablet */
+                    } else if (app == 0x0D0004) {            /* a touch screen's first finger: a tablet (unless a mouse came first) */
+                        if (!h->screen) { if (h->xsz || h->bn) continue; h->screen = h->absolute = 1; h->rid = rid; }
+                        if (finger > 0 || rid != h->rid) continue;
+                        if (page == 0x0D && u == 0x42 && !h->bn) { h->bpos = at; h->bn = 1; }
+                        if (page == 1 && u == 0x30 && !h->xsz) { h->xpos = at; h->xsz = size; h->xmax = lmax; }
+                        if (page == 1 && u == 0x31 && !h->ysz) { h->ypos = at; h->ysz = size; h->ymax = lmax; }
+                    } else if (app >> 16 == 1 && !h->screen) {   /* a mouse, a tablet */
                         if (page == 9 && !h->bn) { h->bpos = at; h->bn = count; h->rid = rid; }
                         if (page == 1 && u == 0x30 && !h->xsz) { h->xpos = at; h->xsz = size; h->absolute = !(v & 4); h->xmax = lmax; h->rid = rid; }
                         if (page == 1 && u == 0x31 && !h->ysz) { h->ypos = at; h->ysz = size; h->ymax = lmax; }

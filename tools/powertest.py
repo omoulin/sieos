@@ -6,7 +6,9 @@ serial console, through QEMU's monitor for the buttons:
     system_wakeup; then the shell, the file, a new file, the network;
     again while fsloop works; `suspend 3`: woken by the clock's alarm;
   - `reboot`: the FADT's reset register (QEMU stops: -no-reboot);
-  - booted again: the power button (system_powerdown): a clean power off.
+  - booted again, with no S3 in QEMU's tables (as "Modern Standby" laptops
+    have): `suspend` refused at once ("not supported"); the power button
+    (system_powerdown): a clean power off.
 Usage: powertest.py <cpus> <disk image> <qemu command line...>
 The image must be a fresh one (first-start setup); the test works in a copy.
 
@@ -25,10 +27,10 @@ qemu = None
 import atexit
 atexit.register(lambda: qemu and qemu.poll() is None and qemu.kill())
 
-def boot():
+def boot(extra=[]):
     global qemu, out, seen
     if os.path.exists(mon): os.unlink(mon)
-    qemu = subprocess.Popen(cmdline + ["-monitor", f"unix:{mon},server,nowait"], stdin=subprocess.PIPE,
+    qemu = subprocess.Popen(cmdline + extra + ["-monitor", f"unix:{mon},server,nowait"], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out = seen = b""
 
@@ -142,12 +144,15 @@ send("reboot")
 ok("QEMU stopped (-no-reboot)", stopped())
 ok("reboot", b"mk: restarting" in seen, "reset register" if b"mk: reset register" in seen else "keyboard controller")
 
-# ---- booted again: the power button
-boot()
+# ---- booted again, without S3 (QEMU's \_S3 removed): suspend refused; the power button
+boot(["-global", "PIIX4_PM.disable_s3=1"])
 expect("login: ", 60); send("root")
 expect("Password: "); send("rootpass1")
 expect("# ")
 if not os.environ.get("NOSLEEP"): ok("the file written after waking is on the disk", "after" in run("cat /root/after.txt"))
+t0 = time.time()
+r = run("suspend", 10)
+ok("no S3: suspend refused at once", "not supported" in r and b"\\_S3: none" in seen and b"mk: ACPI S3" not in seen, f"{line(r)}, {time.time() - t0:.1f} s")
 monitor("system_powerdown")
 ok("power button: power off", stopped(30))
 ok("power button seen by acpid", b"acpid: power button" in seen and b"mk: power off" in seen)

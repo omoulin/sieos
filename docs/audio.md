@@ -4,7 +4,9 @@ Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 Playing and recording on Intel High Definition Audio: QEMU's `intel-hda`
 and `ich9-intel-hda` with their codecs, and PC chipsets up to Raptor Lake
-(the target laptop's controller, PCI 00:1f.3) with a Realtek-style codec.
+(the target laptop's controller, PCI 00:1f.3; the Ice Lake 2-in-1's,
+8086:34c8, in HDA mode: [ice-lake.md](ice-lake.md#sound)) with a
+Realtek-style codec.
 One output and one input stream, 48 kHz, 16-bit, stereo: no mixing of
 several programs, no other rates (convert files beforehand). The output
 goes to the speakers (analog) by default, or to an HDMI or DisplayPort
@@ -49,7 +51,9 @@ gives up on it: clients get "no sound card".
   digital microphone wired to the DSP cannot be recorded; the log says
   which). Intel: TCSEL (traffic class 0), and on PCHs snooped DMA and no
   clock gating while the link resets, as Linux does (`hda_intel.c`); the
-  link and codecs reset; commands through CORB/RIRB, polled.
+  link and codecs reset; the DSP's processing pipe off if the firmware left
+  it on, a multi-link controller's link moved from 6 to 24 MHz (Ice Lake
+  on, `intel_init_lctl`); commands through CORB/RIRB, polled.
 - **Controllers:** up to two: the chipset's, and an NVIDIA GPU's HDMI
   function (class 0403 too; snooped DMA set as Linux's `AZX_SNOOP_TYPE_NVIDIA`).
   Each has its own CORB/RIRB page and buffer lists (the rings are shared);
@@ -63,7 +67,13 @@ gives up on it: clients get "no sound card".
   inputs muted), widgets powered, pins enabled (headphone drive, 80% bias
   for a microphone, EAPD on). The volume is the DACs' output amplifier
   (0 dB at 100). When a stream starts, a headphone plugged in silences
-  the speaker (no interrupt for plugging in while playing).
+  the speaker (no interrupt for plugging in while playing). When
+  recording starts with headphones in, a jack's microphone (a headset's)
+  is preferred, on whichever ADC reaches it; else the first microphone.
+  Realtek's ALC225 family (ALC215/225/285/289/295/299, Dell's ALC3271):
+  its combo jack's mode set through coefficients (unplugged, or a CTIA or
+  OMTP headset, measured), and on a Dell the headset microphone's pin made
+  one ([ice-lake.md](ice-lake.md#sound)).
 - **Streams:** a 128 KiB ring each (683 ms), 8 periods of 16 KiB, an
   interrupt at each period's end. Playing zeroes what was played, so it
   plays silence if writes stop; it stops one period after the last data

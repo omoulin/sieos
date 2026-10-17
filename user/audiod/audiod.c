@@ -25,7 +25,10 @@
  *   (TCSEL); on PCHs, snooped DMA and no clock gating while the link resets
  *   (Skylake on). A controller whose PCI class says "audio device" (0401)
  *   instead of HDA (0403) has its DSP (SST/SOF) on: the HDA part still
- *   works, but microphones wired to the DSP do not.
+ *   works, but microphones wired to the DSP do not. Skylake on, the
+ *   capability list: the DSP's processing pipe kept out of the way (PPCTL),
+ *   and a link left at 6 MHz by the firmware moved to 24 MHz (Ice Lake on:
+ *   multi-link LCTL.SCF, as Linux's intel_init_lctl).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -204,7 +207,7 @@ static int controller(pci_t *p, uint64_t rpa)
     uint64_t len, pa, cpa;
     h = &hc[nh];
     if (p->irq < 0 || !(pa = pci_bar(p, 0, &len)) || !len || (long)(h->regs = map_phys(pa, 0x4000)) < 0) return -1;
-    int intel = (p->id & 0xFFFF) == 0x8086, pch = intel && (p->id >> 16 < 0x2600 || p->id >> 16 >= 0x3B00);
+    int d = p->id >> 16, intel = (p->id & 0xFFFF) == 0x8086, pch = intel && !(d >= 0x2600 && d < 0x3000) && d >> 8 != 0x3A;   /* (ICHs: 26xx-2Fxx, 3Axx) */
     uint32_t cg = pci_cfg(p, 0x48);              /* (pch: a PCH, not an ICH; 0x48: CGCTL) */
     if (intel) pci_cfgw(p, 0x44, pci_cfg(p, 0x44) & ~7u);       /* TCSEL: traffic class 0 */
     if (pch) {
@@ -227,6 +230,22 @@ static int controller(pci_t *p, uint64_t rpa)
     sys_sleep(100000);
     w32(GCTL, 1);
     if (until(GCTL, 1, 1)) return -1;
+    for (uint32_t o = r32(0x14) & 0xFFFF, n = 0, c; intel && o >= 0x100 && o < 0x3F80 && n < 16; o = c & 0xFFFF, n++) {
+        c = r32(o);                              /* (LLCH: the capability list) */
+        if ((c >> 16 & 0xFFF) == 3 && r32(o + 4) >> 30) {   /* processing pipe: GPROCEN, PIE off */
+            w32(o + 4, r32(o + 4) & ~(3u << 30));
+            printf("audiod: the DSP's processing pipe was on: off\n");
+        }
+        if ((c >> 16 & 0xFFF) != 2) continue;
+        uint32_t l = r32(o + 0x44), cap = r32(o + 0x40), scf = cap & 4 ? 2 : cap & 8 ? 3 : cap & 2 ? 1 : 0;
+        if (l & 15 || !scf || (l >> 16 & 1) != (l >> 23 & 1)) continue;
+        w32(o + 0x44, l & ~(1u << 16));          /* multi-link 0 at 6 MHz: off (SPA), to 24 MHz (SCF), on */
+        for (int i = 0; i < 50 && r32(o + 0x44) >> 23 & 1; i++) sys_sleep(10000);
+        w32(o + 0x44, (l & ~15u & ~(1u << 16)) | scf);
+        w32(o + 0x44, (l & ~15u) | scf | 1u << 16);
+        for (int i = 0; i < 50 && !(r32(o + 0x44) >> 23 & 1); i++) sys_sleep(10000);
+        printf("audiod: link clock from 6 MHz to %d MHz (LCTL %x)\n", 6 << scf, r32(o + 0x44));
+    }
     sys_sleep(1000000);                          /* the codecs say they are there (521 µs) */
     if (pch) pci_cfgw(p, 0x48, cg);
 
@@ -249,6 +268,7 @@ static int controller(pci_t *p, uint64_t rpa)
     h->irq = p->irq; h->iss = iss;
     nh++;
     uint32_t codecs = r8(STATESTS) | r8(STATESTS + 1) << 8;
+    printf("audiod: codecs on the link: %x\n", codecs);
     for (int a = 0; a < 15; a++) if (codecs >> a & 1) codec(a);
     w32(INTCTL, 1u << 31 | 1u << iss | (iss ? 1 : 0));
     return 0;
@@ -316,7 +336,7 @@ int main(int argc, char **argv)
             break;
         case AUDIO_READ:
             if (in.tok || !ach) { r = in.tok ? -EBUSY : -ENOENT; break; }
-            if (!in.run) start(&in);
+            if (!in.run) { mic(); start(&in); }      /* (the headset's microphone if plugged in) */
             in.tok = from; in.want = m.w[1];
             if (in.n) reply_read();
             continue;

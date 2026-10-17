@@ -34,7 +34,7 @@ static q_t aq, ioq;                          /* admin, I/O */
 static volatile uint32_t *r;                 /* the registers (BAR 0) */
 static uint8_t *mem;                         /* DMA: data (DISK_MAX), then admin SQ, admin CQ, I/O SQ (+ PRP list), I/O CQ */
 static uint64_t bus;                         /* its bus address */
-static uint32_t dstrd, nn, nsid, lbads;      /* doorbell stride, namespaces, the one in use, log2(sector size) */
+static uint32_t dstrd, nn, nsid, lbads, mdts;   /* doorbell stride, namespaces, the one in use, log2(sector size), largest transfer */
 static int cur = -1, dead;                   /* the controller set up; a command timed out */
 
 /* One command, waited for: -> 0 done, -EIO failed. Spin a little (the
@@ -106,7 +106,8 @@ static int start(int nth)
     memcpy(m, mem + 24, 40);
     for (int n = 40; n && m[n - 1] == ' ';) m[--n] = 0;
     printf("vblk: NVMe %02x:%02x.%x: %s\n", p.at >> 16 & 0xFF, p.at >> 11 & 31, p.at >> 8 & 7, m);
-    if (mem[77] && mem[77] < 5) return -1;              /* MDTS (in 4 KiB pages, log2): 128 KiB transfers must be allowed */
+    mdts = mem[77] < 5 ? mem[77] : 0;                    /* MDTS (in 4 KiB pages, log2; 0: any): below 128 KiB, transfers are cut */
+    if (mdts) printf("vblk: NVMe: at most %u KiB per command\n", 4u << mdts);
     if (admin(5, qb + 3 * 4096, 1 << 16 | 1, 1) ||                    /* create I/O CQ 1 (contiguous, no interrupts) */
         admin(1, qb + 2 * 4096, 1 << 16 | 1, 1 << 16 | 1)) return -1;   /* create I/O SQ 1 -> CQ 1 */
     return 0;
@@ -134,11 +135,17 @@ int nvme_open(int nth, uint32_t ns, uint64_t *sectors, uint32_t *bs)
     return 0;
 }
 
-long nvme_io(int op, uint64_t lba, uint32_t count)
+long nvme_io(int op, uint64_t lba, uint32_t count)      /* (in pieces of MDTS: from page k, its PRP list from entry k) */
 {
-    uint32_t bytes = count << lbads;
-    uint64_t p2 = bytes <= 4096 ? 0 : bytes <= 8192 ? bus + 4096 : bus + DISK_MAX + 2 * 4096 + 2048;
-    return cmd(&ioq, op, bus, p2, (uint32_t)lba, lba >> 32, count - 1);
+    uint32_t max = mdts ? (4096u << mdts) >> lbads : count, at = 0;
+    long e;
+    do {
+        uint32_t n = count - at < max ? count - at : max, bytes = n << lbads, k = (at << lbads) / 4096;
+        uint64_t p2 = bytes <= 4096 ? 0 : bytes <= 8192 ? bus + (k + 1) * 4096ULL : bus + DISK_MAX + 2 * 4096 + 2048 + 8 * k;
+        e = cmd(&ioq, op, bus + k * 4096ULL, p2, (uint32_t)(lba + at), (lba + at) >> 32, n - 1);
+        at += n;
+    } while (!e && at < count);
+    return e;
 }
 
 void *nvme_buffer(void) { return mem; }

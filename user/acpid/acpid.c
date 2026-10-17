@@ -22,7 +22,14 @@
  *    `battery`) ask the port "acpi": ACPI_STATUS, or ACPI_WAIT for the
  *    next change.
  *  - The power button powers off, as `poweroff` does (files committed
- *    first). The lid only reports: the desktop decides (screen off, sleep).
+ *    first): the fixed one, the PNP0C0C device's, or Intel's HID event
+ *    filter's (INT33D5: Notify 0xCE) and virtual buttons' (INT33D6: 0xC0),
+ *    which "Modern Standby" laptops use; their other events (a 2-in-1's
+ *    tablet and laptop modes) are logged. The lid only reports: the
+ *    desktop decides (screen off, sleep).
+ *  - Machines without \_S3 ("Modern Standby" only: the FADT's LOW_POWER_S0
+ *    flag; Ice Lake laptops often) sleep in s2idle, which SIEOS does not do
+ *    yet: `suspend` then says so at once, before anything is touched.
  *  - Waking from S3: the power button, the GPEs of the lid, power button
  *    and controller that can wake (their _PRW; armed by _DSW or _PSW), and
  *    for `suspend N` the CMOS clock's alarm (PM1's RTC_EN). Nothing else.
@@ -41,7 +48,7 @@ static const uint8_t *fadt;
 static uint16_t pm1a, pm1b, pm1len, gpe0, gpelen, ec_data, ec_sc;   /* ports; gpelen: status bytes */
 static uint8_t gpe_en[16], gpe_wk[16];          /* the GPEs we enabled; those that wake us */
 static uint16_t hits[128];                      /* each one's events since the last tick */
-static int ec = -1, ec_gpe = -1, bat = -1, ac = -1, lid = -1, pwrb = -1, sci = -1;
+static int ec = -1, ec_gpe = -1, bat = -1, ac = -1, lid = -1, pwrb = -1, sci = -1, ihid = -1, vbtn = -1;
 static int s3, bif = 1, button, dirty;          /* ACPI_S3 if it can sleep; read the battery's capacities again; the power button
                                                    was pressed; read all again */
 static int wdev[3], nwdev;                      /* the devices that wake us (their _PRW) */
@@ -128,8 +135,11 @@ static void notify(int dev, int64_t v)
 {
     if (dev < 0) return;
     if (dev == bat) { if (v == 0x81) bif = 1; }
-    else if (dev == pwrb && v == 0x80) button = 1;
-    else if (dev != ac && dev != lid) return;
+    else if ((dev == pwrb && v == 0x80) || (dev == ihid && v == 0xCE) || (dev == vbtn && v == 0xC0)) button = 1;
+    else if (dev == ihid || dev == vbtn) {
+        if (v != 0xCF && v != 0xC1) log_line("Intel %s: event %x%s\n", dev == ihid ? "HID" : "buttons", (int)v, v == 0xCC ? ": tablet mode" : v == 0xCD ? ": laptop mode" : "");
+        return;
+    } else if (dev != ac && dev != lid) return;
     dirty = 1;
 }
 
@@ -316,6 +326,7 @@ static long power_do(int how)
     int secs = how >> 8;
     how &= 255;
     if (how == POWER_SLEEP && sys_clock() < awake) { log_line("suspend: just woke: not again\n"); return 0; }
+    if (how == POWER_SLEEP && !s3) { log_line("suspend: this machine has no S3 (only s2idle, not done yet)\n"); return -ENOSYS; }
     log_line("%s\n", what[how]);
     if (how == POWER_RESTART) return sys_power(how, 0);
     for (int i = 0; how == POWER_SLEEP && i < nwdev; i++) aml_wake(wdev[i], 3, 1);
@@ -388,6 +399,7 @@ int main(int argc, char **argv)
     if (gpelen > 16) gpelen = 16;
     cnt = blk(64, 172); smi = (uint16_t)f32(48);
     log_line("FADT: SCI %d, PM1 events %x/%x, control %x, GPE0 %x (%d), SMI %x, flags %x\n", sci, pm1a, pm1b, cnt, gpe0, 8 * gpelen, smi, f32(112));
+    if (f32(112) & 1 << 21) log_line("FADT: low-power S0 idle (Modern Standby)%s\n", s3 ? "; S3 too: suspend uses S3" : ", no S3: suspend is not available (s2idle: not done yet)");
     arm();                                          /* (no GPE yet) */
 
     /* The devices. */
@@ -408,6 +420,10 @@ int main(int argc, char **argv)
     ac = dev("ACPI0003", "AC adapter");
     lid = dev("PNP0C0D", "lid");
     pwrb = dev("PNP0C0C", "power button");
+    int64_t one = 1, x;
+    if ((ihid = dev("INT33D5", "Intel HID events")) >= 0)    /* (on: its events, and the power button's) */
+        aml_eval(ihid, "HDSM", 1, &one, &x, 1), aml_eval(ihid, "BTNL", 0, 0, &x, 1);
+    if ((vbtn = dev("INT33D6", "Intel virtual buttons")) >= 0) aml_eval(vbtn, "VBDL", 0, 0, &x, 1);
     for (int i = 0, d[3] = { lid, pwrb, ec }, g; i < 3; i++)       /* what wakes us from S3 */
         if (d[i] >= 0 && (g = aml_wake(d[i], 3, -1)) >= 0 && g < 8 * gpelen) {
             gpe_wk[g / 8] |= (uint8_t)(1 << g % 8); wdev[nwdev++] = d[i];

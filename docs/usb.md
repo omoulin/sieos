@@ -138,6 +138,13 @@ then `fsck.siefs` and the file read back on the host. Measured (`bench 64`,
 x86-64 KVM): writes 376-396 MiB/s, reads 557-629 MiB/s (virtio: 217 / 213);
 arm64 (emulated, `bench 16`): 152-166 / 252 MiB/s.
 
+A drive whose MDTS (its largest transfer) is below 128 KiB has each
+request cut into commands of that size (`vblk: NVMe: at most N KiB per
+command`); `make nvme-test` gives QEMU's SieFS drive an MDTS of 3 (32 KiB)
+so that this path is the one tested (its `bench` then: about 67 MiB/s
+both ways, QEMU's cost per command; without the limit 365 / 600 MiB/s).
+The Ice Lake laptop's SK hynix BC501 needs no quirk ([ice-lake.md](ice-lake.md#the-disk)).
+
 Untested on the real drives: the controllers' reset timing, their MDTS and
 LBA formats as read, a SieFS partition on one (no tool makes it yet: copy
 `mkfs.siefs`'s image into a GPT partition of that type from Linux).

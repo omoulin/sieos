@@ -8,6 +8,9 @@
  * Intel codec hides its converters and devices until its vendor verb), the
  * ELD built from two real monitors' EDIDs (eld.h, as igfx writes it) and
  * read back through the pin, and the verbs that send the stream to a monitor.
+ * And a Dell's Realtek of the ALC225 family (the ALC257's graph renamed
+ * ALC299, its headset pin "not connected" as Dell's firmware leaves it):
+ * the pin made a headset microphone, the jack's modes, the microphone chosen.
  *
  * Usage: test DIR (where the .txt dumps are).
  *
@@ -20,18 +23,19 @@
 
 typedef struct { int id; } hda_t;                /* a controller: 0 the PCH's, 1 NVIDIA's */
 #define AUDIO_MUTE 0x100
+static void sys_sleep(long ns) { (void)ns; }
 #include "../../user/audiod/codec.c"
 
 /* ---- The fake codecs. */
 typedef struct {
     uint32_t wcaps, pincap, pindef, ampin, ampout;
-    int nconn, ndev, sel;                        /* connections, devices (0: no list), device selected */
+    int nconn, ndev, sel, sense;                 /* connections, devices (0: no list), device selected; something plugged in */
     uint8_t conn[16];
     const uint8_t *eld[4];                       /* per device: an ELD (the display wrote it) */
     int eldn[4];
 } node_t;
-typedef struct { uint32_t id, vendor; int first, n, hidden; node_t w[64]; } fcodec_t;
-static fcodec_t fc[3];                           /* ALC257 (PCH, 0), RPL HDMI (PCH, 2), NVIDIA (NVIDIA, 0) */
+typedef struct { uint32_t id, sub, vendor; int first, n, hidden; node_t w[64]; } fcodec_t;
+static fcodec_t fc[4];                           /* ALC257 (PCH, 0), RPL HDMI (PCH, 2), NVIDIA (NVIDIA, 0), "ALC299" (PCH, 1) */
 static hda_t pch = { 0 }, nv = { 1 };
 
 static uint32_t amp_caps(const char *s)          /* "ofs=0x57, nsteps=0x57, stepsize=0x02, mute=0" */
@@ -49,6 +53,7 @@ static void load(fcodec_t *c, const char *dir, const char *file)
     unsigned v, nid;
     while (fgets(l, sizeof l, f)) {
         if (sscanf(l, "Vendor Id: 0x%x", &v) == 1) c->id = v;
+        else if (sscanf(l, "Subsystem Id: 0x%x", &v) == 1) c->sub = v;
         else if (sscanf(l, "Node 0x%x [%*[^]]] wcaps 0x%x", &nid, &v) == 2) {
             if (!c->first) c->first = nid;
             c->n = nid - c->first + 1;
@@ -67,7 +72,7 @@ static void load(fcodec_t *c, const char *dir, const char *file)
 
 static struct { int ctl, cad, nid; uint32_t v; } trace[4096];
 static int nt;
-static fcodec_t *model(void) { return h->id ? &fc[2] : cad == 2 ? &fc[1] : cad == 0 ? &fc[0] : 0; }
+static fcodec_t *model(void) { return h->id ? &fc[2] : cad == 2 ? &fc[1] : cad == 0 ? &fc[0] : &fc[3]; }
 static uint32_t verb(int nid, uint32_t v)
 {
     fcodec_t *c = model();
@@ -90,6 +95,8 @@ static uint32_t verb(int nid, uint32_t v)
     }
     if (cmd == 0xF02) { uint32_t r = 0; for (int i = 0; i < 4 && (int)p + i < conn; i++) r |= (uint32_t)w->conn[p + i] << 8 * i; return r; }
     if (cmd == 0xF1C) return w->pindef;
+    if (cmd == 0xF20) return c->sub;
+    if (cmd >= 0x71C && cmd <= 0x71F) { int sh = 8 * (cmd - 0x71C); w->pindef = (w->pindef & ~(0xFFu << sh)) | p << sh; return 0; }
     if (cmd == 0xF81) return c->vendor;
     if (cmd == 0x781 && (p & 3) == 3 && c->hidden) {   /* Intel: every pin to every converter, 4 devices (pipes) */
         node_t *x = c->w + c->first;
@@ -100,7 +107,7 @@ static uint32_t verb(int nid, uint32_t v)
     if (cmd == 0x781) { c->vendor = p; return 0; }
     if (cmd == 0x735) { if ((int)p < (c->hidden ? 1 : w->ndev ? w->ndev : 1)) w->sel = p; return 0; }
     if (cmd == 0xF35) return w->sel;
-    if (cmd == 0xF09) return w->eld[w->sel] ? 0xC0000000 : 0;   /* presence, ELD valid */
+    if (cmd == 0xF09) return w->eld[w->sel] ? 0xC0000000 : w->sense ? 0x80000000 : 0;   /* presence, ELD valid */
     if (cmd == 0xF2F) return w->eld[w->sel] && (int)p < w->eldn[w->sel] ? 0x80000000 | w->eld[w->sel][p] : 0;
     return 0;
 }
@@ -201,6 +208,27 @@ int main(int argc, char **argv)
     jack();
     CHECK(sent(0, 0, dac[0], 0x70620, t0));
     CHECK(sent(0, 0, dac[0], 0x3B000 | ((ampcap(dac[0], 1) & 0x7F) * 80 / 100), t0));   /* (volume 80) */
+
+    /* The Dell's ALC299: pin 25 made a headset microphone; unplugged, the
+     * built-in microphone and the jack's unplugged mode; a headset plugged
+     * in: measured (CTIA, as the fake's coefficients read), its microphone. */
+    load(&fc[3], dir, "alc257.txt");
+    fc[3].id = 0x10ec0299; fc[3].sub = 0x102808b0; fc[3].w[0x19].pindef = 0x40000000;
+    ach = 0; h = &pch; t0 = nt;
+    CHECK(codec(1) == 0 && ach == &pch && acad == 1 && alc && hs == 0);
+    show(t0, "Dell ALC299 set-up");
+    CHECK(sent(0, 1, 0x19, 0x71C3C, t0) && sent(0, 1, 0x19, 0x71D91, t0) && sent(0, 1, 0x19, 0x71EA1, t0) && sent(0, 1, 0x19, 0x71F01, t0));
+    CHECK(fc[3].w[0x19].pindef == 0x01a1913c && ipin == 0x12);
+    CHECK(sent(0, 1, 0x20, 0x50063, t0) && sent(0, 1, 0x20, 0x40000, t0));   /* (unplugged: coefficient 0x63 cleared) */
+    fc[3].w[0x21].sense = 1;
+    t0 = nt;
+    mic();
+    show(t0, "headset plugged in, recording");
+    CHECK(hs == 1 && ipin == 0x19 && adc == 8 && sent(0, 1, 7, 0x70600, t0) && sent(0, 1, 8, 0x70610, t0) && sent(0, 1, 0x19, 0x70724, t0) && sent(0, 1, 0x21, 0x707C0, t0));
+    CHECK(sent(0, 1, 0x20, 0x4D400, t0) && sent(0, 1, 0x20, 0x48000, t0));   /* (CTIA: 0x45 = 0x35 << 10, 0x63 = 2 << 14) */
+    t0 = nt;
+    jack();
+    CHECK(sent(0, 1, 0x14, 0x70700, t0) && nt - t0 < 8);   /* (the speaker off; the mode unchanged: not measured again) */
 
     printf(fails ? "hdmi-test: %d FAILED\n" : "hdmi-test: all passed (%d verbs)\n", fails ? fails : nt);
     return fails != 0;
