@@ -48,7 +48,7 @@ static const uint8_t *fadt;
 static uint16_t pm1a, pm1b, pm1len, gpe0, gpelen, ec_data, ec_sc;   /* ports; gpelen: status bytes */
 static uint8_t gpe_en[16], gpe_wk[16];          /* the GPEs we enabled; those that wake us */
 static uint16_t hits[128];                      /* each one's events since the last tick */
-static int ec = -1, ec_gpe = -1, bat = -1, ac = -1, lid = -1, pwrb = -1, sci = -1, ihid = -1, vbtn = -1;
+static int ec = -1, ec_gpe = -1, bat = -1, ac = -1, lid = -1, pwrb = -1, sci = -1, ihid = -1, vbtn = -1, sbtn_dev = -1;
 static int s3, bif = 1, button, dirty;          /* ACPI_S3 if it can sleep; read the battery's capacities again; the power button
                                                    was pressed; read all again */
 static int wdev[3], nwdev;                      /* the devices that wake us (their _PRW) */
@@ -135,7 +135,7 @@ static void notify(int dev, int64_t v)
 {
     if (dev < 0) return;
     if (dev == bat) { if (v == 0x81) bif = 1; }
-    else if ((dev == pwrb && v == 0x80) || (dev == ihid && v == 0xCE) || (dev == vbtn && v == 0xC0)) button = 1;
+    else if ((dev == pwrb && v == 0x80) || (dev == ihid && v == 0xCE) || (dev == vbtn && v == 0xC0) || (dev == sbtn_dev && v == 0xC6)) button = 1;
     else if (dev == ihid || dev == vbtn) {
         if (v != 0xCF && v != 0xC1) log_line("Intel %s: event %x%s\n", dev == ihid ? "HID" : "buttons", (int)v, v == 0xCC ? ": tablet mode" : v == 0xCD ? ": laptop mode" : "");
         return;
@@ -360,6 +360,46 @@ static void ticker(void *arg)
     for (;;) { sys_sleep(30000000000L); msg_t m = { .w = { TICK } }; ipc_call(port, &m); }
 }
 
+/* ---- A Surface's buttons (MSHW0040, Surface Pro 5 to 7, Book 2): power,
+ * volume up, volume down on three GPIO pads (its _CRS's GpioInts, in that
+ * order, active low; Linux: soc_button_array). Their level (DW0's RX state,
+ * before any inversion) is read every 50 ms: the power button powers off,
+ * the volume buttons go to the audio server (held: again every 150 ms
+ * after 450 ms). */
+static volatile uint32_t *sbtn[3];
+static void surface_buttons(void *arg)
+{
+    (void)arg;
+    long audio = 0;
+    int was = 0, held = 0;
+    for (;;) {
+        sys_sleep(50000000);
+        int now = 0;
+        for (int i = 0; i < 3; i++) if (sbtn[i] && !(*sbtn[i] & 2)) now |= 1 << i;
+        if (now & ~was & 1) { msg_t m = { .w = { TICK, 1 } }; ipc_call(port, &m); }
+        held = now & 6 && (now & 6) == (was & 6) ? held + 1 : 0;
+        if ((now & 6 & ~was) || (held >= 9 && held % 3 == 0)) {
+            log_line("volume %s\n", now & 2 ? "up" : "down");
+            msg_t m = { .w = { AUDIO_KEY, now & 2 ? MK_VOLUP : MK_VOLDOWN } };
+            call_named(&audio, "audio", &m, 1);
+        }
+        was = now;
+    }
+}
+static void surface_buttons_start(int dev)
+{
+    aml_hid_t r;
+    aml_gpio_t g;
+    static const char *what[3] = { "power", "volume up", "volume down" };
+    if (aml_res(dev, "_CRS", &r) || r.npins < 1) { log_line("Surface buttons: no GPIO pins (notifications only)\n"); return; }
+    for (int i = 0; i < 3 && i < r.npins; i++) {
+        volatile uint8_t *cm;
+        if (aml_gpio(r.pins[i], &g) || (long)(cm = map_phys(g.base, 8192)) < 0) { log_line("Surface buttons: %s: pin %d unknown\n", what[i], r.pins[i]); continue; }
+        sbtn[i] = (volatile uint32_t *)(cm + g.pad);
+        log_line("Surface buttons: %s: pin %d, group %d pad %d, DW0 %08x (%s)\n", what[i], r.pins[i], g.group, g.bit, *sbtn[i], *sbtn[i] & 2 ? "up" : "pressed");
+    }
+}
+
 static int dev(const char *hid, const char *what)    /* the first device present with this id, or -1 */
 {
     int k;
@@ -424,6 +464,7 @@ int main(int argc, char **argv)
     if ((ihid = dev("INT33D5", "Intel HID events")) >= 0)    /* (on: its events, and the power button's) */
         aml_eval(ihid, "HDSM", 1, &one, &x, 1), aml_eval(ihid, "BTNL", 0, 0, &x, 1);
     if ((vbtn = dev("INT33D6", "Intel virtual buttons")) >= 0) aml_eval(vbtn, "VBDL", 0, 0, &x, 1);
+    if ((sbtn_dev = dev("MSHW0040", "Surface buttons")) >= 0) surface_buttons_start(sbtn_dev);
     for (int i = 0, d[3] = { lid, pwrb, ec }, g; i < 3; i++)       /* what wakes us from S3 */
         if (d[i] >= 0 && (g = aml_wake(d[i], 3, -1)) >= 0 && g < 8 * gpelen) {
             gpe_wk[g / 8] |= (uint8_t)(1 << g % 8); wdev[nwdev++] = d[i];
@@ -441,6 +482,7 @@ int main(int argc, char **argv)
     arm();
     refresh();
     thread_start(ticker, 0, 4096);
+    if (sbtn[0] || sbtn[1] || sbtn[2]) thread_start(surface_buttons, 0, 4096);
 
     static acpi_status_t out;
     for (;;) {
@@ -457,7 +499,11 @@ int main(int argc, char **argv)
                 if (m.w[1] == st.seq && nwait < 8) { waiters[nwait++] = from; from = 0; break; }
                 /* fall through */
             case ACPI_STATUS: out = st; r.sbuf = &out; r.slen = sizeof out; break;
-            case TICK: if (m.pid != self) r.w[0] = -EPERM; else dirty = 1, memset(hits, 0, sizeof hits); break;
+            case TICK:                              /* (w[1] 1: a Surface's power button) */
+                if (m.pid != self) r.w[0] = -EPERM;
+                else if (m.w[1] == 1) log_line("power button (Surface)\n"), button = 1;
+                else dirty = 1, memset(hits, 0, sizeof hits);
+                break;
             default: r.w[0] = -ENOSYS;
             }
             if (from) ipc_reply(from, &r);
