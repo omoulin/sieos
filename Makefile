@@ -768,6 +768,16 @@ $(B)/host/camera-test: tests/camera/test.c user/usb/uvc.c user/usb/kbl.c
 camera-test: $(B)/host/camera-test
 	$(B)/host/camera-test tests/camera
 .PHONY: camera-test
+# ---- USB keyboards with a touchpad on one interface (user/usb/hid.c,
+# user/lib/hidrep.c) on the host: a Surface Type Cover's kind of report
+# descriptor (tests/hid), the protocol and touchpad mode chosen, its reports.
+$(B)/host/hid-test: tests/hid/test.c tests/hid/mk.h user/usb/hid.c user/usb/usb.h user/lib/hidrep.c user/lib/hidrep.h include/mk/*.h
+	@mkdir -p $(B)/host/hid
+	cp user/usb/hid.c user/usb/usb.h user/lib/hidrep.c user/lib/hidrep.h tests/hid/mk.h $(B)/host/hid/
+	gcc $(HOSTCFLAGS) -I$(B)/host/hid -o $@ tests/hid/test.c $(B)/host/hid/hidrep.c
+hid-test: $(B)/host/hid-test
+	$(B)/host/hid-test tests/hid
+.PHONY: hid-test
 
 # ---- sicc, the SIEOS C compiler (cc/, docs/cc.md): compiler, assembler and
 # linker in one program, written for SIEOS.
