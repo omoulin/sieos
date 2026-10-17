@@ -309,7 +309,7 @@ kind=terminal
 | `name` | what the strip and the menus show |
 | `run` | the program (absolute path) |
 | `args` | its arguments (one line) |
-| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `git`: the Git window; `mail`: opens Mail; `camera`: the Camera window |
+| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `git`: the Git window; `mail`: opens Mail; `camera`: the Camera window; `install`: the Install window ([install.md](install.md)) |
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
   Settings, Mail, Camera, Services, Hello, Fetch a web page, Disk benchmark, Git. Yours are

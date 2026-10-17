@@ -1,9 +1,13 @@
 /*
  * loader.c - SIEOS's UEFI boot loader (EFI/BOOT/BOOTX64.EFI on a USB key's
  * EFI System Partition). The PC's firmware starts it; it:
- *   1. reads \SIEOS\BOOT.CFG from its own partition: the boot modules
- *      ("module=init.elf", init first) and a preferred screen size
- *      ("screen=1920x1080");
+ *   1. reads \SIEOS\BOOT.CFG from its own partition (on a drive SIEOS was
+ *      installed on, \EFI\SIEOS\BOOT.CFG): the boot modules
+ *      ("module=init.elf", init first), a preferred screen size
+ *      ("screen=1920x1080") and SIEOS's partition ("root=GUID", passed to
+ *      the kernel as a boot option);
+ *      then adds "SIEOS" to the firmware's boot menu if the installer asked
+ *      (boot_entry below);
  *   2. loads \SIEOS\KERNEL.BIN where its multiboot header says (1 MiB),
  *      and the modules, with its information and room for the kernel's page
  *      bitmap, into one block below 4 GiB (mem.c puts the bitmap after the
@@ -62,13 +66,13 @@ static uint64_t pages(int type, uint64_t addr, uint64_t n)
 
 /* ---- Files on our own partition. */
 static efi_file_t *root;
+static const char *dir = "\\SIEOS\\";                       /* (or "\\EFI\\SIEOS\\": installed) */
 
 static efi_file_t *open_file(const char *name)
 {
     static uint16_t path[80];
-    const char *pre = "\\SIEOS\\";
     int n = 0;
-    for (const char *s = pre; *s; s++) path[n++] = *s;
+    for (const char *s = dir; *s; s++) path[n++] = *s;
     for (; *name && n < 78; name++) path[n++] = *name == '/' ? '\\' : (uint8_t)*name;
     path[n] = 0;
     efi_file_t *f = 0;
@@ -95,7 +99,7 @@ static int read_all(efi_file_t *f, void *buf, uint64_t size)
 
 /* ---- The configuration: "key=value" lines. */
 static char cfg[2048];
-static const char *mods[SIEOS_BOOT_MODS];
+static const char *mods[SIEOS_BOOT_MODS], *rootid;
 static int nmods, want_w = 1920, want_h = 1080;
 
 static int number(const char **s)
@@ -117,6 +121,7 @@ static void read_config(void)
         char next = *e;
         *e = 0;
         if (!memcmp(l, "module=", 7) && nmods < SIEOS_BOOT_MODS) mods[nmods++] = l + 7;
+        else if (!memcmp(l, "root=", 5) && strlen(l) < 45) rootid = l;
         else if (!memcmp(l, "screen=", 7)) {
             const char *s = l + 7;
             int w = number(&s), h = 0;
@@ -150,6 +155,118 @@ static void screen(sieos_boot_t *b)
     b->fb.format = in->format;
 }
 
+/* ---- The firmware's boot menu. SIEOS's kernel runs after ExitBootServices,
+ * without the firmware's runtime services, so the installer (user/install)
+ * cannot write UEFI variables itself: it leaves a request, the file
+ * \EFI\SIEOS\ADDENTRY, on the drive's EFI partition. Started from the USB
+ * key (or from that partition), this loader still has the firmware's
+ * services: it adds the boot entry "SIEOS" (Boot####: that partition,
+ * \EFI\SIEOS\SIEOSX64.EFI) at the END of BootOrder, so the system that
+ * starts by default stays first and the boot menu (F12) shows SIEOS, then
+ * removes the request. An identical entry already there is not added again. */
+static const efi_guid_t DEVICE_PATH  = { 0x09576E91, 0x6D3F, 0x11d2, { 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B } };
+static const efi_guid_t GLOBAL_VAR   = { 0x8BE4DF61, 0x93CA, 0x11d2, { 0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C } };
+#define RT(i) (st->runtime->fn[i])
+#define EFI_NOT_FOUND (0x800000000000000EUL)
+
+static uint8_t *wstr(uint8_t *w, const char *s)   /* UCS-2, with its 0 -> after it */
+{
+    do { w[0] = (uint8_t)*s; w[1] = 0; w += 2; } while (*s++);
+    return w;
+}
+static uint16_t vname[16];
+static uint16_t *boot_var(unsigned n)             /* "Boot0003" */
+{
+    wstr((uint8_t *)vname, "Boot0000");
+    for (int i = 0; i < 4; i++) vname[7 - i] = "0123456789ABCDEF"[n >> 4 * i & 15];
+    return vname;
+}
+static efi_status_t get_var(uint16_t *name, void *buf, uint64_t *size)
+{
+    uint32_t attr;
+    return CALL(RT(RT_GET_VARIABLE), (uint64_t)name, (uint64_t)&GLOBAL_VAR, (uint64_t)&attr, (uint64_t)size, (uint64_t)buf, 0);
+}
+static efi_status_t set_var(uint16_t *name, const void *buf, uint64_t size)   /* non-volatile, boot + runtime */
+{
+    return CALL(RT(RT_SET_VARIABLE), (uint64_t)name, (uint64_t)&GLOBAL_VAR, 7, size, (uint64_t)buf, 0);
+}
+
+static void boot_entry(void *h, efi_file_t *req)
+{
+    efi_dp_t *dp = 0, *hd = 0;
+    if (EFI_ERR(CALL(BS(BS_HANDLE_PROTOCOL), (uint64_t)h, (uint64_t)&DEVICE_PATH, (uint64_t)&dp, 0, 0, 0)) || !dp) return;
+    for (efi_dp_t *d = dp; d->type != 0x7F; d = (efi_dp_t *)((uint8_t *)d + (d->len[0] | d->len[1] << 8)))
+        if (d->type == 4 && d->sub == 1) hd = d;              /* the partition ("hard drive" node) */
+    if (!hd || hd->len[0] != 42) { print("SIEOS loader: boot entry: no partition in the device path\n"); CALL(req->close, (uint64_t)req, 0, 0, 0, 0, 0); return; }
+    /* The load option: attributes (active), the path's length, "SIEOS",
+     * then the path in its short form: the partition, the file, the end. */
+    uint8_t opt[200], cur[400];                             /* (on the stack: not in the file) */
+    uint16_t order[256], ord_name[10];
+    uint8_t *p = wstr(opt + 6, "SIEOS"), *path = p;
+    const char *file = "\\EFI\\SIEOS\\SIEOSX64.EFI";
+    unsigned fl = 4 + 2 * (strlen(file) + 1);
+    opt[0] = 1;                                              /* LOAD_OPTION_ACTIVE */
+    memcpy(p, hd, 42); p += 42;
+    p[0] = 4; p[1] = 4; p[2] = fl; p[3] = 0; wstr(p + 4, file); p += fl;
+    p[0] = 0x7F; p[1] = 0xFF; p[2] = 4; p[3] = 0; p += 4;
+    opt[4] = (p - path) & 0xFF; opt[5] = (p - path) >> 8;
+    uint64_t len = p - opt, osz = sizeof order - 2, sz;
+    wstr((uint8_t *)ord_name, "BootOrder");
+    efi_status_t e = get_var(ord_name, order, &osz);
+    if (e == EFI_NOT_FOUND) osz = 0;
+    else if (EFI_ERR(e) || osz % 2) {                        /* (never a boot order cut short) */
+        print("SIEOS loader: cannot read BootOrder: no boot entry added\n");
+        CALL(req->close, (uint64_t)req, 0, 0, 0, 0, 0);
+        return;
+    }
+    for (uint64_t i = 0; i < osz / 2; i++)                  /* the same entry already in the menu? */
+        if (sz = sizeof cur, !EFI_ERR(get_var(boot_var(order[i]), cur, &sz)) && sz == len && !memcmp(cur, opt, len)) {
+            CALL(req->del, (uint64_t)req, 0, 0, 0, 0, 0);
+            return;
+        }
+    unsigned n = 0;
+    for (; n < 0x1000; n++)                                  /* the first free Boot#### */
+        if (sz = sizeof cur, get_var(boot_var(n), cur, &sz) == EFI_NOT_FOUND) break;
+    order[osz / 2] = n;
+    if (n == 0x1000 || EFI_ERR(set_var(boot_var(n), opt, len)) || EFI_ERR(set_var(ord_name, order, osz + 2))) {
+        print("SIEOS loader: could not add SIEOS to the firmware's boot menu\n");
+        CALL(req->close, (uint64_t)req, 0, 0, 0, 0, 0);
+        return;
+    }
+    CALL(req->del, (uint64_t)req, 0, 0, 0, 0, 0);            /* (done: the request goes) */
+    char m[] = "SIEOS loader: SIEOS added to the firmware's boot menu (Boot0000)\n";
+    for (int i = 0; i < 4; i++) m[62 - i] = "0123456789ABCDEF"[n >> 4 * i & 15];
+    print(m);
+}
+
+/* Every FAT volume of every drive: a request? If ours is the only one,
+ * every device is connected first (a firmware starting from the USB key may
+ * have connected only that; connecting all costs about 0.5 s in QEMU). */
+static void boot_entries(void)
+{
+    void **hs = 0;
+    uint16_t req[24];
+    uint64_t n = 0;
+    wstr((uint8_t *)req, "\\EFI\\SIEOS\\ADDENTRY");
+    for (int pass = 0; pass < 2; pass++) {
+        if (EFI_ERR(CALL(BS(BS_LOCATE_HANDLE_BUFFER), 2, (uint64_t)&SIMPLE_FS, 0, (uint64_t)&n, (uint64_t)&hs, 0))) return;
+        if (n > 1 || pass) break;
+        CALL(BS(BS_FREE_POOL), (uint64_t)hs, 0, 0, 0, 0, 0);
+        if (EFI_ERR(CALL(BS(BS_LOCATE_HANDLE_BUFFER), 0, 0, 0, (uint64_t)&n, (uint64_t)&hs, 0))) return;   /* 0: all handles */
+        for (uint64_t i = 0; i < n; i++) CALL(BS(BS_CONNECT_CONTROLLER), (uint64_t)hs[i], 0, 0, 1, 0, 0);
+        CALL(BS(BS_FREE_POOL), (uint64_t)hs, 0, 0, 0, 0, 0);
+    }
+    for (uint64_t i = 0; i < n; i++) {
+        efi_fs_t *fs = 0;
+        efi_file_t *r = 0, *f = 0;
+        if (EFI_ERR(CALL(BS(BS_HANDLE_PROTOCOL), (uint64_t)hs[i], (uint64_t)&SIMPLE_FS, (uint64_t)&fs, 0, 0, 0)) ||
+            EFI_ERR(CALL(fs->open_volume, (uint64_t)fs, (uint64_t)&r, 0, 0, 0, 0))) continue;
+        if (!EFI_ERR(CALL(r->open, (uint64_t)r, (uint64_t)&f, (uint64_t)req, 3, 0, 0)) && f) boot_entry(hs[i], f);   /* 3: read, write */
+        CALL(r->close, (uint64_t)r, 0, 0, 0, 0, 0);
+    }
+    CALL(BS(BS_FREE_POOL), (uint64_t)hs, 0, 0, 0, 0, 0);
+}
+
 efi_status_t efi_main(void *image, efi_system_t *system)
 {
     st = system;
@@ -164,7 +281,11 @@ efi_status_t efi_main(void *image, efi_system_t *system)
         EFI_ERR(CALL(BS(BS_HANDLE_PROTOCOL), (uint64_t)li->device, (uint64_t)&SIMPLE_FS, (uint64_t)&fs, 0, 0, 0)) ||
         EFI_ERR(CALL(fs->open_volume, (uint64_t)fs, (uint64_t)&root, 0, 0, 0, 0)))
         return fail("cannot read my own partition", 0);
+    efi_file_t *cf = open_file("BOOT.CFG");
+    if (cf) CALL(cf->close, (uint64_t)cf, 0, 0, 0, 0, 0);
+    else dir = "\\EFI\\SIEOS\\";                                /* installed on a drive's EFI partition */
     read_config();
+    boot_entries();
     if (!nmods) return fail("no module= line in \\SIEOS\\BOOT.CFG", 0);
 
     /* The kernel: a flat binary with a multiboot header at its start, then
@@ -220,7 +341,8 @@ efi_status_t efi_main(void *image, efi_system_t *system)
     sieos_boot_t *b = (sieos_boot_t *)(blk + total);
     memset(b, 0, sizeof *b);
     b->magic = SIEOS_BOOT_MAGIC;
-    b->version = 1;
+    b->version = 2;
+    if (rootid) strlcpy(b->cmdline, rootid, sizeof b->cmdline);
     b->self = (uint64_t)b;
     b->self_len = info_len;
     b->mmap = (uint64_t)b + PAGES(sizeof(sieos_boot_t)) * PAGE;

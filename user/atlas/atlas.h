@@ -49,7 +49,7 @@ void redraw_box(int x0, int y0, int x1, int y1);
 /* ---- Click boxes: what a click at (x, y) means; searched from the last. */
 enum { H_BTN = 1, H_WIN, H_STRIP, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,
        H_PANEL, H_PIN, H_PSEND, H_PSTOP, H_PSUG, H_PACT, H_PCLOSE, H_PMODE, H_SETUP,
-       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL, H_CAM, H_BTASK };
+       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL, H_CAM, H_BTASK, H_INST };
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg);
 int  pill(int x, int y, const char *s, int on, int kind, int arg);   /* -> its right edge */
 void label(int x, int y, const char *s, int k, uint32_t c);
@@ -188,6 +188,18 @@ void cam_info(char *t, size_t cap);
 void cam_draw(int x0, int y0, int x1, int y1, int focused);
 int  cam_click(int kind, int arg);
 
+/* ---- Install (inst.c): SIEOS onto this PC's drive; it runs /bin/install as root on the console "atlas#INST_CHAN". */
+#define INST_CHAN 9997
+void inst_open(void);
+void inst_close(void);
+void inst_draw(int x0, int y0, int x1, int y1, int focused);
+int  inst_click(int kind, int arg);
+int  inst_key(int c);                                 /* 1 if taken */
+int  inst_con(long from, msg_t *m, const char *data); /* 1 if it was the installer's console request */
+int  inst_ended(long pid, int status);                /* 1 if it was the installer */
+int  inst_offer(void);                                /* started from the USB key, a drive to install on */
+void atlas_close(int w);                              /* (atlas.c) close a window */
+
 /* ---- Files (files.c): a folder's contents, a window. */
 void files_open(const char *dir);
 const char *files_dir(void);
@@ -204,8 +216,9 @@ void logo(int x, int y, int scale);
 
 /* ---- The windows (wm.c): a title tab as wide as the title (close, zoom),
  * moved by its tab, resized by its grip or edges; 4 workspaces. Window ids
- * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files, 12 Pins, 13 Git, 14 Mail, 15 Camera. */
-#define WM_MAX 16
+ * are atlas's: 0..7 terminals, 8 the editor, 9 sia, 10 Settings, 11 Files, 12 Pins, 13 Git, 14 Mail, 15 Camera,
+ * 16 Install. */
+#define WM_MAX 17
 #define WM_EDIT 8                                     /* (atlas's W_EDIT: opens bigger) */
 #define WM_SIA 9
 #define WM_SET 10
@@ -214,6 +227,7 @@ void logo(int x, int y, int scale);
 #define WM_REPO 13                                    /* (atlas's W_REPO: opens bigger) */
 #define WM_MAIL 14                                    /* (atlas's W_MAIL: opens bigger) */
 #define WM_CAM 15
+#define WM_INST 16
 #define WM_NWS 4                                      /* workspaces */
 #define TAB_H 34                                      /* a window's tab */
 #define WM_STRIP TAB_H                                /* the strip at a window's top (title when its tab sank) */

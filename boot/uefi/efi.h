@@ -20,8 +20,13 @@ typedef struct { uint64_t signature; uint32_t revision, header_size, crc32, rese
 
 /* Boot services: function pointers after the header, by index. */
 typedef struct { efi_header_t h; void *fn[44]; } efi_boot_t;
-enum { BS_ALLOCATE_PAGES = 2, BS_FREE_PAGES = 3, BS_GET_MEMORY_MAP = 4, BS_HANDLE_PROTOCOL = 16,
-       BS_EXIT_BOOT_SERVICES = 26, BS_SET_WATCHDOG = 29, BS_LOCATE_PROTOCOL = 37 };
+enum { BS_ALLOCATE_PAGES = 2, BS_FREE_PAGES = 3, BS_GET_MEMORY_MAP = 4, BS_FREE_POOL = 6, BS_HANDLE_PROTOCOL = 16,
+       BS_EXIT_BOOT_SERVICES = 26, BS_SET_WATCHDOG = 29, BS_CONNECT_CONTROLLER = 30,
+       BS_LOCATE_HANDLE_BUFFER = 36, BS_LOCATE_PROTOCOL = 37 };
+/* Runtime services, the same way: the firmware's variables (GetVariable(name, guid, &attr, &size, data),
+ * SetVariable(name, guid, attr, size, data)). */
+typedef struct { efi_header_t h; void *fn[14]; } efi_runtime_t;
+enum { RT_GET_VARIABLE = 6, RT_SET_VARIABLE = 8 };
 enum { ALLOC_ANY = 0, ALLOC_MAX_ADDRESS = 1, ALLOC_ADDRESS = 2 };   /* AllocatePages types */
 #define LOADER_DATA 2                        /* the memory type of what we allocate */
 
@@ -32,7 +37,8 @@ typedef struct {
     uint16_t *vendor; uint32_t vendor_rev, pad;
     void *con_in_handle, *con_in, *con_out_handle;
     struct { void *reset, *output_string; } *con_out;   /* text output: OutputString(this, UCS-2) */
-    void *err_handle, *err, *runtime;
+    void *err_handle, *err;
+    efi_runtime_t *runtime;
     efi_boot_t *boot;
     uint64_t ntables;
     efi_config_t *tables;
@@ -45,6 +51,8 @@ typedef struct { uint32_t revision, pad; void *parent, *system, *device, *file_p
  * Close, Read(this, &bytes, buffer), GetPosition/SetPosition(this, position). */
 typedef struct { uint64_t revision; void *open_volume; } efi_fs_t;
 typedef struct { uint64_t revision; void *open, *close, *del, *read, *write, *get_pos, *set_pos; } efi_file_t;
+/* A device path: nodes of (type, subtype, length), ended by type 0x7F. */
+typedef struct { uint8_t type, sub, len[2]; } efi_dp_t;
 
 /* The screen ("graphics output"): QueryMode(this, n, &size, &info), SetMode(this, n), its current mode. */
 typedef struct {

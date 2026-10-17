@@ -11,4 +11,5 @@
  * controller (try the next), -2 no such controller. */
 int  nvme_open(int nth, uint32_t ns, uint64_t *sectors, uint32_t *bs);
 long nvme_io(int op, uint64_t lba, uint32_t count);     /* op 2 read, 1 write, 0 flush -> 0 or -EIO */
-void *nvme_buffer(void);                                /* the DMA buffer (DISK_MAX bytes) nvme_io moves */
+void *nvme_buffer(void);
+extern char nvme_model[41], nvme_serial[21];            /* the open controller's model and serial number */                                /* the DMA buffer (DISK_MAX bytes) nvme_io moves */

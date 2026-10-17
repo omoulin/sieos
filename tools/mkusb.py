@@ -6,10 +6,14 @@ The key holds a GPT partition table and two partitions:
        EFI/BOOT/BOOTX64.EFI   SIEOS's own UEFI loader (boot/uefi)
        SIEOS/KERNEL.BIN       the kernel
        SIEOS/*.ELF            the boot modules (init, con, vblk, fs)
-       SIEOS/BOOT.CFG         "module=..." lines (init first), "screen=WxH"
+       SIEOS/BOOT.CFG         "module=..." lines (init first), "screen=WxH",
+                              "root=GUID": the SieFS partition's own GUID
   2. SIEOS's disk: a SieFS file system, read and written by SIEOS like any
-     disk. It is found by its partition type (SIEFS_TYPE below); its name
-     is "SIEOS".
+     disk. It is found by its unique partition GUID (root= above: the loader
+     passes it to the kernel, vblk takes that partition on whichever drive);
+     its type is SIEFS_TYPE below, its name "SIEOS". It also holds the boot
+     files in /boot, and a snapshot "factory" of the whole system as built:
+     what the installer (user/install) copies onto a PC's drive.
 
 The image is sparse: only what is written takes space. Usage:
   mkusb.py OUT --size BYTES --efi BOOTX64.EFI --kernel K --module M... \
@@ -31,8 +35,8 @@ ENTRIES, ENTRY_SIZE = 128, 128
 def gpt(total, parts, disk_guid):
     """The primary and backup GPT (header + entries), for a disk of `total` sectors."""
     ent = bytearray(ENTRIES * ENTRY_SIZE)
-    for i, (ptype, first, last, name) in enumerate(parts):
-        struct.pack_into("<16s16sQQQ72s", ent, i * ENTRY_SIZE, ptype.bytes_le, uuid.uuid4().bytes_le,
+    for i, (ptype, first, last, name, *guid) in enumerate(parts):     # (guid: given, or a new one)
+        struct.pack_into("<16s16sQQQ72s", ent, i * ENTRY_SIZE, ptype.bytes_le, (guid[0] if guid else uuid.uuid4()).bytes_le,
                          first, last, 0, name.encode("utf-16-le"))
     ent_sectors = len(ent) // SECTOR
     def header(me, other, entries_lba):
@@ -84,26 +88,31 @@ def main():
     if fs_last - fs_first < 64 * 2048:
         sys.exit("mkusb: the key is too small (USBDISK)")
 
-    # The SieFS partition's file system, made at its exact size, then the files.
+    # The boot configuration; the SieFS partition's GUID tells the system its disk.
+    root = uuid.uuid4()
+    cfg = "# SIEOS's UEFI loader (boot/uefi): the boot modules, init first; the screen size\n"
+    cfg += "".join(f"module={os.path.basename(m)}\n" for m in o.module) + f"screen={o.screen}\n"
+
+    # The SieFS partition's file system, made at its exact size, then the files,
+    # the boot files in /boot (for the installer), and the snapshot "factory".
     with tempfile.TemporaryDirectory() as tmp:
         fsimg = os.path.join(tmp, "siefs.img")
         subprocess.run([o.mkfs, "-s", str((fs_last - fs_first + 1) * SECTOR), "-L", "SIEOS", "-d", o.rootfs, fsimg],
                        check=True, stdout=subprocess.DEVNULL)
-        for src, dst in o.put:
+        open(os.path.join(tmp, "boot.cfg"), "w").write(cfg)
+        boot = [(o.efi, "/boot/loader.efi"), (o.kernel, "/boot/kernel.bin"), (os.path.join(tmp, "boot.cfg"), "/boot/boot.cfg")]
+        for src, dst in o.put + boot + [(m, "/boot/" + os.path.basename(m)) for m in o.module]:
             subprocess.run([o.siefs_tool, fsimg, "mkdir", os.path.dirname(dst)], stderr=subprocess.DEVNULL)
             subprocess.run([o.siefs_tool, fsimg, "put", src, dst], check=True)
+        subprocess.run([o.siefs_tool, fsimg, "snap", "factory"], check=True)
 
         # The EFI partition.
         fat = Fat32(esp_last - esp_first + 1, "SIEOS-BOOT")
         fat.add_file("EFI/BOOT/BOOTX64.EFI", open(o.efi, "rb").read())
         fat.add_file("SIEOS/KERNEL.BIN", open(o.kernel, "rb").read())
-        cfg = "# SIEOS's UEFI loader (boot/uefi): the boot modules, init first; the screen size\n"
         for m in o.module:
-            name = os.path.basename(m)
-            fat.add_file("SIEOS/" + name.upper(), open(m, "rb").read())
-            cfg += f"module={name}\n"
-        cfg += f"screen={o.screen}\n"
-        fat.add_file("SIEOS/BOOT.CFG", cfg.encode())
+            fat.add_file("SIEOS/" + os.path.basename(m).upper(), open(m, "rb").read())
+        fat.add_file("SIEOS/BOOT.CFG", (cfg + f"root={root}\n").encode())
 
         with open(o.out, "wb") as f:
             f.truncate(total * SECTOR)
@@ -112,7 +121,7 @@ def main():
             mbr[510:512] = b"\x55\xAA"
             f.seek(0); f.write(mbr)
             h1, ent, h2, ent2_lba = gpt(total, [(ESP_TYPE, esp_first, esp_last, "EFI system"),
-                                                (SIEFS_TYPE, fs_first, fs_last, "SIEOS")], uuid.uuid4())
+                                                (SIEFS_TYPE, fs_first, fs_last, "SIEOS", root)], uuid.uuid4())
             f.seek(SECTOR); f.write(h1)
             f.seek(2 * SECTOR); f.write(ent)
             f.seek(ent2_lba * SECTOR); f.write(ent)

@@ -43,14 +43,18 @@ def main():
         if n not in a:
             continue
         (va, da, size), (_, db, _) = a[n], b[n]
-        i = 0
+        i = done = 0                                    # (done: the end of the last address found)
         while i < size:
             if da[i] == db[i]:
                 i += 1
                 continue
-            if i + 8 <= size and struct.unpack_from("<Q", db, i)[0] - struct.unpack_from("<Q", da, i)[0] == delta:
-                relocs.append(va - base + i)
-                i += 8
+            # the address starts at most 7 bytes before its first differing byte
+            # (the two bases differ only in their high bytes)
+            at = [j for j in range(max(done, i - 7), i + 1) if j + 8 <= size and
+                  struct.unpack_from("<Q", db, j)[0] - struct.unpack_from("<Q", da, j)[0] == delta]
+            if at:
+                relocs.append(va - base + at[0])
+                i = done = at[0] + 8
                 continue
             sys.exit(f"{n}+{i:#x}: an address that is not 64 bits (compile with -fpic)")
     # The .reloc section: per 4 KiB page, its RVA, its size, then 16-bit entries (type 10: 64-bit).

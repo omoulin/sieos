@@ -21,9 +21,10 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
+| Install onto a PC's drive (UEFI) | yes, in QEMU with OVMF (`install-test`); untested on the laptops | no (no UEFI loader) | no | no |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `power-test` (x86-64), `sig-test`, `posix-test`, `cxx-test`, `webdeps-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
+`kernel-test`, `power-test`, `install-test` (x86-64), `sig-test`, `posix-test`, `cxx-test`, `webdeps-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`, `igfx-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -33,6 +34,9 @@ checklist in [raspberrypi.md](raspberrypi.md).
 
 - The assistant's memory: history across sessions and restarts, with
   compaction ([sia.md](sia.md)).
+- Installing on the Lenovo: free space made on its Debian drive
+  ([install.md](install.md#making-free-space-on-the-lenovos-debian-drive)),
+  then the Install window from the key; the boot entry checked in its F12 menu.
 - The target laptop: its drivers are written and wait for a boot from
   the USB key: the Intel display (full modeset), NVMe (passes in QEMU), the
   Realtek network card, the AX210 Wi-Fi ([net.md](net.md)) (and the
@@ -395,3 +399,24 @@ checklist in [raspberrypi.md](raspberrypi.md).
   `make igfx-test` runs the Ice Lake engine too. Not yet tried on either
   laptop. Sizes: igfx.o 19.8 -> 24.2 KB of code (+4.4 KB), atlas.elf
   +4.5 KB of code, +64 bytes of bss.
+- **2026-10-17, later.** The installer ([install.md](install.md)): SIEOS
+  onto a PC's NVMe drive from the USB key, into free space (one GPT entry
+  added, nothing else moved; at least 4 GiB) or onto a whole drive (its
+  model typed to confirm). The desktop's Install window (`user/atlas/inst.c`:
+  drives, model, summary, progress, done) runs `/bin/install`
+  (`user/install`: GPT, FAT32, the SieFS library; every write checked
+  against the plan's ranges), which copies the key's snapshot "factory"
+  (made by mkusb.py) and checks everything it wrote. The boot entry
+  "SIEOS" is added at the end of BootOrder by the loader at the next start
+  from the key (`\EFI\SIEOS\ADDENTRY`: SIEOS has no runtime services).
+  The root partition is now found by its unique GUID (`root=` in BOOT.CFG,
+  a kernel boot option, `SYS_INFO`, vblk), on keys too. `make
+  install-test`: a fake Debian drive (every other sector hashed, the EFI
+  partition's files compared, the FAT checked), the refusals, the boot
+  menu entry (OVMF's variables read), the installed system started from
+  the drive alone; a whole drive erased from the window. Fixed on the way:
+  `elf2efi.py` found a 64-bit address only when its lowest byte differed.
+  Sizes (text): install.elf 104 KB (install.o 17.6, fat.o 6.8, the SieFS
+  library and its check the rest), atlas +8.6 KB (inst.o 7.5), vblk
+  +1.7 KB, the kernel +0.2 KB, BOOTX64.EFI 10.5 -> 14 KB. Not yet run on
+  the laptops.

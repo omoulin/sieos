@@ -11,6 +11,7 @@
  *   siefs IMAGE attr PATH [NAME [VALUE]]   list, show, or set attributes
  *   siefs IMAGE rmattr PATH NAME   siefs IMAGE find NAME VALUE
  *   siefs IMAGE df
+ *   siefs IMAGE snap NAME          a snapshot of "/" (mkusb.py: "factory", the installer's source)
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -75,6 +76,7 @@ static int run(int argc, char **argv)
         }
         return e < 0 ? fail(a, e) : 0;
     }
+    if (!strcmp(cmd, "snap")) return (e = siefs_snapshot(fs, SIEFS_ROOT, a)) ? fail(a, e) : 0;
     if (!strcmp(cmd, "tree")) { if ((e = siefs_walk(fs, a, &ino))) return fail(a, e); tree(ino, 0); return 0; }
     if (!strcmp(cmd, "cat") || (!strcmp(cmd, "get") && b)) {
         FILE *out = b ? fopen(b, "wb") : stdout;
