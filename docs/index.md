@@ -19,6 +19,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [surface-pro-7.md](surface-pro-7.md) | the second laptop, a Surface Pro 7 (Ice Lake): the Type Cover, the buttons, battery through the Surface Aggregator (SAM), the lid, the touch screen (IPTS), sound (ALC274), power without S3; what is left (pen, multi-touch, sensor hub, cameras, s2idle) and what to check |
 | [siefs.md](siefs.md) | SieFS, the file system: disk layout, commits, checksums, attributes, volumes, snapshots, encryption |
 | [accounts.md](accounts.md) | users, logins, the first start, Argon2id, account files |
+| [scriptures.md](scriptures.md) | Scriptures: the scriptures offline (footnotes, search, highlights, notes, Church Account sync), its port to SIEOS: an atlas window, HTTPS, the C library it needs, fonts, the test |
 | [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, Git, apps, the assistant |
 | [audio.md](audio.md) | sound: Intel HD Audio playing and recording, the audio server, `play`, `rec`, `vol`, the test |
 | [bluetooth.md](bluetooth.md) | Bluetooth: btd (HCI, L2CAP, SMP), the AX210 over USB and the Pis' UART, keyboards and mice (classic HID, HID over GATT), `bt`, Settings |

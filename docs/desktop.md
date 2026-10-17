@@ -312,7 +312,8 @@ kind=terminal
 | `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `git`: the Git window; `mail`: opens Mail; `camera`: the Camera window; `install`: the Install window ([install.md](install.md)); `window`: a program that opens its own window (the web browser): its terminal waits minimized |
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
-  Settings, Mail, Camera, Services, Hello, Fetch a web page, Disk benchmark, Git. Yours are
+  Settings, Mail, Camera, Services, Hello, Fetch a web page, Disk benchmark, Git,
+  Scriptures ([scriptures.md](scriptures.md)). Yours are
   any `.app` file in your home folder (the strip and Files find them).
 - Starting an app opens a terminal **as you**; its shell runs the app's
   command when it first asks for a line. When the app ends, the shell
@@ -327,8 +328,17 @@ once on the screen) and waits for what the window gets: keys, the pointer
 and its wheel, a new size, focus, the close box. Atlas frames it like its
 own windows (tab, workspaces, zoom, minimize); at most 8 at once; only the
 user logged in may open one. The web browser (`/bin/web`,
-[webkit-plan.md](webkit-plan.md)) is the first; `tests/web/atlaswin.c` the
-smallest.
+[webkit-plan.md](webkit-plan.md)) is the first, Scriptures
+([scriptures.md](scriptures.md)) the first written in SIEOS's own C;
+`tests/web/atlaswin.c` the smallest.
+
+Such a window gets the keys of the window it is: the desktop keeps
+Ctrl+Space, Ctrl+T, Ctrl+W, Ctrl+Tab and Ctrl+1..4, and gives it Ctrl+F,
+Ctrl+V, Ctrl+Enter and Ctrl+Shift+letter (as Mail gets them). The
+clipboard is the program's too: `ATLAS_WIN_CLIP_GET` reads it (a
+terminal's selection, or what a program put there), `ATLAS_WIN_CLIP_SET`
+sets it (up to 16 KiB). A new size (`ATW_SIZE`) says the desktop's zoom
+in its code (100: normal), so a program can size its text the same.
 
 ## Mail
 
