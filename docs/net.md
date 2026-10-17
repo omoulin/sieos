@@ -364,7 +364,10 @@ ERROR` with the LMAC/UMAC error logs.
   `net_info`.
 - `http.c`: HTTP/1.1, `http://` and `https://`; Content-Length, chunked, or
   until close; up to 5 redirects for GET; `http_line` reads a body line by
-  line (Server-Sent Events).
+  line (Server-Sent Events). The request is built on the heap, as long as
+  the caller's headers need (a Cookie of a few KiB), so threads may
+  request at once; a caller's own `User-Agent` or `Accept` replaces
+  http.c's.
 - `tls.c`: **TLS 1.3** (RFC 8446), preferred, and **TLS 1.2** (RFC 5246)
   for servers that know no better (many mail providers, older sites). One
   ClientHello offers both (supported_versions 1.3, 1.2). The same API either

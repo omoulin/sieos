@@ -244,6 +244,7 @@ include user/posix/posix.mk
 include user/web/deps.mk
 include user/web/jsc.mk
 include user/web/webkit.mk
+include user/scriptures/scriptures.mk
 
 # ---- the disk: a SieFS image of rootfs/ plus the programs in /bin.
 # build/rootfs is the staging copy. The image is made once (mkfs.siefs);
@@ -258,12 +259,13 @@ ROOTFS  := $(shell find rootfs -type f)
 # SIEOS's own programs that SIEOS builds itself (make + cc): their sources
 # in /src/sieos, next to its Makefile (rootfs/src/sieos, docs/make.md)
 SELF_SRC := $(foreach p,hello sh make,user/$(p)/$(p).c)
-$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB)
+$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB) $(ROOTFS_FONTS)
 	rm -rf $(B)/rootfs && mkdir -p $(B)/rootfs && cp -R rootfs/. $(B)/rootfs/ && cp $(SELF_SRC) $(B)/rootfs/src/sieos/
 	mkdir -p $(B)/rootfs/bin $(B)/rootfs/home $(B)/rootfs/tmp
 	mkdir -p $(B)/rootfs/lib/sicc/include/mk && cp cc/include/*.h user/lib/mk.h user/lib/gpio.h siefs/siefs.h $(B)/rootfs/lib/sicc/include/ && \
 	    cp include/mk/*.h $(B)/rootfs/lib/sicc/include/mk/ && cp $(SICC_LIB) $(B)/rootfs/lib/sicc/
 	for p in $(BINS); do cp $(B)/$$p.elf $(B)/rootfs/bin/$$p; done
+	mkdir -p $(B)/rootfs/lib/fonts && cp $(ROOTFS_FONTS) $(B)/rootfs/lib/fonts/
 	$(if $(filter atlas,$(KARCH_NOBINS)),cp $(B)/noscreen.elf $(B)/rootfs/bin/atlas)
 	for l in $(LINKS); do ln -s $${l%/*} $(B)/rootfs/bin/$${l#*/}; done
 	chmod -R u=rwX,go=rX $(B)/rootfs && chmod 755 $(B)/rootfs/bin/* && chmod 1777 $(B)/rootfs/tmp

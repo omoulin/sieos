@@ -24,7 +24,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Install onto a PC's drive (UEFI) | yes, in QEMU with OVMF (`install-test`); untested on the laptops | no (no UEFI loader) | no | no |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `power-test`, `install-test` (x86-64), `grow-test`, `gpt-test`, `sig-test`, `posix-test`, `cxx-test`, `webdeps-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
+`kernel-test`, `power-test`, `install-test` (x86-64), `scriptures-test`, `grow-test`, `gpt-test`, `sig-test`, `posix-test`, `cxx-test`, `webdeps-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`, `igfx-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -442,3 +442,24 @@ checklist in [raspberrypi.md](raspberrypi.md).
   on a 1 GiB key, `siefs-test` cuts the power at every write of two grows.
   Sizes (text): space.o +1.4 KB, check.o +0.3 KB, vblk +1.0 KB + gpt.o
   1.6 KB (its 20 KB table buffer malloc'd during the start only).
+- **2026-10-17, later.** Scriptures ([scriptures.md](scriptures.md)): the
+  user's app to read the scriptures offline (footnotes, full-text search,
+  highlights, notes and tags, tabs, Church Account sync; ~7,100 lines of
+  C written for Linux and SDL2 with SIEOS in mind) ported as
+  `/bin/scriptures` and the **Scriptures** app: its portable core
+  unchanged; a window through atlas's protocol for other programs'
+  windows (`plat_sieos.c`), HTTPS over `http.c` and `tls.c`
+  (`net_sieos.c`), the C library the core asks for on SIEOS's own
+  (`libc.c`: files, directories, UTC time, threads and futex mutexes;
+  formatting from `/bin/cc`'s `fmt.c`), DejaVu Sans Mono and its bold in
+  `/lib/fonts` rendered by stb_truetype (the oblique slanted, not stored).
+  Built by gcc and by sicc (both architectures), in the default image:
+  +251 KB text (x86-64; 312 KB arm64) + 673 KB of fonts. Atlas: Ctrl+F,
+  Ctrl+V, Ctrl+Enter and Ctrl+Shift+letter go to other programs' windows;
+  the clipboard for them (`ATLAS_WIN_CLIP_GET`/`SET`, 16 KiB, was 4);
+  `ATW_SIZE` carries the zoom. `http.c`: the request on the heap (long
+  Cookie headers, threads at once), the caller's User-Agent and Accept.
+  `make scriptures-test`: a stand-in for the content API over HTTPS on
+  the host; download, a chapter, a footnote, search, a highlight, a note,
+  the window closed and opened again with all of it back. Not yet tried
+  against the real site or a Church Account.

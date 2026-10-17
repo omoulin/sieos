@@ -82,7 +82,7 @@ int  atlas_open_file(const char *path);               /* in the editor: 0, or -E
 int  atlas_run_app(const char *path);                 /* a launcher (.app): 0, or -error */
 int  atlas_find(const char *key, const char *value);  /* the files with that attribute, under the sia strip -> count */
 extern int  atlas_debug;                              /* tests: log where things are drawn */
-extern char clip[4096];                               /* the clipboard (copied text) */
+extern char clip[16384];                              /* the clipboard (copied text) */
 extern int  clip_n;
 
 /* ---- The login screen (atlas.c) and the first start on the screen (setup.c). */
