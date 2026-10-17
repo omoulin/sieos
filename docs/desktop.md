@@ -469,7 +469,9 @@ between processes.
 
 - **The screen** (`screen.c`): x86, QEMU's standard VGA card or the UEFI
   firmware's screen (GOP); on the target laptop's Intel display (Raptor
-  Lake-S / Alder Lake-S, PCI 8086:a788, display version 12) `igfx.c` sets
+  Lake-S / Alder Lake-S, PCI 8086:a788, display version 12) and on the
+  second laptop's (Ice Lake "Iris Plus", 8086:8a52 and kin, display
+  version 11) `igfx.c` sets
   the display up itself: the eDP panel and up to two DP or HDMI monitors,
   each in its best mode the link and CDCLK can carry (EDID over DP AUX or
   GMBUS, the VBT from the ACPI OpRegion for ports and the panel's power
@@ -477,16 +479,37 @@ between processes.
   the firmware's, fitted by each pipe's scaler; the panel's brightness in
   Settings; a monitor with speakers gets its sound turned on (HDMI mode,
   the ELD for the HDMI codec: [audio.md](audio.md#hdmi-and-displayport)).
-  **Hot-plug:** a thread of Atlas reads the PCH's hot-plug pins (SDEISR,
-  one bit per port TC1-TC4) twice a second; a change that still holds
+  **Ice Lake** differs in a few places, each a branch or a small table in
+  the same code: the panel runs on the eDP transcoder (DDI A works from
+  no other), DP_TP_CTL is per port, DPLL 0 and 1 have their own CFGCR
+  registers, CDCLK's voltage goes to level 2 at most, one pipe alone gets
+  one DBUF slice (i915's ICL table), its combo PHYs have their own swing
+  table, and the monitor ports are DDI B (a combo PHY, DPLL 1) and the
+  Type-C ports C-F (the Thunderbolt 3 / USB-C ports). A Type-C port is
+  found by its live state: a legacy connector (the PCH's pin), DP
+  alternate mode or Thunderbolt (the FIA's `DFLEXDPSP`). For legacy and
+  DP-alt, the display takes the PHY from the USB side (`DFLEXDPCSSS`, once
+  `DFLEXDPPMS` says it is ready), learns its DP lanes and pin assignment
+  (one, two or four lanes: a USB-C dock that also carries USB 3 gives
+  two), tells the FIA the lanes used, and drives the port's MG PHY: its
+  MG PLL (i915's `icl_calc_mg_pll_state`), `MG_DP_MODE` and the MG swing
+  tables. A Thunderbolt monitor (a DP tunnel the Thunderbolt controller's
+  firmware sets up) uses the TBT PLL, shared by all such monitors, with
+  its AUX channel switched to the TBT side; no PHY is programmed.
+  **Hot-plug:** a thread of Atlas reads the hot-plug pins (the PCH's
+  SDEISR: TC1-TC4 on Raptor Lake, DDI B and the legacy Type-C connectors
+  on Ice Lake; and on Ice Lake the FIA's live states, one bit per port)
+  twice a second; a change that still holds
   200 ms later (not a bounce) makes Atlas go over the monitor ports: one
   plugged in is probed and lit as at the start (EDID, mode, the next free
   pipe, B or C; sound if it has speakers) in a mode the CDCLK carries as
   it is, since changing CDCLK would blank the panel; one unplugged has its
-  pipe, port, DPLL, IO power and sound turned off. The panel is never
+  pipe, port, DPLL, IO power and sound turned off (and an Ice Lake Type-C
+  PHY given back to the USB side). The panel is never
   touched but for its DBUF share: the shares follow i915's table for the
-  pipes now running (the panel alone: both slices; with one monitor, half;
-  with two, a quarter), each pipe moved at its next frame and only once its
+  pipes now running (Raptor Lake: the panel alone, both slices; with one
+  monitor, half; with two, a quarter. Ice Lake: one slice alone or with one
+  monitor, a quarter with two), each pipe moved at its next frame and only once its
   new blocks are free, so no two pipes ever share blocks. A third monitor
   finds no pipe (logged). DP "short pulses" (a sink asking for link
   retraining) are not handled: unplug and plug again. Each step is logged
@@ -499,7 +522,7 @@ between processes.
   (on Linux: `sudo build/host/siefs /dev/sdX2 cat /etc/igfx.log`); anything
   it cannot do leaves the firmware's screen, and a modeset that never
   finished makes the next start keep it (remove the log to try again).
-  Not tested on the laptop yet. AArch64, QEMU's ramfb on `virt`, the
+  Not tested on either laptop yet. AArch64, QEMU's ramfb on `virt`, the
   firmware's framebuffer on the Pi 4, `simple-framebuffer` on the Pi 5.
   The layout is computed from the screen's size; below 1600 pixels wide
   the Deskbar is narrower.
@@ -590,7 +613,13 @@ HDMI one on a DP++ port that does not answer at first, both at once, a
 third with no pipe left, one unplugged, the other port given a DP monitor
 again, everything unplugged; each time the pipes, DPLLs, sound and DBUF
 shares are checked, and that no two running pipes ever share DBUF blocks
-and no write changes the panel's pipe, port or clocks.
+and no write changes the panel's pipe, port or clocks. Then the same
+engine as an Ice Lake: the Dell in DP-alt mode on a Type-C port (its MG
+PLL, `DDI_CLK_SEL`, the FIA's lanes and PHY ownership, `MG_DP_MODE`), the
+Samsung on DDI B (DPLL 1), the Type-C monitor unplugged (the PHY given
+back), two Thunderbolt monitors sharing the TBT PLL (on until the last is
+unplugged), and a DP-alt port with only two DP lanes (the Dell at a mode
+two lanes carry).
 
 `make mail-test` (both architectures; 75 s on x86-64) runs Mail against
 two servers of `tools/mailserver.py` on the host (IMAP, POP3 and SMTP over
