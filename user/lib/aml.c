@@ -829,8 +829,10 @@ static void resources(aml_hid_t *d, const uint8_t *b, uint32_t n)
         }
         if (t == 0x8E && r[5] == 3 && !d->baud) {                       /* UartSerialBus */
             d->baud = r[12] | r[13] << 8 | r[14] << 16 | (uint32_t)r[15] << 24;
+            uint32_t tl = r[10] | r[11] << 8;
             d->flow = (r[7] & 3) == 1;
             if (!d->baud) d->baud = 1;                                  /* (one, speed unknown) */
+            if (12 + tl < hdr + len) cstr(d->bus, sizeof d->bus, r + 12 + tl, hdr + len - 12 - tl);   /* its controller */
         }
         if (t == 0x8C && !r[4]) {                                       /* GpioInt */
             uint32_t pt = r[14] | r[15] << 8, sn = r[17] | r[18] << 8;

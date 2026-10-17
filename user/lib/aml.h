@@ -19,7 +19,7 @@
 
 typedef struct {
     char path[48], hid[12];      /* "\_SB_.PC00.I2C5.TPD0", "ELAN06FA" */
-    char bus[48], gpio[48];      /* its I2C controller, its GpioInt's controller (ACPI paths) */
+    char bus[48], gpio[48];      /* its I2C (or UART) controller, its GpioInt's controller (ACPI paths) */
     int addr, pin, irq, desc;    /* I2C address, GpioInt pin, Interrupt() line, HID descriptor register; -1: none */
     int pin_low, pin_edge;       /* the GpioInt: active low, edge-triggered */
     uint32_t speed;              /* the bus's speed, Hz */

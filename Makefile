@@ -130,6 +130,14 @@ $(B)/user/vnet/%.o: user/vnet/%.c user/vnet/nic.h user/lib/mk.h include/mk/*.h $
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
+# The ACPI server (x86-64) and its Surface Aggregator client (ssam.c: a Surface's battery and charger over a UART).
+$(B)/acpid.elf: $(B)/user/acpid.o $(B)/user/acpid/ssam.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $< $(B)/user/acpid/ssam.o $(ULIB)
+$(B)/user/acpid.o: user/acpid/ssam.h user/lib/aml.h
+$(B)/user/acpid/%.o: user/acpid/%.c user/acpid/ssam.h user/lib/aml.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
+	@mkdir -p $(@D)
+	$(TCC) $(UCFLAGS) -c $< -o $@
+
 # The Wi-Fi server (wifid.c) and its chip driver: arm64 the Pis' CYW43455
 # (bcm.c, over the SDIO host sdio.c), x86-64 Intel's AX210 (iwl.c, with the
 # host's WPA2 handshake wpa.c); the command is an ordinary program (wifi.c).
@@ -778,6 +786,15 @@ $(B)/host/hid-test: tests/hid/test.c tests/hid/mk.h user/usb/hid.c user/usb/usb.
 hid-test: $(B)/host/hid-test
 	$(B)/host/hid-test tests/hid
 .PHONY: hid-test
+# ---- the Surface Aggregator's protocol (user/acpid/ssam.c) on the host,
+# against a pretend SAM (tests/ssam): requests, ACKs, NAKs, lost and bad
+# frames, frames sent twice, events.
+$(B)/host/ssam-test: tests/ssam/test.c user/acpid/ssam.c user/acpid/ssam.h
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -DSSAM_HOST -Iuser/acpid -o $@ tests/ssam/test.c user/acpid/ssam.c
+ssam-test: $(B)/host/ssam-test
+	$(B)/host/ssam-test
+.PHONY: ssam-test
 
 # ---- sicc, the SIEOS C compiler (cc/, docs/cc.md): compiler, assembler and
 # linker in one program, written for SIEOS.
