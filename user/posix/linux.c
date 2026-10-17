@@ -42,6 +42,7 @@
 #include <sys/epoll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <elf.h>
 
 #define FS_PATH 512                       /* longest path (as user/lib/mk.h) */
 
@@ -615,12 +616,18 @@ static void unsupported(long n)
  * llvm-symbolizer on the host (a port's crash, explained) */
 static void abort_trace(void)
 {
-    extern char __ehdr_start[] __attribute__((weak)), etext[] __attribute__((weak));
+    extern const char __ehdr_start[] __attribute__((weak));
     static const char hex[] = "0123456789abcdef";
-    char line[24 * 8 + 32] = "posix: abort, from:";
+    char line[48 * 8 + 32] = "posix: abort, from:";
     size_t len = 19;
-    uintptr_t *p = __builtin_frame_address(0), lo = (uintptr_t)__ehdr_start, hi = (uintptr_t)etext;
-    for (int i = 0, k = 0; hi && i < 2048 && k < 24; i++)
+    uintptr_t *p = __builtin_frame_address(0), lo = 0, hi = 0;
+    if (__ehdr_start) {                               /* the code: the executable segment */
+        const Elf64_Ehdr *eh = (const Elf64_Ehdr *)__ehdr_start;
+        const Elf64_Phdr *ph = (const Elf64_Phdr *)(__ehdr_start + eh->e_phoff);
+        for (int i = 0; i < eh->e_phnum; i++)
+            if (ph[i].p_type == PT_LOAD && (ph[i].p_flags & PF_X)) { lo = ph[i].p_vaddr; hi = lo + ph[i].p_memsz; }
+    }
+    for (int i = 0, k = 0; lo && hi && i < 4096 && k < 48; i++)
         if (p[i] > lo && p[i] < hi) {
             line[len++] = ' ';
             for (int sh = 24; sh >= 0; sh -= 4) line[len++] = hex[p[i] >> sh & 15];
@@ -822,6 +829,11 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     case SYS_tgkill:     if (c == 6 && a == ident(0)) abort_trace();
                          return a == ident(0) ? S2(SYS_TKILL, b, c) : S2(SYS_KILL, a, c);
     case SYS_rt_sigsuspend: return do_sigsuspend();
+    case SYS_timerfd_create: return -ENOSYS;          /* (WebKit's timers then use GLib's own) */
+#ifdef SYS_inotify_init
+    case SYS_inotify_init:
+#endif
+    case SYS_inotify_init1: case SYS_inotify_add_watch: case SYS_inotify_rm_watch: return -ENOSYS;   /* (GLib watches files by polling instead) */
     case SYS_sched_setattr: case SYS_sched_setscheduler: case SYS_sched_setparam: return 0;   /* (priorities: the kernel's own) */
     case SYS_rt_sigprocmask: if (d >= 8 && c) memset(A(c), 0, 8); return 0;   /* (no masks on SIEOS) */
     case SYS_rt_sigaction: return do_sigaction((int)a, A(b), A(c));

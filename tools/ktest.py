@@ -13,10 +13,11 @@
           "wtest NAME: ok"; the libraries' own must end without an error)
   jsc     JavaScriptCore's shell: each /lib/jsc/NAME.js of $JSTESTS, with the
           JIT and without (each prints "jsc NAME: ok"; bench.js its time)
+  web     WebKit: the web-render commands of $KRUN (" ;; "), each "web render: ok"
   run     the commands of $KRUN (separated by " ;; "), their output shown
   place   P-cores and E-cores: the kernel booted with pcores=N (QEMU's
           cores are all alike) says so at boot, and places threads by kind
-Usage: ktest.py <kernel|sia|bench|place|posix|cxx|webdeps|jsc|run> <cpus> <disk image> <qemu command line...>
+Usage: ktest.py <kernel|sia|bench|place|posix|cxx|webdeps|jsc|web|run> <cpus> <disk image> <qemu command line...>
 The image must be a fresh one (first-start setup); the test works in a copy.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -31,7 +32,7 @@ copy = image + ".k"
 shutil.copyfile(image, copy)
 cmdline = [a.replace(image, copy) if a.startswith("file=") else a for a in cmdline]
 args = {}                                       # a test's arguments
-if what == "webdeps" and "wtest-soup" in __import__("os").environ.get("WTESTS", ""):   # its web servers on the host
+if (what == "webdeps" and "wtest-soup" in __import__("os").environ.get("WTESTS", "")) or what == "web":   # web servers on the host
     import os.path
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "webdeps"))
     import servers
@@ -166,6 +167,17 @@ elif what == "jsc":                              # JavaScriptCore's shell (user/
             ok(f"{t} ({mode})", good, lines[-1] if good else r.strip()[-600:])
     if len(times) == 2:
         print(f"the JIT's worth: bench.js {times['no JIT']} ms without it, {times['JIT']} ms with it (x{times['no JIT'] / max(1, times['JIT']):.1f})")
+
+elif what == "web":                              # WebKit (user/web/webkit.mk): web-render runs, $KRUN (" ;; ")
+    ports = args["wtest-soup"].split()                 # (PLAIN TLS H2 SELF: in the commands as $PLAIN...)
+    for c in __import__("os").environ["KRUN"].split(" ;; "):
+        for k, v in zip(("$PLAIN", "$TLS", "$H2", "$SELF"), ports): c = c.replace(k, v)
+        r = run(c, 600)
+        lines = [l.strip() for l in r.splitlines() if l.strip().startswith("web render:")]
+        for l in lines[:-1]: print("   ", l)
+        bad = "killed" in r or "ended by" in r or "exit status" in r
+        good = not bad and bool(lines) and lines[-1].endswith(": ok")
+        ok(c.split()[1] if len(c.split()) > 1 else c, good, lines[-1] if good else r.strip()[-1500:])
 
 elif what == "run":                              # any commands ($KRUN, separated by " ;; "): their output shown
     for c in __import__("os").environ["KRUN"].split(" ;; "):

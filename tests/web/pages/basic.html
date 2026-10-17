@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- tests/web/pages/basic.html (make web-test): CSS layout (flex, grid,
+     borders, rounded corners), text, an image, and a script that changes the
+     page once it has loaded. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only -->
+<html><head><meta charset="utf-8"><title>SIEOS basic</title>
+<style>
+  body { margin: 0; background: #ffffff; font-family: sans-serif; }
+  .row { display: flex; height: 100px; }
+  .row div { width: 100px; }
+  #r { background: #ff0000; } #g { background: #00ff00; } #b { background: #888888; }
+  .grid { display: grid; grid-template-columns: 50px 50px; grid-auto-rows: 50px; width: 100px; }
+  .grid div:nth-child(1) { background: #ffff00; } .grid div:nth-child(4) { background: #00ffff; }
+  .box { position: absolute; left: 300px; top: 0; width: 80px; height: 80px; border: 10px solid #000000;
+         border-radius: 50px; background: #ff00ff; }
+  h1 { position: absolute; left: 10px; top: 220px; margin: 0; font-size: 40px; color: #000080; }
+  img { position: absolute; left: 0; top: 300px; width: 64px; height: 64px; }
+</style></head>
+<body>
+  <div class="row"><div id="r"></div><div id="g"></div><div id="b"></div></div>
+  <div class="grid"><div></div><div></div><div></div><div></div></div>
+  <div class="box"></div>
+  <h1>Bonjour, SIEOS — été</h1>
+  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Crect width='64' height='64' fill='%23ff8000'/%3E%3C/svg%3E">
+  <script>
+    window.addEventListener("load", () => { document.getElementById("b").style.background = "#0000ff"; });
+  </script>
+</body></html>

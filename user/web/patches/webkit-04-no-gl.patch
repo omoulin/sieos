@@ -1,0 +1,40 @@
+WPE without GL: with WEBKIT_DISABLE_COMPOSITING_MODE=1 (GTK's variable, which WPE
+ignored), hardware acceleration and compositing are off (pages drawn by Skia on
+the CPU into shared memory: NonCompositedFrameRenderer) and the WebProcess
+makes no EGL display. SIEOS has no GL yet (docs/webkit-plan.md, decision 8).
+
+--- a/Source/WebKit/UIProcess/wpe/WebPreferencesWPE.cpp
++++ b/Source/WebKit/UIProcess/wpe/WebPreferencesWPE.cpp
+@@ -26,10 +26,20 @@
+ #include "config.h"
+ #include "WebPreferences.h"
+ 
++#include <stdlib.h>
++#include <string.h>
++
+ namespace WebKit {
+ 
+ void WebPreferences::platformInitializeStore()
+ {
++    if (const char* noGL = getenv("WEBKIT_DISABLE_COMPOSITING_MODE"); noGL && strcmp(noGL, "0")) {
++        setHardwareAccelerationEnabled(false);
++        setAcceleratedCompositingEnabled(false);
++        setForceCompositingMode(false);
++        setThreadedScrollingEnabled(false);
++        return;
++    }
+     setAcceleratedCompositingEnabled(true);
+     setForceCompositingMode(true);
+     setThreadedScrollingEnabled(true);
+--- a/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
++++ b/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
+@@ -239,7 +239,8 @@
+             initializePlatformDisplayIfNeeded();
+     }
+ #else
+-    initializePlatformDisplayIfNeeded();
++    if (const char* noGL = getenv("WEBKIT_DISABLE_COMPOSITING_MODE"); !noGL || !strcmp(noGL, "0"))
++        initializePlatformDisplayIfNeeded();
+ #endif
+     initializeVulkanIfNeeded();
+ #endif // PLATFORM(WPE)

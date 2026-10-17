@@ -234,6 +234,7 @@ include user/python/python.mk
 include user/posix/posix.mk
 include user/web/deps.mk
 include user/web/jsc.mk
+include user/web/webkit.mk
 
 # ---- the disk: a SieFS image of rootfs/ plus the programs in /bin.
 # build/rootfs is the staging copy. The image is made once (mkfs.siefs);
