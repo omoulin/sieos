@@ -27,7 +27,7 @@ standard library, which needs a much fuller POSIX layer).
 | Dynamic loading | none (static programs) | not needed: extension modules are linked in statically (`Modules/Setup.local`, `*static*`) |
 | A console that is a terminal | the console server and atlas's terminals (line editing in `tty.c`) | `isatty`, raw mode for the REPL's line editing (`termios` minimum) — or Python's REPL with plain line input |
 
-## Phase 1: MicroPython (about 1 to 2 weeks)
+## Phase 1: MicroPython (done, 2026-10-16: one agent run)
 
 MicroPython's "minimal" and "unix" ports need little: `malloc` or a
 fixed heap, `printf`, `setjmp`/`longjmp`, file reads for `import`, a
@@ -55,7 +55,7 @@ Done when: the REPL works in a desktop terminal and on the serial
 console, `import` reads `.py` files from the disk, the basics and float
 tests pass on x86-64 and AArch64, and a script blinks a Pi's pin.
 
-## Phase 2: the POSIX layer (about 4 to 6 weeks)
+## Phase 2: the POSIX layer (done, 2026-10-17, as the WebKit plan's phases 1-3: about 1.5 h of agent time)
 
 **Shared with the browser, and built that way:** [webkit-plan.md](webkit-plan.md)
 (its phases 1-3) builds this layer as `libposix`: musl's C library from
@@ -90,7 +90,7 @@ function against the same test on Linux, as `tests/cc` does for sicc):
    lookups (`getpwuid` from `/etc/passwd`'s format), `termios` minimum.
 8. **Sockets** (BSD names over `net.h`), `select`/`poll`.
 
-## Phase 3: CPython (about 3 to 5 weeks)
+## Phase 3: CPython (about 1-3 h of agent time)
 
 1. **Cross-build** CPython 3.13 as for WASI (the closest model: static,
    no `fork`, no `dlopen`, few signals): a `Modules/Setup.local` with the
@@ -154,9 +154,9 @@ and the agreed list of the standard library's tests passes.
 
 ## Size of the work, in short
 
-| Phase | Builds | Rough effort |
+| Phase | Builds | Effort (Claude Code time) |
 |---|---|---|
-| 1. MicroPython | `setjmp`/`longjmp`, a port, a `gpio` module, tests | 1 to 2 weeks |
-| 2. POSIX layer | fd table, stdio, libm, pthreads, pipes, `posix_spawn`, time, sockets; 4 small kernel additions | 4 to 6 weeks |
-| 3. CPython | cross-build, frozen modules, stdlib, C modules, test list | 3 to 5 weeks |
-| 4. Integration | editor *Run*, Deskbar app, sia, a local `pip` | 1 to 2 weeks |
+| 1. MicroPython | `setjmp`/`longjmp`, a port, a `gpio` module, tests | done (one agent run) |
+| 2. POSIX layer | fd table, stdio, libm, pthreads, pipes, `posix_spawn`, time, sockets; 4 small kernel additions | done: shared with WebKit ([webkit-plan.md](webkit-plan.md)), ~1.5 h |
+| 3. CPython | cross-build, frozen modules, stdlib, C modules, test list | ~1-3 h (the build, then failing stdlib tests one by one) |
+| 4. Integration | editor *Run*, Deskbar app, sia, a local `pip` | ~0.5-1 h |
