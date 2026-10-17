@@ -117,17 +117,98 @@ $(WB)/stamp/glib: $(WB)/stamp/zlib $(WB)/stamp/libffi $(WB)/stamp/pcre2
 	$(PKGENV) $(MESON) install -C $(WB)/build/glib --destdir $(SR) --no-rebuild | tail -3
 	touch $@
 
-WEBDEPS   := zlib libffi pcre2 glib
+# ---- ICU (text: Unicode properties, normalization, breaking, collation, Intl).
+# Its data is built from source, filtered (user/web/icu-filter.json), by the
+# tools of a host build of the same ICU, and linked in (static data).
+ICU_VER   := 78.3
+ICU_SHA   := 3a2e7a47604ba702f345878308e6fefeca612ee895cf4a5f222e7955fabfe0c0
+ICUD_SHA  := 9d8b3899096aeb83e4e21ef8a40fec9e03b28db18c48452efac882ce25a91e27
+ICU_URL   := https://github.com/unicode-org/icu/releases/download/release-$(ICU_VER)
+ICU_OFF   := --disable-tests --disable-samples --disable-extras --disable-icuio --disable-layoutex
+$(WB)/stamp/icu: $(WB)/toolchain.stamp user/web/icu-filter.json
+	$(call fetch,$(ICU_URL)/icu4c-$(ICU_VER)-sources.tgz,icu4c-$(ICU_VER)-sources.tgz,$(ICU_SHA))
+	$(call fetch,$(ICU_URL)/icu4c-$(ICU_VER)-data.zip,icu4c-$(ICU_VER)-data.zip,$(ICUD_SHA))
+	$(call unpack,icu,icu4c-$(ICU_VER)-sources.tgz)
+	rm -rf $(WB)/src/icu/source/data && cd $(WB)/src/icu/source && python3 -m zipfile -e $(CURDIR)/.hosttools/dl/icu4c-$(ICU_VER)-data.zip .
+	rm -rf $(WB)/build/icu-host $(WB)/build/icu && mkdir -p $(WB)/build/icu-host $(WB)/build/icu
+	cd $(WB)/build/icu-host && ICU_DATA_FILTER_FILE=$(CURDIR)/user/web/icu-filter.json CC=gcc CXX=g++ \
+	    $(CURDIR)/$(WB)/src/icu/source/configure $(ICU_OFF) >/dev/null && $(MAKE) -s >/dev/null
+	cd $(WB)/build/icu && ICU_DATA_FILTER_FILE=$(CURDIR)/user/web/icu-filter.json $(PKGENV) CC=$(CURDIR)/$(WB)/bin/cc \
+	    CXX=$(CURDIR)/$(WB)/bin/c++ AR=$(CURDIR)/$(LLVM)/bin/llvm-ar RANLIB=$(CURDIR)/$(LLVM)/bin/llvm-ranlib CFLAGS=-Os CXXFLAGS=-Os \
+	    $(CURDIR)/$(WB)/src/icu/source/configure --host=$(TRIPLE) --prefix=/usr --with-cross-build=$(CURDIR)/$(WB)/build/icu-host \
+	    --disable-shared --enable-static --with-data-packaging=static --disable-tools $(ICU_OFF) >/dev/null
+	$(MAKE) -s -C $(WB)/build/icu >/dev/null && $(MAKE) -s -C $(WB)/build/icu install DESTDIR=$(SR) >/dev/null
+	touch $@
+
+# ---- FreeType (glyphs; no PNG bitmaps, Brotli, HarfBuzz: a lean first build)
+FT_VER    := 2.15.0
+FT_SHA    := 93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5
+$(WB)/stamp/freetype: $(WB)/stamp/zlib
+	$(call fetch,https://download.savannah.gnu.org/releases/freetype/freetype-$(FT_VER).tar.xz,freetype-$(FT_VER).tar.xz,$(FT_SHA))
+	$(call unpack,freetype,freetype-$(FT_VER).tar.xz)
+	rm -rf $(WB)/build/freetype && cd $(WB)/src/freetype && $(MESONSET) $(CURDIR)/$(WB)/build/freetype -Dbrotli=disabled \
+	    -Dbzip2=disabled -Dharfbuzz=disabled -Dpng=disabled -Dzlib=enabled -Dtests=disabled >/dev/null
+	$(PKGENV) $(NINJA) -C $(WB)/build/freetype >/dev/null && $(PKGENV) $(MESON) install -C $(WB)/build/freetype --destdir $(SR) --no-rebuild >/dev/null
+	touch $@
+
+# ---- HarfBuzz (shaping), with ICU and FreeType; no GLib, Cairo, subsetter, tools
+HB_VER    := 14.6.0
+HB_SHA    := d07a007327277708a2a73ae437887cdbaf282937f6d03ca5467723e9099af586
+HB_OFF    := glib gobject cairo chafa png zlib graphite graphite2 fontations harfrust kbts wasm raster vector gpu subset \
+             tests introspection docs utilities benchmark
+$(WB)/stamp/harfbuzz: $(WB)/stamp/icu $(WB)/stamp/freetype
+	$(call fetch,https://github.com/harfbuzz/harfbuzz/releases/download/$(HB_VER)/harfbuzz-$(HB_VER).tar.xz,harfbuzz-$(HB_VER).tar.xz,$(HB_SHA))
+	$(call unpack,harfbuzz,harfbuzz-$(HB_VER).tar.xz)
+	rm -rf $(WB)/build/harfbuzz && cd $(WB)/src/harfbuzz && $(MESONSET) $(CURDIR)/$(WB)/build/harfbuzz -Dicu=enabled \
+	    -Dfreetype=enabled $(HB_OFF:%=-D%=disabled) >/dev/null
+	$(PKGENV) $(NINJA) -C $(WB)/build/harfbuzz >/dev/null && $(PKGENV) $(MESON) install -C $(WB)/build/harfbuzz --destdir $(SR) --no-rebuild >/dev/null
+	touch $@
+
+# ---- Expat (Fontconfig's XML)
+EXPAT_VER := 2.9.0
+EXPAT_SHA := 1e6371862cc31999b368c3b89b49994f0677e1bab5f1b2b85ae3741f5d803051
+$(WB)/stamp/expat: $(WB)/toolchain.stamp
+	$(call fetch,https://github.com/libexpat/libexpat/releases/download/R_$(subst .,_,$(EXPAT_VER))/expat-$(EXPAT_VER).tar.xz,expat-$(EXPAT_VER).tar.xz,$(EXPAT_SHA))
+	$(call unpack,expat,expat-$(EXPAT_VER).tar.xz)
+	rm -rf $(WB)/build/expat && $(CMAKESET) -S $(WB)/src/expat -B $(WB)/build/expat -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF \
+	    -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_DOCS=OFF -DEXPAT_SHARED_LIBS=OFF >/dev/null
+	$(NINJA) -C $(WB)/build/expat >/dev/null && DESTDIR=$(SR) $(NINJA) -C $(WB)/build/expat install >/dev/null
+	touch $@
+
+# ---- Fontconfig (finding fonts: Skia and WebCore ask it); its configuration in /etc/fonts
+FC_VER    := 2.18.3
+FC_SHA    := 4f7b554a38cdf78c033f666c8871f3749e14a094f65a07f630c91ed0b43d35e3
+$(WB)/stamp/fontconfig: $(WB)/stamp/freetype $(WB)/stamp/expat
+	$(call fetch,https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/$(FC_VER)/fontconfig-$(FC_VER).tar.xz,fontconfig-$(FC_VER).tar.xz,$(FC_SHA))
+	$(call unpack,fontconfig,fontconfig-$(FC_VER).tar.xz)
+	rm -rf $(WB)/build/fontconfig && cd $(WB)/src/fontconfig && $(MESONSET) $(CURDIR)/$(WB)/build/fontconfig -Dsysconfdir=/etc \
+	    -Dlocalstatedir=/var -Ddoc=disabled -Dnls=disabled -Dtests=disabled -Dtools=disabled -Dcache-build=disabled \
+	    -Diconv=disabled -Dxml-backend=expat -Dfontations=disabled -Ddefault-fonts-dirs=/lib/fonts >/dev/null
+	$(PKGENV) $(NINJA) -C $(WB)/build/fontconfig >/dev/null && $(PKGENV) $(MESON) install -C $(WB)/build/fontconfig --destdir $(SR) --no-rebuild >/dev/null
+	touch $@
+
+# ---- fonts for the tests (and, later, the browser): DejaVu
+DJV_VER   := 2.37
+DJV_SHA   := fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7
+$(WB)/fonts/DejaVuSans.ttf:
+	$(call fetch,https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_$(subst .,_,$(DJV_VER))/dejavu-fonts-ttf-$(DJV_VER).tar.bz2,dejavu-fonts-ttf-$(DJV_VER).tar.bz2,$(DJV_SHA))
+	mkdir -p $(@D) && tar xjf .hosttools/dl/dejavu-fonts-ttf-$(DJV_VER).tar.bz2 -C $(@D) --strip-components=2 \
+	    dejavu-fonts-ttf-$(DJV_VER)/ttf/DejaVuSans.ttf dejavu-fonts-ttf-$(DJV_VER)/ttf/DejaVuSerif.ttf && touch $@
+
+WEBDEPS   := zlib libffi pcre2 glib icu freetype harfbuzz expat fontconfig
 webdeps: $(WEBDEPS:%=$(WB)/stamp/%)
 
 # ---- webdeps-test: our programs (tests/webdeps/NAME.c, linked with the
 # libraries through pkg-config) and the libraries' own tests, run in QEMU
 WTESTS_C  := $(patsubst tests/webdeps/%.c,%,$(wildcard tests/webdeps/*.c))
-$(WB)/wtest-%: tests/webdeps/%.c $(WEBDEPS:%=$(WB)/stamp/%)
-	$(PKGENV) $(WB)/bin/cc -Os -o $@ $< $$($(PKGENV) $(PKGCONF) --static --cflags --libs $$(sed -n 's,^/\* pkg-config: \(.*\) \*/,\1,p' $<))
-webdeps-test: all webdeps $(WTESTS_C:%=$(WB)/wtest-%) $(WB)/wtest-zlib-example
+$(WB)/wtest-%: tests/webdeps/%.c $(WEBDEPS:%=$(WB)/stamp/%) $(SYSROOT)/usr/lib/libc.a
+	$(PKGENV) $(WB)/bin/cc -Os -c -o $@.o $< $$($(PKGENV) $(PKGCONF) --cflags $$(sed -n 's,^/\* pkg-config: \(.*\) \*/,\1,p' $<))
+	$(PKGENV) $(WB)/bin/c++ -o $@ $@.o $$($(PKGENV) $(PKGCONF) --static --libs $$(sed -n 's,^/\* pkg-config: \(.*\) \*/,\1,p' $<))   # (C++ libraries: ICU)
+webdeps-test: all webdeps $(WTESTS_C:%=$(WB)/wtest-%) $(WB)/wtest-zlib-example $(WB)/fonts/DejaVuSans.ttf
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 512M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	for f in $(WTESTS_C:%=$(WB)/wtest-%) $(WB)/wtest-zlib-example; do $(B)/host/siefs $(B)/test.img put $$f /bin/$$(basename $$f) && \
 	    $(B)/host/siefs $(B)/test.img chmod 755 /bin/$$(basename $$f) || exit 1; done
+	$(B)/host/siefs $(B)/test.img mkdir /lib/fonts && for f in $(WB)/fonts/*.ttf; do \
+	    $(B)/host/siefs $(B)/test.img put $$f /lib/fonts/$$(basename $$f) || exit 1; done
 	WTESTS="$(WTESTS_C:%=wtest-%) wtest-zlib-example" python3 tools/ktest.py webdeps $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 .PHONY: webdeps webdeps-test
