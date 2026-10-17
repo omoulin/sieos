@@ -103,10 +103,12 @@ typedef struct task {
     volatile uint32_t sigpend;  /* caught signals waiting for it (one bit each) */
     uint32_t gen;               /* the calls it gave up (mod 2^31): in its reply tokens (ipc.c) */
     struct sigctx *sigctx;      /* running a signal's function: what it was doing (task.c) */
+    int sigwaiting;             /* in SYS_SIGWAIT in that function: its signals are due (they wake it) */
     uint64_t clear_tid;         /* SYS_THREAD_SELF: 0 written there, and a futex waiter woken, at its end */
 } task_t;
-/* A caught signal waits for t, and t is not already in a signal's function. */
-#define sig_due(t) ((t)->sigpend && !(t)->sigctx)
+/* A caught signal waits for t, and t is not already in a signal's function
+ * (or is, but waits for one there: SYS_SIGWAIT). */
+#define sig_due(t) ((t)->sigpend && (!(t)->sigctx || (t)->sigwaiting))
 /* The fast test, where a thread waits or leaves the kernel: nonzero if its
  * process may be ending or a signal may be due (stop_why then says). */
 #define may_stop(t) ((t)->proc->exiting | (t)->sigpend)

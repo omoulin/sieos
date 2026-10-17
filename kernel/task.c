@@ -836,17 +836,8 @@ __attribute__((cold)) static int sig_post(proc_t *p, int sig, int tid)   /* tid:
     if (!t || t == cur) return 0;        /* (the caller: on its way out of this call) */
     tlb_shootdown(p);
     spin_lock(&p->lock);
-    for (task_t *x = p->threads; x; x = x->tnext) {
-        if (x != t) continue;
-        if (sig_due(t)) stop_thread(t, -EINTR);
-        else if (t->sigctx) {            /* in a function: its SYS_SIGWAIT takes it */
-            spin_lock(&sleep_lock);
-            int asleep = t->state == TS_SLEEP;
-            if (asleep) { sleep_remove(t); t->state = TS_READY; } else t->woken = 1;
-            spin_unlock(&sleep_lock);
-            if (asleep) { t->ret = 1; ready(t); }
-        }
-    }
+    for (task_t *x = p->threads; x; x = x->tnext)
+        if (x == t && sig_due(t)) stop_thread(t, -EINTR);   /* (in a function: if its SYS_SIGWAIT waits) */
     spin_unlock(&p->lock);
     return 0;
 }
@@ -895,16 +886,22 @@ __attribute__((cold)) long thread_kill(long tid, int sig)
 __attribute__((cold)) long sig_wait(void)
 {
     task_t *t = cur;
+    if (!t->sigctx) {                    /* (a signal ends the sleep: -EINTR) */
+        for (;;) { long r = sleep_ns(1000000000000ULL); if (r < 0) return r; }   /* (1000 s, again and again) */
+    }
+    __atomic_store_n(&t->sigwaiting, 1, __ATOMIC_SEQ_CST);   /* (its signals are due now: they stop the sleep) */
+    long r;
     for (;;) {
         uint32_t p = __atomic_load_n(&t->sigpend, __ATOMIC_ACQUIRE);
-        if (p && t->sigctx) {
-            int sig = __builtin_ctz(p);
-            __atomic_and_fetch(&t->sigpend, ~(1u << sig), __ATOMIC_SEQ_CST);
-            return sig;
+        if (p) {
+            r = __builtin_ctz(p);
+            __atomic_and_fetch(&t->sigpend, ~(1u << r), __ATOMIC_SEQ_CST);
+            break;
         }
-        long r = sleep_ns(1000000000000ULL);   /* (1000 s, again and again) */
-        if (r < 0) return r;
+        if ((r = sleep_ns(1000000000000ULL)) < 0 && t->proc->exiting) break;
     }
+    t->sigwaiting = 0;
+    return r;
 }
 
 /* SYS_SIGNAL: what sig does to this process (SIG_DFL, SIG_IGN, or entry:
