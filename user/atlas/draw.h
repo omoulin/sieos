@@ -25,6 +25,8 @@ int  screen_init(screen_t *s);      /* 0: ready, at SW x SH if the screen can ta
 int  screen_native(int *w, int *h); /* a resizable screen's own size (the Intel display's
                                        panel, igfx.c): 1, or 0 if it has none */
 int  screen_backlight(int pct);     /* the panel's brightness in %: set it (pct >= 0) -> now; -1: none */
+int  screen_wake(void);            /* after a suspend: the Intel display set up again -> 0; -1: not it */
+void screen_blank(int off);        /* the panel's backlight off (1: the lid closed) or on again */
 long rtc_seconds(void);            /* the time of day in seconds (UTC), or -1: no clock */
 
 void draw_init(const screen_t *s);
@@ -43,6 +45,8 @@ int  text_w(int n, int scale);      /* width in pixels of n characters */
  * '.' and ' ' leave what is under it), every pixel scale x scale. The rows
  * are not copied: they must stay (static data). */
 void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *keys, const uint32_t *cols, int scale);
+void dl_image(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h);   /* w x h pixels (0x00RRGGBB, rows
+                                       one after the other) stretched into the box; not copied: they must stay */
 void dl_pointer(int x, int y);      /* where the mouse pointer is drawn (on top of everything) */
 void present(int x0, int y0, int x1, int y1);   /* draw this region of the picture on the screen (picture coordinates) */
 void present_pointer(int ox, int oy, int x, int y);   /* the pointer moved from (ox, oy): both places */

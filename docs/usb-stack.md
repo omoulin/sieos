@@ -17,6 +17,8 @@ built and booted (UEFI loader, `make usb`) is in [usb.md](usb.md).
 | `user/usb/usb.c` | enumeration, control transfers, Configure Endpoint, hubs, hotplug, the `usb` port (`USB_DISKS`, `USB_DISK`) |
 | `user/usb/msc.c` | mass storage: Bulk-Only Transport + SCSI, one `usbdiskN` port per disk |
 | `user/usb/hid.c` | boot keyboards, mice and tablets (report descriptor parsed by `user/lib/hidrep.c`, shared with I2C touchpads: [touchpad.md](touchpad.md)) → `CON_INJECT` |
+| `user/usb/uvc.c` | cameras (USB video class): YUY2 frames over isochronous transfers, port `camera` |
+| `user/usb/kbl.c` | the Legion laptop's keyboard light (ITE 8258, 048d:c195), port `kblight` |
 | `include/mk/gpt.h` | GPT layout and the SieFS partition type GUID (shared with `tools/mkusb.py`) |
 
 ## How it works
@@ -51,6 +53,51 @@ built and booted (UEFI loader, `make usb`) is in [usb.md](usb.md).
 - **Input.** Key presses become set-1 scancodes (with key repeat), pointers
   relative or absolute moves; `con` treats them like its own devices.
 
+## Cameras
+
+`uvc.c` takes a camera's VideoStreaming interface from the whole
+configuration descriptor: the uncompressed **YUY2** format (no JPEG
+decoder), 640 x 480 if offered, else the biggest size that does 15
+frames a second or more; its frame rates; the alternate settings and
+their isochronous endpoints. The laptop's camera (04f2:b83e) offers
+640 x 480 YUY2 at 30 frames/s, alternate settings of 128 to 3060 bytes per
+125 µs.
+
+- **Port `camera`** (`CAM_OPEN`, `CAM_FRAME`, `CAM_CLOSE`, mk/proto.h):
+  one client at a time; frames come converted to 0x00RRGGBB (integer
+  BT.601, 0.7 ms a 640 x 480 frame on the host). The camera streams only
+  while open: closed (or after 3 s without a request: a client that ended),
+  it is put back to alternate setting 0, which powers its sensor down.
+- **Opening:** VS_PROBE_CONTROL with the format, frame and the fastest
+  rate; the camera answers how many bytes it sends per interval; the
+  smallest alternate setting that carries them (else the next slower
+  rate); VS_COMMIT_CONTROL; SET_INTERFACE; the endpoint added to the
+  controller (`configure`; `ep_drop` removes it at close).
+- **Isochronous transfers** (`xhci.c`): 40 "isoch" TRBs stay queued (5 ms
+  at one per microframe), each into its own 4 KiB of DMA memory, started
+  "as soon as possible" (SIA), an interrupt every 8th (BEI on the others:
+  1000 interrupts a second). Each completion (`async_trb` names its TRB)
+  hands the packet to the frame being filled and queues the TRB again;
+  TRBs the controller skipped (a missed interval) are queued again too.
+- **Frames:** each packet starts with a payload header: the frame bit
+  (flips each frame), end of frame, error. A frame complete, without
+  error and exactly w x h x 2 bytes becomes the ready one (three buffers:
+  being filled, ready, being sent), else it is dropped.
+
+## The keyboard light
+
+The Legion 5 Gen 10's keyboard (ITE 8258, 048d:c195) takes 960-byte
+feature reports with id 7 on its interface 0 (vendor page 0xFF89), as
+OpenRGB found ("Lenovo Legion 5 Gen 10", `LenovoUSBController_Gen7_8`):
+`0xCA` asks the active profile, `0xCB` sets a profile's lighting (one
+group: static, the colour, the 24 zones), `0xCE` the brightness (0 off, 3
+low, 9 high). `kbl.c` sends nothing unless the device is exactly
+048d:c195 **and** its report descriptor holds that very feature report
+(page, usage, id, 959 bytes); every command sent is logged with its first
+bytes. Port `kblight` (`KBL_SET`, `KBL_GET`): the level (off, low, high)
+and a colour; the setting is kept in `/etc/kblight` and given to the
+keyboard again at each start. `/bin/kblight` and Settings use it.
+
 ## Tests and measurements
 
 `make usb-dev-test` (x86-64 with KVM; `ARCH=arm64` on QEMU `virt`, xHCI on
@@ -68,6 +115,15 @@ xHCI.
 USB root mounted 0.41 s after boot (x86-64); UEFI boot from the key: kernel
 after 0.87 s.
 
+QEMU has no USB camera (only `usb-host` passthrough): `make camera-test`
+runs `uvc.c` and `kbl.c`'s check on the host, with the laptop's own
+descriptors (`tests/camera`, read from Linux's sysfs): the format, frame,
+rates and alternate settings found; frames assembled from synthetic
+packets (an error bit, a lost packet, a frame without its end mark,
+header-only packets, a buffer being sent left alone); YUY2 to RGB values;
+the light's report found on interface 0 only. `gui-test` opens the
+Camera window ("No camera.") and a .ppm in it.
+
 ## Raspberry Pi: untested
 
 The Pi glue in `pci.c` is written from the hardware documentation but has
@@ -84,5 +140,6 @@ not run on a board (QEMU has no Pi PCIe). To verify:
 ## Limits
 
 No MSI; one controller; the memory of an unplugged device is not given back;
-no isochronous transfers;
+isochronous transfers only at high speed (and full speed: written, not
+tried), up to 4 KiB per interval; one camera at a time;
 a USB disk is root only when there is no virtio or SD disk.

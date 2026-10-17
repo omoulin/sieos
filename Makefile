@@ -34,7 +34,7 @@ UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 KCORE   := main mem task ipc syscall vm random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
-ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead x25519 ed25519 pubkey net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
+ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead aes x25519 ed25519 pubkey btcrypt net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
 ULIB    := $(B)/user/libsieos.a
 PROGS   := con usb vblk fs init         # boot modules: loaded by QEMU with the kernel
 BINS    := sh auth login acct svc atlas hello bench fsloop crash siastub ktest vnet netd fetch sia siad racey cc gfxhat gpiod gpio make ssh sshd git mail audiod play   # programs on the disk, in /bin
@@ -44,8 +44,11 @@ LINKS   += $(NETLINKS:%=fetch/%)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
-BINS    += $(if $(filter x86_64,$(ARCH)),i2chid)    # laptops' I2C touchpads (ACPI)
+BINS    += kblight                     # a keyboard's light (the USB server's kbl.c)
+BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
+ULIBOBJ += $(if $(filter x86_64,$(ARCH)),aml)       # the AML interpreter they share
 BINS    += python                       # MicroPython (user/python/python.mk)
+BINS    += btd bt                       # Bluetooth: the server and the command
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
 all: $(B)/kernel.bin $(PROGS:%=$(B)/%.elf) $(KARCH_EXTRA) $(B)/disk.img
@@ -130,12 +133,17 @@ $(B)/user/wifi/%.o: user/wifi/%.c user/wifi/wifi.h user/wifi/wpa.h user/lib/mk.h
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
-# I2C touchpads (x86-64 only): the AML reader (aml.c) and the driver (i2chid.c).
-$(B)/i2chid.elf: $(B)/user/i2chid/i2chid.o $(B)/user/i2chid/aml.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
-	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(B)/user/i2chid/i2chid.o $(B)/user/i2chid/aml.o $(ULIB)
-$(B)/user/i2chid/%.o: user/i2chid/%.c user/i2chid/aml.h user/lib/mk.h user/lib/hidrep.h include/mk/*.h $(TOOLDEP)
+# The AML interpreter (user/lib/aml.c, x86-64: the touchpad, the ACPI server): small beats fast.
+$(B)/user/lib/aml.o: UCFLAGS += -Os
+
+# Bluetooth (user/btd, docs/bluetooth.md): the server (its stack: hci, l2cap, smp, input; the Pis'
+# UART: uart.c) and the command (user/bt).
+BTD     := btd hci l2cap smp input uart
+$(B)/btd.elf: $(BTD:%=$(B)/user/btd/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
+	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(BTD:%=$(B)/user/btd/%.o) $(ULIB)
+$(B)/user/btd/%.o: user/btd/%.c user/btd/btd.h user/lib/hidrep.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
-	$(TCC) $(UCFLAGS) $(if $(filter %/aml.o,$@),-Os) -c $< -o $@   # (AML runs once, at start: small beats fast)
+	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # Mail (user/mail): the protocols (mail.c) and the message decoding (mime.c).
 $(B)/mail.elf: $(B)/user/mail/mail.o $(B)/user/mail/mime.o $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
@@ -145,17 +153,19 @@ $(B)/user/mail/%.o: user/mail/%.c user/mail/mail.h user/lib/net.h user/lib/mk.h 
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The USB server (user/usb): the xHCI controller, hubs, disks, keyboards and mice.
-USBSRV  := usb xhci pci msc hid
+USBSRV  := usb xhci pci msc hid btusb uvc kbl
 $(B)/usb.elf: $(USBSRV:%=$(B)/user/usb/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(USBSRV:%=$(B)/user/usb/%.o) $(ULIB)
-$(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
+$(B)/user/usb/%.o: user/usb/%.c user/usb/usb.h user/lib/hidrep.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
 
 # The desktop has several files; its font is drawn in tools/mkfont.py.
-ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen igfx wm settings files icons pins repo mail
+ATLAS   := atlas panel edit setup draw font font15 font18 font13 screen igfx wm settings files icons pins repo mail cam
 $(B)/atlas.elf: $(ATLAS:%=$(B)/user/atlas/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(ATLAS:%=$(B)/user/atlas/%.o) $(ULIB)
+$(B)/user/atlas/igfx.o: user/lib/eld.h
+$(B)/user/audiod.o: user/audiod/codec.c user/lib/eld.h
 $(B)/user/atlas/%.o: user/atlas/%.c user/atlas/draw.h user/atlas/atlas.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
 	@mkdir -p $(@D)
 	$(TCC) $(UCFLAGS) -c $< -o $@
@@ -337,6 +347,11 @@ gui-test-real: all $(B)/host/fsck.siefs
 crash-test: all $(B)/host/fsck.siefs
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/crashtest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+# power-test (x86-64): ACPI in QEMU (tools/powertest.py, user/acpid): suspend to RAM and
+# waking up (twice: once while fsloop works), the network and files after; reboot; the power button
+power-test: all $(B)/host/fsck.siefs
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	python3 tools/powertest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # kernel-test: floating-point and AVX registers per thread, thread-local
 # variables (in programs built by gcc and by sicc), memory quotas (tools/ktest.py);
 # then booted again with pcores=SMP/2 (half the CPUs pretend to be E-cores): placement
@@ -413,8 +428,8 @@ git-test: all
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	python3 tools/gittest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # audio-test: sound (docs/audio.md) on QEMU's intel-hda + hda-duplex, output to a WAV file:
-# vol, play (the tone checked in QEMU's file), mute, rec (tools/audiotest.py)
-audio-test: all
+# vol, play (the tone checked in QEMU's file), mute, rec (tools/audiotest.py); first the HDMI codec test (hdmi-test)
+audio-test: all hdmi-test
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	python3 tools/audiotest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
@@ -429,7 +444,7 @@ clean:
 distclean:
 	rm -rf $(B)
 
-.PHONY: all run run-nox test crash-test audio-test gpio-test gui-test gui-test-real kernel-test sig-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test git-test model clean distclean newdisk FORCE
+.PHONY: all run run-nox test crash-test power-test audio-test gpio-test gui-test gui-test-real kernel-test sig-test ipc-bench gfxhat-test sia-test sia-mem-test demand-test make-test py-test git-test model clean distclean newdisk FORCE
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.
@@ -461,11 +476,11 @@ WIFIFW  := .hosttools/rpi/fw/brcmfmac43455-sdio.bin .hosttools/rpi/fw/brcmfmac43
 	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/cypress/cyfmac43455-sdio.clm_blob
 .hosttools/rpi/fw/brcmfmac43455-sdio.txt:
 	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/brcm/brcmfmac43455-sdio.txt
-sdcard: all $(WIFIFW)
+sdcard: all $(WIFIFW) .hosttools/bt/BCM4345C0.hcd
 	rm -f $(B)/sd-siefs.img && $(B)/host/mkfs.siefs -s $(SDDISK) -L SIEOS -d $(B)/rootfs $(B)/sd-siefs.img
 	$(if $(SDMODEL),$(B)/host/siefs $(B)/sd-siefs.img mkdir /models && $(B)/host/siefs $(B)/sd-siefs.img put models/$(PIMODEL) /models/$(PIMODEL))
 	$(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware 2>/dev/null; $(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware/brcm 2>/dev/null; \
-	    for f in $(WIFIFW); do $(B)/host/siefs $(B)/sd-siefs.img put $$f /lib/firmware/brcm/$$(basename $$f); done
+	    for f in $(WIFIFW) .hosttools/bt/BCM4345C0.hcd; do $(B)/host/siefs $(B)/sd-siefs.img put $$f /lib/firmware/brcm/$$(basename $$f); done
 	python3 tools/mksdcard.py $(B)/sieos-pi$(PI).img --pi $(PI) --kernel $(B)/kernel.bin --initrd $(B)/modules.img \
 	    --siefs $(B)/sd-siefs.img $(if $(FIRMWARE),--firmware $(FIRMWARE))
 	rm -f $(B)/sd-siefs.img
@@ -545,9 +560,17 @@ IWLFW_URL := https://gitlab.com/kernel-firmware/linux-firmware/-/raw/38c1a7096df
 IWLFW := .hosttools/intel/iwlwifi-ty-a0-gf-a0-89.ucode .hosttools/intel/iwlwifi-ty-a0-gf-a0.pnvm
 .hosttools/intel/%:
 	mkdir -p $(@D) && curl -sfL -o $@ $(IWLFW_URL)/$*
-usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW)
+# Its Bluetooth's firmware (and the Pis' Bluetooth patch, for sdcard), the
+# same way, each file checked against tools/bt-firmware.sha256.
+BTFW_URL  := https://gitlab.com/kernel-firmware/linux-firmware/-/raw/38c1a7096dfb2188f55f342b835f14c362c59409/intel
+BCMFW_URL := https://raw.githubusercontent.com/RPi-Distro/bluez-firmware/6851250bf9d51ff50e3c5b2cf2111e2419d4335b/broadcom
+BTFW := .hosttools/bt/ibt-0041-0041.sfi .hosttools/bt/ibt-0041-0041.ddc
+.hosttools/bt/%: tools/bt-firmware.sha256
+	mkdir -p $(@D) && curl -sfL -o $@.part $(if $(filter BCM%,$*),$(BCMFW_URL),$(BTFW_URL))/$*
+	echo "$$(grep ' $*$$' tools/bt-firmware.sha256 | cut -d' ' -f1)  $@.part" | sha256sum -c --quiet && mv $@.part $@
+usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW) $(BTFW)
 	$(call USBMAKE,$(B)/sieos-usb.img,$(USBDISK)) $(if $(USBMODEL),--put models/$(MODEL) /models/$(MODEL)) \
-	    $(foreach f,$(IWLFW),--put $(f) /lib/firmware/$(notdir $(f)))
+	    $(foreach f,$(IWLFW) $(BTFW),--put $(f) /lib/firmware/$(notdir $(f)))
 QEMU_UEFI = qemu-system-x86_64 -smp $(SMP) -m $(MEM) $(ACCEL) -no-reboot \
            -bios $(UEFI_FW) \
            -drive if=none,id=k,file=$(1),format=raw \
@@ -562,7 +585,14 @@ $(B)/sieos-usb.img:
 usb-test: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(B)/host/fsck.siefs
 	$(call USBMAKE,$(B)/usb-test.img,512M)
 	python3 tools/usbtest.py $(SMP) $(B)/host $(B)/usb-test.img $(B)/screens $(call QEMU_UEFI,$(B)/usb-test.img) -display none -serial stdio
-.PHONY: usb run-usb usb-test
+# run-bt: this PC's own Intel Bluetooth (8087:0032) passed into QEMU, with the
+# firmware on the disk (docs/bluetooth.md). Linux loses its Bluetooth while it
+# runs, and QEMU needs access to the device (/dev/bus/usb/...): run it yourself.
+run-bt: all $(BTFW)
+	$(B)/host/siefs $(B)/disk.img mkdir /lib/firmware 2>/dev/null; \
+	    for f in $(BTFW); do $(B)/host/siefs $(B)/disk.img put $$f /lib/firmware/$$(basename $$f); done
+	$(QEMU) $(SCREEN) -device qemu-xhci -device usb-host,vendorid=0x8087,productid=0x0032 -display $(WINDOW) $(SERIAL)
+.PHONY: usb run-usb usb-test run-bt
 
 # usb-dev-test: the USB stack itself (tools/usbdevtest.py), on both architectures:
 # SIEOS's only disk on a USB key (no virtio disk), the first start typed on a USB
@@ -593,7 +623,7 @@ nvme-test: all $(B)/host/fsck.siefs $(B)/host/siefs $(if $(filter arm64,$(ARCH))
 #   make siefs-test          unit, model, crash and corruption tests, with measurements
 #   make siefs-freestanding  compile the library with the SIEOS flags (no C library)
 HOSTCFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Isiefs -Itools/siefs -Itools -Iinclude
-SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/vol.c siefs/crypt.c siefs/check.c lib/fmt.c lib/aead.c lib/chacha20.c
+SIEFS_LIB   := siefs/crc.c siefs/tree.c siefs/space.c siefs/fs.c siefs/vol.c siefs/crypt.c siefs/check.c lib/fmt.c lib/aead.c lib/aes.c lib/chacha20.c
 SIEFS_H     := siefs/siefs.h siefs/siefs_int.h tools/siefs/host.h include/mk/crypto.h
 SIEFS_TOOLS := mkfs.siefs fsck.siefs siefs-dump siefs
 SIEFS_FCFLAGS := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-pic \
@@ -624,7 +654,7 @@ $(B)/siefs-fs/%.o: %.c $(SIEFS_H)
 # ---- the crypto library (lib/blake2b.c, chacha20.c, argon2.c, sha1.c, zlib.c;
 # SSH's ed25519.c and Poly1305): official test vectors, BLAKE2b and zlib
 # against independent implementations, Argon2id timing.
-CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/sha1.c lib/zlib.c lib/string.c
+CRYPTO_SRC := lib/blake2b.c lib/chacha20.c lib/argon2.c lib/ed25519.c lib/x25519.c lib/sha2.c lib/aead.c lib/aes.c lib/sha1.c lib/zlib.c lib/string.c lib/pubkey.c lib/btcrypt.c
 $(B)/host/crypto-test: tests/crypto/test.c $(CRYPTO_SRC) include/mk/crypto.h include/mk/zlib.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/crypto/test.c $(CRYPTO_SRC)
@@ -633,15 +663,45 @@ crypto-test: $(B)/host/crypto-test
 	python3 tests/crypto/check.py $(B)/host/crypto-test
 .PHONY: crypto-test
 
-# ---- the AML reader (user/i2chid/aml.c) on the host: tables made with iasl
+# ---- Bluetooth (docs/bluetooth.md): btd's stack on the host, driven by
+# scripted HCI traces (tests/bt/hcitest.c: classic pairing and HID, LE SMP
+# and HID over GATT); hidrep.c and the stand-in mk.h copied beside it.
+BT_STACK := user/btd/hci.c user/btd/l2cap.c user/btd/smp.c user/btd/input.c
+$(B)/host/bt-test: tests/bt/hcitest.c tests/bt/btmk.h $(BT_STACK) user/btd/btd.h user/lib/hidrep.c user/lib/hidrep.h lib/btcrypt.c lib/aes.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c include/mk/*.h
+	@mkdir -p $(B)/host/bt
+	cp user/lib/hidrep.c user/lib/hidrep.h $(B)/host/bt/ && cp tests/bt/btmk.h $(B)/host/bt/mk.h
+	gcc $(HOSTCFLAGS) -I$(B)/host/bt -Iuser/btd -o $@ tests/bt/hcitest.c $(BT_STACK) $(B)/host/bt/hidrep.c lib/btcrypt.c lib/aes.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c
+bt-test: $(B)/host/bt-test
+	$(B)/host/bt-test
+.PHONY: bt-test
+
+# ---- the AML interpreter (user/lib/aml.c) on the host: tables made with iasl
 # from tests/aml/*.asl (laptop patterns: Intel's reference firmware as on
-# Lenovo's Legion, constants, methods), and QEMU's own DSDT.
-$(B)/host/aml-test: tests/aml/test.c user/i2chid/aml.c user/i2chid/aml.h
+# Lenovo's Legion, constants, methods; an embedded controller and battery).
+$(B)/host/aml-test: tests/aml/test.c user/lib/aml.c user/lib/aml.h
 	@mkdir -p $(@D)
-	gcc $(HOSTCFLAGS) -DAML_HOST -Iuser/i2chid -o $@ tests/aml/test.c user/i2chid/aml.c
+	gcc $(HOSTCFLAGS) -DAML_HOST -Iuser/lib -o $@ tests/aml/test.c user/lib/aml.c
+# ---- audiod's codec side (codec.c, eld.h) on the host: the laptop's real
+# codecs (their /proc/asound dumps) answered by a fake, two real EDIDs (tests/hdmi)
+$(B)/host/hdmi-test: tests/hdmi/test.c user/audiod/codec.c user/lib/eld.h
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -Iuser/lib -o $@ tests/hdmi/test.c
+hdmi-test: $(B)/host/hdmi-test
+	$(B)/host/hdmi-test tests/hdmi
+.PHONY: hdmi-test
 aml-test: $(B)/host/aml-test
 	sh tests/aml/check.sh $(B)/host/aml-test
 .PHONY: aml-test
+
+# ---- USB cameras and the keyboard light (user/usb/uvc.c, kbl.c) on the host:
+# QEMU has no USB camera, so the laptop's own descriptors (tests/camera) and
+# synthetic packets: parsing, frame assembly, YUY2 -> RGB, the light's check.
+$(B)/host/camera-test: tests/camera/test.c user/usb/uvc.c user/usb/kbl.c
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -DUSB_HOST -o $@ tests/camera/test.c
+camera-test: $(B)/host/camera-test
+	$(B)/host/camera-test tests/camera
+.PHONY: camera-test
 
 # ---- sicc, the SIEOS C compiler (cc/, docs/cc.md): compiler, assembler and
 # linker in one program, written for SIEOS.
@@ -746,7 +806,7 @@ llm-neon-test: $(SICC)
 # HTTPS) on each other kind of card, MACHINE:CARD (x86-64: the default cards
 # of QEMU's "pc" and "q35", virtio 1.0 without the legacy interface; arm64:
 # virtio on PCIe, what "-nic user" gives on virt).
-NET_CRYPTO := lib/sha2.c lib/sha1.c user/wifi/wpa.c lib/aead.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
+NET_CRYPTO := lib/sha2.c lib/sha1.c user/wifi/wpa.c lib/aead.c lib/aes.c lib/x25519.c lib/pubkey.c lib/chacha20.c lib/string.c
 $(B)/host/net-crypto-test: tests/net/crypto.c $(NET_CRYPTO) include/mk/crypto.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -o $@ tests/net/crypto.c $(NET_CRYPTO)

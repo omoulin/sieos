@@ -16,15 +16,16 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
 | Network, TLS | yes: virtio (legacy, 1.0), e1000, e1000e; RTL8168h written, untested on the laptop | yes: virtio (MMIO, PCIe) | no driver yet | no driver yet |
 | SSH client and server | yes | yes | needs the network | needs the network |
+| Bluetooth (keyboards, mice) | AX210 over USB: written, untested (`run-bt`); stack: `bt-test` | no controller | CYW43455 on the mini UART: untested | CYW43455 on the BCM2712 UART: untested |
 | Sound (Intel HDA) | yes: intel-hda, ich9-intel-hda | no driver (no HDA there) | no | no |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sig-test`, `posix-test`, `cxx-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
+`kernel-test`, `power-test` (x86-64), `sig-test`, `posix-test`, `cxx-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
-`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `aml-test`,
+`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
 
@@ -36,7 +37,10 @@ checklist in [raspberrypi.md](raspberrypi.md).
   the USB key: the Intel display (full modeset), NVMe (passes in QEMU), the
   Realtek network card, the AX210 Wi-Fi ([net.md](net.md)), HD Audio
   (passes in QEMU, [audio.md](audio.md)), the touchpad
-  ([touchpad.md](touchpad.md)); then NVIDIA compute
+  ([touchpad.md](touchpad.md)), the camera and the keyboard light
+  ([usb-stack.md](usb-stack.md#cameras)), Bluetooth
+  ([bluetooth.md](bluetooth.md)), ACPI power: off, restart, sleep, battery,
+  lid ([power.md](power.md)); then NVIDIA compute
   ([gpu-plan.md](gpu-plan.md)).
 - A web browser: WPE WebKit on a musl-based POSIX layer, phase by phase
   ([webkit-plan.md](webkit-plan.md)).
@@ -119,6 +123,22 @@ checklist in [raspberrypi.md](raspberrypi.md).
   and zlib (inflate, a small deflate) in `lib/`. Host git fsck accepts what
   SIEOS pushes and the repositories it makes (`make git-test`). The Git
   window on the desktop drives `/bin/git` ([desktop.md](desktop.md#git)).
+- **2026-10-16.** Mail grows to what `../mailbox` (the Linux client in
+  Atlas's look) does ([desktop.md](desktop.md#mail)): several accounts
+  (`[account]` sections in `~/.mail`; a one-account file reads as
+  before), each with its folders, unread counts (STATUS) and connection,
+  a From choice when writing, an account editor (pick, new, remove);
+  self-signed certificates accepted per account, their SHA-256 shown and
+  pinned (`tls_open`: that certificate only, the key still proven; a
+  changed one refused); favorite folders at the top; the newest 300
+  messages; attachments saved (`~/Downloads`), files attached (picked in
+  Files; multipart/mixed, base64), forwarded with the message; Reply all;
+  Delete into the Trash (SPECIAL-USE `\Trash` or its usual names), for
+  good from it; a copy of what is sent in Sent (APPEND); `mailto:` links
+  (the sia strip, `mail mailto:`); Ctrl+N/R/Shift+R/L, F5, Ctrl+Enter (con
+  now tells Ctrl+Enter and Ctrl+Shift+letters apart). atlas.elf +8.8 KB
+  (the window: 31 KB of code), mail.elf +13 KB. `make mail-test` covers it
+  all against two host servers.
 - **2026-10-16.** Mail ([desktop.md](desktop.md#mail)): a window of the
   desktop (folders, messages, reading, writing, replying, forwarding,
   deleting, the account) and `/bin/mail`, which does the talking: IMAP or
@@ -160,6 +180,16 @@ checklist in [raspberrypi.md](raspberrypi.md).
   plugged headphone silences the speaker. `play`, `rec`, `vol`; a volume
   choice in Settings; `make audio-test` checks the tone QEMU plays into a
   WAV file. audiod.o: 6.4 KB of code. Not yet run on the laptop.
+- **2026-10-16, later.** HDMI/DP sound ([audio.md](audio.md#hdmi-and-displayport)):
+  igfx turns display audio on for a monitor whose EDID has sound (ELD
+  built from it into the HDMI codec, the transcoder's audio, HDMI mode with
+  an AVI infoframe instead of DVI); audiod finds the sinks by the codec's
+  "ELD valid" (Intel's codec opened by its vendor verb; DP-MST devices per
+  pin), on up to two controllers (an NVIDIA GPU's HDMI function too,
+  enabled if hidden: useful only when the firmware lit a screen on it).
+  `vol out [N]`, a Settings "Output" row. `make hdmi-test`: the laptop's
+  real codec dumps replayed, ELDs from two real EDIDs. audiod.o 10.5 KB
+  (+4.1), igfx.o +1.4 KB. Not tried with a monitor yet.
 - **2026-10-16.** NVMe ([usb.md](usb.md#the-pcs-nvme-drives)): the disk
   server drives NVMe SSDs (reset, Identify, one I/O queue pair; read,
   write, flush with PRP lists; polled), on both architectures; it lists
@@ -191,3 +221,48 @@ checklist in [raspberrypi.md](raspberrypi.md).
   and the target's real report descriptor; `make aml-test`. Untested on the
   laptop itself. Sizes: i2chid 36 KB of code (the AML reader 13.5 KB,
   `-Os`), the kernel +0.5 KB, the USB server +2 KB (touchpad gestures).
+- **2026-10-16, later.** Bluetooth ([bluetooth.md](bluetooth.md)): `btd`,
+  one server for the whole host stack (HCI with command credits and ACL
+  flow control, L2CAP channels, classic SSP answered for the controller,
+  LE SMP Secure Connections and legacy pairing, bonds in
+  `/etc/bluetooth.keys`), keyboards and mice by classic HID (boot protocol)
+  and HID over GATT into the same `hidrep.c` as USB (which now reads
+  keyboards too); the laptop's AX210 through a USB pipe in the usb server
+  (`btusb.c`) with Intel's TLV firmware boot, the Pis' CYW43455 on a UART
+  (Pi 4: the mini UART, since the PL011 is the console) with Broadcom's
+  patch; `/bin/bt`; Settings' Bluetooth section. P-256 key exchange made
+  constant time; AES moved to `lib/aes.c`. `make bt-test` (scripted HCI
+  traces, 84 checks), SMP's functions in `crypto-test`, `make run-bt` (the
+  host's adapter in QEMU, run by hand). Untested on hardware. Sizes
+  (x86-64, text + data): btd 82 KB (its own code 38 KB, crypto 21 KB),
+  bt 15 KB, the USB server +3 KB, Atlas +4 KB, wifid -5 KB on x86-64 (AES apart),
+  i2chid +2 KB (keyboards in hidrep).
+- **2026-10-16, later.** The laptop's camera and keyboard light, in the
+  USB server ([usb-stack.md](usb-stack.md#cameras)). xHCI isochronous IN
+  transfers (40 queued, an interrupt per 8); USB video class: the YUY2
+  format at 640 x 480, probe and commit, the smallest alternate setting
+  that fits, frames assembled from payload headers, converted to RGB on
+  request; port `camera`, the camera powered only while open. The Camera
+  window in Atlas (live picture, snapshots to `~/Pictures` as .ppm, a .ppm
+  from Files shown). The Legion's ITE 8258 keyboard light (OpenRGB's
+  protocol: feature report 7): off, low, high and a colour, from Settings
+  or `/bin/kblight`, kept in `/etc/kblight` and restored at start; nothing
+  sent unless the device and its report descriptor match exactly. QEMU has
+  no camera: `make camera-test` checks the code on the host with the
+  laptop's real descriptors. Untested on the laptop itself. Sizes: the USB
+  server +11.2 KB of code (uvc.o 6.0 KB, kbl.o 2.4 KB, the file calls 2.5 KB, the isochronous core 0.3 KB), atlas +6.4 KB (cam.o 4.4 KB),
+  `/bin/kblight` 13 KB.
+- **2026-10-16, night.** ACPI power ([power.md](power.md)): power off and
+  restart through the FADT (sleep type from `\_S5`, the reset register;
+  QEMU's hard-coded ports gone), suspend to RAM (S3: the other CPUs parked,
+  CPU 0 back through the trampoline, the TSC carried on, the CPUs started
+  again; PCI headers and interrupt links restored; init restarts the device
+  drivers), and `/bin/acpid`: the SCI, GPEs, the embedded controller's
+  queries, Notify, battery (`_BIX`/`_BST`), AC, lid, the power button (a
+  clean power off). The AML interpreter moved to `user/lib` and gained I/O,
+  PCI and EC fields with writes, packages as arrays, more opcodes. The
+  desktop: the battery in the Deskbar, Sleep in its menu, the lid (Settings:
+  screen off or sleep), the display set up again after waking. `battery`,
+  `suspend`; `make power-test`. Checked on the target platform's real tables
+  on the host; untested on the laptop. Sizes: kernel.bin +3.3 KB, aml.o
+  13.5 -> 17.6 KB, acpid 41 KB of code (acpid.o 10 KB), i2chid +4.4 KB (the interpreter), atlas +2.8 KB, sh +0.9 KB.

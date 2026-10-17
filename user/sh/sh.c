@@ -92,8 +92,29 @@ static int cmd_sleep(int ac, char **av)
     return r == -EINTR ? 128 + SIGINT : err("sleep", r);   /* (Ctrl-C: "^C" shown) */
 }
 
-/* poweroff and reboot: commit the files first, so nothing written is lost. */
-static int cmd_power(int ac, char **av) { (void)ac; fs_sync(); return err(av[0], sys_power(av[0][0] == 'r')); }
+/* poweroff, reboot, suspend: the files committed first (power(): through
+ * the ACPI server, which tells the firmware), so nothing written is lost. */
+static int cmd_power(int ac, char **av) { (void)ac; return err(av[0], power(av[0][0] == 'r' ? POWER_RESTART : av[0][0] == 's' ? POWER_SLEEP : POWER_OFF)); }
+static int cmd_battery(int ac, char **av)              /* the ACPI server's status */
+{
+    (void)ac;
+    acpi_status_t s;
+    long p = port_find("acpi");
+    msg_t m = { .w = { ACPI_STATUS }, .rbuf = &s, .rlen = sizeof s };
+    if (p <= 0 || ipc_call(p, &m) < 0) return err(av[0], -ENOENT);
+    const char *u = s.flags & ACPI_MWH ? "W" : "A";
+    if (!(s.flags & ACPI_BAT)) printf("no battery");
+    else {
+        printf("battery %d%%, %s", s.percent, s.flags & ACPI_CHARGING ? "charging" : s.flags & ACPI_AC ? "not charging" : "discharging");
+        if (s.minutes >= 0) printf(", %d:%02d %s", s.minutes / 60, s.minutes % 60, s.flags & ACPI_CHARGING ? "to full" : "left");
+        printf(" (%u of %u m%sh, design %u; %d m%s, %u mV)", s.now, s.full, u, s.design, s.rate, u, s.mv);
+    }
+    printf("; AC %s", s.flags & ACPI_AC ? "on" : "off");
+    if (s.flags & ACPI_LID) printf("; lid %s", s.flags & ACPI_LID_CLOSED ? "closed" : "open");
+    if (s.wakes) printf("; woken %u times", s.wakes);
+    printf("\n");
+    return 0;
+}
 
 /* ---- Who am I. The kernel knows the numbers (SYS_IDENT); the names are
  * in /etc/users and /etc/groups. */
@@ -437,6 +458,7 @@ static const struct { const char *name, *help; int (*run)(int, char **); } cmds[
     { "kill",   "[-INT|-TERM|-KILL|-HUP] PID...  end programs (yours; root: any)", cmd_kill },
     { "mem",    "memory, processes, CPUs",                  cmd_mem },
     { "uptime", "time since start",                         cmd_uptime },
+    { "battery", "battery, AC and lid (laptops)",           cmd_battery },
     { "sleep",  "SECONDS  wait (0.5 allowed)",              cmd_sleep },
     { "clear",  "clear the screen",                         cmd_clear },
     { "whoami", "your user name",                           cmd_whoami },
@@ -449,6 +471,7 @@ static const struct { const char *name, *help; int (*run)(int, char **); } cmds[
     { "exit",   "end this session",                         cmd_logout },
     { "poweroff", "turn the machine off (root)",            cmd_power },
     { "reboot", "restart the machine (root)",               cmd_power },
+    { "suspend", "sleep (suspend to RAM) until the power button (root)", cmd_power },
 };
 #define NCMD (sizeof cmds / sizeof cmds[0])
 

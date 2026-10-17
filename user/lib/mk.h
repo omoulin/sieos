@@ -58,7 +58,7 @@ static inline long irq_ack(int irq)                     { return SYS(SYS_IRQ_ACK
 static inline void *map_phys(uint64_t pa, size_t size)  { return (void *)SYS(SYS_MAP_PHYS, pa, size); }
 static inline long sys_brk(uintptr_t end)               { return SYS(SYS_BRK, end, 0); }
 static inline long sys_info(mk_info_t *in)              { return SYS(SYS_INFO, in, 0); }
-static inline long sys_power(int restart)               { return SYS(SYS_POWER, restart, 0); }
+static inline long sys_power(int how, long arg)         { return SYS(SYS_POWER, how, arg); }   /* POWER_* */
 static inline long sys_tasks(mk_task_t *t, long max, int after) { return syscall4(SYS_TASKS, (long)t, max, after, 0); }
 static inline long sys_clock(void)                      { return SYS(SYS_CLOCK, 0, 0); }      /* ns since boot */
 static inline long sys_sleep(uint64_t ns)               { return SYS(SYS_SLEEP, ns, 0); }
@@ -235,6 +235,7 @@ long fs_unlock(const char *path, const uint8_t kek[32]);     /* root: path's enc
 long fs_rekey(const char *path, const fs_key_t *key, const uint8_t *old);   /* root: its key wrapped anew (old: if locked) */
 long fs_rmvol(const char *path);
 long fs_sync(void);
+long power(int how);                   /* POWER_*: files committed, then through acpid (or the kernel) */
 long fs_chdir(const char *path);
 const char *fs_getcwd(void);
 long run(const char *path, const char *args);         /* start a program from the disk, wait -> its status */

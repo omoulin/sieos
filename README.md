@@ -157,7 +157,7 @@ tour, file by file, with the crash and on-demand mechanisms:
   Intel e1000/e1000e (any QEMU `-nic user` works).
 - **SSH** ([docs/ssh.md](docs/ssh.md)): `ssh`, `ssh-keygen` and `sshd`,
   interoperable with OpenSSH (Ed25519 keys, chacha20-poly1305).
-- **Mail**: IMAP, POP3 and SMTP over TLS: the Mail window and `mail`.
+- **Mail**: IMAP, POP3 and SMTP over TLS, several accounts, attachments, Trash and Sent, pinned self-signed certificates: the Mail window and `mail`.
 - **sia, the assistant** ([docs/sia.md](docs/sia.md)): below.
 - **sicc, the C compiler** ([docs/cc.md](docs/cc.md)): below.
 - **make** ([docs/make.md](docs/make.md)): `/bin/make` builds C projects on

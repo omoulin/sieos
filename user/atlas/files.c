@@ -112,6 +112,7 @@ static void activate(int i)
     path_of(i, path, sizeof path);
     if (ent[i].dir) { strlcpy(cwd, path, sizeof cwd); load(); return; }
     size_t l = strlen(path);
+    if (mail_pick(path)) return;                         /* (Mail's Attach) */
     if (l > 4 && !strcmp(path + l - 4, ".app")) atlas_run_app(path);
     else atlas_open_file(path);
 }

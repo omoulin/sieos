@@ -8,9 +8,10 @@
  *
  * Big numbers are arrays of 32-bit "limbs", least significant first. All
  * modular arithmetic is in Montgomery form (x*R mod m, R = 2^(32n)), which
- * replaces divisions by shifts. Checking a signature uses only public data,
- * so speed matters more than constant time here; the one secret (the key
- * exchange's scalar) is a fresh random number used once.
+ * replaces divisions by shifts. Checking a signature uses only public data;
+ * the key exchange's scalar is a secret (and Bluetooth keeps its key pair a
+ * while): the reductions are masked rather than branched, and the point is
+ * multiplied by a ladder whose steps do not depend on the scalar's bits.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -36,6 +37,10 @@ static int bn_cmp(const uint32_t *a, const uint32_t *b, int n)
     return 0;
 }
 static int bn_zero(const uint32_t *a, int n) { for (int i = 0; i < n; i++) if (a[i]) return 0; return 1; }
+static void bn_pick(uint32_t *r, const uint32_t *s, uint32_t keep, int n)   /* r = keep ? r : s (keep: 0 or ~0) */
+{
+    for (int i = 0; i < n; i++) r[i] = (r[i] & keep) | (s[i] & ~keep);
+}
 static uint32_t bn_add(uint32_t *r, const uint32_t *a, const uint32_t *b, int n)
 {
     uint64_t c = 0;
@@ -63,7 +68,8 @@ static void mont_mul(const mont_t *c, uint32_t *r, const uint32_t *a, const uint
         for (int j = 1; j < n; j++) { C += t[j] + (uint64_t)q * c->m[j]; t[j - 1] = (uint32_t)C; C >>= 32; }
         C += t[n]; t[n - 1] = (uint32_t)C; t[n] = t[n + 1] + (uint32_t)(C >> 32);
     }
-    if (t[n] || bn_cmp(t, c->m, n) >= 0) bn_sub(t, t, c->m, n);
+    uint32_t s[BN], borrow = bn_sub(s, t, c->m, n);
+    bn_pick(t, s, -(borrow & (t[n] ^ 1)), n);     /* t - m unless t < m */
     memcpy(r, t, n * 4);
 }
 
@@ -106,11 +112,14 @@ static void mont_pow(const mont_t *c, uint32_t *r, const uint32_t *x, const uint
 
 static void mod_add(const mont_t *c, uint32_t *r, const uint32_t *a, const uint32_t *b)
 {
-    if (bn_add(r, a, b, c->n) || bn_cmp(r, c->m, c->n) >= 0) bn_sub(r, r, c->m, c->n);
+    uint32_t s[BN], carry = bn_add(r, a, b, c->n);
+    bn_pick(r, s, -(bn_sub(s, r, c->m, c->n) & (carry ^ 1)), c->n);
 }
 static void mod_sub(const mont_t *c, uint32_t *r, const uint32_t *a, const uint32_t *b)
 {
-    if (bn_sub(r, a, b, c->n)) bn_add(r, r, c->m, c->n);
+    uint32_t m[BN], neg = -bn_sub(r, a, b, c->n);
+    for (int i = 0; i < c->n; i++) m[i] = c->m[i] & neg;
+    bn_add(r, r, m, c->n);
 }
 
 /* x^-1 mod m (m prime), x in Montgomery form: Fermat, x^(m-2). */
@@ -320,20 +329,50 @@ static void pt_add(const mont_t *f, pt_t *r, const pt_t *p, const pt_t *q)
     *r = o;
 }
 
-/* r = k1*P + k2*Q (Shamir's trick: one pass over both scalars); k2 may be 0. */
+/* r = k1*P + k2*Q (Shamir's trick: one pass over both scalars), public ones. */
 static void pt_mul2(const mont_t *f, pt_t *r, const uint8_t *k1, const pt_t *p, const uint8_t *k2, const pt_t *q, int len)
 {
     pt_t acc, pq;
     memset(&acc, 0, sizeof acc);
-    if (k2) pt_add(f, &pq, p, q);
+    pt_add(f, &pq, p, q);
     for (int i = 0; i < len * 8; i++) {
         pt_dbl(f, &acc, &acc);
-        int b1 = k1[i / 8] >> (7 - i % 8) & 1, b2 = k2 ? k2[i / 8] >> (7 - i % 8) & 1 : 0;
+        int b1 = k1[i / 8] >> (7 - i % 8) & 1, b2 = k2[i / 8] >> (7 - i % 8) & 1;
         if (b1 && b2) pt_add(f, &acc, &acc, &pq);
         else if (b1) pt_add(f, &acc, &acc, p);
         else if (b2) pt_add(f, &acc, &acc, q);
     }
     *r = acc;
+}
+
+/* r = k*P, k secret: a Montgomery ladder (each step one add and one double,
+ * the two points swapped by masks). n or 2n is added to k so that its top
+ * bit is always bit 32*limbs: the same number of steps for every k. */
+static void pt_swap(pt_t *a, pt_t *b, uint32_t m)
+{
+    uint32_t *x = (uint32_t *)a, *y = (uint32_t *)b;
+    for (size_t i = 0; i < sizeof *a / 4; i++) { uint32_t t = (x[i] ^ y[i]) & m; x[i] ^= t; y[i] ^= t; }
+}
+static void pt_ladder(const curve_t *c, pt_t *r, const uint8_t *k, const pt_t *p)
+{
+    const mont_t *f = &c->p;
+    int nl = c->n.n;
+    uint32_t a[13] = { 0 }, b[13] = { 0 };
+    bn_from(a, nl, k, c->len);
+    a[nl] = bn_add(a, a, c->n.m, nl);             /* k + n ... */
+    b[nl] = a[nl] + bn_add(b, a, c->n.m, nl);     /* ... or k + 2n, when k + n is short */
+    bn_pick(a, b, -(a[nl] & 1), nl + 1);
+    pt_t r0 = *p, r1;
+    pt_dbl(f, &r1, p);
+    for (int i = 32 * nl - 1; i >= 0; i--) {
+        uint32_t bit = -(a[i / 32] >> (i % 32) & 1);
+        pt_swap(&r0, &r1, bit);
+        pt_add(f, &r1, &r0, &r1);
+        pt_dbl(f, &r0, &r0);
+        pt_swap(&r0, &r1, bit);
+    }
+    *r = r0;
+    wipe(a, sizeof a); wipe(b, sizeof b);
 }
 
 static int pt_affine_x(const curve_t *c, uint8_t *x, uint8_t *y, const pt_t *p)
@@ -412,7 +451,7 @@ int ec_public(int id, uint8_t *pub, const uint8_t *priv)
     uint8_t k[48];
     ec_scalar(c, k, priv);
     memcpy(g.x, c->gx, sizeof g.x); memcpy(g.y, c->gy, sizeof g.y); memcpy(g.z, c->p.one, sizeof g.z);
-    pt_mul2(&c->p, &r, k, &g, 0, 0, c->len);
+    pt_ladder(c, &r, k, &g);
     pub[0] = 4;
     wipe(k, sizeof k);
     return pt_affine_x(c, pub + 1, pub + 1 + c->len, &r);
@@ -425,7 +464,7 @@ int ec_shared(int id, uint8_t *out, const uint8_t *priv, const uint8_t *peer, si
     uint8_t k[48];
     if (pt_load(c, &q, peer, plen)) return -1;
     ec_scalar(c, k, priv);
-    pt_mul2(&c->p, &r, k, &q, 0, 0, c->len);
+    pt_ladder(c, &r, k, &q);
     wipe(k, sizeof k);
     return pt_affine_x(c, out, 0, &r);
 }

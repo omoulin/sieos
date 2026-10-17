@@ -44,6 +44,7 @@
 
 #define ATLAS_INPUT 100             /* from our input thread: con_event_t[] in sbuf */
 #define ATLAS_TICK  102             /* from the clock thread: a new minute */
+#define ATLAS_ACPI  106             /* from the ACPI thread: battery, AC, lid, a wake-up (acpi_status_t) */
 
 #define TCMAX 132                   /* a terminal: up to 132 x 60 characters */
 #define TRMAX 60
@@ -58,8 +59,9 @@
 #define W_PINS (MAXTERM + 4)
 #define W_REPO (MAXTERM + 5)
 #define W_MAIL (MAXTERM + 6)
-#define NWIN (MAXTERM + 7)
-_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES && W_REPO == WM_REPO && W_MAIL == WM_MAIL, "wm.c knows the window ids");
+#define W_CAM (MAXTERM + 7)
+#define NWIN (MAXTERM + 8)
+_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES && W_REPO == WM_REPO && W_MAIL == WM_MAIL && W_CAM == WM_CAM, "wm.c knows the window ids");
 #define TBAR 48                     /* the insides of a window start this far below their top */
 
 typedef struct { char name[48], path[160]; int app; } item_t;
@@ -79,7 +81,7 @@ static struct { char name[48], path[96]; int kind; } apps[MAXAPP];   /* the syst
 static int nitems, napps, next_chan = 1;
 static int focus = -1;              /* the window with the keys, or -1 */
 static int strip_on;                /* the sia strip has the keys */
-static int sia_on, set_on, files_on, pins_on, repo_on;   /* those windows exist */
+static int sia_on, set_on, files_on, pins_on, repo_on, cam_on;   /* those windows exist */
 static int last_term = -1;          /* the terminal used last (the Deskbar shows it) */
 static char toast[96];              /* a short message under the strip (until the next action) */
 int atlas_debug;                     /* /tmp/atlas.debug exists: log places (tests) */
@@ -115,7 +117,7 @@ static void geometry(void)
 
 /* ---- Menus: one at a time; entries with an icon, separators. */
 enum { A_SEP = 1, A_TERM, A_SIA, A_FILES, A_EDITOR, A_SETTINGS, A_PINS, A_RUNAPP, A_WINDOW, A_LOGOUT,
-       A_MIN, A_ZOOM, A_SENDWS, A_CLOSE };
+       A_MIN, A_ZOOM, A_SENDWS, A_CLOSE, A_SLEEP };
 #define MAXMENT 28
 #define MENH 36
 #define MENSEP 12
@@ -168,6 +170,43 @@ static void rtc_read(void)
     rtc_t0 = sys_clock();
 }
 static long now_day(void) { return (rtc_day + (sys_clock() - rtc_t0) / 1000000000) % 86400; }
+
+/* ---- Power (port "acpi", user/acpid; x86-64 laptops): the battery in the
+ * Deskbar's tray, the lid (closed: the panel's backlight off, or sleep:
+ * Settings), waking up (the display set up again). A thread waits for the
+ * changes (ACPI_WAIT) and hands them to the main loop. */
+acpi_status_t atlas_power;                               /* (flags 0: no ACPI server) */
+int atlas_lid_sleep;                                     /* /etc/display.conf: lid=sleep */
+static void acpi_thread(void *arg)
+{
+    (void)arg;
+    acpi_status_t s;
+    long p = 0;
+    for (int i = 0; i < 50 && (p = port_find("acpi")) <= 0; i++) sys_sleep(100000000);   /* (5 s: none on this machine) */
+    for (uint32_t seq = ~0u; p > 0; ) {
+        msg_t m = { .w = { ACPI_WAIT, seq }, .rbuf = &s, .rlen = sizeof s };
+        if (ipc_call(p, &m) < 0 || (long)m.w[0] < 0) { sys_sleep(1000000000); p = port_find("acpi"); continue; }   /* (restarted) */
+        seq = s.seq;
+        msg_t a = { .w = { ATLAS_ACPI }, .sbuf = &s, .slen = sizeof s };
+        ipc_call(port, &a);
+    }
+}
+static void power_event(const acpi_status_t *n)
+{
+    int was = atlas_power.flags & ACPI_LID_CLOSED, shut = n->flags & ACPI_LID_CLOSED, woke = atlas_power.flags && n->wakes != atlas_power.wakes;
+    atlas_power = *n;
+    if (woke) {                                          /* the display lost its set-up */
+        say("atlas: awake: the screen set up again\n");
+        rtc_read();
+        if (screen_wake() && scr.resizable) atlas_set_size(PW, PH);
+        if (shut && !atlas_lid_sleep) screen_blank(1);
+        redraw();
+    }
+    if (shut != was) say("atlas: lid %s%s\n", shut ? "closed: " : "open", shut ? (atlas_lid_sleep ? "sleep" : "screen off") : "");
+    if (shut && !was && atlas_lid_sleep) power(POWER_SLEEP);   /* (back here once awake) */
+    else if (shut != was) screen_blank(shut);
+    if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
+}
 
 static void clock_thread(void *arg)                      /* one message a minute, nothing else */
 {
@@ -319,7 +358,7 @@ static void rescan(void)
 static int win_used(int w)
 {
     return w >= 0 && w < MAXTERM ? terms[w].used : w == W_EDIT ? edit_active() : w == W_SIA ? sia_on :
-           w == W_SET ? set_on : w == W_FILES ? files_on : w == W_PINS ? pins_on : w == W_REPO ? repo_on : w == W_MAIL ? mail_on() : 0;
+           w == W_SET ? set_on : w == W_FILES ? files_on : w == W_PINS ? pins_on : w == W_REPO ? repo_on : w == W_MAIL ? mail_on() : w == W_CAM ? cam_on : 0;
 }
 static void win_title(int w, char *t, size_t cap)
 {
@@ -330,10 +369,11 @@ static void win_title(int w, char *t, size_t cap)
     else if (w == W_PINS) strlcpy(t, "Pins", cap);
     else if (w == W_REPO) strlcpy(t, "Git", cap);
     else if (w == W_MAIL) strlcpy(t, "Mail", cap);
+    else if (w == W_CAM) strlcpy(t, "Camera", cap);
     else strlcpy(t, "Files", cap);
     if (w < MAXTERM && terms[w].back) { size_t n = strlen(t); n += strlcpy(t + n, " [history -", 16); t[n + num(t + n, terms[w].back)] = 0; strlcpy(t + strlen(t), "]", 2); }
 }
-static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : w == W_REPO ? I_GIT : w == W_MAIL ? I_MAIL : I_FOLDER; }
+static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : w == W_REPO ? I_GIT : w == W_MAIL ? I_MAIL : w == W_CAM ? I_CAM : I_FOLDER; }
 int wm_icon(int w) { return win_icon(w); }
 
 /* wm.c asks: is it there, its title, draw its inside. */
@@ -352,6 +392,7 @@ void wm_info(int w, char *t, size_t cap)                 /* the strip's right si
     else if (w == W_PINS) strlcpy(t, "GPIO", cap);
     else if (w == W_REPO) strlcpy(t, repo_dir(), cap);
     else if (w == W_MAIL) mail_info(t, cap);
+    else if (w == W_CAM) cam_info(t, cap);
 }
 void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
 {
@@ -362,6 +403,7 @@ void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
     else if (w == W_PINS) pins_draw(x0, y0, x1, y1, keys);
     else if (w == W_REPO) repo_draw(x0, y0, x1, y1, keys);
     else if (w == W_MAIL) mail_draw(x0, y0, x1, y1, keys);
+    else if (w == W_CAM) cam_draw(x0, y0, x1, y1, keys);
     else files_draw(x0, y0, x1, y1, keys);
 }
 
@@ -583,9 +625,16 @@ static void draw_deskbar(void)
     {                                                    /* sia's state: a dot (lit when sia runs), then the words */
         int idle = !strcmp(st, "sia: idle");
         dl_rect(x0 + 18, ty + 15, x0 + 28, ty + 25, 5, idle ? C_LINE : C_ACC);
-        dl_text(x0 + 38, ty + 9, st, strlen(st), S(2), idle ? C_DIM : C_TXT, 0, 0, x1 - 100, SH);
+        dl_text(x0 + 38, ty + 9, st, strlen(st), S(2), idle ? C_DIM : C_TXT, 0, 0, atlas_power.flags & ACPI_BAT ? x1 - 66 - text_w(5, ST) : x1 - 100, SH);
     }
     dl_text(x1 - 16 - text_w(5, ST), ty + 6, ck, 5, ST, C_TXT, 0, 0, SW, SH);   /* (title size) */
+    if (atlas_power.flags & ACPI_BAT) {                  /* the battery: its outline, filled as charged */
+        int bx = x1 - 30 - text_w(5, ST) - 24, by = ty + 14, pc = atlas_power.percent < 0 ? 0 : atlas_power.percent;
+        uint32_t c = atlas_power.flags & ACPI_CHARGING ? C_ACC : pc < 15 ? C_ERR : C_TXT;
+        dl_frame(bx, by, bx + 22, by + 12, 2, 1, c);
+        dl_rect(bx + 22, by + 4, bx + 25, by + 8, 0, c);
+        dl_rect(bx + 2, by + 2, bx + 2 + 18 * pc / 100, by + 10, 0, c);
+    }
     int ry = ty + DB_TRAY;                               /* the apps */
     dl_rect(x0 + 10, ry, x1 - 10, ry + 1, 0, C_LINE);
     for (int k = 0; k < NDB; k++) {
@@ -979,6 +1028,7 @@ static void close_win(int w)
     if (w == W_PINS) { pins_on = 0; pins_close(); say("atlas: pins closed\n"); }
     if (w == W_REPO) { repo_on = 0; repo_close(); say("atlas: git closed\n"); }
     if (w == W_MAIL) { mail_close(); say("atlas: mail closed\n"); }
+    if (w == W_CAM) { cam_on = 0; cam_close(); say("atlas: camera closed\n"); }
     wm_gone(w);
     if (focus == w) focus = wm_top();
     settle();
@@ -988,8 +1038,9 @@ static void logout(void)
 {
     for (int t = 0; t < MAXTERM; t++) if (terms[t].used) { tty_hangup(&terms[t].tty); sys_kill(terms[t].pid); close_term(&terms[t]); }
     edit_close();
-    sia_on = set_on = files_on = pins_on = repo_on = 0;
+    sia_on = set_on = files_on = pins_on = repo_on = cam_on = 0;
     repo_close();
+    cam_close();
     pins_logout();
     settings_close();
     mail_close();
@@ -1024,7 +1075,7 @@ void greeter_login(const char *name, const char *pw)
 }
 
 /* The system's launchers (/etc/apps), for the strip and the menu. */
-enum { K_TERMINAL, K_EDITOR, K_SETTINGS, K_GIT, K_MAIL };
+enum { K_TERMINAL, K_EDITOR, K_SETTINGS, K_GIT, K_MAIL, K_CAMERA };
 static void scan_apps(void)
 {
     napps = 0;
@@ -1044,7 +1095,7 @@ static void scan_apps(void)
             char *f = file_get(apps[napps].path, &len), kind[16];
             app_field(f, "kind", kind, sizeof kind);
             free(f);
-            apps[napps].kind = !strcmp(kind, "editor") ? K_EDITOR : !strcmp(kind, "settings") ? K_SETTINGS : !strcmp(kind, "git") ? K_GIT : !strcmp(kind, "mail") ? K_MAIL : K_TERMINAL;
+            apps[napps].kind = !strcmp(kind, "editor") ? K_EDITOR : !strcmp(kind, "settings") ? K_SETTINGS : !strcmp(kind, "git") ? K_GIT : !strcmp(kind, "mail") ? K_MAIL : !strcmp(kind, "camera") ? K_CAMERA : K_TERMINAL;
             app_name(apps[napps].path, apps[napps].name, sizeof apps[0].name);
             napps++;
         }
@@ -1080,8 +1131,10 @@ static void login(void)
 }
 
 /* ---- Files and apps: opening them. */
-static int open_file(const char *path)                   /* in the editor */
+static int open_file(const char *path)                   /* in the editor (a .ppm: in the Camera window) */
 {
+    size_t pl = strlen(path);
+    if (pl > 4 && !strcmp(path + pl - 4, ".ppm") && atlas_may(path, 0) && !cam_show(path)) { cam_on = 1; show_win(W_CAM); settle(); return 0; }
     if (!atlas_may(path, 0) || edit_open(path) < 0) { strlcpy(toast, "Cannot open that file.", sizeof toast); settle(); return -EACCES; }
     show_win(W_EDIT);
     settle();
@@ -1129,6 +1182,12 @@ static void open_files(void)
     show_win(W_FILES);
     settle();
 }
+void atlas_show(int w)
+{
+    if (w == W_FILES) { open_files(); return; }
+    show_win(w);
+    settle();
+}
 
 /* Start an app: a terminal (a shell as the logged-in user, never root)
  * which runs the app's command when it first asks for a line. */
@@ -1147,6 +1206,7 @@ static void app_start(const char *path)
     if (!strcmp(kind, "settings")) { open_settings(); return; }
     if (!strcmp(kind, "git")) { repo_open(); repo_on = 1; show_win(W_REPO); settle(); return; }
     if (!strcmp(kind, "mail")) { mail_open(); show_win(W_MAIL); settle(); return; }
+    if (!strcmp(kind, "camera")) { cam_open(); cam_on = 1; show_win(W_CAM); settle(); return; }
     if (rn[0] != '/') { say("atlas: app %s: no program\n", nm); settle(); return; }
     long t = open_term(0);
     if (t < 0) { settle(); return; }
@@ -1260,7 +1320,7 @@ static void main_menu(void)                              /* the Deskbar's: start
     for (int i = 0; i < napps; i++) {
         if (apps[i].kind == K_EDITOR || apps[i].kind == K_SETTINGS || !strcmp(base_name(apps[i].path), "shell.app")) continue;
         if (!sep++) menu_add("", A_SEP, 0, -1);
-        menu_add(apps[i].name, A_RUNAPP, apps[i].path, apps[i].kind == K_GIT ? I_GIT : apps[i].kind == K_MAIL ? I_MAIL : I_APP);
+        menu_add(apps[i].name, A_RUNAPP, apps[i].path, apps[i].kind == K_GIT ? I_GIT : apps[i].kind == K_MAIL ? I_MAIL : apps[i].kind == K_CAMERA ? I_CAM : I_APP);
     }
     sep = 0;
     for (int w = 0; w < NWIN; w++) {
@@ -1273,6 +1333,7 @@ static void main_menu(void)                              /* the Deskbar's: start
         menu_add(t, A_WINDOW, a, win_icon(w));
     }
     menu_add("", A_SEP, 0, -1);
+    if (atlas_power.flags & ACPI_S3) menu_add("Sleep", A_SLEEP, 0, -1);
     menu_add("Log out", A_LOGOUT, 0, -1);
     menu_show(DBX + DBW - 340, M + DB_MENU + 2);
 }
@@ -1353,6 +1414,7 @@ static void menu_do(int k)
     case A_RUNAPP: app_start(arg); return;
     case A_WINDOW: { int v = 0; for (const char *p = arg; *p; p++) v = v * 10 + *p - '0'; show_win(v); settle(); return; }
     case A_LOGOUT: logout(); redraw(); return;
+    case A_SLEEP: redraw(); say("atlas: sleep\n"); power(POWER_SLEEP); return;
     case A_MIN: min_win(w); settle(); return;
     case A_ZOOM: wm_toggle_max(w); settle(); return;
     case A_SENDWS: wm_send(w, arg[0] - '0'); if (focus == w) focus = wm_top(); settle(); return;
@@ -1468,12 +1530,15 @@ static void click(int x, int y)
     case H_PINS:  focus_win(W_PINS); pins_click(k, a); redraw(); return;
     case H_REPO:  focus_win(W_REPO); repo_click(k, a); redraw(); return;
     case H_MAIL:  focus_win(W_MAIL); mail_click(k, a); settle(); return;
+    case H_CAM:   focus_win(W_CAM); cam_click(k, a); redraw(); return;
     case H_DESK:  if (strip_on) { strip_on = 0; redraw(); } return;
     }
 }
 
 static void key(int c)
 {
+    if (focus != W_MAIL || strip_on || mode != SESSION)  /* (Ctrl+Enter, Ctrl+Shift+letter: Mail's only) */
+        c = c == KEY_CRET ? '\n' : c >= KEY_CSA ? c - KEY_CSA + 1 : c;
     if (mode == GREETER) {
         if (first_start) { setup_key(c); redraw(); return; }
         char *f = gfield ? gpw : gname;
@@ -1512,6 +1577,7 @@ static void key(int c)
         size_t n = strlen(query);
         if (c == 27) { query[0] = 0; nres = nfound = 0; strip_on = 0; redraw(); return; }
         strip_on = 1;
+        if (c == '\n' && !memcmp(query, "mailto:", 7)) { mail_mailto(query); query[0] = 0; nres = nfound = 0; strip_on = 0; atlas_show(W_MAIL); return; }
         if (c == '\n') { if (nres) open_result(0); return; }
         if (c == '\t') { for (int i = 0; i < nres; i++) if (res[i].kind == R_ASK) { open_result(i); return; } return; }
         if (c == '\b') { if (n) query[n - 1] = 0; }
@@ -1528,6 +1594,7 @@ static void key(int c)
     if (focus == W_PINS) { if (pins_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
     if (focus == W_REPO) { if (repo_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
     if (focus == W_MAIL) { if (mail_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
+    if (focus == W_CAM) { if (c == 27) { focus = -1; redraw(); } return; }
     term_t *t = &terms[focus];                           /* the focused terminal */
     int x0, x1, y0, y1;
     if (!win_box(focus, &x0, &y0, &x1, &y1)) x0 = x1 = y0 = y1 = 0;
@@ -1697,6 +1764,7 @@ int main(int argc, char **argv)
         while (p && !same_n(p, "size=", 5)) { p = strchr(p, '\n'); if (p) p++; }
         if (p) { for (p += 5; *p >= '0' && *p <= '9'; p++) w = w * 10 + *p - '0'; if (*p == 'x') for (p++; *p >= '0' && *p <= '9'; p++) h = h * 10 + *p - '0'; }
         if (w >= 1024 && w <= 3840 && h >= 600 && h <= 2400) { PW = w; PH = h; }
+        for (p = dc; p; p = strchr(p, '\n') ? strchr(p, '\n') + 1 : 0) atlas_lid_sleep |= same_n(p, "lid=sleep", 9);
         free(dc);
     }
     if (screen_init(&scr) && (PW != 1920 || PH != 1080)) { PW = 1920; PH = 1080; }   /* (that size failed: the default) */
@@ -1729,9 +1797,11 @@ int main(int argc, char **argv)
     say("atlas: greeter (%dx%d, full frame %lu us)\n", PW, PH, (unsigned long)frame_us);
     thread_start(input_thread, 0, 16384);
     thread_start(clock_thread, 0, 4096);
+    thread_start(acpi_thread, 0, 4096);
     panel_init(port);
     settings_init(port);
     pins_init(port);
+    cam_init(port);
     wm_init(port);
     mouse_apply();
 
@@ -1778,15 +1848,34 @@ int main(int argc, char **argv)
             settings_revert();
             continue;
         }
+        if (m.pid == self && m.w[0] == ATLAS_BT) {       /* Settings: a Bluetooth scan or pairing goes on */
+            reply_val(from, 0);
+            if (mode == SESSION && settings_bt_tick()) redraw();
+            continue;
+        }
         if (m.pid == self && m.w[0] == ATLAS_PINS) {     /* the Pins window: the levels, the step */
             reply_val(from, 0);
             int a0, b0, c0, d0;
             if (mode == SESSION && pins_on && pins_tick() && win_box(W_PINS, &a0, &b0, &c0, &d0)) redraw_box(a0, b0 + TBAR - 40, c0, d0);
             continue;
         }
+        if (m.pid == self && m.w[0] == ATLAS_CAM) {      /* the Camera window: a new frame (drawn before the answer) */
+            int a0, b0, c0, d0;
+            if (cam_tick((int)m.w[1]) && mode == SESSION && cam_on) {
+                cam_box(&a0, &b0, &c0, &d0);
+                if (m.w[1] && c0 > a0) redraw_box(a0, b0, c0, d0); else settle();
+            }
+            reply_val(from, 0);
+            continue;
+        }
         if (m.pid == self && m.w[0] == ATLAS_ANIM) {     /* the next frame of the tabs that move */
             reply_val(from, 0);
             if (mode == SESSION && wm_tick()) settle();   /* (a window has opened: all of it, its places logged) */
+            continue;
+        }
+        if (m.pid == self && m.w[0] == ATLAS_ACPI && m.rlen == sizeof(acpi_status_t)) {
+            reply_val(from, 0);
+            power_event((const acpi_status_t *)buf);
             continue;
         }
         if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the Deskbar's tray */

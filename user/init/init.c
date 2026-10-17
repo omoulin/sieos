@@ -5,6 +5,7 @@
  *
  *     kernel ─► init ─┬─► con   (boot module, driver)  the console          at boot
  *                     ├─► vblk  (boot module, driver)  the disk             at boot
+ *                     ├─► acpi  (/bin/acpid, driver)   power, battery, lid  at boot (x86-64)
  *                     ├─► fs    (boot module)          the files            at boot
  *                     ├─► login (/bin/login)           the console's prompt at boot
  *                     ├─► atlas (/bin/atlas, driver)   the desktop          at boot
@@ -12,6 +13,7 @@
  *                     ├─► vnet  (/bin/vnet, driver)    the network card     port "nic0"
  *                     ├─► netd  (/bin/netd)            TCP/IP, DHCP, DNS    port "net"
  *                     ├─► audio (/bin/audiod, driver)  sound                port "audio"
+ *                     ├─► bt    (/bin/btd, driver)     Bluetooth            at boot
  *                     └─► sia   (/bin/siad, 4.5 GiB)   the assistant        port "sia"
  *
  * On demand: a server with a port in the table is not started at boot.
@@ -99,6 +101,9 @@ static svc_t svc[MAXSVC] = {
     { .i = { "auth",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "auth", 5 * MIN }, "/bin/auth", "auth", .watch = "auth" },
     { .i = { "login", 0, 0, 0, 0, SVC_ALWAYS, 0 }, "/bin/login", "login", .console = 1 },
 #if defined(__x86_64__)
+    /* ACPI (a driver): sleep types for the kernel, battery, lid, buttons; with no
+     * ACPI tables it ends with 0 */
+    { .i = { "acpi",  0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/acpid", "acpid", .watch = "acpi" },
     /* a laptop's I2C touchpad (a driver, from the ACPI tables); with none it ends with 0 */
     { .i = { "i2chid", 0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/i2chid", "i2chid" },
 #endif
@@ -121,6 +126,9 @@ static svc_t svc[MAXSVC] = {
      * port is there to find; on a machine with no Wi-Fi chip it ends with 0
      * and is not started again */
     { .i = { "wifi",  0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/wifid", "wifid", .watch = "wifi" },
+    /* Bluetooth (a driver, docs/bluetooth.md): the port "bt"; at boot, so bonded
+     * keyboards and mice come back; with no adapter it ends with 0 */
+    { .i = { "bt",    0, 0, 0, 0, SVC_ON_FAILURE, 1 }, "/bin/btd", "btd", .watch = "bt" },
     { .i = { "netd",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "net", 10 * MIN },  "/bin/netd", "netd" },
     /* the SSH server (docs/ssh.md): only where /etc/ssh/sshd_config exists, else it
      * ends with 0 at once and is not started again; it listens, so it starts the
@@ -420,6 +428,14 @@ static long serve(msg_t *m, msg_t *a, long from, char *req)
         if (s->i.state != SVC_RUNNING) return -ESRCH;
         s->ping_t0 = sys_clock();
         s->ping_pid = s->i.pid;
+        return 0;
+    case INIT_RESUME:                   /* the devices lost their state while asleep */
+        if (m->uid) return -EPERM;
+        for (int i = 0; i < nsvc; i++)
+            if ((s = &svc[i])->i.driver && s->i.state == SVC_RUNNING && s->i.pid != m->pid && strcmp(s->i.name, "atlas")) {
+                say("init: %s started anew after the sleep\n", s->i.name);
+                sys_kill(s->i.pid);     /* (its end comes as NOTE_CHILD: started again) */
+            }
         return 0;
     case INIT_ANSWER: {
         if (m->pid != self || m->w[1] >= (uint64_t)nsvc) return -EPERM;

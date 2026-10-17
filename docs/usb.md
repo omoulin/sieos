@@ -142,6 +142,13 @@ Untested on the real drives: the controllers' reset timing, their MDTS and
 LBA formats as read, a SieFS partition on one (no tool makes it yet: copy
 `mkfs.siefs`'s image into a GPT partition of that type from Linux).
 
+## The laptop's camera and keyboard light
+
+The USB server also drives the Lenovo's camera (port `camera`: the Camera
+window, [desktop.md](desktop.md#camera)) and its keyboard light (port
+`kblight`: Settings and `/bin/kblight`); how, and what is tested without
+the laptop, in [usb-stack.md](usb-stack.md#cameras).
+
 ## Limits
 
 - Secure Boot: not supported yet (the loader is not signed).
@@ -149,6 +156,5 @@ LBA formats as read, a SieFS partition on one (no tool makes it yet: copy
   [raspberrypi.md](raspberrypi.md)).
 - The kernel and the modules must fit below 4 GiB, and the memory at 1 MiB
   must be free (it is on the firmwares we know of).
-- Power off on real hardware: the ACPI sleep command needs the firmware's
-  tables to be read (not done yet): on a real PC, `poweroff` stops SIEOS and
-  writes the disk, then the machine is turned off with its power button.
+- Power off, restart and sleep on real hardware go through the firmware's
+  ACPI tables ([power.md](power.md)); untested on the laptop yet.

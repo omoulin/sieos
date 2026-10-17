@@ -47,7 +47,9 @@ enum { KEY_UP = 0x101, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_PGUP, KEY_PGDN, KEY_HO
        KEY_DEL, KEY_BTAB,            /* KEY_BTAB: Shift+Tab */
        KEY_F1 = 0x111,               /* F1 .. F12: KEY_F1 + 0 .. 11 */
        KEY_CTAB = 0x120,             /* Ctrl+Tab */
-       KEY_C1 };                     /* Ctrl+1 .. Ctrl+9: KEY_C1 + 0 .. 8 */
+       KEY_C1,                       /* Ctrl+1 .. Ctrl+9: KEY_C1 + 0 .. 8 */
+       KEY_CRET = KEY_C1 + 9,        /* Ctrl+Enter */
+       KEY_CSA };                    /* Ctrl+Shift+A .. Z: KEY_CSA + 0 .. 25 */
 
 /* Disk driver, port "disk" (vblk). Blocks are 4 KiB. One message moves at
  * most DISK_MAX bytes; the data travels in sbuf (write) or rbuf (read).
@@ -79,6 +81,28 @@ typedef struct {
     uint16_t vendor, product;
     char name[38];                     /* the device's product name, if it has one */
 } usb_disk_t;
+
+/* A USB camera (the USB server's uvc.c), port "camera" while one is
+ * plugged in: one client at a time, the camera streaming only while open
+ * (and stopped by itself after 3 s without a request). Frames come
+ * converted: 0x00RRGGBB pixels, rows one after the other. Reply: w[0]. */
+enum {
+    CAM_OPEN = 1,   /* -> 0; reply w[1] = width, w[2] = height (-EBUSY: another client's) */
+    CAM_FRAME,      /* rbuf <- the next frame (waits for it, up to 1 s) -> bytes */
+    CAM_CLOSE,      /* the camera stops                                 -> 0 */
+};
+/* A keyboard's light (the USB server's kbl.c: the Legion laptops' ITE 8258,
+ * 048d:c195), port "kblight" while one is there. The setting is kept in
+ * /etc/kblight and given to the keyboard again at each start. */
+enum {
+    KBL_SET = 1,    /* w[1] = KBL_OFF / KBL_LOW / KBL_HIGH, w[2] = colour 0xRRGGBB -> 0 */
+    KBL_GET,        /* -> the level; reply w[1] = the colour */
+};
+enum { KBL_OFF, KBL_LOW, KBL_HIGH };
+/* The colours offered (Settings, /bin/kblight; any 0xRRGGBB may be set). */
+#define KBL_NCOL 7
+#define KBL_COLOURS { { "White", 0xFFFFFF }, { "Red", 0xFF0000 }, { "Orange", 0xFF6000 }, { "Green", 0x00FF00 }, \
+                      { "Cyan", 0x00FFFF }, { "Blue", 0x0000FF }, { "Purple", 0xA000FF } }
 
 /* File server, port "fs" (SieFS). Paths are absolute ("/a/b"), sent in
  * sbuf; two paths ("from\0to") or a path and a name are separated by a 0.
@@ -183,6 +207,8 @@ enum {
     INIT_ANSWER,    /* (init's own timer thread: a server's SVC_MAYSTOP answer) -> 0 */
     INIT_PING,      /* (init's own watcher thread) w[1] = the service, w[2] = 1: a ping
                        is going out to it, 0: it answered                    -> 0 */
+    INIT_RESUME,    /* (root: acpid, awake after a suspend) the device drivers are started
+                       anew (killed: init restarts them), but the caller and the desktop -> 0 */
 };
 enum { SVC_ALWAYS, SVC_ON_FAILURE, SVC_NEVER };                 /* restart policies */
 /* Any server started on demand answers this question from init (pid 1)
@@ -402,6 +428,65 @@ enum {
     AUDIO_READ,       /* w[1] = rbuf's size; recording starts, and runs while someone
                          reads -> bytes in rbuf (waits for some)                 */
     AUDIO_VOL,        /* w[1] = volume 0-100, | AUDIO_MUTE; AUDIO_ASK: no change -> the same */
+    AUDIO_OUT,        /* w[1] = output (0 speakers, 1... HDMI/DP monitors with sound), or
+                         AUDIO_ASK -> w[0] the one playing, w[1] how many; rbuf: their
+                         names, one a line                                        */
 };
 #define AUDIO_MUTE 0x100
 #define AUDIO_ASK  0x200
+
+/* Bluetooth (docs/bluetooth.md). A USB adapter's HCI pipe, port "bthci"
+ * (the USB server, user/usb/btusb.c; btd is its only client). Reply: w[0]. */
+enum {
+    BTH_SEND = 0x50,  /* w[1] = 0: an HCI command (control endpoint), 1: bulk OUT (ACL data;
+                         Intel's bootloader commands); sbuf = the packet          -> 0 */
+    BTH_RECV,         /* rbuf <- what came, records of {endpoint: 0 interrupt (events),
+                         1 bulk IN; length (16 bits, LE); bytes}; waits for some -> bytes */
+    BTH_INFO,         /*                                     -> vendor << 16 | product */
+};
+/* The Bluetooth server, port "bt" (/bin/btd; the command: /bin/bt; Settings).
+ * Reply: w[0] = result or -error. Addresses: 6 bytes, least significant first. */
+#define BT_MAXDEV 24
+enum {
+    BT_STATUS = 0x58, /* rbuf <- bt_status_t                                         -> 0 */
+    BT_LIST,          /* rbuf <- bt_dev_t[]: found by the last scan, and bonded      -> how many */
+    BT_SCAN,          /* look for devices (classic and LE), about 10 s; see BT_LIST   -> 0 */
+    BT_PAIR,          /* (root) sbuf = bt_dev_t (addr, type): connect, pair, bond; then its
+                         keyboard or mouse is used. BT_STATUS follows it (a code to show) -> 0 */
+    BT_CONFIRM,       /* (root) w[1] = 1: the code matches, 0: it does not          -> 0 */
+    BT_FORGET,        /* (root) sbuf = bt_dev_t (addr): disconnect, delete its keys -> 0 */
+    BT_POWER,         /* (root) w[1] = 1 on, 0 off (kept in /etc/bluetooth.keys)    -> 0 */
+};
+enum { BTS_OFF, BTS_STARTING, BTS_ON, BTS_FAILED };            /* bt_status_t.state */
+enum { BTP_NONE, BTP_BUSY, BTP_CONFIRM, BTP_PASSKEY, BTP_DONE, BTP_FAILED };   /* .pair: CONFIRM:
+                         does the code match the device's? PASSKEY: type the code on the device */
+enum { BTK_OTHER, BTK_KEYBOARD, BTK_MOUSE, BTK_AUDIO, BTK_PHONE, BTK_COMPUTER }; /* bt_dev_t.kind */
+enum { BTT_CLASSIC, BTT_LE_PUBLIC, BTT_LE_RANDOM };             /* bt_dev_t.type */
+#define BTF_BONDED    1
+#define BTF_CONNECTED 2
+#define BTF_INPUT     4                        /* its keyboard / mouse is in use */
+typedef struct { uint8_t addr[6], type, kind, flags; int8_t rssi; char name[32]; } bt_dev_t;
+typedef struct {
+    uint8_t state, scanning, pair, _pad;
+    uint8_t addr[6], pair_addr[6];             /* ours; the device being paired */
+    uint32_t code;                             /* BTP_CONFIRM / BTP_PASSKEY: the 6 digits */
+    char chip[48], why[64];                    /* the controller and its firmware; the last failure */
+} bt_status_t;
+/* The ACPI server, port "acpi" (/bin/acpid, x86-64, docs/power.md): power,
+ * battery, AC, lid, buttons. Reply: w[0] = result or -error. */
+enum {
+    ACPI_POWER = 1, /* w[1] = POWER_OFF, POWER_RESTART or POWER_SLEEP (root): the firmware
+                       is told (_PTS), then the kernel (SYS_POWER) -> 0 once awake again */
+    ACPI_STATUS,    /* -> 0, an acpi_status_t in rbuf */
+    ACPI_WAIT,      /* w[1] = the seq last seen: the reply waits until the status changes
+                       (battery, AC, lid, a wake-up) -> 0, an acpi_status_t in rbuf */
+};
+typedef struct {
+    uint32_t seq, flags;                       /* +1 at each change; ACPI_* below */
+    int32_t percent, minutes;                  /* the battery's charge; time to empty or full (-1: unknown) */
+    int32_t rate;                              /* mW (mA if not ACPI_MWH), charging or discharging */
+    uint32_t now, full, design, mv;            /* mWh (or mAh), and its voltage in mV */
+    uint32_t wakes;                            /* times woken from sleep */
+} acpi_status_t;
+enum { ACPI_AC = 1, ACPI_BAT = 2, ACPI_CHARGING = 4, ACPI_LID = 8, ACPI_LID_CLOSED = 16, ACPI_MWH = 32,
+       ACPI_S3 = 64 };                         /* (S3: the machine can sleep) */

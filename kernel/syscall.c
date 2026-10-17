@@ -280,15 +280,18 @@ static long set_fs(uint64_t base)
     return 0;
 }
 
-static long power(int restart)
+static long power(int how, uint64_t arg)
 {
     if (cur->proc->uid) return -EPERM;
+    if (how == POWER_SET) return arch_sleep_type(arg & 0xFF, arg >> 8 & 0xFFFF);
+    if (how == POWER_SLEEP) return suspend();
+    if (how != POWER_OFF && how != POWER_RESTART) return -EINVAL;
 #ifdef STACKCHECK
     stack_report();
 #endif
-    kprintf("mk: %s\n", restart ? "restarting" : "power off");
+    kprintf("mk: %s\n", how ? "restarting" : "power off");
     halt_others();                       /* every other CPU stops first */
-    arch_power(restart);
+    arch_power(how);
 }
 
 void syscall(regs_t *r)
@@ -321,7 +324,7 @@ void syscall(regs_t *r)
     case SYS_MAP_PHYS:      ret = map_phys(a, b); break;
     case SYS_BRK:           ret = brk(a); break;
     case SYS_INFO:          ret = info(a); break;
-    case SYS_POWER:         ret = power(a); break;
+    case SYS_POWER:         ret = power(a, b); break;
     case SYS_TASKS:         ret = tasks(a, b, c); break;
     case SYS_CLOCK:         ret = now_ns(); break;
     case SYS_SLEEP:         ret = sleep_ns(a); break;
