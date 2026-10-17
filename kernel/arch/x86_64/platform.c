@@ -37,6 +37,7 @@ void serial_init(void)
 }
 void arch_putc(char c)
 {
+    fbcon_putc(c);                      /* (and on the firmware's screen, until the desktop has it) */
     while (!(inb(COM1 + 5) & 0x20)) ;   /* wait until the port can take a byte */
     outb(COM1, c);
 }
@@ -72,6 +73,7 @@ static void from_uefi(uint64_t pa)
     }
     x86_rsdp = b->rsdp;
     x86_fb = (struct bootfb){ b->fb.pa, b->fb.size, b->fb.width, b->fb.height, b->fb.pitch, b->fb.format };
+    fbcon_start();                                                     /* the log on the screen from now on */
     add(bi.rsvd, &bi.nrsvd, 8, 0, PAGE);                               /* page 0: "no page" */
     add(bi.rsvd, &bi.nrsvd, 8, TRAMP, PAGE);                           /* where the other CPUs start */
     kprintf("mk: started by the UEFI loader, %d RAM ranges%s\n", bi.nram, x86_fb.pa ? ", firmware screen" : "");

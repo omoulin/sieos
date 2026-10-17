@@ -46,6 +46,7 @@ void arch_mem_init(uint64_t top)
     write_cr3(kernel_as);
     uint64_t cr4;
     asm volatile("mov %%cr4, %0; or $0x80, %0; mov %0, %%cr4" : "=r"(cr4));
+    fbcon_map();                                      /* the log's screen, wherever it is */
 }
 
 /* ---- The kernel's own mappings in the KDEV area, one after the other:
@@ -70,7 +71,7 @@ void *kmap(uint64_t pa, uint64_t size, uint64_t flags)
 }
 
 /* SYS_MAP_PHYS never maps the interrupt controllers (the kernel's own). */
-void arch_phys_mapped(uint64_t pa, uint64_t size) { (void)pa; (void)size; }
+void arch_phys_mapped(uint64_t pa, uint64_t size) { fbcon_mapped(pa, size); }   /* the desktop took the screen? */
 int arch_phys_forbidden(uint64_t pa, uint64_t size) { return pa < 0xFF000000 && pa + size > 0xFEC00000; }
 /* The firmware's screen (a UEFI loader's frame buffer) may sit in what the
  * memory map calls RAM: only that range may then be mapped by the desktop. */

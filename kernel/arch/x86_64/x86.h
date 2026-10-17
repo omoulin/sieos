@@ -26,3 +26,8 @@ void serial_init(void);                         /* COM1, for the log (again afte
 /* platform.c: what a UEFI loader gave (0: none, booted by multiboot) */
 extern uint64_t x86_rsdp;                       /* the ACPI tables' root pointer */
 extern struct bootfb { uint64_t pa, size; uint32_t w, h, pitch, fmt; } x86_fb;   /* the firmware's screen */
+/* fbcon.c: the log on the firmware's screen */
+void fbcon_start(void);
+void fbcon_map(void);
+void fbcon_putc(char c);
+void fbcon_mapped(uint64_t pa, uint64_t size);

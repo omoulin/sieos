@@ -126,11 +126,12 @@ static int row, col, esc;    /* esc: inside an "ESC [ ... letter" sequence */
 
 static void vga_clear(int from)
 {
-    for (int i = from; i < 80 * 25; i++) vga[i] = 0x0700 | ' ';
+    for (int i = from; vga && i < 80 * 25; i++) vga[i] = 0x0700 | ' ';
 }
 
 static void vga_putc(char c)
 {
+    if (!vga) return;
     if (esc == 1) { esc = c == '[' ? 2 : 0; return; }
     if (esc == 2) {                          /* the few ANSI sequences we need */
         if (c < '@' || c > '~') return;      /* parameters: ignored */
@@ -163,6 +164,7 @@ static void output(const char *s, size_t n)
 {
     for (size_t i = 0; i < n; i++) vga_putc(s[i]);
     for (size_t i = 0; i < n; i += 199) sys_debug(s + i, n - i < 199 ? n - i : 199);
+    if (!vga) return;
     int pos = row * 80 + col;                /* move the blinking cursor, once */
     outb(0x3D4, 14); outb(0x3D5, pos >> 8);
     outb(0x3D4, 15); outb(0x3D5, pos);
@@ -243,15 +245,25 @@ static void vmmouse_read(void)
  * mouse; then their interrupts, to our port. */
 static void dev_init(long port)
 {
-    vga = map_phys(0xB8000, 80 * 25 * 2);
+    /* Started by a UEFI loader: no VGA text screen (the kernel shows the
+     * log on the firmware's screen until the desktop takes it). Missing
+     * devices read as 0xFF: no PS/2 controller on tablets and many recent
+     * laptops (USB or I2C keyboards), often no COM1: left alone. */
+    mk_screen_t g;
+    if (sys_screen(&g) && (long)(vga = map_phys(0xB8000, 80 * 25 * 2)) <= 0) vga = 0;
     vga_clear(0);
-    outb(COM1 + 1, 1);                        /* serial: interrupt when a byte arrives */
-    outb(COM1 + 4, 0x0B);                     /* ... and connect the interrupt line (OUT2) */
-    mouse_init();
-    while (inb(0x64) & 1) inb(0x60);          /* drop what came during start-up */
-    irq_bind(1, port);                        /* the keyboard */
-    irq_bind(4, port);                        /* COM1 */
-    irq_bind(12, port);                       /* the mouse */
+    int com1 = inb(COM1 + 5) != 0xFF, kbc = inb(0x64) != 0xFF;
+    if (com1) {
+        outb(COM1 + 1, 1);                    /* serial: interrupt when a byte arrives */
+        outb(COM1 + 4, 0x0B);                 /* ... and connect the interrupt line (OUT2) */
+        irq_bind(4, port);
+    }
+    if (kbc) {
+        mouse_init();
+        for (int i = 0; i < 64 && (inb(0x64) & 1); i++) inb(0x60);   /* drop what came during start-up */
+        irq_bind(1, port);                    /* the keyboard */
+        irq_bind(12, port);                   /* the mouse */
+    }
 }
 
 static void dev_irq(uint64_t bits)
@@ -262,19 +274,20 @@ static void dev_irq(uint64_t bits)
          * read together, in order. Their interrupts are edge-triggered:
          * a byte that arrives before we re-enable them would not
          * signal again, so look once more after re-enabling. */
+        int k = 0;
         do {
             uint8_t st;
-            while ((st = inb(0x64)) & 1) {
+            while ((st = inb(0x64)) & 1 && ++k < 256) {
                 uint8_t b = inb(0x60);
                 if (st & 0x20) mouse_byte(b); else keyboard(b);
             }
             if (vmmouse) vmmouse_read();
             irq_ack(1);
             irq_ack(12);
-        } while (inb(0x64) & 1);
+        } while (inb(0x64) & 1 && k < 256);
     }
     if (bits & 1 << 4) {
-        while (inb(COM1 + 5) & 1) tty_input(&tty, inb(COM1));
+        for (int k = 0; k < 256 && inb(COM1 + 5) & 1; k++) tty_input(&tty, inb(COM1));
         irq_ack(4);
     }
 }

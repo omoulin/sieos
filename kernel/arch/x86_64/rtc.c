@@ -23,6 +23,8 @@ int64_t arch_rtc(void)
 {
     int v[6], w[6], b, k = 0;
     static const int reg[6] = { 0, 2, 4, 7, 8, 9 };          /* seconds, minutes, hours, day, month, year */
+    const uint8_t *f = (const uint8_t *)acpi_find("FACP", 0);   /* the FADT may say "no CMOS clock" (IAPC_BOOT_ARCH bit 5) */
+    if (f && ((const sdt_t *)f)->len >= 111 && *(const uint16_t *)(f + 109) & 1 << 5) return 0;
     do {                                                      /* the same twice: not mid-update */
         while (cmos(0x0A) & 0x80 && ++k < 1000000) ;
         for (int i = 0; i < 6; i++) v[i] = cmos(reg[i]);
