@@ -17,7 +17,10 @@
  *
  * Threads: main answers the port; the receiver reads the controller and
  * runs the stack; the start thread brings the controller up, then ticks
- * the stack once a second. One lock for the stack.
+ * the stack once a second; "sound" answers audiod on the port "btaudio"
+ * (its writes land in a2dp.c's ring) and the pump sends them to the
+ * headphones on time. One lock for the stack. Files received go to the
+ * desktop user's ~/Downloads (Atlas says who: BT_USER) and Atlas shows it.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -31,6 +34,7 @@ int  uart_read(uint8_t *b, int cap);
 extern int uart_max;
 
 static volatile int big;                          /* the stack's lock */
+static char note[96];                             /* for Atlas to show (sent by the tick, without the lock) */
 static void lock(void)   { while (__atomic_exchange_n(&big, 1, __ATOMIC_ACQUIRE)) sys_yield(); }
 static void unlock(void) { __atomic_store_n(&big, 0, __ATOMIC_RELEASE); }
 
@@ -313,13 +317,13 @@ static void start(void *a)
     int acl_mtu = g16(sync_rsp + 1), acl_n = g16(sync_rsp + 4);
     hci_sync(0x2002, 0, 0);
     int le_mtu = sync_st ? 0 : g16(sync_rsp + 1), le_n = sync_rsp[3];
-    static const uint8_t mask[8] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F }, one = 1, le[2] = { 1, 0 }, two = 2, cod[3] = { 0x0C, 0x01, 0 };
+    static const uint8_t mask[8] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F }, one = 1, le[2] = { 1, 0 }, two = 2, cod[3] = { 0x0C, 0x01, 0x38 };
     static uint8_t name[248] = "SIEOS";
     hci_sync(0x0C01, mask, 8);                            /* every event (SSP's and LE's included) */
     hci_sync(0x0C56, &one, 1);                            /* Secure Simple Pairing */
     hci_sync(0x0C6D, le, 2);                              /* LE */
     hci_sync(0x0C45, &two, 1);                            /* inquiry results with RSSI and names */
-    hci_sync(0x0C24, cod, 3);                             /* a laptop computer */
+    hci_sync(0x0C24, cod, 3);                             /* a laptop computer; sound out, file transfer */
     hci_sync(0x0C13, name, 248);
     hci_sync(0x0C7A, &one, 1);                            /* Secure Connections (P-256) for classic pairing too */
     lock();
@@ -332,7 +336,95 @@ static void start(void *a)
     ready = 1;
     bt_ready();
     unlock();
-    for (;;) { sys_sleep(1000000000); lock(); bt_tick(); unlock(); }
+    for (;;) {
+        static char n[96];
+        sys_sleep(1000000000);
+        lock();
+        bt_tick();
+        int sw = a2dp_new;
+        a2dp_new = 0;
+        strlcpy(n, note, sizeof n); note[0] = 0;
+        unlock();
+        long p = sw ? port_find("audio") : 0;             /* (outside the lock: they may be calling us) */
+        msg_t m = { .w = { AUDIO_OUT, AUDIO_BT } };       /* headphones ready: audiod plays to them */
+        if (p > 0) ipc_call(p, &m);
+        m = (msg_t){ .w = { ATLAS_NOTE }, .sbuf = n, .slen = strlen(n) + 1 };
+        if (n[0] && (p = port_find("atlas")) > 0) ipc_call(p, &m);
+    }
+}
+
+/* ---- Headphones: audiod's writes land in pcm_ring; sent when due (a2dp_pump). */
+static long pump_tid;
+static void pump(void *a)
+{
+    (void)a;
+    for (;;) { lock(); int64_t d = a2dp_pump(sys_clock()); unlock(); sys_sleep(d > 0 ? (uint64_t)d : 1000000000); }
+}
+static void sound(void *a)
+{
+    (void)a;
+    long port = port_create("btaudio"), from = 0, r = 0;
+    static char name[32];
+    pump_tid = thread_start(pump, 0, 8192);
+    for (size_t outn = 0;; ) {
+        lock();
+        uint32_t at = pcm_w, i = at % PCM_RING, room = PCM_RING - (at - pcm_r);
+        unlock();
+        msg_t m = { .w = { (uint64_t)r }, .sbuf = name, .slen = outn, .rbuf = pcm_ring + i, .rlen = room < PCM_RING - i ? room : PCM_RING - i };
+        from = from > 0 ? ipc_reply_recv(from, port, &m) : ipc_recv(port, &m);
+        if (from <= 0) continue;
+        outn = 0;
+        lock();
+        const char *s = a2dp_sink();
+        if (m.uid) r = -EPERM;
+        else if (m.w[0] == AUDIO_OUT) { r = s ? 0 : -ENOENT; if (s) outn = strlcpy(name, s, sizeof name); }
+        else if (m.w[0] != AUDIO_WRITE) r = -ENOSYS;
+        else if ((r = a2dp_put(at, (int)(m.rlen & ~3u), (int)m.w[1])) > 0) {
+            sys_wake((int)pump_tid);
+            while (PCM_RING - (pcm_w - pcm_r) < 4096 && a2dp_sink()) {   /* full: the answer waits for room */
+                int64_t d = a2dp_pump(sys_clock());
+                unlock(); sys_sleep(d > 0 ? (uint64_t)d : 2000000); lock();
+            }
+        }
+        unlock();
+    }
+}
+
+/* ---- Files received: into the desktop user's ~/Downloads (nobody's: root's). */
+static int desk_uid = -1;
+static long rxf = -1;
+static uint64_t rxoff;
+static char rxpath[160], rxname[64];
+int file_open(const btdev_t *from, const char *name, uint32_t size)
+{
+    acct_user_t u;
+    char dir[96];
+    if (rxf >= 0 || acct_user(0, desk_uid >= 0 ? desk_uid : 0, &u)) return -1;
+    fmt(dir, sizeof dir, "%s/Downloads", u.home);
+    if (!fs_mkdir(dir, 0755)) fs_chown(dir, u.uid, u.gid);
+    for (int i = 0; i < 10 && rxf < 0; i++) {             /* (taken: "1-name", "2-name"...) */
+        if (i) fmt(rxpath, sizeof rxpath, "%s/%d-%s", dir, i, name); else fmt(rxpath, sizeof rxpath, "%s/%s", dir, name);
+        rxf = fs_open(rxpath, FS_WRONLY | FS_CREAT | FS_EXCL, 0644);
+    }
+    if (rxf < 0) { bt_log("bt: OBEX: cannot write into %s\n", dir); return -1; }
+    fs_chown(rxpath, u.uid, u.gid);
+    rxoff = 0;
+    strlcpy(rxname, name, sizeof rxname);
+    fmt(note, sizeof note, "Receiving %s from %s...", name, from->d.name);
+    bt_log("bt: OBEX: into %s (%u bytes)\n", rxpath, (unsigned)size);
+    return 0;
+}
+int file_write(const void *p, int n)
+{
+    long r = fs_write(rxf, rxoff, p, (size_t)n);
+    if (r > 0) rxoff += (uint64_t)r;
+    return (int)r;
+}
+void file_close(int ok)
+{
+    fs_close(rxf); rxf = -1;
+    if (!ok) fs_unlink(rxpath);
+    fmt(note, sizeof note, ok ? "Received %s (Downloads)." : "Receiving %s failed.", rxname);
 }
 
 int main(int argc, char **argv)
@@ -341,15 +433,21 @@ int main(int argc, char **argv)
     long port = port_create("bt");
     bt.state = BTS_STARTING;
     thread_start(start, 0, 16384);
+    thread_start(sound, 0, 16384);
     static bt_status_t st;
-    static bt_dev_t list[BT_MAXDEV], want;
-    msg_t m = { .rbuf = &want, .rlen = sizeof want };
+    static bt_dev_t list[BT_MAXDEV];
+    static uint64_t in[BT_CHUNK / 8 + 16];                /* a request's data: a device, a file's piece */
+    const bt_dev_t *want = (const bt_dev_t *)in;
+    bt_send_t *snd = (bt_send_t *)in;
+    static int sender;                                    /* who is sending a file */
+    enum { ROOT = 1 << (BT_PAIR - BT_STATUS) | 1 << (BT_CONFIRM - BT_STATUS) | 1 << (BT_FORGET - BT_STATUS) | 1 << (BT_POWER - BT_STATUS) | 1 << (BT_USER - BT_STATUS) };
+    msg_t m = { .rbuf = in, .rlen = sizeof in };
     long from = ipc_recv(port, &m);
     for (;;) {
         long r = 0;
         const void *out = 0;
         size_t outn = 0;
-        int root = m.uid == 0, has = m.rlen == sizeof want;
+        int root = m.uid == 0, has = m.rlen == sizeof *want;
         lock();
         if (from <= 0) r = -EINVAL;
         else if (m.w[0] == BT_STATUS) {
@@ -362,18 +460,25 @@ int main(int argc, char **argv)
             strlcpy(st.chip, bt.chip, sizeof st.chip); strlcpy(st.why, bt.why, sizeof st.why);
             out = &st; outn = sizeof st;
         } else if (m.w[0] == BT_LIST) { r = bt_list(list); out = list; outn = r * sizeof list[0]; }
-        else if (m.w[0] < BT_SCAN || m.w[0] > BT_POWER) r = -ENOSYS;
-        else if (m.w[0] != BT_SCAN && !root) r = -EPERM;
+        else if (m.w[0] < BT_SCAN || m.w[0] > BT_USER) r = -ENOSYS;
+        else if (ROOT >> (m.w[0] - BT_STATUS) & 1 && !root) r = -EPERM;
+        else if (m.w[0] == BT_USER) desk_uid = (int)m.w[1];
         else if (bt.state != BTS_ON) r = -EAGAIN;
         else switch (m.w[0]) {
         case BT_SCAN: r = bt_scan(); break;
-        case BT_PAIR: r = has ? bt_pair(&want) : -EINVAL; break;
+        case BT_PAIR: r = has ? bt_pair(want) : -EINVAL; break;
         case BT_CONFIRM: r = bt_confirm(m.w[1] != 0); break;
-        case BT_FORGET: r = has ? bt_forget(&want) : -EINVAL; break;
+        case BT_FORGET: r = has ? bt_forget(want) : -EINVAL; break;
         case BT_POWER: r = bt_power(m.w[1] != 0); bonds_save(); break;
+        case BT_CONNECT: r = has ? bt_connect(want, m.w[1] != 0) : -EINVAL; break;
+        case BT_SEND:
+            snd->name[63] = 0;
+            if (!(r = m.rlen == sizeof *snd ? opp_send(snd->addr, snd->name, snd->size) : -EINVAL)) sender = m.pid;
+            break;
+        case BT_DATA: r = m.pid == sender ? opp_data((const uint8_t *)in, (int)m.rlen, m.w[1] != 0) : -EBUSY; break;
         }
         unlock();
-        m = (msg_t){ .w = { (uint64_t)r }, .sbuf = out, .slen = outn, .rbuf = &want, .rlen = sizeof want };
+        m = (msg_t){ .w = { (uint64_t)r }, .sbuf = out, .slen = outn, .rbuf = in, .rlen = sizeof in };
         from = from > 0 ? ipc_reply_recv(from, port, &m) : ipc_recv(port, &m);
     }
 }

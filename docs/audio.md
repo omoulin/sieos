@@ -9,7 +9,8 @@ One output and one input stream, 48 kHz, 16-bit, stereo: no mixing of
 several programs, no other rates (convert files beforehand). The output
 goes to the speakers (analog) by default, or to an HDMI or DisplayPort
 monitor with sound: one lit by the Intel display (igfx.c), or one the
-firmware lit on the NVIDIA GPU (see [HDMI and DisplayPort](#hdmi-and-displayport)).
+firmware lit on the NVIDIA GPU (see [HDMI and DisplayPort](#hdmi-and-displayport)),
+or to Bluetooth headphones (see [Bluetooth](#bluetooth)).
 
 ```
    play x.wav ──AUDIO_WRITE (the frames)──► audiod ──► the output ring (DMA) ──► codec ──► speaker / headphones
@@ -25,7 +26,7 @@ firmware lit on the NVIDIA GPU (see [HDMI and DisplayPort](#hdmi-and-displayport
 | `play FILE.wav` | plays a WAV file (48 kHz, 16-bit, stereo PCM; others are refused) |
 | `rec FILE.wav [SECONDS]` | records that long (default 5 s) into a WAV file |
 | `vol [0-100\|mute]` | shows or sets the volume; a number also unmutes |
-| `vol out [N]` | lists the outputs (0 the speakers, then each monitor with sound, by name; `*` the one playing), or plays to output N |
+| `vol out [N]` | lists the outputs (0 the speakers, then each monitor with sound, then connected Bluetooth headphones, by name; `*` the one playing), or plays to output N |
 
 They are one program (`user/play/play.c`, 2.1 KB of code) under three names.
 Ctrl-C stops `play` and `rec`. Settings has the volume too (Sound: Mute,
@@ -132,6 +133,23 @@ the codec is how audiod learns that a monitor with sound is there.
   firmware lit a screen on it (the BIOS in discrete-GPU mode, or a monitor
   on a port wired to the dGPU at boot) and wrote the ELD. A function the
   firmware hid has no address (no BAR): then it stays unused.
+
+## Bluetooth
+
+Headphones or speakers connected by Bluetooth ([bluetooth.md](bluetooth.md#headphones-and-speakers-a2dp))
+are the last output, by their name, while connected. btd asks audiod to
+play to them when they connect (`AUDIO_OUT` with `AUDIO_BT`); audiod also
+picks them at start if they are there. Then the output stream of the
+controller stops and each `AUDIO_WRITE` goes on to btd's port `btaudio`
+(root only), with the volume in `w[1]`: the kernel copies the frames
+from where they landed in audiod's ring into btd's, the one copy more
+than for the speakers. btd encodes them (SBC), paces them by the media
+clock and holds the answer while its 170 ms ring is full, which paces
+the client. The volume is applied in the encoder. If btd says the
+headphones are gone, audiod goes back to the speakers and the client's
+write is answered 0 (sent again, to the speakers). With no HDA codec but
+a Bluetooth adapter (the Pis), audiod now stays up for headphones only
+(writes get -ENOENT until some connect). Sizes: audiod +1.0 KB.
 
 ## Tests
 

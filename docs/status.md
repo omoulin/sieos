@@ -16,7 +16,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
 | Network, TLS | yes: virtio (legacy, 1.0), e1000, e1000e; RTL8168h written, untested on the laptop | yes: virtio (MMIO, PCIe) | no driver yet | no driver yet |
 | SSH client and server | yes | yes | needs the network | needs the network |
-| Bluetooth (keyboards, mice) | AX210 over USB: written, untested (`run-bt`); stack: `bt-test` | no controller | CYW43455 on the mini UART: untested | CYW43455 on the BCM2712 UART: untested |
+| Bluetooth (keyboards, mice, headphones, file transfer) | AX210 over USB: written, untested (`run-bt`); stack: `bt-test` | no controller | CYW43455 on the mini UART: untested | CYW43455 on the BCM2712 UART: untested |
 | Sound (Intel HDA) | yes: intel-hda, ich9-intel-hda | no driver (no HDA there) | no | no |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
@@ -235,6 +235,21 @@ checklist in [raspberrypi.md](raspberrypi.md).
   (x86-64, text + data): btd 82 KB (its own code 38 KB, crypto 21 KB),
   bt 15 KB, the USB server +3 KB, Atlas +4 KB, wifid -5 KB on x86-64 (AES apart),
   i2chid +2 KB (keyboards in hidrep).
+- **2026-10-17.** Bluetooth stage 2 ([bluetooth.md](bluetooth.md)):
+  SDP (our A2DP source and Object Push records; a client), headphones and
+  speakers (A2DP source: AVDTP as initiator and acceptor, a fixed-point SBC
+  encoder at 48 kHz joint stereo, bitpool 53 or the sink's highest, RTP
+  packets paced by the media clock, software volume, Suspend when idle;
+  audiod's Bluetooth output, fed by one IPC copy to btd's port `btaudio`),
+  file transfer (RFCOMM with credit flow control, OBEX Object Push both
+  ways; `bt send`, received files in the desktop user's `~/Downloads` with
+  a note in Atlas); `bt connect`/`disconnect`, Settings' Connect. Fixed:
+  Atlas's ATLAS_CAM had ATLAS_BT's number (camera frames were taken for
+  Bluetooth ticks). `make bt-test` 279 checks (SBC frames decoded by a test
+  decoder and libsbc: 58 dB SNR). Untested on hardware. Sizes (x86-64,
+  text): btd +21.7 KB (sdp 4.0, a2dp 4.3, sbc 2.8, rfcomm 2.8, obex 4.4,
+  btd.c +2.3, hci +1.1), bt +1.2 KB, audiod +1.0 KB, Atlas +0.7 KB; btd's
+  RAM +58 KB (the 32 KB sound ring, 8 KB OBEX packet, 8 KB request buffer).
 - **2026-10-16, later.** The laptop's camera and keyboard light, in the
   USB server ([usb-stack.md](usb-stack.md#cameras)). xHCI isochronous IN
   transfers (40 queued, an interrupt per 8); USB video class: the YUY2

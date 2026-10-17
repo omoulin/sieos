@@ -3,8 +3,10 @@
  * docs/audio.md): Intel High Definition Audio controllers (QEMU's
  * intel-hda and ich9-intel-hda, PC chipsets up to Raptor Lake; an NVIDIA
  * GPU's HDMI one) and their codecs (codec.c). One output and one input
- * stream, 48 kHz, 16-bit, stereo; the output to the speakers (analog) or to
- * an HDMI / DisplayPort monitor with sound (AUDIO_OUT), on its controller.
+ * stream, 48 kHz, 16-bit, stereo; the output to the speakers (analog), to
+ * an HDMI / DisplayPort monitor with sound (AUDIO_OUT), on its controller,
+ * or to Bluetooth headphones: then each write goes on to btd (its port
+ * "btaudio", straight from where it landed here) with the volume.
  *
  *   A controller: reset, then commands to a codec through the CORB (a ring
  *   we write) and answers through the RIRB (one it writes), polled.
@@ -56,8 +58,16 @@ typedef struct {
 } stream_t;
 
 static hda_t hc[2];
-static int nh;
+static int nh, bt;                               /* bt: playing to Bluetooth headphones */
+static long btp;
 static stream_t out, in;
+
+static long bt_call(msg_t *m)                    /* btd's port "btaudio" -> w[0] or -error */
+{
+    long e = btp > 0 || (btp = port_find("btaudio")) > 0 ? ipc_call(btp, m) : -ENOENT;
+    if (e < 0) btp = 0;
+    return e < 0 ? e : (long)m->w[0];
+}
 
 static uint8_t  r8(int r)              { return h->regs[r]; }
 static void     w8(int r, uint8_t v)   { h->regs[r] = v; }
@@ -120,12 +130,13 @@ static void reply_read(void)
     in.tok = 0; in.pos = (in.pos + n) % RING; in.n -= n;
 }
 
-/* Output k (0: analog, else sink k): the output stream moves to its controller. */
+/* Output k (0: analog, else sink k, nsink + 1: Bluetooth): the output stream moves to its controller. */
 static void output(int k)
 {
-    if ((!k && !ach) || k > nsink) return;
+    if ((!k && !ach) || k > nsink + 1) return;
     if (out.run) stop(&out);
     if (out.tok) { reply_val(out.tok, 0); out.tok = 0; }   /* (a writer waiting: send again) */
+    if ((bt = k > nsink)) return;
     memset(out.ring, 0, RING);                   /* (what was queued: dropped) */
     route_out(k);
     out.c = k ? cur.c : ach;
@@ -244,10 +255,12 @@ static int setup(void)
     for (int i = 0; nh < 2 && !pci_scan(&p, 8, 0x040100 << 8, 0xFFFF0000, i); i++)
         if ((p.id & 0xFFFF) == 0x8086) controller(&p, rpa);   /* Intel's, its DSP on (not AC'97: no memory BAR) */
     hdmi_scan(1);
-    if (!ach && !nsink) { printf("audiod: no codec with a speaker, headphone, line out or monitor\n"); return -1; }
+    if (!ach && !nsink) printf("audiod: no codec with a speaker, headphone, line out or monitor%s\n", port_find("bt") > 0 ? ": Bluetooth only" : "");
+    if (!ach && !nsink && port_find("bt") <= 0) return -1;
     in.ring = rings; in.tag = TAG_IN; in.c = ach ? ach : hc; in.sd = SD0; in.bit = 1;
     out.ring = rings + RING; out.tag = TAG_OUT;
-    output(!ach);                                /* analog, else the first monitor */
+    msg_t q = { .w = { AUDIO_OUT } };
+    output(bt_call(&q) >= 0 ? nsink + 1 : !ach);  /* headphones, else analog, else the first monitor */
     return 0;
 }
 
@@ -267,6 +280,12 @@ int main(int argc, char **argv)
         memset(out.ring + out.pos + take, 0, m.rlen - take);   /* (the rest: the room stays silent) */
         switch (m.w[0]) {
         case AUDIO_WRITE:
+            if (bt) {                                /* on to btd, from where it landed */
+                msg_t f = { .w = { AUDIO_WRITE, (uint64_t)vol }, .sbuf = out.ring + out.pos, .slen = take };
+                if ((r = bt_call(&f)) < 0) { output(!ach); r = 0; }   /* gone: back to the speakers (sent again) */
+                break;
+            }
+            if (!out.c) { r = -ENOENT; break; }
             if (!room) {                         /* full: the answer waits for room */
                 if (!out.tok) { out.tok = from; continue; }
                 r = -EBUSY;
@@ -290,14 +309,19 @@ int main(int argc, char **argv)
             }
             r = vol;
             break;
-        case AUDIO_OUT: {                        /* (scanned again: a monitor gone sends the sound back to analog) */
-            char names[9 + 4 * 17] = "Speakers\n", *e = names + 9;
+        case AUDIO_OUT: {                        /* (scanned again: a monitor or headphones gone send the sound back to analog) */
+            char names[9 + 4 * 17 + 33] = "Speakers\n", *e = names + 9;
             int k = m.w[1] & AUDIO_ASK ? -1 : (int)m.w[1];
-            if (hdmi_scan(0)) output(!ach);
-            if (k > nsink || (!k && !ach)) { r = -EINVAL; break; }
-            if (k >= 0 && k != sel) output(k);
+            if (hdmi_scan(0) && !bt) output(!ach);
             for (int i = 0; i < nsink; i++) { size_t l = strlen(sink[i].name); memcpy(e, sink[i].name, l); e += l; *e++ = '\n'; }
-            msg_t a = { .w = { (uint64_t)sel, (uint64_t)nsink + 1 }, .sbuf = names, .slen = (uint64_t)(e - names) };
+            msg_t q = { .w = { AUDIO_OUT }, .rbuf = e, .rlen = 32 };
+            int hb = bt_call(&q) >= 0;               /* Bluetooth headphones, last */
+            if (hb) { e += q.rlen; *e++ = '\n'; }
+            if (bt && !hb) output(!ach);
+            if (k == AUDIO_BT) k = hb ? nsink + 1 : 99;
+            if (k > nsink + hb || (!k && !ach)) { r = -EINVAL; break; }
+            if (k >= 0 && k != (bt ? nsink + 1 : sel)) output(k);
+            msg_t a = { .w = { (uint64_t)(bt ? nsink + 1 : sel), (uint64_t)(nsink + 1 + hb) }, .sbuf = names, .slen = (uint64_t)(e - names) };
             ipc_reply(from, &a);
             continue;
         }

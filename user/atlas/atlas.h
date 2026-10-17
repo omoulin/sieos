@@ -177,7 +177,7 @@ void atlas_show(int w);                               /* (atlas.c) a window (WM_
 void mail_ended(int pid);                             /* a child of atlas ended */
 
 /* ---- Camera (cam.c): the USB camera's picture, snapshots to ~/Pictures; a .ppm shown. */
-#define ATLAS_CAM 106                                 /* message: its thread -> atlas, w[1] = 1: a new frame */
+#define ATLAS_CAM 107                                 /* message: its thread -> atlas, w[1] = 1: a new frame */
 void cam_init(long atlas_port);
 void cam_open(void);                                  /* the camera, live */
 void cam_close(void);                                 /* the window closed: the camera too */
