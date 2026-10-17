@@ -158,11 +158,11 @@ checked against its SHA-256 in `user/posix/posix.mk`:
 
 | Tool | From | Kept |
 |---|---|---|
-| clang, lld, llvm-ar/-ranlib/-nm/-objcopy/-strip, clang's own headers | `LLVM-23.1.3-Linux-X64.tar.xz` (release binaries) | only those files (~250 MB of the 2 GB archive) |
-| libc++, libc++abi, libunwind, compiler-rt builtins sources | `llvm-project-23.1.3.src.tar.xz` | `libcxx libcxxabi libunwind runtimes cmake llvm/cmake llvm/utils/llvm-lit compiler-rt` |
-| CMake 4.4.4, Ninja 1.13.2, Meson (for GLib, HarfBuzz, libsoup...) | PyPI wheels, `pip install --target --require-hashes` | `.hosttools/py/` |
-| gperf 3.3 | GNU release, built by the host's g++ | `.hosttools/bin/gperf` |
-| pkgconf (phase 4) | its release, built by gcc | `.hosttools/bin/pkg-config` |
+| clang, lld, llvm-ar/-ranlib/-nm/-objcopy/-strip/-readelf/-size, clang's own headers | `LLVM-23.1.3-Linux-X64.tar.xz` (release binaries, statically linked) | only those files: 630 MB of the 2 GB archive (clang 282 MB, lld 213 MB), the archive then deleted |
+| libc++, libc++abi, libunwind, compiler-rt builtins sources | `llvm-project-23.1.3.src.tar.xz` | `runtimes cmake libcxx libcxxabi libunwind compiler-rt libc llvm/cmake llvm/utils third-party/siphash`: 226 MB |
+| CMake 4.4.4, Ninja 1.13.2 | their PyPI wheels (plain zip files: unpacked, no pip) | `.hosttools/wk/bin/` |
+| gperf 3.3 | GNU release, built by the host's g++ | `.hosttools/wk/bin/gperf` |
+| Meson, pkgconf (phase 4) | a wheel; a release built by gcc | `.hosttools/wk/bin/` |
 
 *Test:* `clang --version`, `cmake --version`, `ninja --version`,
 `gperf --version` from `.hosttools`; a C file cross-compiled for
@@ -416,7 +416,7 @@ Honest, for focused work, phases in order (1 and 0 can overlap):
 ## What you will be asked to do
 
 - Nothing as root: every tool is fetched into `.hosttools/` with its
-  checksum (`make wk-tools`: ~2.2 GB downloaded, ~1 GB kept). If you
+  checksum (`make wk-tools`: 2.2 GB downloaded once, 943 MB kept). If you
   prefer Debian's packages, `sudo apt install clang lld cmake ninja-build
   gperf meson pkgconf` works too (the Makefile uses them when present
   and recent enough).
@@ -431,4 +431,11 @@ Honest, for focused work, phases in order (1 and 0 can overlap):
 
 | Phase | State |
 |---|---|
+| 0 | **done** (2026-10-16): `make wk-tools` (`user/posix/posix.mk`): clang/lld 23.1.3, CMake 4.4.4, Ninja 1.13.2, gperf 3.3 and LLVM's runtime sources, each checked by SHA-256, in `.hosttools/wk` (943 MB); about 3 minutes on this host |
 | 1 | **done** (2026-10-16): `kernel/vm.c` (regions, page faults, the kernel's copies into untouched pages, `SYS_MMAP`, `SYS_MUNMAP`, `SYS_MPROTECT`, `SYS_FUTEX`, `SYS_THREAD_SELF`); `ktest vm` and `ktest futex` pass on x86-64 and arm64 (built by gcc and by sicc); kernel code 54,787 → 59,459 bytes (x86-64), 80,680 → 85,736 (arm64); `test`, `kernel-test`, `gui-test` (x86-64) and `test`, `kernel-test` (arm64) pass; IPC round trip unchanged (375-491 ns) |
+| 3 (first part) | **done** (2026-10-16): **libposix** (`make posix`): musl 1.2.6 from its release with its system calls replaced (`user/posix/syscall_arch.h`, and `clone`, the thread pointer and cancellation in `user/posix/musl/`), the Linux personality (`user/posix/linux.c`, 770 lines: the fd table on the terminal, the file server and `/dev/null`, `/dev/zero`, `/dev/urandom`; files, directories, links, stat, `getdents64`; `mmap` (anonymous and private file copies), `mprotect`, `madvise`, `brk`, `mremap`'s stack probe; threads through `clone`, `futex`, `set_tid_address`; clocks and sleeps; identity; `uname`, `getrandom`, `sysinfo`, `sched_getaffinity`), the start-up code (`user/posix/start.c`: the Linux initial stack, an 8 MiB main stack given on first touch). Installed with musl's headers in `$(B)/posix/sysroot/usr`. `make posix-test` (stdio, files, threads, memory: 4 programs, 42 checks) passes on x86-64 and arm64. Sizes: the personality 14.4 KB of code; a C "hello" 46.9 KB (stripped), the tests ~100 KB. Not yet: pipes and unix sockets (`unixd`), sockets on netd, `poll`, `posix_spawn`, signals through `rt_sigaction`, a kernel wall clock (`CLOCK_REALTIME` is the build date plus the time since boot) |
+| 4 (first part) | **done** (2026-10-16): the C++ runtime (`make cxx`): libc++, libc++abi (no demangler in `terminate`: -98 KB), libunwind and compiler-rt's builtins, built by CMake from LLVM 23.1.3's sources for each processor (2,300 files, ~2 minutes). `make cxx-test` (strings, containers, virtual calls, RTTI, exceptions through 20 frames, rethrow, 16 `std::thread`s with mutex and condition variable, atomics, chrono, iostreams, `std::filesystem`, a static destructor at exit) passes on x86-64 and arm64. A C++ "hello" with `std::vector<std::string>`: 101 KB stripped; the test (iostreams, filesystem): 490 KB |
+
+Next: phase 2 (shared memory, notes, shared program images), then the rest
+of phase 3 (`unixd`, sockets, `poll`, `posix_spawn`, signals, `SYS_TIME`),
+then the dependencies of phase 4.

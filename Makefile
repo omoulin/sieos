@@ -220,6 +220,7 @@ $(FPU_PROGS:%=$(B)/user/%.o): UCFLAGS := $(filter-out -mgeneral-regs-only,$(UCFL
 
 # ---- /bin/python: MicroPython, fetched and built by its own rules (also an FPU program)
 include user/python/python.mk
+include user/posix/posix.mk
 
 # ---- the disk: a SieFS image of rootfs/ plus the programs in /bin.
 # build/rootfs is the staging copy. The image is made once (mkfs.siefs);

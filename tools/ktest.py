@@ -7,9 +7,11 @@
           the middle of an answer (init restarts it), speed and memory
   bench   the IPC round trip, and 40 clients calling one server at once
           (the kernel's locking; three runs each)
+  posix   programs built on libposix (musl + the Linux personality): each
+          /bin/ptest-NAME of $PTESTS ("cxx": /bin/cxxtest-NAME, C++)
   place   P-cores and E-cores: the kernel booted with pcores=N (QEMU's
           cores are all alike) says so at boot, and places threads by kind
-Usage: ktest.py <kernel|sia|bench|place> <cpus> <disk image> <qemu command line...>
+Usage: ktest.py <kernel|sia|bench|place|posix|cxx> <cpus> <disk image> <qemu command line...>
 The image must be a fresh one (first-start setup); the test works in a copy.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -95,6 +97,14 @@ if what == "kernel":
         res.append(expect(re.compile(rb"ktest fpu: (ok|FAIL)"), 120)[1].group(1))
     ok("two processes computing at once", res == [b"ok", b"ok"])
     run("", 10)
+
+elif what in ("posix", "cxx"):                   # programs built on libposix (docs/webkit-plan.md)
+    for t in __import__("os").environ["PTESTS"].split():
+        prog = f"ptest-{t}" if what == "posix" else f"cxxtest-{t}"
+        r = run(f"{prog} one two", 300)
+        lines = [l.strip() for l in r.splitlines() if l.strip().startswith(("ptest ", "cxxtest ", "posix:"))]
+        for l in lines[:-1]: print("   ", l)
+        ok(prog, f"{prog.split('-')[0]} {t}: ok" in r, lines[-1] if lines else r.strip()[-300:])
 
 elif what == "place":
     m = re.search(rb"mk: \d+ CPUs running: (\d+) P-cores, (\d+) E-cores", seen)
