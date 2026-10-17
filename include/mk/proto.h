@@ -309,7 +309,42 @@ enum {
     NET_LINK,       /* (from a network driver) w[2] = its interface; w[1] = 1: the link came up
                        (netd asks DHCP again), 0: it went down               -> 0 */
     NET_SOCKETS,    /* rbuf <- net_sock_t[], every socket                         -> how many */
+    NET_POLL,       /* w[1] = handle -> NET_IN | NET_OUT | NET_ERR, what it is ready for
+                       now; if nothing, netd notes the caller (SYS_NOTE) once it is: the
+                       basis of poll() for libposix's sockets (docs/webkit-plan.md)  */
 };
+enum { NET_IN = 1, NET_OUT = 2, NET_ERR = 4 };
+
+/* unixd, port "unix" (/bin/unixd, docs/webkit-plan.md): pipes and unix socket
+ * pairs for libposix, descriptors passed in messages, and what a program
+ * hands to one it starts. Ends belong to the processes that hold them (the
+ * kernel stamps the caller's pid on each call). Reply: w[0] = result or -error. */
+#define UNIX_MAX (64 << 10)                   /* largest message data */
+enum { UNIX_STREAM = 1, UNIX_SEQPACKET, UNIX_PIPE };
+enum { UNIX_NONBLOCK = 1, UNIX_PEEK = 2 };
+enum {
+    UNIX_PAIR = 1,  /* w[1] = UNIX_STREAM, _SEQPACKET or _PIPE -> 0; reply w[1], w[2] = the two
+                       ends (a pipe: w[1] reads, w[2] writes); the caller holds both   */
+    UNIX_SEND,      /* w[1] = end, w[2] = n descriptors, w[3] = flags; sbuf = n unix_desc_t,
+                       then the data -> bytes taken (waits for room unless NONBLOCK) */
+    UNIX_RECV,      /* w[1] = end, w[2] = max bytes, w[3] = flags; rbuf <- descriptors, then
+                       data (room for 8 descriptors first) -> bytes; reply w[1] = n
+                       descriptors (now held by the caller); 0 and 0: the end      */
+    UNIX_CLOSE,     /* w[1] = end: the caller holds it once less                   -> 0 */
+    UNIX_SHUTDOWN,  /* w[1] = end, w[2] = 0 reading, 1 writing, 2 both             -> 0 */
+    UNIX_POLL,      /* sbuf = end numbers (uint64_t); rbuf <- one byte each, NET_IN | NET_OUT
+                       | NET_ERR -> how many are ready; none: the caller is noted later */
+    UNIX_STASH,     /* w[1] = n descriptors; sbuf = them, then bytes -> 0; reply w[1] = a cookie */
+    UNIX_CLAIM,     /* w[1] = cookie; rbuf <- descriptors (now the caller's), bytes -> bytes;
+                       reply w[1] = n descriptors                                  */
+    UNIX_UNSTASH,   /* w[1] = cookie: given back (a start that failed)             -> 0 */
+    UNIX_BYE,       /* the caller ends: every end it holds                         -> 0 */
+    UNIX_TICK,      /* (unixd's own ticker)                                        -> 0 */
+};
+/* A descriptor in a message: an end of unixd's, a shared memory object
+ * (SYS_SHM_*; size: its size), or something only described (libposix's own). */
+typedef struct { uint32_t kind, extra; uint64_t id, size; } unix_desc_t;
+enum { UD_END = 1, UD_SHM, UD_OTHER };
 typedef struct {
     uint32_t rip;                              /* the other side's address and port (TCP) */
     uint16_t lport, rport;                     /* lport: ours */
@@ -338,6 +373,7 @@ typedef struct {
 #define EHOSTUNREACH  113
 #define EADDRINUSE    98
 #define EPROTO        71
+#define EMSGSIZE      90
 #endif
 
 /* A network card driver (vnet), port "nic0": the network server sends it

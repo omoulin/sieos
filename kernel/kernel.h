@@ -70,6 +70,7 @@ typedef struct proc {
     int sigtid;                 /* ... the thread that runs it (the one that set it) */
     struct region *regions;     /* its anonymous memory (SYS_MMAP, vm.c; under lock) */
     struct proc *asnext;        /* in vm.c's address space table */
+    uint64_t note;              /* SYS_NOTE_WORD: the word SYS_NOTE adds to (0: none) */
 } proc_t;
 
 /* A thread ("task"): what the scheduler runs. Its task_t sits at the bottom
@@ -253,6 +254,15 @@ long vm_mmap(uint64_t addr, uint64_t size, uint64_t flags);
 long vm_munmap(uint64_t addr, uint64_t size, uint64_t flags);
 long vm_mprotect(uint64_t addr, uint64_t size, uint64_t prot);
 long futex(int op, uint64_t uaddr, uint64_t val, uint64_t ns);
+long shm_create(uint64_t id, uint64_t size);
+long shm_hold(uint64_t id, int pid);
+long shm_close(uint64_t id);
+long shm_map(uint64_t id, uint64_t addr, uint64_t flags);
+uint64_t vm_shm_page(uint64_t va, void **o, uint64_t *off);
+int  vm_shm_share(proc_t *c, uint64_t va, void *o, uint64_t off, uint64_t flags);
+long note(int pid);
+long note_word(uint64_t uaddr);
+#define PN_SHARE 2                      /* proc_new's driver argument: SPAWN_SHARE */
 /* random.c */
 void rand_init(void);
 void rand_event(uint64_t x);

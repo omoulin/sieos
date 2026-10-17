@@ -6,7 +6,7 @@
 # Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 # boot.S first (the Image header the loaders look for), then the rest
-KARCH_OBJS   := boot entry cpu fpu smp mmu platform fdt diag
+KARCH_OBJS   := boot entry cpu fpu smp mmu platform fdt diag rtc
 KARCH_CFLAGS :=
 KARCH_LDS    := kernel/arch/arm64/linker.ld
 # sicc (built by the host compiler first) is compiler, assembler, linker,

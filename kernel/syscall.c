@@ -194,7 +194,8 @@ static long spawn(uint64_t img, uint64_t len, uint64_t uargs, int uid, int gid, 
     uint64_t quota = o.flags & SPAWN_QUOTA ? (o.quota + PAGE - 1) / PAGE : p->quota;
     if (!quota && (o.flags & SPAWN_QUOTA)) return -EINVAL;
     if (p->quota && (!quota || quota > p->quota)) quota = p->quota;
-    proc_t *c = proc_new(src, (const uint8_t *)img, len, args, uid, gid, &g, !!(o.flags & SPAWN_DRIVER), quota, &e);
+    int how = (o.flags & SPAWN_DRIVER ? 1 : 0) | (o.flags & SPAWN_SHARE && src ? PN_SHARE : 0);
+    proc_t *c = proc_new(src, (const uint8_t *)img, len, args, uid, gid, &g, how, quota, &e);
     if (!c) return e;
     memcpy(c->console, console, sizeof c->console);
     c->bg = p->bg || (o.flags & SPAWN_BACKGROUND);
@@ -280,6 +281,23 @@ static long set_fs(uint64_t base)
     return 0;
 }
 
+/* SYS_TIME: the wall clock: the real-time clock read at boot (arch_rtc), or
+ * the time root last set, plus the time since. */
+static int64_t wall_base;               /* ns since 1970 at boot (now_ns() = 0) */
+static long wall_time(uint64_t set)
+{
+    static spinlock_t lock;             /* (the first reader reads the clock chip) */
+    static int read;
+    spin_lock(&lock);
+    if (!read) { int64_t r = arch_rtc(); read = 1; if (r > 0 && !wall_base) wall_base = r * 1000000000 - (int64_t)now_ns(); }
+    spin_unlock(&lock);
+    if (set) {
+        if (cur->proc->uid) return -EPERM;
+        wall_base = (int64_t)set - (int64_t)now_ns();
+    }
+    return wall_base + (int64_t)now_ns();
+}
+
 static long power(int how, uint64_t arg)
 {
     if (cur->proc->uid) return -EPERM;
@@ -355,6 +373,13 @@ void syscall(regs_t *r)
     case SYS_MPROTECT:      ret = vm_mprotect(a, b, c); break;
     case SYS_FUTEX:         ret = futex((int)a, b, c, SC_ARG3(r)); break;
     case SYS_THREAD_SELF:   if (a) cur->clear_tid = a; ret = cur->tid; break;
+    case SYS_SHM_CREATE:    ret = shm_create(a, b); break;
+    case SYS_SHM_MAP:       ret = shm_map(a, b, c); break;
+    case SYS_SHM_HOLD:      ret = shm_hold(a, (int)b); break;
+    case SYS_SHM_CLOSE:     ret = shm_close(a); break;
+    case SYS_NOTE_WORD:     ret = note_word(a); break;
+    case SYS_NOTE:          ret = note((int)a); break;
+    case SYS_TIME:          ret = wall_time(a); break;
     default:               ret = -ENOSYS;
     }
     SC_RET(r) = ret;

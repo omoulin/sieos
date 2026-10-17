@@ -5,7 +5,7 @@
 # Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 # boot.S first (the multiboot header), then the entry code
-KARCH_OBJS   := boot entry ap cpu fpu smp mmu platform
+KARCH_OBJS   := boot entry ap cpu fpu smp mmu platform rtc
 # Linked in the top 2 GiB (-mcmodel=kernel). No "red zone": interrupts
 # arriving in kernel mode use the same stack.
 KARCH_CFLAGS := -mcmodel=kernel -mno-red-zone

@@ -43,6 +43,7 @@ NETLINKS := ping host nslookup ifconfig netstat traceroute nc curl wget   # othe
 LINKS   += $(NETLINKS:%=fetch/%)
 SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the file server
 
+BINS    += unixd                        # pipes and unix sockets for libposix (docs/webkit-plan.md)
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
 BINS    += kblight                     # a keyboard's light (the USB server's kbl.c)
 BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep

@@ -5,7 +5,9 @@
  * Linux paths. What this file keeps for the program:
  *
  *   the fd table      fd -> what it is (the terminal, a file of the file
- *                     server with its offset, /dev/null...), its flags
+ *                     server with its offset, /dev/null..., a pipe or socket
+ *                     end of unixd's, a socket of netd's, a memfd, an
+ *                     eventfd: sock.c), its flags
  *   the current folder (paths are made absolute here: the file server
  *                     knows none)
  *   the main stack    (for pthread_getattr_np's probe, through mremap)
@@ -34,6 +36,11 @@
 #include <sys/uio.h>
 #include <sys/utsname.h>
 #include <time.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <pthread.h>
+#include <sys/select.h>
+#include <sys/socket.h>
 
 #define FS_PATH 512                       /* longest path (as user/lib/mk.h) */
 
@@ -129,10 +136,21 @@ static int absolute(const char *path, char *out)
 void __sieos_startdir(const char *dir) { char p[FS_PATH]; if (!absolute(dir, p)) memcpy(cwd, p, strlen(p) + 1); }
 
 /* ---- The fd table */
-enum { F_FREE, F_CON, F_FILE, F_DIR, F_NULL, F_ZERO, F_RANDOM };
-typedef struct { int kind, flags, cloexec; long sh; uint64_t off; char *path; } fd_t;
+enum { F_FREE, F_CON, F_FILE, F_DIR, F_NULL, F_ZERO, F_RANDOM, F_UNIX, F_SHM, F_EVENT, F_SOCK };
+typedef struct {
+    int kind, flags, cloexec;
+    long sh;                                      /* F_FILE, F_DIR: the file server's handle */
+    uint64_t off;                                 /* the offset (F_DIR: the cursor; F_SHM: the size) */
+    char *path;
+    uint64_t id;                                  /* F_UNIX: the end; F_SOCK: netd's handle; F_SHM: the object */
+    int type;                                     /* F_UNIX: UNIX_*; F_SOCK: SOCK_*; F_SHM: made */
+    void *obj;                                    /* F_EVENT: the counter; F_SOCK: a connect going on */
+    uint32_t ip;                                  /* F_SOCK: the peer, our port */
+    uint16_t port, lport;
+} fd_t;
 #define NFD 1024
-static fd_t fds[NFD];                             /* (0, 1, 2: the terminal, set at start: __sieos_main_stack) */
+static fd_t *fds;                                 /* NFD of them, mapped at start (pages given when touched):
+                                                     0, 1, 2: the terminal (__sieos_main_stack) */
 static fd_t *fd_get(long fd) { return fd >= 0 && fd < NFD && fds[fd].kind != F_FREE ? &fds[fd] : 0; }
 static long fd_new(int from, fd_t f)              /* the lowest free fd >= from */
 {
@@ -167,6 +185,7 @@ static long fs_path(int op, const char *p, long w1, long w2, void *rbuf, size_t 
     return fs(&m);
 }
 
+static void release(fd_t *f);
 static long do_close(long fd)
 {
     lock();
@@ -178,7 +197,7 @@ static long do_close(long fd)
         msg_t m = { .w = { FS_CLOSE, c.sh } };
         fs(&m);
         free(c.path);
-    }
+    } else release(&c);
     return 0;
 }
 
@@ -223,6 +242,13 @@ static long file_io(fd_t *f, int write, void *buf, size_t n, uint64_t off)
     return done;
 }
 
+/* (sock.c, included below) */
+static long unix_send(fd_t *f, const void *data, size_t n, const unix_desc_t *d, int nd);
+static long unix_recv(fd_t *f, void *data, size_t n, int flags, int *fdv, int maxfd, int *nd, int cloexec);
+static long sock_send(fd_t *f, const void *buf, size_t n, int flags, uint32_t ip, uint16_t port);
+static long sock_recv(fd_t *f, void *buf, size_t n, int flags, uint32_t *ip, uint16_t *port);
+static long event_rw(fd_t *f, int write, void *buf, size_t n);
+
 static long do_rw(long fd, int write, void *buf, size_t n, int64_t pos)   /* pos < 0: at the fd's offset */
 {
     fd_t *f = fd_get(fd);
@@ -240,6 +266,12 @@ static long do_rw(long fd, int write, void *buf, size_t n, int64_t pos)   /* pos
         for (size_t d = 0; d < n; ) { long r = S2(SYS_RANDOM, (char *)buf + d, n - d > 4096 ? 4096 : n - d); if (r < 0) return r; d += r; }
         return n;
     case F_DIR: return -EISDIR;
+    case F_UNIX:
+        if (write) return unix_send(f, buf, n, 0, 0);
+        { int nd; return unix_recv(f, buf, n, 0, 0, 0, &nd, 0); }
+    case F_SOCK: return write ? sock_send(f, buf, n, 0, 0, 0) : sock_recv(f, buf, n, 0, 0, 0);
+    case F_EVENT: return event_rw(f, write, buf, n);
+    case F_SHM: return -EINVAL;
     }
     if (write ? (f->flags & O_ACCMODE) == O_RDONLY : (f->flags & O_ACCMODE) == O_WRONLY) return -EBADF;
     long r = file_io(f, write, buf, n, pos >= 0 ? (uint64_t)pos : f->off);
@@ -290,6 +322,10 @@ static long do_fstat(long fd, struct kstat *k)
     if (f->kind != F_FILE && f->kind != F_DIR) {
         memset(k, 0, sizeof *k);
         k->mode = 020666; k->nlink = 1; k->blksize = 4096; k->rdev = f->kind;   /* a character device */
+        if (f->kind == F_SHM) { k->mode = 0100600; k->size = f->off; }
+        else if (f->kind == F_SOCK || (f->kind == F_UNIX && f->type != UNIX_PIPE)) k->mode = 0140777;
+        else if (f->kind == F_UNIX) k->mode = 010600;
+        k->ino = f->id;
         return 0;
     }
     siefs_stat_t st;
@@ -400,6 +436,8 @@ static long do_dup3(long old, long new, long flags)
     return r == new || r < 0 ? r : (do_close(r), -EBUSY);
 }
 
+static volatile uint32_t note_word;                /* SYS_NOTE adds to it (poll sleeps on it: sock.c) */
+
 /* ---- Memory */
 static uintptr_t stack_lo, stack_hi;                  /* the main thread's stack */
 void *__sieos_main_stack(size_t size)
@@ -407,7 +445,10 @@ void *__sieos_main_stack(size_t size)
     long a = S3(SYS_MMAP, 0, size, PROT_READ | PROT_WRITE);
     if (a < 0) S1(SYS_EXIT, a);
     stack_lo = a; stack_hi = a + size;
+    fds = (fd_t *)S3(SYS_MMAP, 0, NFD * sizeof(fd_t), PROT_READ | PROT_WRITE);
+    if ((long)fds < 0) S1(SYS_EXIT, (long)fds);
     fds[0] = (fd_t){ F_CON }; fds[1] = fds[2] = (fd_t){ F_CON, O_WRONLY };
+    S1(SYS_NOTE_WORD, &note_word);                     /* (poll sleeps on it: sock.c) */
     return (void *)a;
 }
 #define L_MAP_SHARED 1
@@ -417,6 +458,16 @@ static long do_mmap(long addr, size_t len, long prot, long flags, long fd, long 
 {
     if (!len) return -EINVAL;
     long rw = prot & 7;
+    fd_t *sf = fd >= 0 && !(flags & L_MAP_ANON) ? fd_get(fd) : 0;
+    if (sf && sf->kind == F_SHM) {                    /* a memfd: its object, shared */
+        if (!sf->type || off % 4096 || (uint64_t)off + len > ((sf->off + 4095) & ~4095UL)) return -EINVAL;
+        long a = S3(SYS_SHM_MAP, sf->id, (flags & L_MAP_FIXED) ? addr - off : 0, rw | (flags & L_MAP_FIXED ? MAP_FIXED : 0));
+        if (a < 0) return a;
+        uint64_t whole = (sf->off + 4095) & ~4095UL, l = (len + 4095) & ~4095UL;
+        if (off) S3(SYS_MUNMAP, a, off, 0);           /* (only the part asked for stays) */
+        if (off + l < whole) S3(SYS_MUNMAP, a + off + l, whole - off - l, 0);
+        return a + off;
+    }
     if (fd >= 0 && !(flags & L_MAP_ANON)) {           /* a file: a private copy of it */
         fd_t *f = fd_get(fd);
         if (!f || f->kind != F_FILE) return f ? -ENODEV : -EBADF;
@@ -462,9 +513,9 @@ static uint64_t ts_ns(const struct timespec *t) { return (uint64_t)t->tv_sec * 1
 #ifndef EPOCH
 #define EPOCH 0
 #endif
-static uint64_t now_ns(int clk)                    /* CLOCK_REALTIME: the build date + uptime, until SYS_TIME */
+static uint64_t now_ns(int clk)                    /* CLOCK_REALTIME: the kernel's wall clock (SYS_TIME) */
 {
-    return (clk == CLOCK_REALTIME || clk == CLOCK_REALTIME_COARSE ? (uint64_t)EPOCH * 1000000000 : 0) + S0(SYS_CLOCK);
+    return clk == CLOCK_REALTIME || clk == CLOCK_REALTIME_COARSE ? (uint64_t)S1(SYS_TIME, 0) : (uint64_t)S0(SYS_CLOCK);
 }
 
 static long do_futex(volatile int *addr, int op, int val, const struct timespec *t, int val3)
@@ -512,6 +563,7 @@ static long ident(int which)
     long r = S2(SYS_IDENT, 0, &id);
     return r ? r : which == 0 ? id.pid : which == 1 ? id.uid : id.gid;
 }
+static long self_pid(void) { static long me; if (!me) me = ident(0); return me; }
 static long ppid(void)
 {
     mk_task_t t;
@@ -529,6 +581,17 @@ void __sieos_random(void *buf, size_t n)
     }
 }
 unsigned long __sieos_hwcap(void) { mk_info_t in; return S1(SYS_INFO, &in) ? 0 : in.hwcap; }
+
+#include "sock.c"
+#include "spawn.c"
+
+_Noreturn void __sieos_exit(int code) { S1(SYS_EXIT, code); for (;;) ; }
+unsigned __sieos_dns(void)                       /* (musl's resolver, resolvconf.c) */
+{
+    net_info_t in;
+    msg_t m = { .w = { NET_INFO }, .rbuf = &in, .rlen = sizeof in };
+    return netd(&m) < 0 ? 0 : in.dns;
+}
 
 static void unsupported(long n)
 {
@@ -591,6 +654,7 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     }
     case SYS_ftruncate: {
         fd_t *fl = fd_get(a);
+        if (fl && fl->kind == F_SHM) return shm_size(fl, b);
         if (!fl || fl->kind != F_FILE) return fl ? -EINVAL : -EBADF;
         msg_t m = { .w = { FS_TRUNCATE, fl->sh, b } };
         return fs(&m);
@@ -690,7 +754,10 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     case SYS_set_tid_address: return S1(SYS_THREAD_SELF, a);
     case SYS_futex:      return do_futex(A(a), b, c, A(d), f);
     case SYS_exit:       S0(SYS_THREAD_EXIT); return 0;
-    case SYS_exit_group: S1(SYS_EXIT, a); return 0;
+    case SYS_exit_group:
+        if (used_unixd) { msg_t m = { .w = { UNIX_BYE } }; unixd(&m); }   /* (our pipes and sockets: closed) */
+        S1(SYS_EXIT, a);
+        return 0;
     case SYS_sched_yield: return S0(SYS_YIELD);
     case SYS_sched_getaffinity: {
         mk_info_t in;
@@ -719,7 +786,36 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     case SYS_tkill:      return S2(SYS_KILL, ident(0), b);
     case SYS_tgkill:     return S2(SYS_KILL, a, c);
     case SYS_rt_sigprocmask: if (d >= 8 && c) memset(A(c), 0, 8); return 0;   /* (no masks on SIEOS) */
-    case SYS_rt_sigaction: if (c) memset(A(c), 0, 4 * sizeof(long)); return 0; /* (signals: a later phase) */
+    case SYS_rt_sigaction: return do_sigaction((int)a, A(b), A(c));
+    case SYS_wait4:      if (d) memset(A(d), 0, 144); return do_wait4((int)a, A(b), (int)c);
+    /* pipes, sockets, waiting (sock.c) */
+#ifdef SYS_pipe
+    case SYS_pipe:       return new_pair(UNIX_PIPE, 0, A(a));
+#endif
+    case SYS_pipe2:      return new_pair(UNIX_PIPE, (int)b, A(a));
+    case SYS_socket: case SYS_socketpair: case SYS_connect: case SYS_bind: case SYS_listen: case SYS_accept:
+    case SYS_accept4: case SYS_sendto: case SYS_recvfrom: case SYS_sendmsg: case SYS_recvmsg: case SYS_shutdown:
+    case SYS_getsockname: case SYS_getpeername: case SYS_setsockopt: case SYS_getsockopt:
+        return do_socket_call(n, a, b, c, d, e, f);
+#ifdef SYS_poll
+    case SYS_poll:       return do_poll(A(a), b, c < 0 ? -1 : c * 1000000LL);
+    case SYS_select: {
+        long *tv = A(e);
+        return do_select((int)a, A(b), A(c), A(d), tv ? tv[0] * 1000000000LL + tv[1] * 1000 : -1);
+    }
+#endif
+    case SYS_ppoll:      return do_poll(A(a), b, ts_or_inf(A(c)));
+    case SYS_pselect6:   return do_select((int)a, A(b), A(c), A(d), ts_or_inf(A(e)));
+    case SYS_eventfd2: {
+        event_t *ev = malloc(sizeof *ev);
+        if (!ev) return -ENOMEM;
+        *ev = (event_t){ (uint64_t)a, !!(b & 1) };          /* (EFD_SEMAPHORE) */
+        fd_t fe = { .kind = F_EVENT, .flags = O_RDWR | (b & O_NONBLOCK ? O_NONBLOCK : 0), .cloexec = !!(b & O_CLOEXEC), .obj = ev };
+        r = fd_new(0, fe);
+        if (r < 0) free(ev);
+        return r;
+    }
+    case SYS_memfd_create: return memfd_new((int)b);
     case SYS_sigaltstack: return 0;
     case SYS_prlimit64:
         if (d) { unsigned long *l = A(d); l[0] = l[1] = b == 3 ? 8UL << 20 : ~0UL; }   /* RLIMIT_STACK: 8 MiB */

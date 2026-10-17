@@ -114,6 +114,18 @@ enum {
                           the word's memory, so it also works between processes sharing it */
     SYS_THREAD_SELF,   /* (clear) -> the calling thread's id; if clear != 0, when this thread
                           ends the kernel writes a 32-bit 0 there and wakes a futex waiter */
+    SYS_SHM_CREATE,    /* (id, size) -> 0: a shared memory object (zeroed) named id, a random
+                          63-bit number the caller chose (-EEXIST: taken); the caller holds
+                          it. Knowing id is the right to use it: map it, hold it         */
+    SYS_SHM_MAP,       /* (id, addr, PROT_* | MAP_FIXED) -> address: the whole object mapped */
+    SYS_SHM_HOLD,      /* (id, pid) -> 0: pid (0: the caller) holds the object once more (it
+                          lives while held or mapped; a process's holds end with it)      */
+    SYS_SHM_CLOSE,     /* (id) -> 0: the caller holds it once less                         */
+    SYS_NOTE_WORD,     /* (addr): this process's note word (a 32-bit word in its memory)    */
+    SYS_NOTE,          /* (pid) -> 0: add one to pid's note word and wake its futex waiters:
+                          "something you wait for may be ready" (root, or the same user)  */
+    SYS_TIME,          /* (ns) -> ns since 1970 (UTC): the wall clock, the real-time clock
+                          read at boot plus the time since; ns != 0: set it (root only)   */
 };
 /* SYS_MMAP, SYS_MPROTECT: rights (Linux's values), and where. PROT_NONE: no
  * access at all (guard pages). PROT_WRITE with PROT_EXEC is allowed on
@@ -232,6 +244,10 @@ typedef struct {
                                         limit; nobody may give a child more than its own */
 #define SPAWN_BACKGROUND 64          /* background work: its threads prefer E-cores (SYS_PLACE);
                                         without it, a child is background if its parent is */
+#define SPAWN_SHARE 256              /* elf lies in a shared memory object the caller has mapped
+                                        (SYS_SHM_MAP, page-aligned): its read-only segments are
+                                        mapped from the object's pages, not copied, so processes
+                                        started from one image share its code               */
 #define SPAWN_PGROUP 128             /* the child leads a new process group (its pid), which its
                                         own children join: a shell's job, for SYS_KILL -pid
                                         (Ctrl-C). Without it, a child is in its parent's group */

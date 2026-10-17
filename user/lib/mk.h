@@ -86,6 +86,14 @@ static inline long sys_munmap(void *addr, size_t size, int flags) { return sysca
 static inline long sys_mprotect(void *addr, size_t size, int prot) { return syscall4(SYS_MPROTECT, (long)addr, size, prot, 0); }
 static inline long sys_futex(int op, volatile void *addr, long val, uint64_t ns) { return syscall4(SYS_FUTEX, op, (long)addr, val, ns); }
 static inline long sys_thread_self(volatile void *clear)  { return SYS(SYS_THREAD_SELF, clear, 0); }
+/* Shared memory objects (named by a random 63-bit id), notes, the wall clock. */
+static inline long sys_shm_create(uint64_t id, size_t size) { return SYS(SYS_SHM_CREATE, id, size); }
+static inline void *sys_shm_map(uint64_t id, void *addr, int flags) { return (void *)syscall4(SYS_SHM_MAP, (long)id, (long)addr, flags, 0); }
+static inline long sys_shm_hold(uint64_t id, int pid)    { return SYS(SYS_SHM_HOLD, id, pid); }
+static inline long sys_shm_close(uint64_t id)            { return SYS(SYS_SHM_CLOSE, id, 0); }
+static inline long sys_note_word(volatile void *w)       { return SYS(SYS_NOTE_WORD, w, 0); }
+static inline long sys_note(int pid)                     { return SYS(SYS_NOTE, pid, 0); }
+static inline int64_t sys_time(int64_t set)              { return SYS(SYS_TIME, set, 0); }
 
 /* Answer a message with just a result in w[0]. */
 static inline long reply_val(long token, long v)        { msg_t m = { .w = { v } }; return ipc_reply(token, &m); }
