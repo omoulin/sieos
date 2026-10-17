@@ -238,36 +238,27 @@ static int hid_start(void)
 }
 
 /* ---- The interrupt pin: a pad of Intel's GPIO controller, as its
- * reference firmware describes it (\_SB.GINF (group, what): 0 its
- * community's offset, 1 pads, 2 their registers' offset, 3 host ownership,
- * 5 GPE status (interrupt status and enable are 0x40 and 0x20 before it),
- * 8 the group's first ACPI pin number; \_SB.GADR: with the base address). */
+ * reference firmware describes it (\_SB.GINF, \_SB.GADR: aml_gpio). */
 static volatile int busy;
-
-static int ginf(int64_t g, int64_t what, int64_t *v) { int64_t a[2] = { g, what }; return aml_int("\\_SB.GINF", 2, a, v); }
 
 static int gpio_start(void)
 {
-    int64_t g, n, first, at, off, sts, own;
     const aml_hid_t *dev = &d->a;
     aml_hid_t c;
+    aml_gpio_t g;
+    volatile uint8_t *cm;
     d->girq = -1;
     if (dev->pin < 0 || dev->pin_edge || aml_res(0, sub(dev->gpio, "_CRS"), &c) || c.irq < 0) {
         log_line("no GPIO interrupt (pin %d on %s)\n", dev->pin, dev->gpio);
         return -1;
     }
-    for (g = 0; g < 32 && !ginf(g, 1, &n) && !ginf(g, 8, &first); g++) {
-        if (dev->pin < first || dev->pin >= first + n) continue;
-        int64_t a[2] = { g, 2 }, pin = dev->pin - first;
-        if (aml_int("\\_SB.GADR", 2, a, &at) || ginf(g, 2, &off) || ginf(g, 5, &sts) || ginf(g, 3, &own)) break;
-        volatile uint8_t *cm = map_phys(at - off, 8192);        /* the community's registers */
-        if ((long)cm < 0) break;
-        volatile uint32_t *ho = (volatile uint32_t *)(cm + own), *pad = (volatile uint32_t *)(cm + off + pin * 16);
-        uint32_t gbit = d->gbit = 1u << pin;
-        d->gis = (volatile uint32_t *)(cm + sts - 0x40);
-        d->gie = (volatile uint32_t *)(cm + sts - 0x20);
+    if (!aml_gpio(dev->pin, &g) && (long)(cm = map_phys(g.base, 8192)) >= 0) {   /* its community's registers */
+        volatile uint32_t *ho = (volatile uint32_t *)(cm + g.own), *pad = (volatile uint32_t *)(cm + g.pad);
+        uint32_t gbit = d->gbit = 1u << g.bit;
+        d->gis = (volatile uint32_t *)(cm + g.sts - 0x40);
+        d->gie = (volatile uint32_t *)(cm + g.sts - 0x20);
         log_line("GPIO pin %d: group %d pad %d at %lx, DW0 %08x DW1 %08x, host owned %d; interrupt line %d\n",
-                 dev->pin, (int)g, (int)pin, (long)(at + pin * 16), pad[0], pad[1], !!(*ho & gbit), c.irq);
+                 dev->pin, g.group, g.bit, (long)(g.base + g.pad), pad[0], pad[1], !!(*ho & gbit), c.irq);
         *ho |= gbit;                                             /* ours (not ACPI's) */
         /* level, inverted if active low ("1": a report waits); not to the I/O APIC, SCI, SMI, NMI */
         pad[0] = (pad[0] & ~(3u << 25 | 1u << 23 | 0xFu << 17)) | (dev->pin_low ? 1u << 23 : 0);

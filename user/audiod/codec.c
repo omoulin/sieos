@@ -16,7 +16,15 @@
  *   headset whose microphone is wired CTIA (iPhone) or OMTP (older Nokia),
  *   told apart by measuring (alc_headset_mode_*, alc_determine_headset_type).
  *   Dell's firmware leaves the headset microphone's pin (25) "not
- *   connected": it is made one (Linux's DELL4_MIC_NO_PRESENCE).
+ *   connected": it is made one (Linux's DELL4_MIC_NO_PRESENCE), on Dells
+ *   only (their subsystem id).
+ *
+ *   Realtek's ALC294 family (ALC234/274/294: a Surface Pro 7's ALC274, its
+ *   subsystem Realtek's own): Linux's alc294_init, nothing more (no
+ *   fixup for the Surface there): the EAPD coefficients, the headphone
+ *   amplifier's depop, then the generic walk (speakers, headphones, the
+ *   built-in microphones on the codec's digital-microphone pin: the
+ *   firmware's NHLT lists none for the DSP).
  *
  *   HDMI / DisplayPort (any codec, any controller; Linux: patch_hdmi.c): the
  *   digital pins, each with its devices (DP multi-stream: one per display
@@ -38,7 +46,7 @@ enum { TAG_IN = 1, TAG_OUT = 2 };                /* the streams' tags */
 typedef struct { hda_t *c; uint8_t cad, nid, dev, cvt, dp; char name[17]; } sink_t;
 static hda_t *h, *ach;                           /* the controller spoken to; the analog codec's */
 static int cad, acad, afg, hp, spk, hpcap, vol = 80, npin, nsink, sel;   /* sel: 0 analog, else sink sel (sink[sel - 1]) */
-static int adc, ipin, jk, alc, hs = -1, nadc;   /* the ADC recording, its pin; jk: a jack's microphone only; an ALC225-family codec, its jack's mode */
+static int adc, ipin, jk, alc, alc294, hs = -1, nadc;   /* the ADC recording, its pin; jk: a jack's microphone only; an ALC225-family codec, its jack's mode; an ALC294-family codec */
 static uint8_t adcs[4];
 static uint8_t dac[2];
 typedef struct { hda_t *c; uint8_t cad, nid; } hpin_t;
@@ -246,6 +254,12 @@ static int codec(int a)
             printf("audiod: Realtek ALC%x on a Dell: pin 25 is the headset's microphone\n", lo);
         }
         if (alc) { C(0x36, 1 << 13, 0); C(0x4A, 0xC00, 0); coef(0x57, 4, 7, 4); }   /* (alc_fill_eapd_coef; alc225_init: headphone amplifier at high power) */
+        alc294 = id >> 16 == 0x10EC && (lo == 0x234 || lo == 0x274 || lo == 0x294);
+        if (alc294) {                            /* the ALC294 family (a Surface Pro 7's ALC274): alc_fill_eapd_coef, the jack microphone's bias by verb */
+            if (lo != 0x294) C(0x6E, 0xFFFF, 0x0C25);
+            C(0x10, 1 << 15, 0); C(0x6B, 0x18, 0x18);
+            printf("audiod: Realtek ALC%x (subsystem %08x)\n", lo, verb(afg, 0xF2000));
+        }
     }
     sub = par(afg, 4);
     for (uint32_t nid = sub >> 16 & 0xFF; nid < (sub >> 16 & 0xFF) + (sub & 0xFF); nid++) {
@@ -269,6 +283,14 @@ static int codec(int a)
     if (!an) return -1;
     int *pin[2] = { &spk, &hp }, k = 0;
     dac[0] = dac[1] = 0;
+    if (alc294 && hp) {                          /* the headphone amplifier's depop, once (alc294_hp_init): pin muted and off, */
+        amp(hp, 1, 0, 1); verb(hp, 0x70700);     /* depop by hand, started, waited for (up to 1 s), back to automatic */
+        sys_sleep(100000000);
+        C(0x6F, 0xF, 0); coef(0x58, 0, 0x8000, 0x8000);
+        for (int i = 0; i < 20 && coef(0x58, 1, 0, 0) & 0x80; i++) sys_sleep(50000000);
+        C(0x6F, 0xF, 0xB);
+        sys_sleep(50000000);
+    }
     for (int i = 0; i < 2; i++) {
         int d = *pin[i] ? route(*pin[i], W_DAC, 0) : 0;
         if (!d) { *pin[i] = 0; continue; }

@@ -51,14 +51,14 @@ static node_t *nd;
 static int nn, ncap, hh[4096], nn0 = 1 << 30;   /* nodes below nn0 outlive the evaluation */
 static val_t *vals;
 static int nv, vcap;
-static int err, dry, depth;
+static int err, dry, depth, quiet;          /* (quiet: failures not logged) */
 static const uint8_t *base, *cur;           /* the tables (offsets in the log are from here); the term being evaluated */
 static uint8_t arena[32768] __attribute__((aligned(16)));
 static uint32_t used;
 
 static void fail(const char *why, const uint8_t *at)
 {
-    if (!err && !dry) log_line("aml: %s at 0x%lx\n", why, (long)((at ? at : cur) - base));
+    if (!err && !dry && !quiet) log_line("aml: %s at 0x%lx\n", why, (long)((at ? at : cur) - base));
     err = 1;
 }
 
@@ -827,11 +827,22 @@ static void resources(aml_hid_t *d, const uint8_t *b, uint32_t n)
             d->addr = r[16] | r[17] << 8;
             if (12 + tl < hdr + len) cstr(d->bus, sizeof d->bus, r + 12 + tl, hdr + len - 12 - tl);
         }
-        if (t == 0x8C && !r[4] && d->pin < 0) {                         /* GpioInt */
+        if (t == 0x8E && r[5] == 3 && !d->baud) {                       /* UartSerialBus */
+            d->baud = r[12] | r[13] << 8 | r[14] << 16 | (uint32_t)r[15] << 24;
+            uint32_t tl = r[10] | r[11] << 8;
+            d->flow = (r[7] & 3) == 1;
+            if (!d->baud) d->baud = 1;                                  /* (one, speed unknown) */
+            if (12 + tl < hdr + len) cstr(d->bus, sizeof d->bus, r + 12 + tl, hdr + len - 12 - tl);   /* its controller */
+        }
+        if (t == 0x8C && !r[4]) {                                       /* GpioInt */
             uint32_t pt = r[14] | r[15] << 8, sn = r[17] | r[18] << 8;
-            d->pin_edge = r[7] & 1; d->pin_low = (r[7] >> 1 & 3) == 1;
-            if (pt + 1 < hdr + len) d->pin = r[pt] | r[pt + 1] << 8;
-            if (sn < hdr + len) cstr(d->gpio, sizeof d->gpio, r + sn, hdr + len - sn);
+            int pin = pt + 1 < hdr + len ? r[pt] | r[pt + 1] << 8 : -1;
+            if (d->npins < 4) d->pins[d->npins++] = pin;
+            if (d->pin < 0) {
+                d->pin_edge = r[7] & 1; d->pin_low = (r[7] >> 1 & 3) == 1;
+                d->pin = pin;
+                if (sn < hdr + len) cstr(d->gpio, sizeof d->gpio, r + sn, hdr + len - sn);
+            }
         }
         if (t == 0x89 && d->irq < 0 && r[4]) d->irq = r[5] | r[6] << 8 | r[7] << 16;   /* Interrupt */
         if (t == 0x40 && nio < 2) d->io[nio++] = r[2] | r[3] << 8;     /* IO (decode, min, max, align, length) */
@@ -886,7 +897,7 @@ static int eval(int dev, const char *s, int argc, const int64_t *arg, val_t *o) 
     for (int i = 0; i < argc && i < 7; i++) a[i] = (val_t){ .t = V_INT, .i = arg[i] };
     top();
     if (nd[k].kind == N_METHOD) call(k, a, o); else get(k, o);
-    if (err) { char p[48]; aml_path(k, p, sizeof p); log_line("aml: (in %s)\n", p); }
+    if (err && !quiet) { char p[48]; aml_path(k, p, sizeof p); log_line("aml: (in %s)\n", p); }
     if (err || o->t == V_NONE) { err = 0; return -1; }
     return 0;
 }
@@ -899,6 +910,27 @@ int aml_eval(int dev, const char *path, int argc, const int64_t *arg, int64_t *v
     for (val_t *e = (val_t *)o.b; n < (int)o.n && n < max; n++) v[n] = e[n].t == V_PKG ? -1 : num(e + n);   /* (a package in it: -1) */
     return n;
 }
+int aml_gpio(int pin, aml_gpio_t *g)
+{
+    int64_t a[2] = { 0, 8 }, n = 0, first = 0, at = 0, off = 0, own = 0, sts = 0;
+    quiet = 1;                                  /* (no log: a short package says which layout) */
+    int f = aml_eval(0, "\\_SB.GINF", 2, a, &first, 1) < 0 ? 6 : 8;   /* a group's first pin: 8 (Tiger Lake on), 6 (Cannon, Ice Lake) */
+    quiet = 0;
+    for (int k = 0; k < 32; k++) {
+        a[0] = k; a[1] = 1;
+        if (aml_eval(0, "\\_SB.GINF", 2, a, &n, 1) < 0 || (a[1] = f, aml_eval(0, "\\_SB.GINF", 2, a, &first, 1) < 0)) break;
+        if (pin < first || pin >= first + n) continue;
+        a[1] = 2;
+        if (aml_eval(0, "\\_SB.GADR", 2, a, &at, 1) < 0 || (a[1] = 2, aml_eval(0, "\\_SB.GINF", 2, a, &off, 1) < 0) ||
+            (a[1] = 3, aml_eval(0, "\\_SB.GINF", 2, a, &own, 1) < 0) || (a[1] = 5, aml_eval(0, "\\_SB.GINF", 2, a, &sts, 1) < 0)) return -1;
+        g->group = k; g->bit = (int)(pin - first);
+        g->base = (uint64_t)(at - off);
+        g->pad = (uint32_t)(off + 16 * g->bit); g->own = (uint32_t)own; g->sts = (uint32_t)sts;
+        return 0;
+    }
+    return -1;
+}
+
 int aml_wake(int dev, int s, int on)
 {
     int64_t v[2], a[3] = { on, s, 0 }, r;

@@ -19,12 +19,24 @@
 
 typedef struct {
     char path[48], hid[12];      /* "\_SB_.PC00.I2C5.TPD0", "ELAN06FA" */
-    char bus[48], gpio[48];      /* its I2C controller, its GpioInt's controller (ACPI paths) */
+    char bus[48], gpio[48];      /* its I2C (or UART) controller, its GpioInt's controller (ACPI paths) */
     int addr, pin, irq, desc;    /* I2C address, GpioInt pin, Interrupt() line, HID descriptor register; -1: none */
     int pin_low, pin_edge;       /* the GpioInt: active low, edge-triggered */
     uint32_t speed;              /* the bus's speed, Hz */
     int io[2];                   /* the first two I/O port ranges' bases (an embedded controller: data, command); -1: none */
+    int pins[4], npins;          /* every GpioInt's pin, in order (buttons: power, volume up, down) */
+    uint32_t baud;               /* a UartSerialBus: its speed (0: none), */
+    int flow;                    /* hardware flow control (RTS/CTS) */
 } aml_hid_t;
+
+/* An Intel GPIO pad (the reference firmware's GINF/GADR methods say where
+ * its community's registers are): the community's physical address (8 KiB
+ * of registers), the offsets there of the pad's configuration (DW0, DW1
+ * after it), of its group's host-ownership and GPI_GPE_STS registers
+ * (interrupt status and enable are 0x40 and 0x20 before that one), and
+ * its bit in those. */
+typedef struct { uint64_t base; uint32_t pad, own, sts; int group, bit; } aml_gpio_t;
+int  aml_gpio(int pin, aml_gpio_t *g);      /* an ACPI GPIO pin number -> 0, or -1: unknown */
 
 long aml_load(const uint8_t *t, long n);    /* the tables, one after the other (others than DSDT/SSDT skipped) -> named objects */
 int  aml_hid(aml_hid_t *d, int max);        /* the I2C HID devices present ("PNP0C50") -> how many */

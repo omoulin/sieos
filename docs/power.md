@@ -13,7 +13,8 @@ writes the registers; the AML runs in user space, in `/bin/acpid`
 | `kernel/arch/x86_64/platform.c` | power off and S3: sleep type + SLP_EN in the PM1 control registers; restart: the FADT's reset register, the keyboard controller, a triple fault |
 | `kernel/task.c`, `smp.c`, `ap.S` | suspend: the other CPUs parked, CPU 0's state saved, the waking vector (the CPUs' trampoline), everything back, the other CPUs started again |
 | `user/lib/aml.c` | the AML interpreter: memory, I/O, PCI and embedded-controller fields, packages, Notify ([touchpad.md](touchpad.md)) |
-| `user/acpid/acpid.c` | sleep types to the kernel, the SCI (power button, GPEs, the embedded controller's queries), battery / AC / lid on port `acpi`, `_PTS`/`_WAK`, what wakes the machine (`_PRW`, the clock's alarm), PCI state across a sleep |
+| `user/acpid/acpid.c` | sleep types to the kernel, the SCI (power button, GPEs, the embedded controller's queries), battery / AC / lid on port `acpi`, `_PTS`/`_WAK`, what wakes the machine (`_PRW`, the clock's alarm), PCI state across a sleep; a Surface's GPIO buttons |
+| `user/acpid/ssam.c` | a Surface's battery and charger: the Surface Aggregator Module over its UART ([surface-pro-7.md](surface-pro-7.md#battery-and-charger-the-surface-aggregator)) |
 | `user/init/init.c` | `INIT_RESUME`: the device drivers started anew after a sleep |
 | `user/atlas` | the battery in the Deskbar's tray, Sleep in its menu, the lid (Settings: screen off or sleep), the display set up again after a sleep |
 | `user/sh/sh.c` | `poweroff`, `reboot`, `suspend [N]` (root), `battery` |
@@ -37,19 +38,23 @@ writes the registers; the AML runs in user space, in `/bin/acpid`
   memory window, read as memory.)
 - **Battery.** `_STA` (present), `_BIX` (else `_BIF`) for the capacities,
   `_BST` for state, rate, remaining and voltage: percent and time left or
-  to full. Read at start, after each Notify and every 30 s. `ACPI_STATUS`
+  to full. Read at start, after each Notify and every 30 s. A Surface
+  (Pro 7) has no battery in its tables: the same four answers come from
+  its Surface Aggregator over a UART (`ssam.c`), read again on its events. `ACPI_STATUS`
   gives it; `ACPI_WAIT` waits for the next change (the desktop's thread).
 - **Power button**: a clean power off, as `poweroff`: the fixed one, the
   `PNP0C0C` device, or on "Modern Standby" laptops Intel's HID event
   filter (`INT33D5`, Notify 0xCE) and virtual buttons (`INT33D6`, 0xC0),
   which acpid enables (`HDSM(1)`, `BTNL`, `VBDL`); their other events are
-  logged (a 2-in-1's tablet and laptop modes, 0xCC/0xCD). **Lid**: acpid
+  logged (a 2-in-1's tablet and laptop modes, 0xCC/0xCD); a Surface's
+  buttons (`MSHW0040`: power, volume up and down on GPIO pads, read every
+  50 ms; volume to the audio server). **Lid**: acpid
   only reports; the desktop turns the panel's backlight off, or sleeps
   (Settings, `/etc/display.conf`: `lid=sleep`).
 - **No S3.** Laptops that only have "Modern Standby" (the FADT's
   `LOW_POWER_S0_IDLE` flag, logged; no `\_S3`) sleep in s2idle, which
   SIEOS does not do yet: `suspend` answers "not supported" at once, before
-  `_PTS`; the desktop offers no Sleep ([ice-lake.md](ice-lake.md#power)).
+  `_PTS`; the desktop offers no Sleep ([surface-pro-7.md](surface-pro-7.md#power)).
 - **Sleep (S3).** `suspend` (root), the Deskbar's menu, or the lid:
   `power(POWER_SLEEP)`: files committed; acpid keeps every PCI function's
   header and PCI Express control registers and the interrupt links'
@@ -106,6 +111,8 @@ writes the registers; the AML runs in user space, in `/bin/acpid`
   (`system_powerdown`) powers off. Passes with 1, 4 and 8 CPUs, on `pc`
   and on `q35` (`-M q35 -global ICH9-LPC.disable_s3=0`: the reset
   register), and with the kernel built by sicc.
+- `make ssam-test`: the Surface Aggregator's protocol against a pretend
+  one (host).
 - `make aml-test`: `tests/aml/power.asl` (the Legion's patterns: `\_S3`
   under `If`, `_PTS`/`_WAK`, the controller, the battery's packages, a
   query and its Notify, PCI behind a bridge), and waking (`aml-test -W`):

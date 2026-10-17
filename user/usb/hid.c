@@ -6,10 +6,12 @@
  * PS/2 set-1 scancodes for keys, moves and buttons for pointers (CON_INJECT).
  *
  * Keyboards use the "boot protocol": 8 bytes, the modifier keys as bits,
- * then up to 6 keys held. Mice and tablets are read with their own
- * "report descriptor", which says where the buttons, X, Y and the wheel
- * are in a report. Both in user/lib/hidrep.c (shared with I2C and
- * Bluetooth devices).
+ * then up to 6 keys held. Mice, tablets, touchpads, and keyboards that
+ * are more than that on one interface (a Surface Type Cover: keyboard,
+ * mouse, volume keys and a precision touchpad, switched to its fingers'
+ * mode) are read with their own "report descriptor", which says where the
+ * buttons, X, Y, the wheel and the fingers are in a report. Both in
+ * user/lib/hidrep.c (shared with I2C and Bluetooth devices).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -41,7 +43,8 @@ static void hid_async(usbdev_t *d, int dci, int code, uint32_t left)
     }
 }
 
-/* ---- A HID interface: a keyboard (boot protocol), or a pointer. */
+/* ---- A HID interface: a keyboard (boot protocol), or what its report
+ * descriptor says: pointer, touchpad, keyboard, volume keys. */
 int hid_attach(usbdev_t *d, const uint8_t *f, int len)
 {
     int slot = 0;
@@ -58,23 +61,34 @@ int hid_attach(usbdev_t *d, const uint8_t *f, int len)
     memset(h, 0, sizeof *h);
     h->d = d;
     h->dci = dci_of(ep[2]);
-    h->kbd = f[6] == 1 && f[7] == 1;                             /* boot interface, keyboard */
     h->len = (ep[4] | ep[5] << 8) & 0x7FF;
     if (h->len > 64) h->len = 64;
-    if (!(h->buf = dmem(64, &h->bus))) return -1;
-    if (h->kbd) {
-        control(d, 0x21, 0x0B, 0, f[2], 0, 0);                   /* SET_PROTOCOL(boot) */
-        control(d, 0x21, 0x0A, 0, f[2], 0, 0);                   /* SET_IDLE(0): report changes only */
-    } else {
-        static uint8_t rd[1024];
-        if (rlen > (int)sizeof rd) rlen = sizeof rd;
-        if (rlen && control(d, 0x81, 6, 0x2200, f[2], rd, rlen) > 0) hid_parse(&h->r, rd, rlen);
-        if (!h->r.xsz && f[6] == 1 && f[7] == 2) {               /* no layout found: a boot mouse */
-            control(d, 0x21, 0x0B, 0, f[2], 0, 0);
-            h->r = (hidrep_t){ .bn = 3, .xpos = 8, .xsz = 8, .ypos = 16, .ysz = 8 };
-        }
-        if (!h->r.xsz) { free(h); return -1; }
+    if (!(h->buf = dmem(64, &h->bus))) { free(h); return -1; }
+    static uint8_t rd[2048];                                     /* (a Type Cover's: 1.1 KB) */
+    hidrep_t *r = &h->r;
+    if (rlen > (int)sizeof rd) rlen = sizeof rd;
+    if (rlen && control(d, 0x81, 6, 0x2200, f[2], rd, rlen) > 0) hid_parse(r, rd, rlen);
+    /* A boot keyboard alone keeps the boot protocol; one that is also a
+     * pointer or a touchpad (a Surface Type Cover: keyboard, mouse,
+     * consumer keys and touchpad on one interface) is read in the report
+     * protocol, all its reports through its descriptor. */
+    h->kbd = f[6] == 1 && f[7] == 1 && !r->xsz && !r->trid && !r->csz;
+    if (h->kbd) control(d, 0x21, 0x0B, 0, f[2], 0, 0);           /* SET_PROTOCOL(boot) */
+    else if (f[6] == 1) control(d, 0x21, 0x0B, 1, f[2], 0, 0);   /* SET_PROTOCOL(report) */
+    if (h->kbd || r->kn) control(d, 0x21, 0x0A, 0, f[2], 0, 0);  /* SET_IDLE(0): report changes only */
+    if (!h->kbd && !r->xsz && !r->trid && !r->kn && !r->csz && f[6] == 1 && f[7] == 2) {   /* no layout found: a boot mouse */
+        control(d, 0x21, 0x0B, 0, f[2], 0, 0);
+        *r = (hidrep_t){ .bn = 3, .xpos = 8, .xsz = 8, .ypos = 16, .ysz = 8 };
     }
+    if (r->trid) {                     /* a precision touchpad: its fingers (input mode 3), all of them and its button */
+        uint8_t m[2] = { (uint8_t)r->mrid, 3 }, s[2] = { (uint8_t)r->srid, 3 };
+        if (r->mrid < 1 || r->msz > 8 || control(d, 0x21, 0x09, 0x300 | r->mrid, f[2], m, 2) < 0) r->trid = 0;
+        else if (r->srid) control(d, 0x21, 0x09, 0x300 | r->srid, f[2], s, 2);
+    }
+    if (!h->kbd && !r->xsz && !r->trid && !r->kn && !r->csz) { free(h); return -1; }
+    log_line("usb: %04x:%04x interface %d: %s%s%s%s%s\n", d->vendor, d->product, f[2], h->kbd ? "boot keyboard" : r->kn ? "keyboard, " : "",
+             r->trid ? "touchpad (fingers), " : r->mrid ? "touchpad (as a mouse), " : "", r->screen ? "touch screen, " : r->xsz ? (r->absolute ? "tablet, " : "mouse, ") : "",
+             r->csz ? "volume keys, " : "", h->kbd ? "" : "its reports");
     d->hid[slot] = h;
     d->async[h->dci] = hid_async;
     if (!nhid++) hid_send(0, 0);                                 /* con: a keyboard or pointer is here */
@@ -85,6 +99,10 @@ int hid_attach(usbdev_t *d, const uint8_t *f, int len)
 void hid_detach(usbdev_t *d)
 {
     static const uint8_t none[8];
-    for (int k = 0; k < 4; k++) { hid_t *h = d->hid[k]; if (h && h->kbd) hid_keys(h->prev, none); }   /* its keys let go */
+    for (int k = 0; k < 4; k++) {                                /* its keys let go */
+        hid_t *h = d->hid[k];
+        if (h && h->kbd) hid_keys(h->prev, none);
+        else if (h && h->r.kn) hid_keys(h->r.kprev, none);
+    }
 }
 int hid_count(void) { return nhid; }

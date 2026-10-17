@@ -4,8 +4,8 @@ Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 Playing and recording on Intel High Definition Audio: QEMU's `intel-hda`
 and `ich9-intel-hda` with their codecs, and PC chipsets up to Raptor Lake
-(the target laptop's controller, PCI 00:1f.3; the Ice Lake 2-in-1's,
-8086:34c8, in HDA mode: [ice-lake.md](ice-lake.md#sound)) with a
+(the target laptop's controller, PCI 00:1f.3; the Surface Pro 7's,
+8086:34c8, in HDA mode: [surface-pro-7.md](surface-pro-7.md#sound)) with a
 Realtek-style codec.
 One output and one input stream, 48 kHz, 16-bit, stereo: no mixing of
 several programs, no other rates (convert files beforehand). The output
@@ -73,7 +73,11 @@ gives up on it: clients get "no sound card".
   Realtek's ALC225 family (ALC215/225/285/289/295/299, Dell's ALC3271):
   its combo jack's mode set through coefficients (unplugged, or a CTIA or
   OMTP headset, measured), and on a Dell the headset microphone's pin made
-  one ([ice-lake.md](ice-lake.md#sound)).
+  one. Realtek's ALC294 family (the Surface Pro 7's ALC274): Linux's
+  `alc294_init` (EAPD coefficients, the headphone depop), then the
+  generic walk ([surface-pro-7.md](surface-pro-7.md#sound)). Volume keys
+  (a USB keyboard's consumer keys, a Surface's buttons) come as
+  `AUDIO_KEY`.
 - **Streams:** a 128 KiB ring each (683 ms), 8 periods of 16 KiB, an
   interrupt at each period's end. Playing zeroes what was played, so it
   plays silence if writes stop; it stops one period after the last data
