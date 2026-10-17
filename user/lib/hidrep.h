@@ -1,6 +1,6 @@
 /*
- * hidrep.h - HID input reports (hidrep.c): where a mouse's, a tablet's or
- * a precision touchpad's buttons, X, Y, wheel and fingers are (from the
+ * hidrep.h - HID input reports (hidrep.c): where a mouse's, a tablet's, a
+ * touch screen's or a precision touchpad's buttons, X, Y, wheel and fingers are (from the
  * device's report descriptor), and each report turned into CON_INJECT
  * events for the console; keyboards' reports (boot layout: modifier bits,
  * a reserved byte, 6 keys) turned into scancodes, held keys repeated.
@@ -13,8 +13,8 @@
 
 #define HID_FINGERS 5
 typedef struct {
-    /* a mouse or tablet (positions are bit offsets in the report, after its id) */
-    int rid, bpos, bn, xpos, xsz, ypos, ysz, wpos, wsz, absolute;
+    /* a mouse or tablet (positions are bit offsets in the report, after its id); screen: a touch screen's first finger */
+    int rid, bpos, bn, xpos, xsz, ypos, ysz, wpos, wsz, absolute, screen;
     int32_t xmax, ymax;
     /* a keyboard: its report, modifier bits, key array (6 keys used); the keys held */
     int krid, kpos, kkeys, kn;

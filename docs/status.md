@@ -43,6 +43,10 @@ checklist in [raspberrypi.md](raspberrypi.md).
   ([bluetooth.md](bluetooth.md)), ACPI power: off, restart, sleep, battery,
   lid ([power.md](power.md)); then NVIDIA compute
   ([gpu-plan.md](gpu-plan.md)).
+- The second laptop (an Ice Lake 2-in-1, [ice-lake.md](ice-lake.md)): its
+  sound, touch screen, power and disk are written and wait for a boot;
+  then, if wanted, the DSP's microphones (SOF), the sensor hub (rotation),
+  s2idle and Ice Lake's display in igfx.
 - A web browser: WPE WebKit on a musl-based POSIX layer, phase by phase
   ([webkit-plan.md](webkit-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
@@ -343,3 +347,25 @@ checklist in [raspberrypi.md](raspberrypi.md).
   ([bluetooth.md](bluetooth.md)); the usb server takes the chipset's xHCI
   (00:14.0) over the CPU's Thunderbolt one. Untested on hardware. Sizes:
   iwl.o +1.4 KB of code, btd.o +0.5 KB, usb's pci.o +77 bytes.
+- **2026-10-17, later.** The second laptop, an Ice Lake 2-in-1 (likely a
+  Dell XPS 13 7390; [ice-lake.md](ice-lake.md)). Sound on its Smart Sound
+  controller (8086:34c8) in HDA mode: Ice Lake taken for a PCH, not an old
+  ICH (snooping, clock gating); the DSP's processing pipe off if left on,
+  the multi-link clock from 6 to 24 MHz (as Linux's `intel_init_lctl`);
+  Intel display codecs' vendor widget right from Ice Lake on (node 2);
+  Realtek's ALC225 family (ALC289/299 on Dells): headphone amplifier,
+  Dell's headset-microphone pin, the combo jack's mode measured (CTIA or
+  OMTP); recording prefers a plugged headset's microphone on any ADC. The
+  touch screen: i2chid drives two devices, the board's SCL counts from
+  `FMCN`/`SSCN`, a touch screen's first finger as an absolute pointer
+  (input mode 2; also for USB and Bluetooth through `hidrep.c`). acpid:
+  no `\_S3` ("Modern Standby"): `suspend` says "not supported" at once
+  (`power-test` boots once without S3), the FADT's low-power S0 flag
+  logged; Intel's HID event filter and virtual buttons (power button,
+  tablet/laptop mode logged). vblk: drives with an MDTS below 128 KiB
+  (requests cut; `nvme-test` runs at MDTS 32 KiB). Not done, with what it
+  would take: the DSP's digital microphones (SOF), the sensor hub, the
+  IPU4 camera, s2idle, Ice Lake's display. `hdmi-test`: a Dell ALC299
+  case; `bt-test`: a touch screen descriptor. Untested on the machine.
+  Sizes (x86-64, text): audiod.o +2.9 KB, i2chid.o +1.8 KB, hidrep.o
+  +0.3 KB, acpid.o +0.9 KB, nvme.o +0.25 KB (arm64 +0.3 KB), sh.o +14 B.

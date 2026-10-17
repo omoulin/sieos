@@ -7,7 +7,16 @@
  *   widgets walked from each output pin to a DAC and from an ADC to a
  *   microphone or line-in pin, through mixers and selectors; on the way every
  *   connection chosen and every amplifier opened at 0 dB. The volume is the
- *   DACs' output amplifiers; a headphone plugged in silences the speaker.
+ *   DACs' output amplifiers; a headphone plugged in silences the speaker, and
+ *   recording then prefers the jack's microphone (a headset's).
+ *
+ *   Realtek's ALC225 family (ALC215/225/285/289/295/299; Dell names them
+ *   ALC3253/3254/3271...; Linux: patch_realtek.c): a combo jack whose mode
+ *   is set through the vendor widget's coefficients: unplugged, or a
+ *   headset whose microphone is wired CTIA (iPhone) or OMTP (older Nokia),
+ *   told apart by measuring (alc_headset_mode_*, alc_determine_headset_type).
+ *   Dell's firmware leaves the headset microphone's pin (25) "not
+ *   connected": it is made one (Linux's DELL4_MIC_NO_PRESENCE).
  *
  *   HDMI / DisplayPort (any codec, any controller; Linux: patch_hdmi.c): the
  *   digital pins, each with its devices (DP multi-stream: one per display
@@ -29,6 +38,8 @@ enum { TAG_IN = 1, TAG_OUT = 2 };                /* the streams' tags */
 typedef struct { hda_t *c; uint8_t cad, nid, dev, cvt, dp; char name[17]; } sink_t;
 static hda_t *h, *ach;                           /* the controller spoken to; the analog codec's */
 static int cad, acad, afg, hp, spk, hpcap, vol = 80, npin, nsink, sel;   /* sel: 0 analog, else sink sel (sink[sel - 1]) */
+static int adc, ipin, jk, alc, hs = -1, nadc;   /* the ADC recording, its pin; jk: a jack's microphone only; an ALC225-family codec, its jack's mode */
+static uint8_t adcs[4];
 static uint8_t dac[2];
 typedef struct { hda_t *c; uint8_t cad, nid; } hpin_t;
 static hpin_t hpin[16];                          /* HDMI / DP pins */
@@ -45,10 +56,12 @@ static void amp(int nid, int o, int idx, int mute)   /* open at 0 dB, or muted *
 }
 /* A pin's default configuration (port: 1 = nothing attached; device). */
 static int pincfg(int nid, int *dev) { uint32_t c = verb(nid, 0xF1C00); *dev = c >> 20 & 15; return c >> 30; }
-static int inpin(int nid)                        /* a microphone or line-in pin? */
+static int inpin(int nid)                        /* a microphone or line-in pin? (jk: a jack's, something in it) */
 {
     int dev, port = pincfg(nid, &dev);
-    return wtype(nid) == W_PIN && port != 1 && (par(nid, 0xC) & 0x20) && (dev == 0xA || dev == 8);
+    uint32_t pc = par(nid, 0xC);
+    if (wtype(nid) != W_PIN || port == 1 || !(pc & 0x20) || (dev != 0xA && dev != 8)) return 0;
+    return !jk || (!port && (!(pc & 4) || verb(nid, 0xF1C00) & 0x100 || verb(nid, 0xF0900) >> 31));   /* (its own sense, if any) */
 }
 
 /* Follow nid's connections down to a DAC (from an output pin) or an input
@@ -92,13 +105,65 @@ static void set_vol(void)
     }
 }
 
+static int plugged(void)                         /* headphones in the jack? (the analog codec's) */
+{
+    if (!hp || !(hpcap & 4)) return 0;
+    if (hpcap & 2) verb(hp, 0x70900);            /* (this pin senses only when asked) */
+    return verb(hp, 0xF0900) >> 31;
+}
+
+/* An ALC225-family codec's coefficient (of widget nid) changed -> its old value. */
+__attribute__((noinline)) static uint32_t coef(int nid, int i, uint32_t mask, uint32_t set)
+{
+    verb(nid, 0x50000 | i);
+    uint32_t v = verb(nid, 0xC0000) & 0xFFFF;
+    if (mask) { verb(nid, 0x50000 | i); verb(nid, 0x40000 | (v & ~mask) | set); }
+    return v;
+}
+#define C(i, mask, set) coef(0x20, i, mask, set)
+static void headset(int in)                      /* the combo jack's mode, when it changed */
+{
+    static const uint16_t pre[7][4] = { { 0x20, 0x4A, 0x100, 0 }, { 0x57, 5, 0x4000, 0 }, { 0x20, 0x63, 0xC000, 0xC000 },
+        { 0x20, 0x4A, 0x30, 0x20 }, { 0x20, 0x4A, 0xC00, 0xC00 }, { 0x20, 0x45, 0xFC00, 0xD000 }, { 0x20, 0x4A, 0xC00, 0 } };
+    if (!alc || in == hs) return;
+    for (int i = 0; i < 7; i++) coef(pre[i][0], pre[i][1], pre[i][2], pre[i][3]);   /* (alc225_pre_hsmode) */
+    if ((hs = in)) {
+        C(0x67, 0xF000, 0x1000);                 /* measure: the ring as CTIA's ground; else as OMTP's */
+        C(0x45, 0xFC00, 0xD000); C(0x49, 0x300, C(0x45, 0, 0) & 1 << 9 ? 0x200 : 0x100);
+        sys_sleep(800000000);
+        int ctia = (C(0x46, 0, 0) & 0xF0) == 0xF0;
+        if (!ctia) { C(0x45, 0xFC00, 0xE000); C(0x49, 0x300, 0x100); sys_sleep(100000000); ctia = (C(0x46, 0, 0) & 0xF0) != 0xF0; }
+        C(0x4A, 0x1C0, 0x1C0); C(0x4A, 0x30, 0x30); C(0x67, 0xF000, 0x3000);
+        int b9 = C(0x45, 0, 0) >> 9 & 1;
+        C(0x45, 0xFC00, ctia ? 0xD400 : 0xE400); C(0x63, 0xC000, ctia && b9 ? 0x4000 : 0x8000);
+        printf("audiod: headset jack: %s wiring, its microphone on\n", ctia ? "CTIA (iPhone)" : "OMTP");
+    } else C(0x63, 0xC000, 0);                   /* unplugged */
+    if (hp) { verb(hp, 0x70740 | (hpcap & 8 ? 0x80 : 0)); amp(hp, 1, 0, 0); }   /* (the headphones' output again) */
+}
+
 /* The headphone jack: plugged in, the speaker is silenced. */
 static void jack(void)
 {
-    if (sel || !hp || !spk || !(hpcap & 4)) return;
+    if (sel || !ach) return;
     at(ach, acad);
-    if (hpcap & 2) verb(hp, 0x70900);            /* (this pin senses only when asked) */
-    verb(spk, 0x70700 | (verb(hp, 0xF0900) >> 31 ? 0 : 0x40));
+    int in = plugged();
+    if (spk) verb(spk, 0x70700 | (in ? 0 : 0x40));
+    headset(in);
+}
+
+/* The microphone, as recording starts: an ADC's path to a jack's (a
+ * headset's) when headphones are in, else to the first one (built in). */
+static void mic(void)
+{
+    int a = 0, in;
+    if (!nadc) return;
+    at(ach, acad);
+    headset(in = plugged());
+    for (ipin = 0, jk = in; jk >= 0 && !ipin; jk--)
+        for (int i = 0; i < nadc && !ipin; i++) if ((ipin = route(adcs[i], W_PIN, 0))) a = adcs[i];
+    jk = 0;
+    if (a != adc) { if (adc) conv(adc, 0); if ((adc = a)) conv(adc, TAG_IN); }
+    if (ipin) verb(ipin, 0x70720 | (par(ipin, 0xC) & 1 << 12 ? 4 : 0));   /* input; 80% bias (a microphone) */
 }
 
 /* Output k (0: analog, else sink k - 1) gets the output stream's tag, the
@@ -161,10 +226,10 @@ static int codec(int a)
 {
     at(h, a);
     afg = 0;
-    uint32_t id = par(0, 0), sub = par(0, 4), adc = 0, ipin = 0, n0 = npin;
+    uint32_t id = par(0, 0), sub = par(0, 4), n0 = npin, lo = id & 0xFFFF;
     int an = !ach;
     if (id >> 16 == 0x8086) {                    /* Intel display codec: all pins, converters, devices */
-        int vn = (id & 0xFFFF) >= 0x2812 ? 2 : 8;   /* (its vendor widget: Tiger Lake on 2) */
+        int vn = lo >= 0x280F ? 2 : lo == 0x2800 || lo == 0x280C || lo == 0x280D ? 11 : 8;   /* (its vendor widget: Ice Lake on 2) */
         uint32_t v = verb(vn, 0xF8100);
         if ((v & 3) != 3) verb(vn, 0x78100 | (v & 0xFC) | 3);
     }
@@ -172,7 +237,16 @@ static int codec(int a)
         if ((par(f, 5) & 0xFF) == 1) afg = f;
     if (!afg) return -1;
     verb(afg, 0x70500);                          /* D0 */
-    if (an) hp = spk = 0;
+    if (an) {
+        int d;
+        hp = spk = adc = nadc = 0;
+        alc = id >> 16 == 0x10EC && (lo == 0x215 || lo == 0x225 || lo == 0x285 || lo == 0x289 || lo == 0x295 || lo == 0x299);
+        if (alc && verb(afg, 0xF2000) >> 16 == 0x1028 && pincfg(0x19, &d) == 1) {   /* Dell: a headset microphone, no jack sense of its own */
+            for (int i = 0; i < 4; i++) verb(0x19, (0x71Cu + i) << 8 | (0x01A1913C >> 8 * i & 0xFF));
+            printf("audiod: Realtek ALC%x on a Dell: pin 25 is the headset's microphone\n", lo);
+        }
+        if (alc) { C(0x36, 1 << 13, 0); C(0x4A, 0xC00, 0); coef(0x57, 4, 7, 4); }   /* (alc_fill_eapd_coef; alc225_init: headphone amplifier at high power) */
+    }
     sub = par(afg, 4);
     for (uint32_t nid = sub >> 16 & 0xFF; nid < (sub >> 16 & 0xFF) + (sub & 0xFF); nid++) {
         uint32_t cap = par(nid, 9), type = cap >> 20 & 15;
@@ -187,10 +261,7 @@ static int codec(int a)
             if (dev == 2) { if (!hp) hp = nid; } /* headphones */
             else if (!spk || dev == 1) spk = nid;   /* a speaker, else a line out */
         }
-        if (type == W_ADC && !adc && (ipin = route(nid, W_PIN, 0))) {
-            conv(adc = nid, TAG_IN);
-            verb(ipin, 0x70720 | (par(ipin, 0xC) & 1 << 12 ? 4 : 0));   /* input; 80% bias (a microphone) */
-        }
+        if (type == W_ADC && nadc < 4) adcs[nadc++] = (uint8_t)nid;
     }
     if (npin > (int)n0)
         printf("audiod: codec %d (%04x:%04x): %d HDMI/DP pins, %d to %d, %d converters each\n",
@@ -209,6 +280,7 @@ static int codec(int a)
     }
     if (!k) return -1;
     ach = h; acad = a;
+    mic();
     printf("audiod: codec %d (%04x:%04x): speaker or line out pin %d, headphone pin %d, DAC %d %d; ADC %d <- pin %d\n",
            a, id >> 16, id & 0xFFFF, spk, hp, dac[0], dac[1], adc, ipin);
     set_vol();

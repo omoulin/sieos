@@ -1,4 +1,4 @@
-# Laptop touchpads (I2C HID)
+# Laptop touchpads and touch screens (I2C HID)
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
@@ -6,8 +6,11 @@ A laptop's touchpad is rarely USB or PS/2: it is a "HID over I2C" device
 on one of the chipset's I2C controllers, described only by the firmware's
 ACPI tables. The driver, `/bin/i2chid` (`user/i2chid`, x86-64), started
 by init at boot, finds it there, drives the controller and feeds the
-console like a USB mouse (`CON_INJECT`). With no such device it ends at
-once and is not started again.
+console like a USB mouse (`CON_INJECT`). A 2-in-1's touch screen is the
+same kind of device: i2chid drives up to two (each on its own
+controller), the screen as an absolute pointer like a USB tablet
+([ice-lake.md](ice-lake.md#touchpad-and-touch-screen)). With no such
+device it ends at once and is not started again.
 
 | File | What it does |
 |---|---|
@@ -35,14 +38,19 @@ once and is not started again.
 - **The controller.** The `_CRS`'s controller path (`\_SB.PC00.I2C5`), its
   `_ADR` (`0x00190001`) is the PCI device (00:19.1). Powered to D0 (PMCSR),
   LPSS reset released (BAR0 + 0x204), the DesignWare core checked
-  (`0x44570140`), master at the bus's speed (SCL counts right for a 216 MHz
-  clock: 400 kHz there, 250 kHz at 133 MHz), transfers through the FIFOs
+  (`0x44570140`), master at the bus's speed: the board's SCL counts from
+  the controller's `FMCN` (fast) or `SSCN` (standard) method, as Linux
+  takes them, else ours (right for a 216 MHz clock: 400 kHz there, 250 kHz
+  at the 133 MHz of Ice Lake to Raptor Lake), transfers through the FIFOs
   with restart and stop, waiting the bytes' time, then the stop.
 - **HID over I2C.** The 30-byte HID descriptor (at `_DSM`'s register, else
   1 or 0x20), SET_POWER on, RESET, the report descriptor. A precision
   touchpad (digitizer "touch pad" with fingers and an input-mode feature)
   is switched to its own mode (SET_REPORT feature, mode 3); otherwise it
-  stays a mouse (it starts as one).
+  stays a mouse (it starts as one). A touch screen (digitizer "touch
+  screen" collection, unless a mouse collection comes first) gets mode 2;
+  its first finger is then the pointer's place, the left button down while
+  it touches.
 - **Gestures** (`hidrep.c`): one finger moves the pointer (relative, about
   2500 counts across the pad, then the console's speed), two fingers
   scroll (natural direction), a touch shorter than 0.2 s that hardly moved

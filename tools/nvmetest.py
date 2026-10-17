@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The NVMe driver (user/vblk/nvme.c) on QEMU's emulated NVMe drives: a
 blank drive with 4 KiB sectors first (listed, skipped: no SieFS), then a
-drive with 512-byte sectors and a GPT whose SieFS partition starts at
+drive with 512-byte sectors, 32 KiB per command at most (MDTS 3: vblk cuts
+transfers), and a GPT whose SieFS partition starts at
 1 MiB. SIEOS must take that partition: first start on the serial console,
 `bench`, a file written and read back, power off; then the partition is
 checked on the host (fsck.siefs, the file read back). Used by `make nvme-test`.
@@ -31,7 +32,7 @@ with open(blank, "wb") as f:
     f.truncate(64 << 20)
 cmdline += ["-drive", f"file={blank},if=none,id=nb,format=raw",
             "-device", "nvme,serial=sieosblank,drive=nb,logical_block_size=4096,physical_block_size=4096,addr=6",
-            "-drive", f"file={disk},if=none,id=nd,format=raw", "-device", "nvme,serial=sieos0,drive=nd,addr=7"]
+            "-drive", f"file={disk},if=none,id=nd,format=raw", "-device", "nvme,serial=sieos0,drive=nd,addr=7,mdts=3"]   # (32 KiB per command: vblk cuts transfers)
 
 qemu = subprocess.Popen(cmdline, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 out, log = b"", b""
@@ -52,7 +53,7 @@ def expect(text, timeout=600):
 def send(line):
     qserial.type_line(qemu, line)
 
-expect("vblk: NVMe disk", 120); expect("(SieFS partition)")
+expect("at most 32 KiB per command", 120); expect("vblk: NVMe disk", 120); expect("(SieFS partition)")
 expect("first start, and there is no screen")
 for pw in ("rootpass1", "alicepass1"):
     for p in ("New password", "Again: "):

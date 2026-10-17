@@ -30,7 +30,7 @@ static const char *errstr(long e)
     case ELOOP: return "too many symbolic links"; case EBUSY: return "busy";
     case 61: return "no such attribute";          case ENOMEM: return "out of memory";
     case EROFS: return "read only (a snapshot)";  case EXDEV: return "not across volumes";
-    case EINTR: return "interrupted";
+    case EINTR: return "interrupted";             case ENOSYS: return "not supported";
     }
     return "error";
 }

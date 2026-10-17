@@ -39,9 +39,17 @@ writes the registers; the AML runs in user space, in `/bin/acpid`
   `_BST` for state, rate, remaining and voltage: percent and time left or
   to full. Read at start, after each Notify and every 30 s. `ACPI_STATUS`
   gives it; `ACPI_WAIT` waits for the next change (the desktop's thread).
-- **Power button**: a clean power off, as `poweroff`. **Lid**: acpid only
-  reports; the desktop turns the panel's backlight off, or sleeps
+- **Power button**: a clean power off, as `poweroff`: the fixed one, the
+  `PNP0C0C` device, or on "Modern Standby" laptops Intel's HID event
+  filter (`INT33D5`, Notify 0xCE) and virtual buttons (`INT33D6`, 0xC0),
+  which acpid enables (`HDSM(1)`, `BTNL`, `VBDL`); their other events are
+  logged (a 2-in-1's tablet and laptop modes, 0xCC/0xCD). **Lid**: acpid
+  only reports; the desktop turns the panel's backlight off, or sleeps
   (Settings, `/etc/display.conf`: `lid=sleep`).
+- **No S3.** Laptops that only have "Modern Standby" (the FADT's
+  `LOW_POWER_S0_IDLE` flag, logged; no `\_S3`) sleep in s2idle, which
+  SIEOS does not do yet: `suspend` answers "not supported" at once, before
+  `_PTS`; the desktop offers no Sleep ([ice-lake.md](ice-lake.md#power)).
 - **Sleep (S3).** `suspend` (root), the Deskbar's menu, or the lid:
   `power(POWER_SLEEP)`: files committed; acpid keeps every PCI function's
   header and PCI Express control registers and the interrupt links'
@@ -111,6 +119,8 @@ writes the registers; the AML runs in user space, in `/bin/acpid`
   every `_Qxx` (four call methods of SSDTs not in the dump), the `_Lxx` /
   `_Exx` GPE methods, `_BIX`, `_BST`, `_PSR`, `_LID`, with a fake memory.
 - `make test`, `usb-test` (OVMF) power off through the new path.
+- `make power-test` also boots once with no `\_S3` (`PIIX4_PM.disable_s3=1`):
+  `suspend` must say "not supported" at once.
 
 ## On the laptop: what to look for
 
