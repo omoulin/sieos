@@ -27,6 +27,8 @@ int  screen_native(int *w, int *h); /* a resizable screen's own size (the Intel 
 int  screen_backlight(int pct);     /* the panel's brightness in %: set it (pct >= 0) -> now; -1: none */
 int  screen_wake(void);            /* after a suspend: the Intel display set up again -> 0; -1: not it */
 void screen_blank(int off);        /* the panel's backlight off (1: the lid closed) or on again */
+int  screen_hpd(void);             /* the Intel display's monitor ports: their hot-plug pins; -1: not it */
+void screen_plug(void);            /* each monitor lit or turned off as its pin says */
 long rtc_seconds(void);            /* the time of day in seconds (UTC), or -1: no clock */
 
 void draw_init(const screen_t *s);

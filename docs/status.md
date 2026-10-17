@@ -25,7 +25,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
 `kernel-test`, `power-test` (x86-64), `sig-test`, `posix-test`, `cxx-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
-`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`,
+`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`, `igfx-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
 
@@ -300,3 +300,17 @@ checklist in [raspberrypi.md](raspberrypi.md).
   checks the laptop's `_PRW` patterns (the Legion's `GPRW`, `_DSW`/`_PSW`,
   a GPE block, S1 only). Sizes: acpid.o +1.1 KB of code, aml.o +0.2 KB,
   sh +0.15 KB, atlas unchanged.
+- **2026-10-17.** Monitor hot-plug on the laptop's Intel display
+  ([desktop.md](desktop.md#how-it-works)): a DP or HDMI monitor plugged in
+  after the start is lit as at the start (EDID, mode, the next free pipe,
+  sound if it has speakers); one unplugged has its pipe, port, DPLL and
+  sound turned off; the panel is never touched but for its DBUF share,
+  which follows i915's table as pipes come and go (each pipe moved at its
+  next frame once its blocks are free). Atlas reads the PCH's hot-plug pins
+  (SDEISR, TC1-TC4) twice a second from a thread of its own, 200 ms of
+  debounce; igfx's modeset code reused (a monitor's probe, the DBUF share
+  now functions). audiod: a stream starting on a monitor that is gone goes
+  back to the speakers (`vol out` already asked again). `make igfx-test`:
+  a fake display engine on the host. Not yet tried on the laptop. Sizes:
+  atlas.elf +1.3 KB of code (igfx.o +1.1 KB, atlas.o +0.25 KB), +1.4 KB
+  of bss (five outputs instead of three); audiod.o +54 bytes.

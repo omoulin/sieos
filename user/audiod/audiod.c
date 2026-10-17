@@ -292,7 +292,10 @@ int main(int argc, char **argv)
                 break;
             }
             out.pos = (out.pos + take) % RING; out.n += take; out.drain = 0;
-            if (!out.run && out.n) { jack(); start(&out); }
+            if (!out.run && out.n) {             /* (to a monitor: still there? else the speakers) */
+                if (sel && hdmi_scan(0)) output(!ach);
+                jack(); start(&out);
+            }
             r = take;
             break;
         case AUDIO_READ:

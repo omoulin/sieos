@@ -134,7 +134,9 @@ In the log (serial console or log viewer), `acpid:` lines:
    control 1804/0, sleep type 5/0`; press the power button: `mk: awake; TSC
    carried on`, `acpid: awake (PM1 status 8100)`, `PCI: .. registers written back`, `init:
    ... started anew after the sleep`, `atlas: awake: the screen set up
-   again` (and in `/etc/igfx.log`, the modeset after waking).
+   again` (and in `/etc/igfx.log`, the modeset after waking, then the
+   monitor ports gone over: one unplugged during the sleep turned off, one
+   plugged in lit).
 6. The lid: Settings, Power, "Lid closed: Sleep". Close the lid: `atlas: lid
    closed: sleep`, `acpid: suspend`, `mk: ACPI S3`. Open it: `mk: awake`,
    `acpid: awake (PM1 status ...)` (which bits: 100, the controller pressed

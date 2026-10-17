@@ -80,8 +80,9 @@ controller for CORB, RIRB and the buffer lists).
 ## HDMI and DisplayPort
 
 ```
-  igfx (Atlas), when it lights a monitor whose EDID says "basic audio":
+  igfx (Atlas), at its start if the VBT has monitor ports:
      display audio on (AUD_FREQ_CNTRL, AUD_PIN_BUF_CTL, the codec wake signal)
+  then when it lights a monitor whose EDID says "basic audio" (at the start or plugged in later):
      HDMI: HDMI mode (not DVI) and an AVI infoframe
      the transcoder's audio on, N/CTS by the hardware, the ELD (built from the EDID) ──┐
                                                                                       │ (inside the chip)
@@ -97,7 +98,8 @@ the codec is how audiod learns that a monitor with sound is there.
   `codec_wake_override`): when a monitor (not the panel) has a CEA block
   with basic audio, `user/lib/eld.h` builds its ELD (CEA revision, name,
   short audio descriptors, speaker allocation, manufacturer and product;
-  DP or HDMI). Before the outputs: `AUD_FREQ_CNTRL` 0x8010 (8T, 96 MHz
+  DP or HDMI). Before the outputs, whenever the VBT has a monitor port (so
+  that the codec is there for a monitor plugged in later): `AUD_FREQ_CNTRL` 0x8010 (8T, 96 MHz
   BCLK, i915's value for display 12), `AUD_PIN_BUF_CTL` on, and the codec
   wake signal (`AUD_CHICKENBIT` bit 15) pulsed and left on, so that
   audiod's link reset finds the HDMI codec; the power wells (PW2-PW4) are
@@ -105,7 +107,8 @@ the codec is how audiod learns that a monitor with sound is there.
   with an AVI infoframe (RGB, no VIC: full range). After its pipe starts:
   `AUD_PIN_ELD_CP_VLD` audio enable for the transcoder, `AUD_CFG` (DP: N
   by the hardware; HDMI: the pixel clock's class, 25.2 MHz if not one of
-  i915's table), the ELD into `AUD_EDID_DATA`, ELD valid. Logged in
+  i915's table), the ELD into `AUD_EDID_DATA`, ELD valid; unplugged: audio
+  off, ELD not valid (with its pipe). Logged in
   `/etc/igfx.log` (`sound: ELD ...`, `display audio on`, `pipe B: sound on`).
 - **The codec side** (`user/audiod/codec.c`, Linux's `patch_hdmi.c`): the
   digital pins with HDMI or DP capability and a connection (the pin
@@ -197,7 +200,10 @@ monitor unplugged.
   pins ... 4 converters each` (0 converters: the vendor verb did not take)
   and an `HDMI/DP sink` line. Silence while listed: DP M/N or HDMI N/CTS
   (the hardware's), the infoframe, or the codec wake left on are the
-  suspects. Only 48 kHz stereo PCM (no surround, no passthrough, no
-  hot-plug: igfx lights monitors only when Atlas starts). No software
+  suspects. Only 48 kHz stereo PCM (no surround, no passthrough). A
+  monitor plugged in later is lit by igfx with its ELD (hot-plug:
+  [desktop.md](desktop.md#how-it-works)): `vol out` and Settings list the
+  sinks again each time they are asked; when a stream starts on a monitor
+  that is gone, the sound goes back to the speakers. No software
   volume for monitors. Intel display versions other than 12 are not
   driven by igfx, so get no display-side set-up.
