@@ -31,6 +31,15 @@ $(WKT)/bin/pkg-config:
 	cd $(WKT)/src/pkgconf-$(PKGCF_VER) && ./configure -q --prefix=$(CURDIR)/$(WKT) --disable-shared && $(MAKE) -s && $(MAKE) -s install
 	rm -rf $(WKT)/src/pkgconf-$(PKGCF_VER) && ln -sf pkgconf $@
 
+# NASM: libjpeg-turbo's x86-64 SIMD code is NASM assembly
+NASM_VER  := 3.02
+NASM_SHA  := 87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d
+$(WKT)/bin/nasm:
+	$(call fetch,https://www.nasm.us/pub/nasm/releasebuilds/$(NASM_VER)/nasm-$(NASM_VER).tar.xz,nasm-$(NASM_VER).tar.xz,$(NASM_SHA))
+	rm -rf $(WKT)/src/nasm-$(NASM_VER) && mkdir -p $(WKT)/src && tar xJf .hosttools/dl/nasm-$(NASM_VER).tar.xz -C $(WKT)/src
+	cd $(WKT)/src/nasm-$(NASM_VER) && ./configure -q --prefix=$(CURDIR)/$(WKT) && $(MAKE) -s nasm && cp nasm $(CURDIR)/$@
+	rm -rf $(WKT)/src/nasm-$(NASM_VER)
+
 # ---- the cross toolchain: compiler wrappers (clang for this processor, the
 # sysroot, compiler-rt's builtins and crtbegin/crtend, static, lld with the
 # segment layout SIEOS's loader wants), a CMake toolchain file, a Meson cross file
@@ -140,14 +149,14 @@ $(WB)/stamp/icu: $(WB)/toolchain.stamp user/web/icu-filter.json
 	$(MAKE) -s -C $(WB)/build/icu >/dev/null && $(MAKE) -s -C $(WB)/build/icu install DESTDIR=$(SR) >/dev/null
 	touch $@
 
-# ---- FreeType (glyphs; no PNG bitmaps, Brotli, HarfBuzz: a lean first build)
+# ---- FreeType (glyphs; PNG for colour bitmaps (emoji); no Brotli, no HarfBuzz)
 FT_VER    := 2.15.0
 FT_SHA    := 93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5
-$(WB)/stamp/freetype: $(WB)/stamp/zlib
+$(WB)/stamp/freetype: $(WB)/stamp/zlib $(WB)/stamp/libpng
 	$(call fetch,https://download.savannah.gnu.org/releases/freetype/freetype-$(FT_VER).tar.xz,freetype-$(FT_VER).tar.xz,$(FT_SHA))
 	$(call unpack,freetype,freetype-$(FT_VER).tar.xz)
 	rm -rf $(WB)/build/freetype && cd $(WB)/src/freetype && $(MESONSET) $(CURDIR)/$(WB)/build/freetype -Dbrotli=disabled \
-	    -Dbzip2=disabled -Dharfbuzz=disabled -Dpng=disabled -Dzlib=enabled -Dtests=disabled >/dev/null
+	    -Dbzip2=disabled -Dharfbuzz=disabled -Dpng=enabled -Dzlib=enabled -Dtests=disabled >/dev/null
 	$(PKGENV) $(NINJA) -C $(WB)/build/freetype >/dev/null && $(PKGENV) $(MESON) install -C $(WB)/build/freetype --destdir $(SR) --no-rebuild >/dev/null
 	touch $@
 
@@ -195,7 +204,71 @@ $(WB)/fonts/DejaVuSans.ttf:
 	mkdir -p $(@D) && tar xjf .hosttools/dl/dejavu-fonts-ttf-$(DJV_VER).tar.bz2 -C $(@D) --strip-components=2 \
 	    dejavu-fonts-ttf-$(DJV_VER)/ttf/DejaVuSans.ttf dejavu-fonts-ttf-$(DJV_VER)/ttf/DejaVuSerif.ttf && touch $@
 
-WEBDEPS   := zlib libffi pcre2 glib icu freetype harfbuzz expat fontconfig
+# ---- libpng (with its SIMD filters)
+PNG_VER   := 1.6.59
+PNG_SHA   := d80dd2a38a37f803cb9b6ac7b14bd6e74ddc3b654780a8380bdf93523fdb4389
+$(WB)/stamp/libpng: $(WB)/stamp/zlib
+	$(call fetch,https://download.sourceforge.net/libpng/libpng-$(PNG_VER).tar.xz,libpng-$(PNG_VER).tar.xz,$(PNG_SHA))
+	$(call unpack,libpng,libpng-$(PNG_VER).tar.xz)
+	rm -rf $(WB)/build/libpng && $(CMAKESET) -S $(WB)/src/libpng -B $(WB)/build/libpng -DPNG_SHARED=OFF -DPNG_STATIC=ON \
+	    -DPNG_TESTS=OFF -DPNG_TOOLS=OFF -DPNG_EXECUTABLES=OFF -DPNG_FRAMEWORK=OFF >/dev/null
+	$(NINJA) -C $(WB)/build/libpng >/dev/null && DESTDIR=$(SR) $(NINJA) -C $(WB)/build/libpng install >/dev/null
+	touch $@
+
+# ---- libjpeg-turbo (the JPEG API; its SIMD code: NASM on x86-64, intrinsics on arm64)
+JPEG_VER  := 3.2.0
+JPEG_SHA  := 6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e
+$(WB)/stamp/libjpeg: $(WB)/toolchain.stamp | $(WKT)/bin/nasm
+	$(call fetch,https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$(JPEG_VER)/libjpeg-turbo-$(JPEG_VER).tar.gz,libjpeg-turbo-$(JPEG_VER).tar.gz,$(JPEG_SHA))
+	$(call unpack,libjpeg,libjpeg-turbo-$(JPEG_VER).tar.gz)
+	rm -rf $(WB)/build/libjpeg && $(CMAKESET) -S $(WB)/src/libjpeg -B $(WB)/build/libjpeg -DENABLE_SHARED=OFF -DENABLE_STATIC=ON \
+	    -DWITH_TURBOJPEG=OFF -DWITH_TOOLS=OFF -DWITH_TESTS=OFF -DWITH_SIMD=ON -DREQUIRE_SIMD=ON \
+	    -DCMAKE_ASM_NASM_COMPILER=$(CURDIR)/$(WKT)/bin/nasm >/dev/null
+	$(NINJA) -C $(WB)/build/libjpeg >/dev/null && DESTDIR=$(SR) $(NINJA) -C $(WB)/build/libjpeg install >/dev/null
+	touch $@
+
+# ---- libwebp (decoding, demux; the encoder comes with it; no tools)
+WEBP_VER  := 1.6.0
+WEBP_SHA  := e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564
+WEBP_OFF  := ANIM_UTILS CWEBP DWEBP GIF2WEBP IMG2WEBP VWEBP WEBPINFO WEBPMUX EXTRAS WEBP_JS FUZZTEST
+$(WB)/stamp/libwebp: $(WB)/toolchain.stamp
+	$(call fetch,https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-$(WEBP_VER).tar.gz,libwebp-$(WEBP_VER).tar.gz,$(WEBP_SHA))
+	$(call unpack,libwebp,libwebp-$(WEBP_VER).tar.gz)
+	rm -rf $(WB)/build/libwebp && $(CMAKESET) -S $(WB)/src/libwebp -B $(WB)/build/libwebp $(WEBP_OFF:%=-DWEBP_BUILD_%=OFF) \
+	    -DWEBP_BUILD_LIBWEBPMUX=ON -DWEBP_USE_THREAD=ON >/dev/null
+	$(NINJA) -C $(WB)/build/libwebp >/dev/null && DESTDIR=$(SR) $(NINJA) -C $(WB)/build/libwebp install >/dev/null
+	touch $@
+
+# ---- SQLite (cookies, storage): the amalgamation, one C file. No loadable
+# extensions, no deprecated calls; WAL without shared memory between
+# processes (exclusive locking: one process owns a database, as in WebKit)
+SQLITE_VER := 3540100
+SQLITE_SHA := 0a9c8e34352dad46006aa82836d5383bff9dc6bc9ce5a60553c05aa30e6ad1f9
+SQLITE_DEF := -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_DEPRECATED -DSQLITE_DQS=0 \
+              -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DEFAULT_LOCKING_MODE=1
+$(WB)/stamp/sqlite: $(WB)/toolchain.stamp
+	$(call fetch,https://www.sqlite.org/2026/sqlite-amalgamation-$(SQLITE_VER).zip,sqlite-amalgamation-$(SQLITE_VER).zip,$(SQLITE_SHA))
+	rm -rf $(WB)/src/sqlite && mkdir -p $(WB)/src && python3 -m zipfile -e .hosttools/dl/sqlite-amalgamation-$(SQLITE_VER).zip $(WB)/src && \
+	    mv $(WB)/src/sqlite-amalgamation-$(SQLITE_VER) $(WB)/src/sqlite
+	$(WB)/bin/cc -Os $(SQLITE_DEF) -c $(WB)/src/sqlite/sqlite3.c -o $(WB)/src/sqlite/sqlite3.o
+	rm -f $(SR)/usr/lib/libsqlite3.a && $(LLVM)/bin/llvm-ar rcs $(SR)/usr/lib/libsqlite3.a $(WB)/src/sqlite/sqlite3.o
+	cp $(WB)/src/sqlite/sqlite3.h $(WB)/src/sqlite/sqlite3ext.h $(SR)/usr/include/
+	printf 'prefix=/usr\nlibdir=$${prefix}/lib\nincludedir=$${prefix}/include\nName: SQLite\nDescription: SQL database engine\nVersion: %s\nLibs: -L$${libdir} -lsqlite3\nCflags: -I$${includedir}\n' \
+	    $(SQLITE_VER) > $(SR)/usr/lib/pkgconfig/sqlite3.pc
+	touch $@
+
+# ---- libxml2 (WebCore's XML): no Python, ICU, zlib, LZMA, HTTP, catalogs, programs
+XML_VER   := 2.15.4
+XML_SHA   := 98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821
+XML_OFF   := PYTHON ICU ZLIB HTTP CATALOG DEBUG DOCS HISTORY LEGACY MODULES PROGRAMS READLINE SCHEMATRON TESTS
+$(WB)/stamp/libxml2: $(WB)/toolchain.stamp
+	$(call fetch,https://download.gnome.org/sources/libxml2/$(basename $(XML_VER))/libxml2-$(XML_VER).tar.xz,libxml2-$(XML_VER).tar.xz,$(XML_SHA))
+	$(call unpack,libxml2,libxml2-$(XML_VER).tar.xz)
+	rm -rf $(WB)/build/libxml2 && $(CMAKESET) -S $(WB)/src/libxml2 -B $(WB)/build/libxml2 $(XML_OFF:%=-DLIBXML2_WITH_%=OFF) >/dev/null
+	$(NINJA) -C $(WB)/build/libxml2 >/dev/null && DESTDIR=$(SR) $(NINJA) -C $(WB)/build/libxml2 install >/dev/null
+	touch $@
+
+WEBDEPS   := zlib libffi pcre2 glib icu libpng freetype harfbuzz expat fontconfig libjpeg libwebp sqlite libxml2
 webdeps: $(WEBDEPS:%=$(WB)/stamp/%)
 
 # ---- webdeps-test: our programs (tests/webdeps/NAME.c, linked with the
