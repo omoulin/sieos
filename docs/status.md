@@ -23,7 +23,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Built by sicc | yes (`cc-sieos`) | always | always | always |
 
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
-`kernel-test`, `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
+`kernel-test`, `power-test` (x86-64), `sig-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
 `cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
@@ -38,7 +38,9 @@ checklist in [raspberrypi.md](raspberrypi.md).
   Realtek network card, the AX210 Wi-Fi ([net.md](net.md)), HD Audio
   (passes in QEMU, [audio.md](audio.md)), the touchpad
   ([touchpad.md](touchpad.md)), the camera and the keyboard light
-  ([usb-stack.md](usb-stack.md#cameras)); then NVIDIA compute
+  ([usb-stack.md](usb-stack.md#cameras)), Bluetooth
+  ([bluetooth.md](bluetooth.md)), ACPI power: off, restart, sleep, battery,
+  lid ([power.md](power.md)); then NVIDIA compute
   ([gpu-plan.md](gpu-plan.md)).
 - The Pis: USB input; running on the real boards (Ethernet and Wi-Fi are
   written but untested there, [raspberrypi.md](raspberrypi.md)).
@@ -119,6 +121,22 @@ checklist in [raspberrypi.md](raspberrypi.md).
   and zlib (inflate, a small deflate) in `lib/`. Host git fsck accepts what
   SIEOS pushes and the repositories it makes (`make git-test`). The Git
   window on the desktop drives `/bin/git` ([desktop.md](desktop.md#git)).
+- **2026-10-16.** Mail grows to what `../mailbox` (the Linux client in
+  Atlas's look) does ([desktop.md](desktop.md#mail)): several accounts
+  (`[account]` sections in `~/.mail`; a one-account file reads as
+  before), each with its folders, unread counts (STATUS) and connection,
+  a From choice when writing, an account editor (pick, new, remove);
+  self-signed certificates accepted per account, their SHA-256 shown and
+  pinned (`tls_open`: that certificate only, the key still proven; a
+  changed one refused); favorite folders at the top; the newest 300
+  messages; attachments saved (`~/Downloads`), files attached (picked in
+  Files; multipart/mixed, base64), forwarded with the message; Reply all;
+  Delete into the Trash (SPECIAL-USE `\Trash` or its usual names), for
+  good from it; a copy of what is sent in Sent (APPEND); `mailto:` links
+  (the sia strip, `mail mailto:`); Ctrl+N/R/Shift+R/L, F5, Ctrl+Enter (con
+  now tells Ctrl+Enter and Ctrl+Shift+letters apart). atlas.elf +8.8 KB
+  (the window: 31 KB of code), mail.elf +13 KB. `make mail-test` covers it
+  all against two host servers.
 - **2026-10-16.** Mail ([desktop.md](desktop.md#mail)): a window of the
   desktop (folders, messages, reading, writing, replying, forwarding,
   deleting, the account) and `/bin/mail`, which does the talking: IMAP or
@@ -247,3 +265,17 @@ checklist in [raspberrypi.md](raspberrypi.md).
   laptop's real descriptors. Untested on the laptop itself. Sizes: the USB
   server +11.2 KB of code (uvc.o 6.0 KB, kbl.o 2.4 KB, the file calls 2.5 KB, the isochronous core 0.3 KB), atlas +6.4 KB (cam.o 4.4 KB),
   `/bin/kblight` 13 KB.
+- **2026-10-16, night.** ACPI power ([power.md](power.md)): power off and
+  restart through the FADT (sleep type from `\_S5`, the reset register;
+  QEMU's hard-coded ports gone), suspend to RAM (S3: the other CPUs parked,
+  CPU 0 back through the trampoline, the TSC carried on, the CPUs started
+  again; PCI headers and interrupt links restored; init restarts the device
+  drivers), and `/bin/acpid`: the SCI, GPEs, the embedded controller's
+  queries, Notify, battery (`_BIX`/`_BST`), AC, lid, the power button (a
+  clean power off). The AML interpreter moved to `user/lib` and gained I/O,
+  PCI and EC fields with writes, packages as arrays, more opcodes. The
+  desktop: the battery in the Deskbar, Sleep in its menu, the lid (Settings:
+  screen off or sleep), the display set up again after waking. `battery`,
+  `suspend`; `make power-test`. Checked on the target platform's real tables
+  on the host; untested on the laptop. Sizes: kernel.bin +3.3 KB, aml.o
+  13.5 -> 17.6 KB, acpid 41 KB of code (acpid.o 10 KB), i2chid +4.4 KB (the interpreter), atlas +2.8 KB, sh +0.9 KB.

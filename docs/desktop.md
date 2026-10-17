@@ -145,7 +145,10 @@ What a window can be:
   Settings; the apps of `/etc/apps`; every open window (minimized ones
   "(hidden)"); *Log out*.
 - **The tray:** sia's state (idle, local, online) after a dot, lit while
-  sia runs, and the clock in the title size.
+  sia runs, and the clock in the title size. On a laptop, the battery left of the
+  clock (its outline filled as charged; accent while charging, red under
+  15%; the % in Settings and `battery`); the menu then has Sleep, and Settings a Power section (the
+  lid closed: screen off, or sleep). See [power.md](power.md).
 - **The apps:** Terminal, sia, Files, Text editor, Pins, Settings. A running
   one is in bold with a lit dot (Terminal: and how many, from 2): a click
   brings its window back in front (the terminal used last, for Terminal);
@@ -165,8 +168,8 @@ Click it or press Ctrl+Space, then type a few letters: the results drop
 down under it, grouped: **Files** (by name, in your home folder), **Apps**
 (your `.app` launchers and those of `/etc/apps`), and **Ask sia**. Enter
 opens the first result, Tab asks sia, Esc closes the results. Text
-starting with `?` only offers the question. Typing when no window has the
-keys goes to the strip too.
+starting with `?` only offers the question; a `mailto:` link opens Mail,
+writing to it. Typing when no window has the keys goes to the strip too.
 
 ![the sia strip](screens/strip.png)
 
@@ -180,6 +183,7 @@ keys goes to the strip too.
 | Ctrl+Tab | the next window of this workspace, in front |
 | Ctrl+1 .. Ctrl+4 | a workspace |
 | Ctrl+S | save (editor) |
+| Ctrl+N, Ctrl+R, Ctrl+Shift+R, Ctrl+L, F5, Ctrl+Enter | Mail: new, reply, reply all, forward, check, send |
 | Ctrl+V, middle button | paste (terminal, editor, assistant, strip, Settings) |
 | Ctrl+C (terminal) | stop the program running there (SIGINT); closing the window hangs it up (SIGHUP) |
 | PgUp / PgDn, the wheel | a terminal's history |
@@ -319,67 +323,108 @@ kind=terminal
 *Mail* (the menu, or "mail" in the strip) reads mail with **IMAP** or
 **POP3** and sends it with **SMTP**, always over TLS (1.3, or 1.2 for
 servers that know no better, as many mail providers) with the
-certificate checked against `/etc/ssl/roots`.
+certificate checked against `/etc/ssl/roots`, or pinned (below).
 
-![Mail: INBOX and a message](screens/mail.png)
+![Mail: two accounts, a favorite folder, INBOX](screens/mail.png)
 
-- **The account**, asked the first time (and with *Account*): your name,
-  address, how mail comes (IMAP or POP3; for POP3, *Leave on server*,
-  yes by default), the incoming and outgoing servers and ports, user name
-  (the address if empty) and password. Kept in `~/.mail` (key=value
-  lines, mode 600, in your home, which is encrypted). Ports 993 (IMAP),
-  995 (POP3) and 465 (SMTP) speak TLS at once; others (143, 110, 587)
-  start in clear and must switch to TLS (STARTTLS, STLS) before the
-  password is sent, or nothing is sent.
-- **The window:** the buttons (*Check*, *New*, *Reply*, *Forward*,
-  *Delete*, *Account*); the folders on the left (IMAP's LIST; POP3:
-  INBOX); the newest 100 messages (from, subject, date; newest first;
-  unread ones bold, with a dot); under them the message clicked:
-  From, To, Cc, Date, Subject, the attachments by name (not opened), and
-  the text wrapped to the window (the wheel or PgUp/PgDn scrolls it).
-  Up/Down opens the next one, Del deletes. Opening a message marks it read.
+- **The accounts**, asked the first time (and with *Account*, or a click
+  on an account's name in the folders): pick one at the top, or *New
+  account*; *Remove* removes the one shown. Each has your name, address,
+  how mail comes (IMAP or POP3; for POP3, *Leave on server*, yes by
+  default; for IMAP, *Copy to Sent*, yes by default), the incoming and
+  outgoing servers and ports, user name (the address if empty), password
+  and *Accept a self-signed certificate* (no by default). Kept in
+  `~/.mail` (key=value lines, a line `[account]` before each account
+  after the first, so a file of one account is as it always was; mode
+  600, in your home, which is encrypted). Ports 993 (IMAP), 995 (POP3)
+  and 465 (SMTP) speak TLS at once; others (143, 110, 587) start in clear
+  and must switch to TLS (STARTTLS, STLS) before the password is sent, or
+  nothing is sent.
+- **Self-signed certificates** (a server at home): with the option on, a
+  certificate no authority signed is shown, by its SHA-256, in a band
+  over the status line; *Accept* pins it (`in_pin`, `out_pin`: the
+  incoming and the outgoing server each) and from then on that
+  certificate only is taken from that server, whatever its name or date,
+  and any other is refused ("the server's certificate changed"). Turning
+  the option off forgets the pins. The server must still prove it holds
+  the certificate's key, as always.
+- **The window:** the buttons (*Check*, *New*, *Reply*, *Reply all*,
+  *Forward*, *Delete*, *Account*); on the left, the favorite folders,
+  then each account's (IMAP's LIST; POP3: INBOX), with their unread
+  messages (IMAP STATUS); the `*` at a folder's right makes it a favorite
+  or not (kept in `~/.mail`, `fav=` lines); the newest 300 messages of
+  the folder clicked (from, subject, date; newest first; unread ones bold,
+  with a dot); under them the message clicked: From, To, Cc, Date,
+  Subject, the attachments (a click saves one into `~/Downloads`, decoded,
+  numbered `1-name` if the name is taken), and the text wrapped to the
+  window (the wheel or PgUp/PgDn scrolls it). Opening a message marks it
+  read.
 - **The text:** the text/plain part of a MIME message (else its HTML,
   tags stripped), quoted-printable and base64 decoded, Latin-1 made
   UTF-8, encoded words (`=?UTF-8?B?...?=`) in the headers decoded. The
   desktop's font is ASCII: accents are dropped, other characters show as
   `?` (`mail read` on a terminal shows the UTF-8).
-- **Writing:** *New*, *Reply* (to the sender, "Re:", the text quoted with
-  `>`, `In-Reply-To` and `References`), *Forward* (the text under a
-  "Forwarded message" header); To, Cc (addresses separated by commas),
-  Subject and the text; Tab goes to the next field; *Send*. The message
-  goes out as UTF-8 text with Date and Message-ID, CRLF lines, and lines
-  starting with a dot doubled. No copy is kept (most providers keep one).
-- **Delete:** IMAP: flagged `\Deleted`, then EXPUNGE; POP3: the copy here
-  and the server's (DELE).
-- **POP3** keeps the messages in `~/Mail/INBOX`, one file each named by
-  the server's UIDL, so none is fetched twice; read ones carry the
-  attribute `seen=1`. With *Leave on server* off, each is deleted from the
-  server once it is here. Messages over 1 MiB are left on the server.
+- **Writing:** *New*, *Reply* (to the sender, or its Reply-To; "Re:", the
+  text quoted with `>`, `In-Reply-To` and `References`), *Reply all*
+  (also the others of To and Cc, in Cc, but none of your addresses),
+  *Forward* (the text under a "Forwarded message" header, and its
+  attachments); *From* (with several accounts: the one it goes from; the
+  folder's by default); To, Cc (addresses separated by commas), Subject
+  and the text; Tab goes to the next field; *Attach* opens Files: a
+  double-click on a file attaches it (a click on its name, under Subject,
+  takes it off); *Send*. The message goes out as UTF-8 text (with files:
+  multipart/mixed, each file base64) with Date and Message-ID, CRLF lines,
+  and lines starting with a dot doubled. A copy goes into the account's
+  Sent folder (IMAP APPEND; the folder flagged `\Sent`, else one named
+  Sent, Sent Items, Sent Mail or Sent Messages) unless *Copy to Sent* is
+  off.
+- **Delete:** IMAP: into the Trash (the folder flagged `\Trash`, else one
+  named Trash, Deleted Items, Deleted Messages or Bin: COPY, then
+  `\Deleted` and EXPUNGE); in the Trash (or with none), for good. POP3:
+  the copy here and the server's (DELE).
+- **mailto: links**: typed in the sia strip (`mailto:bob@example.org?subject=Hi`
+  and Enter), Mail opens writing to that address, the link's subject,
+  Cc and body filled in; `mail mailto:...` on a terminal does the same
+  there (the text typed, a line with one `.` sends it).
+- **Keys:** Up/Down the message before / after, Del delete, F5 check,
+  Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+L forward;
+  writing: Ctrl+Enter send, Esc cancel (also the account form).
+- **POP3** keeps the messages in `~/Mail/INBOX` (another account's in
+  `~/Mail/INBOX-N`), one file each named by the server's UIDL, so none is
+  fetched twice; read ones carry the attribute `seen=1`. With *Leave on
+  server* off, each is deleted from the server once it is here. Messages
+  over 8 MiB are left on the server.
 
 The window does no networking itself. It starts **`/bin/mail -S`** as
 you, on the console `atlas#1000`, and talks to it like a terminal does:
 each command is the answer to the helper's `CON_READ` (one line, words
-separated by tabs), and its answer comes back with `CON_WRITE`, ending in
-a line of one `\x1e` byte. So the desktop never waits for a server,
-atlas does not link TLS (it grows by 22 KB, the window, instead of about 80 KB with the protocols and TLS), and
-what comes from the network is parsed by a process of yours, not by the
-desktop, which runs as root. The helper keeps its IMAP connection between
-commands and is ended when the window closes or you log out.
+separated by tabs, the account first: `-a 1`), and its answer comes back
+with `CON_WRITE`, ending in a line of one `\x1e` byte. So the desktop
+never waits for a server, atlas does not link TLS (the window is 31
+KB of atlas, instead of about 90 KB with the protocols and TLS), and what
+comes from the network is parsed by a process of yours, not by the
+desktop, which runs as root. The helper keeps one IMAP connection per
+account between commands (a changed account connects again) and is
+ended when the window closes or you log out. Attachments are saved, and
+files attached are read, by the helper, as you.
 
 ```
-   atlas (Mail window) ──"list\tINBOX"──► mail -S (as you) ──IMAP / POP3 / SMTP, TLS──► servers
+   atlas (Mail window) ──"-a 0  list  INBOX"──► mail -S (as you) ──IMAP / POP3 / SMTP, TLS──► servers
                        ◄──lines, then \x1e──┘
 ```
 
-The same program is a command, on a terminal:
+The same program is a command, on a terminal (`-a N` first: the Nth
+account, from 0; the first by default):
 
 | Command | What it does |
 |---|---|
-| `mail` / `mail list [FOLDER]` | the newest 100 messages: id, `*` if unread, date, from, subject (tab-separated) |
-| `mail folders` | the folders |
+| `mail` / `mail list [FOLDER]` | the newest 300 messages: id, `*` if unread, date, from, subject (tab-separated) |
+| `mail folders` | the folders and their unread messages (tab-separated) |
 | `mail read ID [FOLDER]` | a message as text (and marked read) |
-| `mail delete ID [FOLDER]` | deleted |
-| `mail send FILE` | a draft: `To:`, `Cc:`, `Subject:` lines, a blank line, the text |
+| `mail save ID [FOLDER [N [DIR]]]` | its attachments (or the Nth) into `~/Downloads` (or DIR) |
+| `mail delete ID [FOLDER]` | into the Trash; from the Trash, for good |
+| `mail send FILE` | a draft: `To:`, `Cc:`, `Subject:`, `Attach:` (a file, one a line) lines, a blank line, the text |
+| `mail mailto:URL` | a message to the link's address: the text typed, then sent |
 
 ## Camera
 
@@ -519,17 +564,24 @@ and the time of each full frame; nothing is logged without it. `make
 gui-test-real` does the same with the real sia and a model on the test
 disk.
 
-`make mail-test` (both architectures; 42 s on x86-64, 86 s on AArch64
-emulated) runs Mail against `tools/mailserver.py` on the host (IMAP,
-POP3 and SMTP over TLS, with a certificate from a test CA made by openssl
-for the run and added to the test disk's `/etc/ssl/roots` only), reached
-at 10.0.2.100 on the usual ports through QEMU's `guestfwd`: the account
-form; INBOX's four seeded messages (quoted-printable, base64 multipart
-with an attachment, encoded-word subject and sender, HTML only) in order,
-unread ones counted; one read (`\Seen` on the server); a reply and a new
-message checked byte for byte on the host (CRLF, the doubled dot, Date,
-Message-ID, In-Reply-To, the recipients); one deleted; `mail list`,
-`read`, `folders` on the console; POP3 in the window (list, read, delete,
-nothing fetched twice); POP3 with STLS and *Leave on server* off, SMTP on
-465, IMAP with STARTTLS and a wrong password from the command line.
-Screenshots: `mail-*.png` in the build's `screens`.
+`make mail-test` (both architectures; 75 s on x86-64) runs Mail against
+two servers of `tools/mailserver.py` on the host (IMAP, POP3 and SMTP over
+TLS): the first with a certificate from a test CA made by openssl for the
+run and added to the test disk's `/etc/ssl/roots` only, at 10.0.2.100; the
+second, self-signed, at 10.0.2.101 (QEMU's `guestfwd`). The account form;
+the folders' unread counts; INBOX's four seeded messages (quoted-printable,
+base64 multipart with an attachment, encoded-word subject and sender, HTML
+only) in order, unread ones counted; one read (`\Seen` on the server), its
+attachment saved; a reply and a new message checked byte for byte on the
+host (CRLF, the doubled dot, Date, Message-ID, In-Reply-To, the
+recipients), the reply's copy in Sent (APPEND); a reply all (the others in
+Cc, not us); a file attached from Files and a forward with its attachment,
+compared with the original bytes; a mailto: link from the strip; delete
+into the Trash, then from it for good; a favorite folder; `mail list`,
+`read`, `folders`, `mail mailto:` on the console; a second account: its
+self-signed certificate refused, then shown (the SHA-256 compared with
+openssl's), accepted and pinned for both servers, its folders found by
+name, a message sent from it (its copy in "Sent Messages"), a changed
+certificate refused; POP3 in the window (list, read, delete, nothing
+fetched twice); POP3 with STLS and *Leave on server* off, SMTP on 465, IMAP
+with STARTTLS and a wrong password from the command line.

@@ -135,6 +135,8 @@ void atlas_user(int *uid, int *gid, mk_groups_t *g);  /* (atlas.c) the logged-in
 
 /* ---- Settings (settings.c): a window of the desktop: the screen's size,
  * the mouse, the assistant's model. */
+extern acpi_status_t atlas_power;                     /* (atlas.c) battery, AC, lid from port "acpi"; flags 0: none */
+extern int atlas_lid_sleep;                           /* the lid closed: sleep (1) or the screen off (0) */
 #define ATLAS_REVERT 104                              /* message: a new screen size was not kept */
 #define ATLAS_BT 106                                  /* message: Bluetooth's ticker (a scan or a pairing goes on) */
 int  settings_bt_tick(void);                          /* ATLAS_BT: 1 if the window must be drawn again */
@@ -169,6 +171,9 @@ int  mail_click(int kind, int arg);                   /* 1 if it was the window'
 int  mail_key(int c);                                 /* 1 if taken */
 void mail_wheel(int arg, int w);
 int  mail_console(long from, msg_t *m, const char *data);   /* CON_* from the helper -> 1: draw again */
+int  mail_pick(const char *path);                     /* Files' double-click: 1 if Mail was picking a file to attach */
+void mail_mailto(const char *url);                    /* a mailto: link: the window, writing to it */
+void atlas_show(int w);                               /* (atlas.c) a window (WM_MAIL, WM_FILES) in front, opened if need be */
 void mail_ended(int pid);                             /* a child of atlas ended */
 
 /* ---- Camera (cam.c): the USB camera's picture, snapshots to ~/Pictures; a .ppm shown. */

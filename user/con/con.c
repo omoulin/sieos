@@ -58,7 +58,7 @@ static void event(int type, int code, int buttons, int x, int y)
         mk_ident_t id;
         if (sys_ident(owner, &id) < 0) { owner = 0; nq = 0; }
     }
-    if (!owner) { if (type == EV_KEY) tty_key(&tty, code); return; }
+    if (!owner) { if (type == EV_KEY) tty_key(&tty, code == KEY_CRET ? '\n' : code >= KEY_CSA ? code - KEY_CSA + 1 : code); return; }
     con_event_t *l = nq ? &q[nq - 1] : 0;
     if (type == EV_MOUSE && !code && l && l->type == EV_MOUSE && !l->code && l->buttons == buttons) {
         l->x = x; l->y = y;                  /* merge with the previous move */
@@ -106,6 +106,8 @@ static void keyboard(uint8_t sc)
     if (key == 0x0F && shift) { event(EV_KEY, KEY_BTAB, mb, mx, my); return; }   /* Shift+Tab */
     if (key == 0x0F && ctrl) { event(EV_KEY, KEY_CTAB, mb, mx, my); return; }    /* Ctrl+Tab */
     if (ctrl && key >= 0x02 && key <= 0x0A) { event(EV_KEY, KEY_C1 + key - 0x02, mb, mx, my); return; }   /* Ctrl+1..9 */
+    if (ctrl && key == 0x1C) { event(EV_KEY, KEY_CRET, mb, mx, my); return; }  /* Ctrl+Enter */
+    if (ctrl && shift && key < 58 && keys[1][key] >= 'A' && keys[1][key] <= 'Z') { event(EV_KEY, KEY_CSA + keys[1][key] - 'A', mb, mx, my); return; }
     if (key < 58 && keys[0][key]) {
         char c = keys[shift][key];
         if (caps && (c | 32) >= 'a' && (c | 32) <= 'z') c ^= 32;

@@ -3,7 +3,8 @@
  * lines unfolded), encoded words in them (RFC 2047: =?UTF-8?B?...?=), and
  * its MIME parts: the text/plain part is the text (else the HTML one,
  * its tags stripped, crudely), quoted-printable and base64 decoded,
- * Latin-1 turned into UTF-8; other parts are only listed, by name.
+ * Latin-1 turned into UTF-8; other parts are listed by name, and
+ * decoded on demand (mime_part: saving, forwarding).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -108,7 +109,7 @@ static void param(const char *v, const char *name, char *out, size_t cap)
 }
 
 /* ---- Decoding. */
-static int hexv(int c) { c = lower(c); return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }
+int hexv(int c) { c = lower(c); return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }
 static int b64v(int c)
 {
     return c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26 : c >= '0' && c <= '9' ? c - '0' + 52 :
@@ -278,10 +279,12 @@ static void strip_html(const char *s, size_t n, buf_t *o)
 }
 
 /* ---- The parts. */
-typedef struct { const char *p; size_t n; char cte[24], cs[32]; } part_t;
-typedef struct { part_t plain, html; buf_t att; } walk_t;
+#define MAXATT 16
+typedef struct { const char *p; size_t n; char cte[24], cs[32], ct[64], name[160]; } part_t;
+typedef struct { part_t plain, html, at[MAXATT]; int nat; } walk_t;
+static walk_t w;                         /* (the message walked last) */
 
-static void walk(const char *m, size_t len, walk_t *w, int depth)
+static void walk(const char *m, size_t len, int depth)
 {
     char ct[256], v[128], disp[160], name[128];
     if (!mime_header(m, len, "content-type", ct, sizeof ct)) strlcpy(ct, "text/plain", sizeof ct);
@@ -297,7 +300,7 @@ static void walk(const char *m, size_t len, walk_t *w, int depth)
                     const char *pe = p;                   /* (the line break before belongs to the delimiter) */
                     if (pe > start && pe[-1] == '\n') pe--;
                     if (pe > start && pe[-1] == '\r') pe--;
-                    walk(start, pe - start, w, depth + 1);
+                    walk(start, pe - start, depth + 1);
                 }
                 if (p + bl + 4 <= e && p[bl + 2] == '-' && p[bl + 3] == '-') return;
                 while (p < e && *p != '\n') p++;
@@ -313,43 +316,55 @@ static void walk(const char *m, size_t len, walk_t *w, int depth)
     param(disp, "filename", name, sizeof name);
     if (!name[0]) param(ct, "name", name, sizeof name);
     int att = same_ci(disp, "attachment", 10) || name[0];
-    part_t *t = att ? 0 : same_ci(ct, "text/plain", 10) ? &w->plain : same_ci(ct, "text/html", 9) ? &w->html : 0;
-    if (t && !t->p) {
-        t->p = b; t->n = e - b;
-        mime_header(m, len, "content-transfer-encoding", t->cte, sizeof t->cte);
-        param(ct, "charset", t->cs, sizeof t->cs);
-        return;
-    }
-    if (t) return;                                       /* (a second text part: not shown) */
-    char nm[160];
-    mime_words(name, nm, sizeof nm);
+    part_t *t = att ? 0 : same_ci(ct, "text/plain", 10) ? &w.plain : same_ci(ct, "text/html", 9) ? &w.html : 0;
+    if (t && t->p) return;                               /* (a second text part: not shown) */
+    if (!t && w.nat == MAXATT) return;
+    if (!t) t = &w.at[w.nat++];
+    t->p = b; t->n = e - b;
+    mime_header(m, len, "content-transfer-encoding", t->cte, sizeof t->cte);
+    param(ct, "charset", t->cs, sizeof t->cs);
+    mime_words(name, t->name, sizeof t->name);
     for (char *c = ct; *c; c++) if (*c == ';') *c = 0;
-    b_fmt(&w->att, "Attachment: %s (%s, %lu KB)\n", nm[0] ? nm : "unnamed", ct, (unsigned long)((e - b) / 1024 + 1));
+    strlcpy(t->ct, ct, sizeof t->ct);
+}
+static void decode(const part_t *t, buf_t *d)            /* its bytes: base64, quoted-printable or as they are */
+{
+    if (same_ci(t->cte, "base64", 6)) b64_dec(t->p, t->n, d);
+    else if (same_ci(t->cte, "quoted-printable", 16)) qp_dec(t->p, t->n, d, 0);
+    else b_add(d, t->p, t->n);
 }
 
 void mime_read(const char *m, size_t len, buf_t *out)
 {
-    static const char *const hs[] = { "From", "To", "Cc", "Date", "Subject", "Message-ID", 0 };
+    static const char *const hs[] = { "From", "Reply-To", "To", "Cc", "Date", "Subject", "Message-ID", 0 };
     char raw[1024], dec[1024];
     for (int i = 0; hs[i]; i++) {
-        if (!mime_header(m, len, hs[i], raw, sizeof raw) && i != 4) continue;
+        if (!mime_header(m, len, hs[i], raw, sizeof raw) && i != 5) continue;
         mime_words(raw, dec, sizeof dec);
         b_fmt(out, "%s: %s\n", hs[i], dec);
     }
-    walk_t w = { 0 };
-    walk(m, len, &w, 0);
-    if (w.att.s) b_str(out, w.att.s);
+
+    memset(&w, 0, sizeof w);
+    walk(m, len, 0);
+    for (int i = 0; i < w.nat; i++)
+        b_fmt(out, "Attachment: %s (%s, %lu KB)\n", w.at[i].name[0] ? w.at[i].name : "unnamed", w.at[i].ct, (unsigned long)(w.at[i].n / 1024 + 1));
     b_str(out, "\n");
     part_t *t = w.plain.p ? &w.plain : w.html.p ? &w.html : 0;
     if (t) {
         buf_t d = { 0 }, h = { 0 };
-        if (same_ci(t->cte, "base64", 6)) b64_dec(t->p, t->n, &d);
-        else if (same_ci(t->cte, "quoted-printable", 16)) qp_dec(t->p, t->n, &d, 0);
-        else b_add(&d, t->p, t->n);
+        decode(t, &d);
         if (t == &w.html && d.s) { strip_html(d.s, d.len, &h); b_free(&d); d = h; }
         if (d.s) put_text(out, d.s, d.len, t->cs);
         b_free(&d);
     }
     if (!out->len || out->s[out->len - 1] != '\n') b_str(out, "\n");
-    b_free(&w.att);
+}
+
+int mime_part(const char *m, size_t len, int n, char *name, size_t cap, buf_t *data)
+{
+
+    memset(&w, 0, sizeof w);
+    walk(m, len, 0);
+    if (n < w.nat) { strlcpy(name, w.at[n].name, cap); decode(&w.at[n], data); }
+    return w.nat;
 }
