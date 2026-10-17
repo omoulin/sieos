@@ -418,7 +418,7 @@ webdeps-test: all webdeps $(WTESTS_C:%=$(WB)/wtest-%) $(WB)/wtest-zlib-example $
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 512M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	for f in $(WTESTS_C:%=$(WB)/wtest-%) $(WB)/wtest-zlib-example; do $(B)/host/siefs $(B)/test.img put $$f /bin/$$(basename $$f) && \
 	    $(B)/host/siefs $(B)/test.img chmod 755 /bin/$$(basename $$f) || exit 1; done
-	$(B)/host/siefs $(B)/test.img mkdir /lib/fonts && for f in $(WB)/fonts/*.ttf; do \
+	{ $(B)/host/siefs $(B)/test.img mkdir /lib/fonts 2>/dev/null; true; } && for f in $(WB)/fonts/*.ttf; do \
 	    $(B)/host/siefs $(B)/test.img put $$f /lib/fonts/$$(basename $$f) || exit 1; done
 	WTESTS="$(WTESTS_C:%=wtest-%) wtest-zlib-example" python3 tools/ktest.py webdeps $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 .PHONY: webdeps webdeps-test
