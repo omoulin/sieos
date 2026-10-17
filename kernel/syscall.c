@@ -350,6 +350,11 @@ void syscall(regs_t *r)
     case SYS_PCI:           ret = pci_cfg(a, b, c); break;
     case SYS_LOG:           ret = sys_log(a, b, c); break;
     case SYS_PLACE:         ret = place((int)a, (int)b); break;
+    case SYS_MMAP:          ret = vm_mmap(a, b, c); break;
+    case SYS_MUNMAP:        ret = vm_munmap(a, b, c); break;
+    case SYS_MPROTECT:      ret = vm_mprotect(a, b, c); break;
+    case SYS_FUTEX:         ret = futex((int)a, b, c, SC_ARG3(r)); break;
+    case SYS_THREAD_SELF:   if (a) cur->clear_tid = a; ret = cur->tid; break;
     default:               ret = -ENOSYS;
     }
     SC_RET(r) = ret;

@@ -535,11 +535,11 @@ long sleep_ns(uint64_t ns)
 /* SYS_WAKE: end the sleep of another thread of this process early (its
  * sleep returns 1); if it is not asleep yet, its next sleep ends at once,
  * so a wake-up is never lost. */
-long sleep_wake(int tid)
+static long wake(int tid, int any)
 {
     task_t *t = task_lock(tid);
     if (!t) return -ESRCH;
-    if (t->proc != cur->proc) { task_unlock(t); return -ESRCH; }
+    if (!any && t->proc != cur->proc) { task_unlock(t); return -ESRCH; }
     spin_lock(&sleep_lock);
     int asleep = t->state == TS_SLEEP;
     if (asleep) { sleep_remove(t); t->state = TS_READY; } else t->woken = 1;
@@ -548,6 +548,8 @@ long sleep_wake(int tid)
     if (asleep) { t->ret = 1; ready(t); }
     return 0;
 }
+long sleep_wake(int tid) { return wake(tid, 0); }
+void thread_wake(int tid) { wake(tid, 1); }
 
 void wake_sleepers(void)
 {
@@ -689,7 +691,9 @@ static void proc_end(proc_t *p)
     ipc_exit(p);                         /* its ports, and whoever waits on it */
     cpu_t *c = this_cpu();
     arch_as_load(c->cur_as = kernel_as); /* leave its address space before freeing it */
+    vm_as_del(p);
     vm_free(p->as);
+    vm_regions_free(p);
     p->as = 0;
     p->pages = 0;
     if (p == super) panic("init, the supervisor, ended (status %d)\n", p->status);
@@ -720,6 +724,7 @@ void thread_exit(void)
 {
     task_t *t = cur;
     proc_t *p = t->proc;
+    vm_thread_end(t);                    /* (SYS_THREAD_SELF's word: pthread_join) */
     spin_lock(&tid_hash[t->tid % NTID].lock);
     for (task_t **h = &tid_hash[t->tid % NTID].head; *h; h = &(*h)->hnext)
         if (*h == t) { *h = t->hnext; break; }
@@ -1020,6 +1025,7 @@ int proc_start(proc_t *p, int ppid)
     p->ppid = ppid;
     list_add(p);
     spin_unlock(&proc_lock);
+    vm_as_add(p);
     ready(t);
     return pid;
 }

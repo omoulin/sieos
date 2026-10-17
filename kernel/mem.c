@@ -295,8 +295,15 @@ static int copy(uint64_t das, void *dst, uint64_t sas, const void *src, uint64_t
     while (n) {
         uint64_t c = n;
         char *dp = (char *)d, *sp = (char *)s;
-        if (das) { if (c > PAGE - d % PAGE) c = PAGE - d % PAGE; if (!(dp = arch_uaddr(das, d, dmode))) return -EFAULT; }
-        if (sas) { if (c > PAGE - s % PAGE) c = PAGE - s % PAGE; if (!(sp = arch_uaddr(sas, s, 0))) return -EFAULT; }
+        if (das) {
+            if (c > PAGE - d % PAGE) c = PAGE - d % PAGE;
+            if (!(dp = arch_uaddr(das, d, dmode)) && (dmode != 1 || !vm_fault_as(das, d, 1) || !(dp = arch_uaddr(das, d, 1))))
+                return -EFAULT;          /* (memory given on first touch: vm.c) */
+        }
+        if (sas) {
+            if (c > PAGE - s % PAGE) c = PAGE - s % PAGE;
+            if (!(sp = arch_uaddr(sas, s, 0)) && (!vm_fault_as(sas, s, 0) || !(sp = arch_uaddr(sas, s, 0)))) return -EFAULT;
+        }
         memcpy(dp, sp, c);
         if (dmode == 2) arch_sync_code(dp, c);   /* loading a program: its code must be runnable */
         d += c; s += c; n -= c;

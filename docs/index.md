@@ -28,6 +28,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [gpu-plan.md](gpu-plan.md) | the GPU plan: sia on the laptop's RTX 5060 (GSP firmware, nvgpu, PTX kernels) and Intel iGPU (execlists, OpenCL kernels), the Pis' VideoCore (the HVS display; V3D if measured worth it) |
 | [python.md](python.md) | `/bin/python`: MicroPython on SIEOS, its modules, the port, what is missing, its test |
 | [python-plan.md](python-plan.md) | the Python plan: MicroPython first, then the POSIX layer and CPython |
+| [webkit-plan.md](webkit-plan.md) | the browser plan: WPE WebKit, musl and a Linux personality (the shared POSIX layer), the kernel's lazy memory and futexes, phases, sizes |
 | [cc.md](cc.md) | sicc, the C compiler: x86-64 and AArch64, optimizer, assembler, linker, tests |
 | [make.md](make.md) | `/bin/make` on SIEOS: what it supports, the demo projects, `sh -c`, tests |
 | [git.md](git.md) | `/bin/git`: commands, git:// and smart HTTP(S), the repository format, SHA-1 and zlib, the Git window, tests |

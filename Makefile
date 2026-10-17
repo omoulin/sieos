@@ -31,7 +31,7 @@ KCFLAGS := $(CFLAGS) $(KARCH_CFLAGS) -Ikernel -Ikernel/arch/$(ARCH) $(if $(STACK
 KHDRS   := kernel/*.h kernel/arch/$(ARCH)/*.h include/mk/*.h
 UCFLAGS := $(CFLAGS) -Iuser/lib -Isiefs
 
-KCORE   := main mem task ipc syscall random kprintf   # kernel/: portable
+KCORE   := main mem task ipc syscall vm random kprintf   # kernel/: portable
 KOBJS   := $(KARCH_OBJS) $(KCORE) fmt string blake2b chacha20
 UCORE   := crt0 lib                     # in every program
 ULIBOBJ := fs date acct tty sig fmt string fdt pci virtio mbox gpio hidrep blake2b argon2 chacha20 sha2 aead aes x25519 ed25519 pubkey btcrypt net http tls x509 ssh sha1 zlib   # the library: a program gets only what it uses
@@ -230,6 +230,7 @@ $(FPU_PROGS:%=$(B)/user/%.o): UCFLAGS := $(filter-out -mgeneral-regs-only,$(UCFL
 
 # ---- /bin/python: MicroPython, fetched and built by its own rules (also an FPU program)
 include user/python/python.mk
+include user/posix/posix.mk
 
 # ---- the disk: a SieFS image of rootfs/ plus the programs in /bin.
 # build/rootfs is the staging copy. The image is made once (mkfs.siefs);

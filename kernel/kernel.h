@@ -68,6 +68,8 @@ typedef struct proc {
     uint32_t sigign, sigcatch;  /* the signals it ignores, and those it catches (SYS_SIGNAL) */
     uint64_t sigentry;          /* ... its function for those */
     int sigtid;                 /* ... the thread that runs it (the one that set it) */
+    struct region *regions;     /* its anonymous memory (SYS_MMAP, vm.c; under lock) */
+    struct proc *asnext;        /* in vm.c's address space table */
 } proc_t;
 
 /* A thread ("task"): what the scheduler runs. Its task_t sits at the bottom
@@ -100,6 +102,7 @@ typedef struct task {
     volatile uint32_t sigpend;  /* caught signals waiting for it (one bit each) */
     uint32_t gen;               /* the calls it gave up (mod 2^31): in its reply tokens (ipc.c) */
     struct sigctx *sigctx;      /* running a signal's function: what it was doing (task.c) */
+    uint64_t clear_tid;         /* SYS_THREAD_SELF: 0 written there, and a futex waiter woken, at its end */
 } task_t;
 /* A caught signal waits for t, and t is not already in a signal's function. */
 #define sig_due(t) ((t)->sigpend && !(t)->sigctx)
@@ -205,6 +208,7 @@ void schedule(void);
 void preempt(void);
 long sleep_ns(uint64_t ns);
 long sleep_wake(int tid);
+void thread_wake(int tid);      /* sleep_wake for any process's thread (futexes) */
 void wake_sleepers(void);
 void idle(void) __attribute__((noreturn));
 void kernel_exit(void);
@@ -238,6 +242,17 @@ long child_port(long port);
 int  ipc_unblock(task_t *t, int state);
 int  ipc_unreply(task_t *t);
 void ipc_exit(proc_t *p);
+/* vm.c */
+int  vm_fault(uint64_t va, int access);   /* a page fault (access: PROT_READ/WRITE/EXEC) -> 1: handled */
+int  vm_fault_as(uint64_t as, uint64_t va, int write);   /* the kernel's copies (mem.c) */
+void vm_as_add(proc_t *p);
+void vm_as_del(proc_t *p);
+void vm_regions_free(proc_t *p);
+void vm_thread_end(task_t *t);
+long vm_mmap(uint64_t addr, uint64_t size, uint64_t flags);
+long vm_munmap(uint64_t addr, uint64_t size, uint64_t flags);
+long vm_mprotect(uint64_t addr, uint64_t size, uint64_t prot);
+long futex(int op, uint64_t uaddr, uint64_t val, uint64_t ns);
 /* random.c */
 void rand_init(void);
 void rand_event(uint64_t x);

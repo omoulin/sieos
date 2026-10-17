@@ -278,6 +278,33 @@ away, is the terminals' business, in the one place they share (`tty.c`).
   no stop/continue (`SIGSTOP`, job control in the background). A program
   started by another begins with every signal at its default.
 
+## Memory given on first touch, futexes
+
+For big ported programs (the browser: [webkit-plan.md](webkit-plan.md)),
+`kernel/vm.c` adds what Linux programs expect from `mmap`:
+
+- **Regions:** `SYS_MMAP(addr, size, PROT_* | MAP_FIXED)` reserves address
+  space from 16 TiB up (a sorted list per process, 32 bytes a region);
+  nothing is allocated. The first touch of a page, by the program (a page
+  fault) or by the kernel copying a message into it, maps a zeroed page
+  with the region's rights, and the access runs again. Any other fault
+  still ends the process. `SYS_MUNMAP` removes a range (or, `UNMAP_KEEP`,
+  only gives its pages back: they come back zeroed), `SYS_MPROTECT`
+  changes rights (pages already there are mapped again; every CPU forgets
+  the old ones). `PROT_NONE` is a guard page; read+write+execute is allowed
+  on anonymous memory only (a JIT's code pool). Pages count against the
+  process's quota when touched.
+- **Futexes:** `SYS_FUTEX(FUTEX_WAIT, addr, value, ns)` sleeps while the
+  32-bit word holds `value` (a time limit, a signal or a wake ends it);
+  `FUTEX_WAKE` wakes up to n. Waiters are keyed by the word's physical
+  address (shared memory will work as is) and sleep like `SYS_SLEEP`, woken
+  like `SYS_WAKE` (a wake before the sleep is not lost). Rarely a sleep
+  that follows a timed-out wait may end early: callers loop anyway.
+- **Thread ids:** `SYS_THREAD_SELF(clear)`: the caller's id; when that thread
+  ends, 0 is written at `clear` and one waiter there woken (`pthread_join`).
+- **Cost:** 4.7 KB of kernel code (x86-64; 5.1 KB arm64); nothing on the
+  paths that existed (`ktest vm`, `ktest futex`; IPC round trip unchanged).
+
 ## Several processors, time, floating point
 
 - **CPUs:** x86 finds them in the ACPI MADT and starts them with
@@ -388,7 +415,8 @@ on a Raspberry Pi's GFX HAT (docs/raspberrypi.md); `ktest log` checks it.
 - **Small:** 4 KiB kernel stacks (deepest use measured: under 2 KiB,
   `make STACKCHECK=1`), one page per CPU, small hash tables.
 - **Pages zeroed on allocation:** memory never leaks between programs.
-- **W^X:** code is read-only, data never executable.
+- **W^X:** code is read-only, data never executable (but anonymous memory a
+  program asks to be executable: a JIT's code pool).
 
 ## Limits
 
