@@ -203,7 +203,7 @@ static void power_event(const acpi_status_t *n)
         redraw();
     }
     if (shut != was) say("atlas: lid %s%s\n", shut ? "closed: " : "open", shut ? (atlas_lid_sleep ? "sleep" : "screen off") : "");
-    if (shut && !was && atlas_lid_sleep) power(POWER_SLEEP);   /* (back here once awake) */
+    if (shut && !was && atlas_lid_sleep && !woke) power(POWER_SLEEP);   /* (back here once awake; woken lid closed: screen off) */
     else if (shut != was) screen_blank(shut);
     if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
 }

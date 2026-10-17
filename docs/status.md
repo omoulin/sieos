@@ -281,3 +281,22 @@ checklist in [raspberrypi.md](raspberrypi.md).
   `suspend`; `make power-test`. Checked on the target platform's real tables
   on the host; untested on the laptop. Sizes: kernel.bin +3.3 KB, aml.o
   13.5 -> 17.6 KB, acpid 41 KB of code (acpid.o 10 KB), i2chid +4.4 KB (the interpreter), atlas +2.8 KB, sh +0.9 KB.
+- **2026-10-17.** Waking from sleep by the lid ([power.md](power.md),
+  Waking): acpid finds what can wake the machine from S3 (the lid's, the
+  power button's and the controller's `_PRW`: a GPE of GPE0, S3 or
+  deeper; `aml_wake()` in the interpreter), arms them before `_PTS(3)`
+  (`_DSW(1, 3, 0)`, else `_PSW(1)`), leaves only those GPEs and the power
+  button on (status cleared), and logs why it woke (`awake (PM1 status
+  ..., GPE ..)`); after `_WAK(3)` it disarms them, turns its GPEs back on,
+  runs the controller's pending queries and reads `_LID`: the desktop sees
+  the lid open and the wake (a wake now always reaches it, even when
+  nothing else changed) and turns the panel on. No loop: a sleep asked
+  within 1 s of waking is not done, and the desktop does not sleep on a
+  lid found closed in the wake's own status. The Legion's lid, power
+  button and controller have no `_PRW` (Linux's `/proc/acpi/wakeup`
+  agrees): its controller wakes the machine itself, told by `_PTS(3)`.
+  `suspend N` (N < 3600 s): woken by the CMOS clock's alarm (RTC_EN), as
+  `make power-test` now does in QEMU (no `_PRW` there); `make aml-test`
+  checks the laptop's `_PRW` patterns (the Legion's `GPRW`, `_DSW`/`_PSW`,
+  a GPE block, S1 only). Sizes: acpid.o +1.1 KB of code, aml.o +0.2 KB,
+  sh +0.15 KB, atlas unchanged.

@@ -37,6 +37,11 @@ int  aml_find(int dev, const char *path);   /* an object's number (for aml_eval)
 #define aml_int(path, argc, arg, v) (aml_eval(0, path, argc, arg, v, 1) < 0 ? -1 : 0)
 int  aml_res(int dev, const char *path, aml_hid_t *d);   /* a resource template (a _CRS): I2C, GpioInt, Interrupt, I/O */
 void aml_path(int dev, char *s, int n);     /* a device's path, "\_SB_.BAT0" */
+/* A device's wake from sleep state s (its _PRW: a GPE of GPE0, and the
+ * deepest state it wakes from): on 1 armed (_DSW(1, s, 0), else _PSW(1)),
+ * 0 disarmed, -1 only asked -> the GPE; -1: it does not wake from s (or
+ * by a GPE block's). */
+int  aml_wake(int dev, int s, int on);
 int  aml_links(int back);                   /* PCI interrupt links: their settings kept (0) or given back (1) -> how many */
 
 /* Given by the program: reading or writing an operation region (space: 0

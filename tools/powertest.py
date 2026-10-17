@@ -4,6 +4,7 @@ serial console, through QEMU's monitor for the buttons:
   - `battery` (QEMU has none: "no battery");
   - sleep: a file written, `suspend` (S3), woken by the monitor's
     system_wakeup; then the shell, the file, a new file, the network;
+    again while fsloop works; `suspend 3`: woken by the clock's alarm;
   - `reboot`: the FADT's reset register (QEMU stops: -no-reboot);
   - booted again: the power button (system_powerdown): a clean power off.
 Usage: powertest.py <cpus> <disk image> <qemu command line...>
@@ -125,6 +126,16 @@ if not os.environ.get("NOSLEEP"):                   # (NOSLEEP=1: without this p
   send(""); expect("# ")
   r = run("battery")
   ok("woken twice", "woken 2 times" in r, line(r))
+  # woken by the clock: `suspend 3`, the CMOS alarm (PM1 RTC_EN); no monitor command
+  t0 = time.time()
+  send("suspend 3")
+  expect("mk: ACPI S3", 20)
+  w = int(expect(")", 30).split("acpid: awake (PM1 status ")[-1].split(",")[0], 16)
+  dt = time.time() - t0
+  expect("# ", 30)
+  ok("suspend 3: woken by the clock", w & 0x400 and 2 <= dt < 20, f"PM1 status {w:x}, {dt:.1f} s")
+  r = run("battery")
+  ok("woken 3 times", "woken 3 times" in r, line(r))
 
 # ---- restart: the FADT's reset register (QEMU stops)
 send("reboot")

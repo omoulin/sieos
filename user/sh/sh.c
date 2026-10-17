@@ -94,7 +94,12 @@ static int cmd_sleep(int ac, char **av)
 
 /* poweroff, reboot, suspend: the files committed first (power(): through
  * the ACPI server, which tells the firmware), so nothing written is lost. */
-static int cmd_power(int ac, char **av) { (void)ac; return err(av[0], power(av[0][0] == 'r' ? POWER_RESTART : av[0][0] == 's' ? POWER_SLEEP : POWER_OFF)); }
+static int cmd_power(int ac, char **av)                /* (suspend N: woken by the clock after N s too) */
+{
+    int n = 0;
+    for (const char *p = ac > 1 ? av[1] : ""; *p >= '0' && *p <= '9' && n < 3600; p++) n = n * 10 + *p - '0';
+    return err(av[0], power(av[0][0] == 'r' ? POWER_RESTART : av[0][0] == 's' ? POWER_SLEEP | n << 8 : POWER_OFF));
+}
 static int cmd_battery(int ac, char **av)              /* the ACPI server's status */
 {
     (void)ac;
@@ -471,7 +476,7 @@ static const struct { const char *name, *help; int (*run)(int, char **); } cmds[
     { "exit",   "end this session",                         cmd_logout },
     { "poweroff", "turn the machine off (root)",            cmd_power },
     { "reboot", "restart the machine (root)",               cmd_power },
-    { "suspend", "sleep (suspend to RAM) until the power button (root)", cmd_power },
+    { "suspend", "[N]  sleep (suspend to RAM) until the power button, the lid, or N s (root)", cmd_power },
 };
 #define NCMD (sizeof cmds / sizeof cmds[0])
 

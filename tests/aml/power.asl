@@ -12,19 +12,32 @@
  * the lid (_LID, from a variable a query method sets); queries _Q15 (lid)
  * and _Q25 (battery) that Notify; PCI configuration (a bridge and a device
  * behind it); a VarPackage, Divide, ToString, Mid, Concatenate, FromBCD.
+ * Waking (_PRW): the lid by the controller's GPE through the Legion's GPRW
+ * (the S-state from the firmware's variables) and its _DSW telling the
+ * controller; the power button's plain package (S4) and _PSW; the
+ * controller's own in a GPE block (not GPE0: not used); a sleep button
+ * that wakes from S1 only (not S3).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 DefinitionBlock ("", "DSDT", 2, "SIEOS", "POWER", 1)
 {
     OperationRegion (GNVS, SystemMemory, 0x40002000, 0x10)
-    Field (GNVS, AnyAcc, Lock, Preserve) { LIDS, 8, SS3, 8, P80D, 16 }
+    Field (GNVS, AnyAcc, Lock, Preserve) { LIDS, 8, SS3, 8, P80D, 16, SS4, 8 }
     OperationRegion (DBG, SystemIO, 0x80, 2)
     Field (DBG, WordAcc, NoLock, Preserve) { P80H, 16 }
 
     If (SS3) { Name (_S3, Package (0x04) { 0x05, Zero, Zero, Zero }) }
     Name (_S5, Package (0x04) { 0x07, Zero, Zero, Zero })
     Method (_PTS, 1) { P80H = (Arg0 | 0xF0) << 8; If (Arg0 == 3) { \_SB.PC00.LPCB.EC0.BS3F = One } }
+    Name (PRWP, Package (0x02) { Zero, Zero })
+    Method (GPRW, 2)                                        /* (the Legion's: the deepest state the firmware allows) */
+    {
+        PRWP [Zero] = Arg0
+        Local0 = (SS3 << 0x03) | (SS4 << 0x04)
+        If ((One << Arg1) & Local0) { PRWP [One] = Arg1 } Else { Local0 >>= One; FindSetLeftBit (Local0, PRWP [One]) }
+        Return (PRWP)
+    }
     Method (_WAK, 1) { P80H = Arg0 << 8; \_SB.PC00.LPCB.EC0.BS3F = Zero; Return (Package (0x02) { Zero, Zero }) }
 
     Scope (_SB)
@@ -52,10 +65,11 @@ DefinitionBlock ("", "DSDT", 2, "SIEOS", "POWER", 1)
                     Name (ECAV, Zero)
                     Mutex (LFCM, 0)
                     Method (_GPE, 0) { Return (0x6E) }
+                    Name (_PRW, Package (0x02) { Package (0x02) { \_SB.GPE1, 0x05 }, 0x03 })
                     Name (_CRS, ResourceTemplate () { IO (Decode16, 0x62, 0x62, 0, 1) IO (Decode16, 0x66, 0x66, 0, 1) })
                     Method (_REG, 2) { If (Arg0 == 3) { ECAV = Arg1 } }
                     OperationRegion (ERAM, EmbeddedControl, Zero, 0xFF)
-                    Field (ERAM, ByteAcc, Lock, Preserve) { Offset (0x60), BS3F, 1, , 7, BTMP, 8 }
+                    Field (ERAM, ByteAcc, Lock, Preserve) { Offset (0x60), BS3F, 1, LIDW, 1, , 6, BTMP, 8 }
                     OperationRegion (ERAX, SystemMemory, 0xFE0B0400, 0xFF)
                     Field (ERAX, ByteAcc, Lock, Preserve)
                     {
@@ -120,8 +134,21 @@ DefinitionBlock ("", "DSDT", 2, "SIEOS", "POWER", 1)
         {
             Name (_HID, EisaId ("PNP0C0D"))
             Method (_LID, 0) { Return (LIDS) }
+            Method (_PRW, 0) { Return (GPRW (0x6E, 0x03)) }
+            Method (_DSW, 3) { \_SB.PC00.LPCB.EC0.LIDW = Arg0 }
         }
-        Device (PWRB) { Name (_HID, EisaId ("PNP0C0C")) }
+        Device (PWRB)
+        {
+            Name (_HID, EisaId ("PNP0C0C"))
+            Name (_PRW, Package (0x02) { 0x6E, 0x04 })
+            Method (_PSW, 1) { P80H = Arg0 | 0x0700 }
+        }
+        Device (SLPB)
+        {
+            Name (_HID, EisaId ("PNP0C0E"))
+            Name (_PRW, Package (0x02) { 0x6F, One })
+        }
+        Device (GPE1) { Name (_HID, "ACPI0006") }
         Name (MSCR, Package (0x05) { })
         Method (MISC, 0)                                    /* what else the interpreter now runs */
         {

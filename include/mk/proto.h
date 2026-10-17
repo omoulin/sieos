@@ -493,7 +493,8 @@ typedef struct {
  * battery, AC, lid, buttons. Reply: w[0] = result or -error. */
 enum {
     ACPI_POWER = 1, /* w[1] = POWER_OFF, POWER_RESTART or POWER_SLEEP (root): the firmware
-                       is told (_PTS), then the kernel (SYS_POWER) -> 0 once awake again */
+                       is told (_PTS), then the kernel (SYS_POWER) -> 0 once awake again;
+                       POWER_SLEEP | N << 8: the clock wakes us after N s too (N < 3600) */
     ACPI_STATUS,    /* -> 0, an acpi_status_t in rbuf */
     ACPI_WAIT,      /* w[1] = the seq last seen: the reply waits until the status changes
                        (battery, AC, lid, a wake-up) -> 0, an acpi_status_t in rbuf */

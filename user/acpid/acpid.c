@@ -23,6 +23,9 @@
  *    next change.
  *  - The power button powers off, as `poweroff` does (files committed
  *    first). The lid only reports: the desktop decides (screen off, sleep).
+ *  - Waking from S3: the power button, the GPEs of the lid, power button
+ *    and controller that can wake (their _PRW; armed by _DSW or _PSW), and
+ *    for `suspend N` the CMOS clock's alarm (PM1's RTC_EN). Nothing else.
  * Every step is logged (the serial console, the log viewer): a laptop's log
  * says what was found and what happened.
  *
@@ -36,11 +39,14 @@ static long port;
 static int self;
 static const uint8_t *fadt;
 static uint16_t pm1a, pm1b, pm1len, gpe0, gpelen, ec_data, ec_sc;   /* ports; gpelen: status bytes */
-static uint8_t gpe_en[16];                      /* the GPEs we enabled */
+static uint8_t gpe_en[16], gpe_wk[16];          /* the GPEs we enabled; those that wake us */
 static uint16_t hits[128];                      /* each one's events since the last tick */
 static int ec = -1, ec_gpe = -1, bat = -1, ac = -1, lid = -1, pwrb = -1, sci = -1;
 static int s3, bif = 1, button, dirty;          /* ACPI_S3 if it can sleep; read the battery's capacities again; the power button
                                                    was pressed; read all again */
+static int wdev[3], nwdev;                      /* the devices that wake us (their _PRW) */
+static uint32_t wakes;
+static long awake;                              /* (when we last woke: sleep asked before then is not done) */
 static uint32_t unit_mwh = 1, design, full;
 static acpi_status_t st;
 static long waiters[8];
@@ -151,6 +157,7 @@ static void refresh(void)
         }
     }
     if (!(s.flags & ACPI_BAT)) s.percent = s.minutes = -1, s.rate = 0, s.now = 0;
+    s.wakes = wakes;
     int big = s.flags != st.flags || s.percent != st.percent || s.wakes != st.wakes;
     if (!big && s.minutes == st.minutes && s.rate == st.rate && s.now == st.now && s.mv == st.mv) return;
     if (big && s.flags & ACPI_BAT)
@@ -232,8 +239,8 @@ static void arm(void)
     for (int k = 0; k < 2; k++) {
         uint16_t e = k ? pm1b : pm1a;
         if (!e) continue;
-        outw(e, 0x8100);                            /* WAK_STS, PWRBTN_STS */
-        if (!(f32(112) & 1 << 4)) outw(e + pm1len, 0x100);
+        outw(e, 0x8500);                            /* WAK_STS, RTC_STS, PWRBTN_STS */
+        outw(e + pm1len, f32(112) & 1 << 4 ? 0 : 0x100);
     }
     for (int i = 0; i < gpelen; i++) outb(gpe0 + i, 0xFF);
     gpe_set();
@@ -278,7 +285,26 @@ static void pci_back(void)
 }
 
 /* ---- Power: the firmware told before (_PTS) and after (_WAK). Waking up,
- * init starts the device drivers anew (the devices lost their state). */
+ * init starts the device drivers anew (the devices lost their state).
+ * Asleep, only the wake GPEs are on (status cleared), the power button,
+ * and with secs the CMOS clock's alarm (< 1 hour: minute and second, any
+ * hour), RTC_EN; awake, the alarm off (arm(): the PM1 enables). */
+static int cmos(int r, int v) { outb(0x70, (uint8_t)r); if (v >= 0) outb(0x71, (uint8_t)v); return inb(0x71); }
+static void alarm(int secs)
+{
+    int b = cmos(11, -1), bin = b & 4;
+    if (secs) {
+        while (cmos(10, -1) & 0x80) ;               /* (no update under way: 244 us before one) */
+        int s = cmos(0, -1), m = cmos(2, -1);
+        if (!bin) s = (s >> 4) * 10 + (s & 15), m = (m >> 4) * 10 + (m & 15);
+        int t = (m * 60 + s + secs) % 3600;
+        s = t % 60; m = t / 60;
+        cmos(1, bin ? s : s / 10 << 4 | s % 10); cmos(3, bin ? m : m / 10 << 4 | m % 10); cmos(5, 0xFF);
+        for (int k = 0; k < 2; k++) { uint16_t e = k ? pm1b : pm1a; if (e) outw(e + pm1len, inw(e + pm1len) | 0x400); }
+    }
+    cmos(11, secs ? b | 0x20 : b & ~0x20);          /* AIE */
+    cmos(12, -1);                                   /* (its flags cleared) */
+}
 static void tell(const char *m, int s)
 {
     int64_t a = s, r;
@@ -287,22 +313,33 @@ static void tell(const char *m, int s)
 static long power_do(int how)
 {
     static const char *what[] = { "power off", "restart", "suspend" };
+    int secs = how >> 8;
+    how &= 255;
+    if (how == POWER_SLEEP && sys_clock() < awake) { log_line("suspend: just woke: not again\n"); return 0; }
     log_line("%s\n", what[how]);
     if (how == POWER_RESTART) return sys_power(how, 0);
+    for (int i = 0; how == POWER_SLEEP && i < nwdev; i++) aml_wake(wdev[i], 3, 1);
     tell("\\_PTS", how == POWER_SLEEP ? 3 : 5);
     if (how == POWER_OFF) return sys_power(how, 0);
     pci_keep();
-    for (int i = 0; i < gpelen; i++) outb(gpe0 + gpelen + i, 0);   /* no GPE wakes us (the power button does) */
+    for (int i = 0; i < gpelen; i++) outb(gpe0 + gpelen + i, gpe_wk[i]), outb(gpe0 + i, 0xFF);
+    if (secs) alarm(secs);
     long r = sys_power(POWER_SLEEP, 0);
-    log_line(r ? "suspend failed (%ld)\n" : "awake\n", r);
+    int s = (pm1a ? inw(pm1a) : 0) | (pm1b ? inw(pm1b) : 0), g = -1;
+    for (int i = 0; i < 8 * gpelen; i++) if (inb(gpe0 + i / 8) & gpe_wk[i / 8] & 1 << i % 8) g = i;
+    if (r) log_line("suspend failed (%ld)\n", r);
+    else log_line(g < 0 ? "awake (PM1 status %x)\n" : "awake (PM1 status %x, GPE %02x)\n", s, g);
     if (!r) pci_back();
     arm();
     tell("\\_WAK", 3);
-    st.wakes += !r;
+    for (int i = 0; i < nwdev; i++) aml_wake(wdev[i], 3, 0);
+    alarm(0);
+    wakes += !r;
     bif = dirty = 1;
     msg_t m = { .w = { INIT_RESUME } };
     long ip = port_find("init");
     if (!r && ip > 0) ipc_call(ip, &m);
+    awake = sys_clock() + 1000000000;
     return r;
 }
 
@@ -371,6 +408,11 @@ int main(int argc, char **argv)
     ac = dev("ACPI0003", "AC adapter");
     lid = dev("PNP0C0D", "lid");
     pwrb = dev("PNP0C0C", "power button");
+    for (int i = 0, d[3] = { lid, pwrb, ec }, g; i < 3; i++)       /* what wakes us from S3 */
+        if (d[i] >= 0 && (g = aml_wake(d[i], 3, -1)) >= 0 && g < 8 * gpelen) {
+            gpe_wk[g / 8] |= (uint8_t)(1 << g % 8); wdev[nwdev++] = d[i];
+            log_line("%s: wakes from S3: GPE %02x\n", i == 0 ? "lid" : i == 1 ? "power button" : "embedded controller", g);
+        }
     for (int g = 0; g < 8 * gpelen; g++) {          /* the GPEs with methods */
         char m[12] = "\\_GPE._L00";
         m[8] = "0123456789ABCDEF"[g >> 4]; m[9] = "0123456789ABCDEF"[g & 15];
@@ -393,7 +435,7 @@ int main(int argc, char **argv)
             msg_t r = { .w = { 0 } };
             switch (m.w[0]) {
             case ACPI_POWER:
-                r.w[0] = m.uid ? -EPERM : m.w[1] > POWER_SLEEP ? -EINVAL : power_do((int)m.w[1]);
+                r.w[0] = m.uid ? -EPERM : (m.w[1] & 255) > POWER_SLEEP || m.w[1] >> 8 >= 3600 ? -EINVAL : power_do((int)m.w[1]);
                 break;
             case ACPI_WAIT:
                 if (m.w[1] == st.seq && nwait < 8) { waiters[nwait++] = from; from = 0; break; }
