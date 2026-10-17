@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<!-- tests/web/pages/script.html (make web-test): a page built by its script:
+     a 2D canvas (Skia on the CPU), 2000 elements made and styled, a promise
+     and a timer before the last change. Part of SIEOS. SPDX-License-Identifier: GPL-3.0-only -->
+<html><head><meta charset="utf-8"><title>SIEOS script</title>
+<style>body { margin: 0; background: #ffffff; } canvas { position: absolute; left: 0; top: 0; }
+#list { position: absolute; left: 400px; top: 0; width: 200px; font: 10px monospace; }
+#done { position: absolute; left: 0; top: 400px; width: 100px; height: 100px; background: #ff0000; }</style></head>
+<body><canvas id="c" width="300" height="300"></canvas><div id="list"></div><div id="done"></div>
+<script>
+const g = document.getElementById("c").getContext("2d");
+g.fillStyle = "#008000"; g.fillRect(0, 0, 150, 150);
+g.fillStyle = "#800080"; g.beginPath(); g.arc(225, 75, 60, 0, 2 * Math.PI); g.fill();
+const grad = g.createLinearGradient(0, 150, 0, 300);
+grad.addColorStop(0, "#000000"); grad.addColorStop(1, "#ffffff");
+g.fillStyle = grad; g.fillRect(0, 150, 300, 150);
+const list = document.getElementById("list");
+for (let i = 0; i < 2000; i++) {
+  const d = document.createElement("div");
+  d.textContent = `item ${i}`;
+  if (i % 2) d.style.background = "#e0e0ff";
+  list.appendChild(d);
+}
+document.title = `${list.children.length} items`;
+Promise.resolve().then(() => setTimeout(() => { document.getElementById("done").style.background = "#00ff00"; }, 10));
+</script></body></html>

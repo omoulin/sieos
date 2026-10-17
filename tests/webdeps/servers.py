@@ -7,14 +7,16 @@ tests/webdeps/servers.py - The web servers wtest-soup talks to, on the host
   h2      HTTP/2 over TLS 1.3 (ALPN h2): a small server written here (no
           HPACK decoding needed: every request gets the same answer)
   self    HTTP/1.1 over TLS, a self-signed certificate (to be refused)
-The HTTP/1.1 paths: /small, /big (1 MiB, byte i = i * 7 % 251), POST /echo
-("got N sum S"). start() returns wtest-soup's arguments: the four ports.
+The HTTP/1.1 paths: /small, /big (1 MiB, byte i = i * 7 % 251), /page (an
+HTML page, background #123456), POST /echo ("got N sum S"). start() returns wtest-soup's arguments: the four ports.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import http.server, os, socket, ssl, struct, subprocess, tempfile, threading
 
 BIG = bytes(i * 7 % 251 for i in range(1 << 20))
+PAGE = (b'<!DOCTYPE html><html><head><meta charset="utf-8"><title>from the host</title></head>'
+        b'<body style="margin:0;background:#123456"><p style="color:#ffffff">Served over TLS by the host</p></body></html>')
 
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -26,6 +28,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
     def do_GET(self):
         if self.path == "/big": return self.answer(BIG)
+        if self.path == "/page": return self.answer(PAGE)
         self.answer(b"hello from the host")
     def do_POST(self):
         d = self.rfile.read(int(self.headers.get("Content-Length", 0)))

@@ -1,0 +1,22 @@
+# /usr/share/mime/globs2 on SIEOS (user/web/mime-globs2): the types of local
+# files by their names, for GIO and WebKit (the freedesktop.org shared MIME
+# database's format, the few types a browser needs). weight:type:pattern
+50:text/html:*.html
+50:text/html:*.htm
+50:application/xhtml+xml:*.xhtml
+50:text/css:*.css
+50:text/javascript:*.js
+50:text/javascript:*.mjs
+50:application/json:*.json
+50:image/svg+xml:*.svg
+50:image/png:*.png
+50:image/jpeg:*.jpg
+50:image/jpeg:*.jpeg
+50:image/webp:*.webp
+50:image/gif:*.gif
+50:image/x-icon:*.ico
+50:font/ttf:*.ttf
+50:font/woff:*.woff
+50:application/wasm:*.wasm
+50:application/xml:*.xml
+50:text/plain:*.txt

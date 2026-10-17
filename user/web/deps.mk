@@ -56,7 +56,7 @@ CLANG     := $(CURDIR)/$(LLVM)/bin/clang
 WCFLAGS   := --target=$(TRIPLE) --sysroot=$(SR) -resource-dir=$(CURDIR)/$(WB)/resource -static -rtlib=compiler-rt \
              -unwindlib=libunwind -fuse-ld=lld -Qunused-arguments -ffunction-sections -fdata-sections \
              -Wl,-z,separate-loadable-segments -Wl,-z,max-page-size=4096 -Wl,--gc-sections -Wl,--eh-frame-hdr
-$(WB)/toolchain.stamp: $(SYSROOT)/usr/lib/libc++.a $(SYSROOT)/usr/lib/crti.o | $(WKT)/bin/meson $(WKT)/bin/pkg-config $(WKT)/bin/cmake $(WKT)/bin/ninja
+$(WB)/toolchain.stamp: $(SYSROOT)/usr/lib/crti.o | $(SYSROOT)/usr/lib/libc++.a $(WKT)/bin/meson $(WKT)/bin/pkg-config $(WKT)/bin/cmake $(WKT)/bin/ninja
 	mkdir -p $(WB)/bin $(WB)/resource/lib $(WB)/stamp $(WB)/src $(WB)/build
 	ln -sfn $(CURDIR)/$(LLVM)/lib/clang/23/include $(WB)/resource/include
 	ln -sfn $(SR)/usr/lib/linux $(WB)/resource/lib/linux
@@ -208,10 +208,11 @@ $(WB)/stamp/fontconfig: $(WB)/stamp/freetype $(WB)/stamp/expat
 # ---- fonts for the tests (and, later, the browser): DejaVu
 DJV_VER   := 2.37
 DJV_SHA   := fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7
-$(WB)/fonts/DejaVuSans.ttf:
+DJV_FONTS := DejaVuSans DejaVuSans-Bold DejaVuSerif DejaVuSansMono
+$(WB)/fonts/DejaVuSans.ttf: user/web/deps.mk
 	$(call fetch,https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_$(subst .,_,$(DJV_VER))/dejavu-fonts-ttf-$(DJV_VER).tar.bz2,dejavu-fonts-ttf-$(DJV_VER).tar.bz2,$(DJV_SHA))
 	mkdir -p $(@D) && tar xjf .hosttools/dl/dejavu-fonts-ttf-$(DJV_VER).tar.bz2 -C $(@D) --strip-components=2 \
-	    dejavu-fonts-ttf-$(DJV_VER)/ttf/DejaVuSans.ttf dejavu-fonts-ttf-$(DJV_VER)/ttf/DejaVuSerif.ttf && touch $@
+	    $(DJV_FONTS:%=dejavu-fonts-ttf-$(DJV_VER)/ttf/%.ttf) && touch $@
 
 # ---- libpng (with its SIMD filters)
 PNG_VER   := 1.6.59

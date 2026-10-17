@@ -1,0 +1,16 @@
+AcceleratedBackingStore.cpp names DRM_FORMAT_XRGB8888 even without libdrm
+(USE_LIBDRM=OFF), where drm_fourcc.h is not included: guarded as its include is.
+
+--- a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
++++ b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
+@@ -217,8 +217,10 @@
+     if (WPE_IS_BUFFER_DMA_BUF(buffer.get())) {
+         auto* dmaBuffer = WPE_BUFFER_DMA_BUF(buffer.get());
+         SkAlphaType alphaType = kPremul_SkAlphaType;
++#if USE(LIBDRM)
+         if (wpe_buffer_dma_buf_get_format(dmaBuffer) == DRM_FORMAT_XRGB8888)
+             alphaType = kOpaque_SkAlphaType;
++#endif
+         return SkImageInfo::Make(width, height, kBGRA_8888_SkColorType, alphaType, SkColorSpace::MakeSRGB());
+     }
+ 

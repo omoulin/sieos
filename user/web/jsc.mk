@@ -9,9 +9,12 @@
 
 WK_VER    := 2.54.1
 WK_SHA    := 0de8bdfba011f9cd63ba9a9171fa6038dd2c08237894f4082abbb821f29d3fe9
-$(WB)/stamp/webkit-src: $(WB)/toolchain.stamp
+# (with SIEOS's few patches: user/web/patches, each saying why)
+WK_PATCHES := $(sort $(wildcard user/web/patches/webkit-*.patch))
+$(WB)/stamp/webkit-src: $(WB)/toolchain.stamp $(WK_PATCHES)
 	$(call fetch,https://wpewebkit.org/releases/wpewebkit-$(WK_VER).tar.xz,wpewebkit-$(WK_VER).tar.xz,$(WK_SHA))
 	$(call unpack,webkit,wpewebkit-$(WK_VER).tar.xz)
+	for p in $(WK_PATCHES); do patch -s -p1 -d $(WB)/src/webkit < $$p || exit 1; done
 	touch $@
 
 # The JIT, all its tiers (LLInt, baseline, DFG, FTL on B3: upstream's Linux

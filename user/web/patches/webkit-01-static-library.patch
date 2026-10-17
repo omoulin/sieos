@@ -1,0 +1,21 @@
+No dynamic linking on SIEOS: with WEBKIT_STATIC_LIBRARY=ON, libWPEWebKit and the
+libraries under it (WTF, JavaScriptCore, WebCore) are static archives, linked into
+each program (as object libraries inside a static one, their objects would be lost).
+
+--- a/Source/cmake/OptionsWPE.cmake
++++ b/Source/cmake/OptionsWPE.cmake
+@@ -203,6 +203,14 @@
+ set(WTF_LIBRARY_TYPE OBJECT)
+ set(JavaScriptCore_LIBRARY_TYPE OBJECT)
+ set(WebCore_LIBRARY_TYPE OBJECT)
++if (WEBKIT_STATIC_LIBRARY)
++    # For systems without dynamic linking: every library static, linked into each program.
++    set(bmalloc_LIBRARY_TYPE STATIC)
++    set(WTF_LIBRARY_TYPE STATIC)
++    set(JavaScriptCore_LIBRARY_TYPE STATIC)
++    set(WebCore_LIBRARY_TYPE STATIC)
++    set(WebKit_LIBRARY_TYPE STATIC)
++endif ()
+ 
+ # These are shared variables, but we special case their definition so that we can use the
+ # CMAKE_INSTALL_* variables that are populated by the GNUInstallDirs macro.
