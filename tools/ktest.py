@@ -9,9 +9,11 @@
           (the kernel's locking; three runs each)
   posix   programs built on libposix (musl + the Linux personality): each
           /bin/ptest-NAME of $PTESTS ("cxx": /bin/cxxtest-NAME, C++)
+  webdeps WebKit's libraries: each /bin/wtest-NAME of $WTESTS (ours print
+          "wtest NAME: ok"; the libraries' own must end without an error)
   place   P-cores and E-cores: the kernel booted with pcores=N (QEMU's
           cores are all alike) says so at boot, and places threads by kind
-Usage: ktest.py <kernel|sia|bench|place|posix|cxx> <cpus> <disk image> <qemu command line...>
+Usage: ktest.py <kernel|sia|bench|place|posix|cxx|webdeps> <cpus> <disk image> <qemu command line...>
 The image must be a fresh one (first-start setup); the test works in a copy.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -130,6 +132,14 @@ elif what in ("posix", "cxx"):                   # programs built on libposix (d
         lines = [l.strip() for l in r.splitlines() if l.strip().startswith(("ptest ", "cxxtest ", "posix:"))]
         for l in lines[:-1]: print("   ", l)
         ok(prog, f"{prog.split('-')[0]} {t}: ok" in r, lines[-1] if lines else r.strip()[-300:])
+
+elif what == "webdeps":                          # WebKit's libraries (user/web/deps.mk): our tests and theirs
+    for prog in __import__("os").environ["WTESTS"].split():
+        r = run(prog, 300)
+        lines = [l.strip() for l in r.splitlines() if l.strip().startswith(("wtest ", "posix:"))]
+        for l in lines[:-1]: print("   ", l)
+        bad = "exit status" in r or "killed" in r or "FAIL" in r or "not ok" in r
+        ok(prog, not bad and (not lines or lines[-1].endswith(": ok")), lines[-1] if lines else r.strip()[-300:])
 
 elif what == "place":
     m = re.search(rb"mk: \d+ CPUs running: (\d+) P-cores, (\d+) E-cores", seen)

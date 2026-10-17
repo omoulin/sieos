@@ -717,7 +717,9 @@ static void proc_end(proc_t *p)
         if (w->state == TS_WAIT && (w->wpid == -1 || w->wpid == p->pid)) { w->ret = 0; ready(w); }
     spin_unlock(&parent->lock);
     if (parent->child_port) port_notify(parent->child_port, parent, NOTE_CHILD);
+    uint64_t nk = note_bump(parent);     /* (its note word too: libposix's pidfds, poll) */
     spin_unlock(&proc_lock);
+    note_wake(nk);
 }
 
 void thread_exit(void)

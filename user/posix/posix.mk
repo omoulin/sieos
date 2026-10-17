@@ -84,7 +84,7 @@ PX_CFLAGS := --sysroot=$(CURDIR)/$(SYSROOT) -Os -fno-stack-protector -ffunction-
 PX_RT     := $(SYSROOT)/usr/lib/linux/libclang_rt.builtins-$(MARCH).a
 # static, not position-independent, each segment on its own pages (SIEOS's
 # loader maps whole pages), unused sections dropped
-PX_LD     := -static -nostdlib -fuse-ld=lld -Wl,-z,separate-loadable-segments -Wl,--gc-sections -Wl,--eh-frame-hdr -L$(SYSROOT)/usr/lib
+PX_LD     := -static -nostdlib -fuse-ld=lld -Wl,-z,separate-loadable-segments -Wl,-z,max-page-size=4096 -Wl,--gc-sections -Wl,--eh-frame-hdr -L$(SYSROOT)/usr/lib
 PX_LIBS   := $(SYSROOT)/usr/lib/crt1.o $(SYSROOT)/usr/lib/libc.a $(PX_RT)
 # musl's files replaced: the system calls (syscall_arch.h), and its few
 # assembly files that make them directly (threads, the thread pointer,
@@ -110,14 +110,17 @@ $(PXB)/linux.o: user/posix/linux.c user/posix/sock.c user/posix/spawn.c user/pos
 	$(PX_CC) $(PX_CFLAGS) -Wno-missing-field-initializers -Wno-sign-compare -Iinclude -Isiefs -c $< -o $@
 $(SYSROOT)/usr/lib/crt1.o: user/posix/start.c $(PXB)/musl/lib/libc.a
 	mkdir -p $(@D) && $(PX_CC) $(PX_CFLAGS) -c $< -o $@
-posix: $(SYSROOT)/usr/lib/libc.a $(SYSROOT)/usr/lib/crt1.o
+# musl's crti.o and crtn.o (_init, _fini): for compilers that link them (user/web/deps.mk)
+$(SYSROOT)/usr/lib/crti.o: $(PXB)/musl/lib/libc.a
+	$(MAKE) -s -C $(PXB)/musl ARCH=$(MARCH) lib/crti.o lib/crtn.o && mkdir -p $(@D) && cp $(PXB)/musl/lib/crti.o $(PXB)/musl/lib/crtn.o $(@D)/
+posix: $(SYSROOT)/usr/lib/libc.a $(SYSROOT)/usr/lib/crt1.o $(SYSROOT)/usr/lib/crti.o
 
 # ---- the C++ runtime (libc++, libc++abi, libunwind) and compiler-rt's
 # builtins, built by CMake from LLVM's sources against the sysroot, static
 RTB       := $(PXB)/runtimes
 CMAKE     := $(CURDIR)/$(WKT)/bin/cmake
 NINJA     := $(CURDIR)/$(WKT)/bin/ninja
-RT_OFF    := SANITIZERS XRAY LIBFUZZER PROFILE MEMPROF ORC CTX_PROFILE GWP_ASAN CRT
+RT_OFF    := SANITIZERS XRAY LIBFUZZER PROFILE MEMPROF ORC CTX_PROFILE GWP_ASAN
 $(SYSROOT)/usr/lib/libc++.a: $(LLSRC)/runtimes/CMakeLists.txt | $(SYSROOT)/usr/lib/libc.a $(SYSROOT)/usr/lib/crt1.o $(WKT)/bin/cmake $(WKT)/bin/ninja
 	rm -rf $(RTB) && $(CMAKE) -G Ninja -S $(LLSRC)/runtimes -B $(RTB) -DCMAKE_MAKE_PROGRAM=$(NINJA) \
 	    -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=$(MARCH) \
@@ -130,7 +133,7 @@ $(SYSROOT)/usr/lib/libc++.a: $(LLSRC)/runtimes/CMakeLists.txt | $(SYSROOT)/usr/l
 	    -DCOMPILER_RT_BUILD_BUILTINS=ON $(RT_OFF:%=-DCOMPILER_RT_BUILD_%=OFF) -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
 	    -DLIBUNWIND_ENABLE_SHARED=OFF -DLIBUNWIND_USE_COMPILER_RT=ON \
 	    -DLIBCXXABI_ENABLE_SHARED=OFF -DLIBCXXABI_USE_LLVM_UNWINDER=ON -DLIBCXXABI_USE_COMPILER_RT=ON -DLIBCXXABI_NON_DEMANGLING_TERMINATE=ON \
-	    -DLIBCXX_ENABLE_SHARED=OFF -DLIBCXX_HAS_MUSL_LIBC=ON -DLIBCXX_USE_COMPILER_RT=ON -DLIBCXX_ENABLE_TIME_ZONE_DATABASE=OFF \
+	    -DLIBCXX_ENABLE_SHARED=OFF -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON -DLIBCXX_HAS_MUSL_LIBC=ON -DLIBCXX_USE_COMPILER_RT=ON -DLIBCXX_ENABLE_TIME_ZONE_DATABASE=OFF \
 	    $(foreach p,LIBCXX LIBCXXABI LIBUNWIND COMPILER_RT,-D$(p)_INCLUDE_TESTS=OFF) -DLIBCXX_INCLUDE_BENCHMARKS=OFF > $(PXB)/runtimes.log
 	$(NINJA) -C $(RTB) install >> $(PXB)/runtimes.log
 cxx: $(SYSROOT)/usr/lib/libc++.a
