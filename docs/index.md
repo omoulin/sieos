@@ -16,7 +16,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [usb-stack.md](usb-stack.md) | the USB stack: xHCI, hubs, USB disks (SCSI), keyboards and mice, hotplug, the Pi glue still to check |
 | [power.md](power.md) | ACPI: power off, restart, suspend to RAM, battery, AC, lid, buttons (`acpid`), what to check on the laptop |
 | [touchpad.md](touchpad.md) | laptop touchpads and touch screens: HID over I2C, the ACPI (AML) reader, the LPSS I2C controller, gestures, what to check on the laptop |
-| [ice-lake.md](ice-lake.md) | the second laptop (an Ice Lake 2-in-1): sound in HDA mode, touch screen, power without S3, NVMe; what is left (DSP microphones, sensor hub, camera, s2idle) and what to check |
+| [surface-pro-7.md](surface-pro-7.md) | the second laptop, a Surface Pro 7 (Ice Lake): the Type Cover, the buttons, battery through the Surface Aggregator (SAM), the lid, the touch screen (IPTS), sound (ALC274), power without S3; what is left (pen, multi-touch, sensor hub, cameras, s2idle) and what to check |
 | [siefs.md](siefs.md) | SieFS, the file system: disk layout, commits, checksums, attributes, volumes, snapshots, encryption |
 | [accounts.md](accounts.md) | users, logins, the first start, Argon2id, account files |
 | [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, Git, apps, the assistant |

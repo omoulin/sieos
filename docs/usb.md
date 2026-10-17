@@ -200,7 +200,7 @@ request cut into commands of that size (`vblk: NVMe: at most N KiB per
 command`); `make nvme-test` gives QEMU's SieFS drive an MDTS of 3 (32 KiB)
 so that this path is the one tested (its `bench` then: about 67 MiB/s
 both ways, QEMU's cost per command; without the limit 365 / 600 MiB/s).
-The Ice Lake laptop's SK hynix BC501 needs no quirk ([ice-lake.md](ice-lake.md#the-disk)).
+The Surface Pro 7's drives (Kioxia BG4, SK hynix BC501, Samsung PM991) need no quirk ([surface-pro-7.md](surface-pro-7.md#the-disk)).
 
 Untested on the real drives: the controllers' reset timing, their MDTS and
 LBA formats as read, a SieFS partition on one (the installer makes it:
