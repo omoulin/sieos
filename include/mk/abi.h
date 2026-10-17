@@ -94,8 +94,9 @@ enum {
                           cores are alike                                                */
     SYS_SIGNAL,        /* (signal, entry) -> 0: what a signal does to this process: entry
                           SIG_DFL (end it), SIG_IGN (nothing), or a function the calling
-                          thread runs when the signal comes (entry(signal), on its stack;
-                          it ends with SYS_SIGRETURN). Not SIGKILL                       */
+                          thread runs when the signal comes (entry(signal, regs), on its
+                          stack, regs: a copy of its registers then, mk_regs_t; it ends
+                          with SYS_SIGRETURN). Not SIGKILL                                */
     SYS_SIGRETURN,     /* (): the end of a signal's function: the thread goes on where the
                           signal found it, all its registers as they were                */
     SYS_ACPI,          /* (buf, size) -> bytes: the firmware's ACPI FADT, DSDT then each SSDT,
@@ -127,7 +128,23 @@ enum {
                           the kernel does it too when one of its children ends           */
     SYS_TIME,          /* (ns) -> ns since 1970 (UTC): the wall clock, the real-time clock
                           read at boot plus the time since; ns != 0: set it (root only)   */
+    SYS_TKILL,         /* (thread id, signal) -> 0: as SYS_KILL to this process, but a
+                          caught signal goes to that thread of it                         */
+    SYS_SIGWAIT,       /* () -> a signal: wait for one. Outside a signal's function, a
+                          caught one runs the function first and this returns -EINTR;
+                          in one (where others wait), the first waiting is taken: its
+                          number returned (sigsuspend in a handler)                       */
 };
+/* SYS_SIGNAL: the registers a signal found its thread with (read only:
+ * SYS_SIGRETURN restores the kernel's own copy), as the kernel saves them. */
+#if defined(__x86_64__)
+typedef struct {
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8, rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    uint64_t vec, err, rip, cs, rflags, rsp, ss;
+} mk_regs_t;
+#elif defined(__aarch64__)
+typedef struct { uint64_t x[31], sp, pc, pstate; } mk_regs_t;
+#endif
 /* SYS_MMAP, SYS_MPROTECT: rights (Linux's values), and where. PROT_NONE: no
  * access at all (guard pages). PROT_WRITE with PROT_EXEC is allowed on
  * anonymous memory (a JIT's code pool); programs' own files stay W^X. */

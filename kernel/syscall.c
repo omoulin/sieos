@@ -382,6 +382,8 @@ void syscall(regs_t *r)
     case SYS_NOTE_WORD:     ret = note_word(a); break;
     case SYS_NOTE:          ret = note((int)a); break;
     case SYS_TIME:          ret = wall_time(a); break;
+    case SYS_TKILL:         ret = thread_kill(a, (int)b); break;
+    case SYS_SIGWAIT:       ret = sig_wait(); break;
     default:               ret = -ENOSYS;
     }
     SC_RET(r) = ret;

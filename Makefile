@@ -233,6 +233,7 @@ $(FPU_PROGS:%=$(B)/user/%.o): UCFLAGS := $(filter-out -mgeneral-regs-only,$(UCFL
 include user/python/python.mk
 include user/posix/posix.mk
 include user/web/deps.mk
+include user/web/jsc.mk
 
 # ---- the disk: a SieFS image of rootfs/ plus the programs in /bin.
 # build/rootfs is the staging copy. The image is made once (mkfs.siefs);

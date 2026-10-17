@@ -11,9 +11,12 @@
           /bin/ptest-NAME of $PTESTS ("cxx": /bin/cxxtest-NAME, C++)
   webdeps WebKit's libraries: each /bin/wtest-NAME of $WTESTS (ours print
           "wtest NAME: ok"; the libraries' own must end without an error)
+  jsc     JavaScriptCore's shell: each /lib/jsc/NAME.js of $JSTESTS, with the
+          JIT and without (each prints "jsc NAME: ok"; bench.js its time)
+  run     the commands of $KRUN (separated by " ;; "), their output shown
   place   P-cores and E-cores: the kernel booted with pcores=N (QEMU's
           cores are all alike) says so at boot, and places threads by kind
-Usage: ktest.py <kernel|sia|bench|place|posix|cxx|webdeps> <cpus> <disk image> <qemu command line...>
+Usage: ktest.py <kernel|sia|bench|place|posix|cxx|webdeps|jsc|run> <cpus> <disk image> <qemu command line...>
 The image must be a fresh one (first-start setup); the test works in a copy.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -147,6 +150,26 @@ elif what == "webdeps":                          # WebKit's libraries (user/web/
         bad = "exit status" in r or "killed" in r or "ended by" in r or "FAIL" in r or "not ok" in r
         good = not bad and (not lines or lines[-1].endswith(": ok"))
         ok(prog, good, lines[-1] if lines and good else r.strip()[-600:])
+
+elif what == "jsc":                              # JavaScriptCore's shell (user/web/jsc.mk): our scripts, JIT on and off
+    times = {}
+    for t in __import__("os").environ["JSTESTS"].split():
+        name = t[:-3]
+        for mode, flags in (("JIT", ""), ("no JIT", "--useJIT=0 ")):
+            r = run(f"jsc {flags}/lib/jsc/{t}", 600)
+            lines = [l.strip() for l in r.splitlines() if l.strip().startswith(f"jsc {name}:")]
+            for l in lines[:-1]: print("   ", l)
+            m = re.search(rf"jsc {name}: (\d+) ms", r)
+            if m: times[mode] = int(m.group(1))
+            bad = "FAIL" in r or "exit status" in r or "killed" in r or "ended by" in r
+            good = not bad and bool(lines) and lines[-1].endswith(": ok")
+            ok(f"{t} ({mode})", good, lines[-1] if good else r.strip()[-600:])
+    if len(times) == 2:
+        print(f"the JIT's worth: bench.js {times['no JIT']} ms without it, {times['JIT']} ms with it (x{times['no JIT'] / max(1, times['JIT']):.1f})")
+
+elif what == "run":                              # any commands ($KRUN, separated by " ;; "): their output shown
+    for c in __import__("os").environ["KRUN"].split(" ;; "):
+        print(f"$ {c}\n{run(c, 600)}")
 
 elif what == "place":
     m = re.search(rb"mk: \d+ CPUs running: (\d+) P-cores, (\d+) E-cores", seen)
