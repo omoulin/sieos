@@ -49,7 +49,7 @@ void redraw_box(int x0, int y0, int x1, int y1);
 /* ---- Click boxes: what a click at (x, y) means; searched from the last. */
 enum { H_BTN = 1, H_WIN, H_STRIP, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,
        H_PANEL, H_PIN, H_PSEND, H_PSTOP, H_PSUG, H_PACT, H_PCLOSE, H_PMODE, H_SETUP,
-       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL, H_CAM };
+       H_WTAB, H_WEDGE, H_WMBTN, H_SET, H_FILE, H_DBMENU, H_DBAPP, H_DBWS, H_DESK, H_PINS, H_REPO, H_MAIL, H_CAM, H_BTASK };
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg);
 int  pill(int x, int y, const char *s, int on, int kind, int arg);   /* -> its right edge */
 void label(int x, int y, const char *s, int k, uint32_t c);

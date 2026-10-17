@@ -5,8 +5,9 @@ Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 One server, `btd` (`user/btd/`), drives the controller and holds the whole
 host stack: HCI, L2CAP, pairing (classic SSP, LE SMP), keyboards and mice
 (classic HID, HID over GATT), headphones and speakers (A2DP: AVDTP, SBC;
-the sound from `audiod`), file transfer (OBEX Object Push over RFCOMM,
-both ways), with SDP for what each side offers. Keyboard and mouse
+the sound from `audiod`; AVRCP: their buttons, absolute volume), file
+transfer (OBEX Object Push over RFCOMM, both ways, received files only
+if the user accepts), with SDP for what each side offers. Keyboard and mouse
 reports go to the console through the same code as USB ones
 (`user/lib/hidrep.c`). Settings has a Bluetooth section; `/bin/bt` does
 the same from a shell.
@@ -60,7 +61,8 @@ can come back.
 | `a2dp.c` | A2DP source: AVDTP signalling, the media channel, pacing |
 | `sbc.c` | the SBC encoder (fixed point) |
 | `rfcomm.c` | RFCOMM: one multiplexer, one data channel, credit flow control |
-| `obex.c` | OBEX Object Push, sending and receiving |
+| `obex.c` | OBEX Object Push, sending and receiving (asking first) |
+| `avrcp.c` | AVRCP over AVCTP: a headset's buttons, absolute volume |
 | `lib/btcrypt.c` | SMP's f4, f5, f6, g2, c1, s1 on AES-CMAC/AES-128, P-256 in SMP's byte order |
 
 **Pairing.** Our IO capability is display + yes/no.
@@ -97,7 +99,7 @@ void    l2_close(l2ch_t *h);
 
 A channel is open once both directions are configured (our MTU 1017);
 `h->priv` is the user's. SDP (PSM 1), AVDTP (0x19) and RFCOMM (3) use
-these calls; all run under btd's one lock (the receiver thread, client
+these calls (AVCTP: 0x17); all run under btd's one lock (the receiver thread, client
 requests, the 1 s tick and the sound threads take it). Outgoing frames are
 fragmented and wait for controller buffers in `hci.c`. When a link drops,
 all its channels are marked closed before their users hear of it, so
@@ -111,9 +113,12 @@ computers).
 ## SDP
 
 The server answers Service Search, Service Attribute and Service Search
-Attribute requests over two records: A2DP source (handle 0x10001: L2CAP
-PSM 0x19, AVDTP 1.3, A2DP 1.3, "player") and Object Push (0x10002: RFCOMM
-channel 9, OBEX, any format). An answer longer than the asker allows is
+Attribute requests over four records: A2DP source (handle 0x10001: L2CAP
+PSM 0x19, AVDTP 1.3, A2DP 1.3, "player"), Object Push (0x10002: RFCOMM
+channel 9, OBEX, any format), AVRCP target (0x10003: 110C, category 1,
+"player") and controller (0x10004: 110E and 110F, category 2,
+"amplifier": the volume), both L2CAP PSM 0x17, AVCTP 1.3, AVRCP 1.4 (the
+first version with absolute volume). An answer longer than the asker allows is
 cut, with a 2-byte continuation (the offset). Patterns may use 16, 32 or
 128-bit UUIDs (on the Bluetooth base).
 
@@ -152,13 +157,44 @@ channel). Logged: `bt: SDP 110b on NAME: found, PSM 19, AVDTP 103, RFCOMM channe
   behind) rather than delaying all that follows. Headphones gone: audiod
   goes back to the speakers.
 - **Volume:** in software, in the encoder (gain = volume squared, mute 0);
-  no AVRCP (absolute volume would need AVCTP, AVRCP and their SDP record).
+  with absolute volume (AVRCP, below) the encoder runs at full scale and
+  the headset scales (mute stays in the encoder).
 - **The encoder** (`sbc.c`, 2.8 KB): the analysis filter as the spec
   writes it (the prototype filter's 41 values, Q20; the 8x16 cosine
   matrix, Q14; 64-bit sums), scale factors, joint stereo per subband when
   mid/side costs fewer bits, the loudness bit allocation, the frame and
   its CRC-8. About 1% of one core for 48 kHz stereo. Checked against
   libsbc: 63 dB SNR at bitpool 53 on two tones, 58 dB at bitpool 35.
+
+## Remote control (AVRCP)
+
+```
+  headset's button ──PASS THROUGH──► btd ──AUDIO_KEY (the operation id)──► audiod ──► play: held / goes on / skips / ends
+  SIEOS's volume  ──AUDIO_VOL──► audiod ──AUDIO_VOL──► btd ──SetAbsoluteVolume──► headset
+  headset's volume ──CHANGED──► btd ──AUDIO_VOL──► audiod (echoed back: same value, nothing sent)
+```
+
+- **The channel.** AVCTP on L2CAP PSM 0x17, one at a time: the sink
+  usually opens it after A2DP; if it has not 2 s after the media channel
+  is up, we do. Single packets only (ours are all under 20 bytes).
+- **Target (the buttons).** PASS THROUGH play, pause, stop, next,
+  previous, volume up and down are accepted (others: not implemented);
+  each press (not the release) goes to audiod as a media key, sent by
+  btd's tick thread outside the lock and woken for it. The key codes are
+  AV/C's own (`MK_PLAY` 0x44...), so nothing is translated. Pause and stop
+  also suspend the stream at once: headsets that guess the state from the
+  stream then send play on the next press. UNIT INFO and SUBUNIT INFO get
+  a panel; GetCapabilities: the SIG's company id, no events (no playback
+  status: we do not track a player); other vendor commands are rejected.
+- **Controller (absolute volume).** When the channel opens we register
+  for the volume-changed event. An INTERIM answer means the headset
+  scales: SIEOS's volume (0-100%, as 0-127, rounded) goes to it by
+  SetAbsoluteVolume, now if known and at each change, and the encoder
+  stops scaling. A CHANGED notification (its own buttons) becomes SIEOS's
+  volume (AUDIO_VOL to audiod), and we register again. A refusal leaves
+  the volume in software. Logged: `bt: NAME: AVRCP connected`, `AVRCP:
+  absolute volume` (or `no absolute volume (code)`), `AVRCP: key 44`.
+- Size: `avrcp.c` 1.9 KB of code, the two SDP records 0.2 KB.
 
 ## File transfer (OBEX Object Push)
 
@@ -178,13 +214,21 @@ channel). Logged: `bt: SDP 110b on NAME: found, PSM 19, AVDTP 103, RFCOMM channe
   "continue"; the last one final; DISCONNECT. 30 s without progress: given
   up. Logged: `bt: OBEX: sending NAME (N bytes) to DEV`, `connected,
   packets up to N bytes`, `NAME sent to DEV (N bytes)`.
-- **Receiving:** a bonded, encrypted device opens our channel 9 and
-  pushes: the file goes to the desktop user's `~/Downloads` (Atlas tells
-  btd who is logged in, BT_USER; nobody: root's), created as that user,
-  `1-NAME`, `2-NAME`... if taken; names lose `/`, `\`, control
-  characters and a leading dot. Nothing is asked: Atlas shows "Receiving
-  NAME from DEV..." then "Received NAME (Downloads)." (ATLAS_NOTE). A
-  transfer that breaks off is deleted. Logged: `bt: OBEX: into PATH (N
+- **Receiving:** only a bonded, encrypted device can open our channel 9
+  and push. The first PUT that carries the file's bytes (or ends it) is
+  held, unanswered, and the user is asked: Atlas shows "DEV wants to send
+  NAME (N KB)." under the sia strip with **Accept** and **Decline**
+  (ATLAS_NOTE with w[1] = 1; the answer: BT_ACCEPT), and the log says the
+  same (`bt accept` / `bt decline` as root answer too, e.g. on a machine
+  with no desktop session). Accepted: the held PUT is taken and the file
+  goes to the desktop user's `~/Downloads` (Atlas tells btd who is logged
+  in, BT_USER; nobody: root's), created as that user, `1-NAME`,
+  `2-NAME`... if taken; names lose `/`, `\`, control characters and a
+  leading dot; Atlas shows "Receiving NAME from DEV..." then "Received
+  NAME (Downloads).". Declined, or no answer in 30 s: "Forbidden" (0xC3),
+  nothing written, "NAME: not taken.". A transfer that breaks off is
+  deleted. Logged: `bt: OBEX: DEV wants to send ...`, `NAME from DEV
+  accepted` / `declined`, `no answer from the user`, `into PATH (N
   bytes)`, `NAME received from DEV (N bytes)`.
 
 ## Using it
@@ -199,6 +243,7 @@ bt forget AA:BB:CC:DD:EE:FF (root)
 bt connect ADDR             a bonded device: headphones then play what audiod plays
 bt disconnect ADDR
 bt send ADDR FILE           to a bonded phone or computer
+bt accept | bt decline      (root) the file a device offers
 bt on | bt off              (root; kept)
 ```
 
@@ -213,7 +258,7 @@ output in Settings → Sound (and `vol out`), chosen when they connect.
 - `make crypto-test`: f4, f5, f6, g2, c1, s1 and two P-256 key exchanges
   against the spec's sample data. Classic SSP's f1/f2/f3/g are not in SIEOS:
   the controller computes them.
-- `make bt-test`: the stack on the host with a fake transport (279 checks):
+- `make bt-test`: the stack on the host with a fake transport (342 checks):
   classic scan, pairing (passkey), link key, encryption, both HID channels,
   a key and a mouse move into CON_INJECT, flow control, a bonded device's
   return; LE advertisement, SMP Secure Connections against a responder
@@ -227,10 +272,18 @@ output in Settings → Sound (and `vol out`), chosen when they connect.
   now, the next 18.7 ms later, catching up after a gap), the RTP headers,
   each SBC frame's header and CRC, the frames decoded by a float decoder in
   the test (58 dB SNR) and by the host's libsbc if there (dlopen; 58 dB),
-  Suspend after 5 s; a phone asking our SDP records (Object Push's channel
-  in four cut answers, Service Search, one attribute), pushing a file
-  (RFCOMM: SABM, PN, MSC, credits; OBEX CONNECT, two PUTs: the file's name
-  and bytes checked), then us sending it 3000 bytes (SDP, RFCOMM with one
+  Suspend after 5 s; AVRCP: our control channel after 2 s, register for
+  the volume, the interim answer, SetAbsoluteVolume (50% = 0x40, 100% =
+  0x7F; the same value not sent twice), the headset's change (0x20) to
+  audiod as 25% and registered again, UNIT INFO, GetCapabilities, a
+  rejected PDU, another profile refused; the buttons (play pressed and
+  released, next, volume up: three keys; record: not implemented), pause
+  suspending the stream at once; a phone asking our SDP records (Object
+  Push's channel in four cut answers, Service Search, one attribute, the
+  two AVRCP records), pushing a file (RFCOMM: SABM, PN, MSC, credits;
+  OBEX CONNECT, the user asked and the PUT held until accepted, two
+  PUTs: the file's name and bytes checked; one declined, one not
+  answered in 30 s: forbidden, no file), then us sending it 3000 bytes (SDP, RFCOMM with one
   credit to start, 4 PUTs of at most 1024 bytes in frames of at most 400,
   its name in UTF-16, every byte checked, DISCONNECT, DISC).
 - `make run-bt` (not run by the tests): QEMU with this PC's Intel adapter
@@ -256,19 +309,27 @@ Every step logs a `bt:` line on the serial console / kernel log: send them.
   when `play x.wav` starts; `vol out` lists them. Listen for gaps
   (pacing, packets dropped for want of controller buffers) and check the
   volume. If a sink refuses: the `refuses command N (error)` line.
+- Remote control: with headphones connected, `bt: NAME: AVRCP connected`
+  and `AVRCP: absolute volume` (or `no absolute volume`); `play a.wav
+  b.wav`, then the headset's play/pause (the sound stops and comes back
+  where it was), next/previous, stop; `AVRCP: key NN` for each. Change
+  `vol 30` and listen (the headset should get quieter while the encoder is
+  at full scale); press the headset's volume buttons: `vol` should follow.
 - Files: pair a phone (`bt pair`), send a photo to "SIEOS" from the
-  phone, look in `~/Downloads`; `bt send PHONE FILE` the other way. The
-  `bt: RFCOMM` and `bt: OBEX` lines say how far it went.
+  phone: Atlas asks (Accept / Decline); accept, look in `~/Downloads`;
+  send again and decline (the phone should say refused), and once without
+  answering (30 s); `bt send PHONE FILE` the other way. The `bt: RFCOMM`
+  and `bt: OBEX` lines say how far it went.
 
 ## Limits
 
 Classic HID uses the boot protocol (SDP could now give the report map:
 not done; no consumer keys, a 3-button mouse with a wheel byte). A2DP:
-SBC only, 48 kHz only (audiod's rate), one sink at a time, no AVRCP (no
-absolute volume, no play/pause buttons), no delay reporting; the tail of
+SBC only, 48 kHz only (audiod's rate), one sink at a time, no delay
+reporting; AVRCP: no playback status nor track events, no browsing, no
+fragmented AVCTP packets; the tail of
 a sound shorter than a packet (under 20 ms) is not sent. OBEX: one
 transfer at a time, Object Push only (no FTP, no GOEP over L2CAP, no SRM),
-no prompt before receiving (bonded, encrypted devices only), no "Send by
-Bluetooth" in the Files window. No LE privacy (bonded LE devices that use
+no "Send by Bluetooth" in the Files window. No LE privacy (bonded LE devices that use
 resolvable private addresses do not come back by themselves: pair again);
 no SCO/isochronous; one adapter; HCI commands time out only at start.

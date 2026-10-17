@@ -1,11 +1,12 @@
 /*
  * tests/aml/test.c - The AML interpreter (user/lib/aml.c) on the host:
- *   aml-test [-m address=dword] [-e offset=byte] [-w] [-d HID] [-v PATH[:arg,...]]... table.aml...
+ *   aml-test [-m address=dword] [-e offset=byte] [-w] [-d HID] [-W HID] [-v PATH[:arg,...]]... table.aml...
  * loads the tables (the DSDT first) as SYS_ACPI gives them. Without -d or
  * -v it prints the I2C HID devices found, one line each. -m: what memory
  * holds there (the firmware's variables); -e: a byte of the embedded
  * controller; anything else reads 0 (I/O ports too). -d: the devices with
- * this _HID/_CID; -v: an object's value (a method: called with the
+ * this _HID/_CID; -W: the same, each one's GPE waking from S3 (armed:
+ * aml_wake, as user/acpid does); -v: an object's value (a method: called with the
  * arguments), its integers; -w: print what the AML writes, its Notify()s,
  * its PCI reads (bridges answer: bus 2 behind).
  *
@@ -75,7 +76,7 @@ int main(int argc, char **argv)
             unsigned long o = strtoul(argv[++i], &e, 0);
             ec[o & 255] = (uint8_t)strtoul(e + 1, 0, 0);
         } else if (!strcmp(argv[i], "-w")) writes = 1;
-        else if ((!strcmp(argv[i], "-v") || !strcmp(argv[i], "-d")) && i + 1 < argc) ask = 1, i++;
+        else if ((!strcmp(argv[i], "-v") || !strcmp(argv[i], "-d") || !strcmp(argv[i], "-W")) && i + 1 < argc) ask = 1, i++;
         else {
             FILE *f = fopen(argv[i], "rb");
             if (!f) { perror(argv[i]); return 2; }
@@ -90,9 +91,13 @@ int main(int argc, char **argv)
         int64_t v[24], args[7];
         int na = 0, k, dev[16];
         if (!strcmp(argv[i], "-m") || !strcmp(argv[i], "-e")) { i++; continue; }
-        if (!strcmp(argv[i], "-d")) {
+        if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "-W")) {
+            int w = argv[i][1] == 'W';
             k = aml_devs(argv[++i], dev, 16);
-            for (int j = 0; j < k; j++) { aml_path(dev[j], p, sizeof p); printf("%s: %s\n", argv[i], p); }
+            for (int j = 0; j < k; j++) {
+                aml_path(dev[j], p, sizeof p);
+                if (w) printf("%s wakes from S3: GPE %d\n", p, aml_wake(dev[j], 3, 1)); else printf("%s: %s\n", argv[i], p);
+            }
             continue;
         }
         if (strcmp(argv[i], "-v")) continue;

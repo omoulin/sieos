@@ -23,7 +23,7 @@ or to Bluetooth headphones (see [Bluetooth](#bluetooth)).
 
 | | |
 |---|---|
-| `play FILE.wav` | plays a WAV file (48 kHz, 16-bit, stereo PCM; others are refused) |
+| `play FILE.wav...` | plays WAV files (48 kHz, 16-bit, stereo PCM; others are refused), one after the other; media keys pause it, skip, stop it |
 | `rec FILE.wav [SECONDS]` | records that long (default 5 s) into a WAV file |
 | `vol [0-100\|mute]` | shows or sets the volume; a number also unmutes |
 | `vol out [N]` | lists the outputs (0 the speakers, then each monitor with sound, then connected Bluetooth headphones, by name; `*` the one playing), or plays to output N |
@@ -39,7 +39,7 @@ speakers the next time the outputs are asked.
 
 `user/audiod/audiod.c` (controllers, streams, the port) and `codec.c`
 (the codecs, through verbs only), port `"audio"` (protocol in
-`include/mk/proto.h`: `AUDIO_WRITE`, `AUDIO_READ`, `AUDIO_VOL`, `AUDIO_OUT`). init starts it when a program
+`include/mk/proto.h`: `AUDIO_WRITE`, `AUDIO_READ`, `AUDIO_VOL`, `AUDIO_OUT`, `AUDIO_KEY`). init starts it when a program
 first looks the port up, and keeps it (the volume lives there; it is not
 saved across a reboot). With no controller it ends with status 2 and init
 gives up on it: clients get "no sound card".
@@ -70,6 +70,15 @@ gives up on it: clients get "no sound card".
   (what the codec still buffers). Recording runs while someone reads and
   stops when the ring is nearly full (nobody reads). A write that finds
   no room waits for the next period.
+- **Media keys** (`AUDIO_KEY`, `MK_...`: the AV/C operation ids, so btd
+  passes a headset's buttons on unchanged; [bluetooth.md](bluetooth.md#remote-control-avrcp)).
+  Pause: the writer's next `AUDIO_WRITE` is held (nothing taken; the
+  stream drains and stops, btd suspends its own), play lets it go. Stop,
+  next, previous: the writer's next write is answered with nothing taken
+  and the key in `w[1]`; `play` then ends, goes to the next file, or the
+  one before (or the same again). Volume up/down: 5 points. The keys are
+  for the process writing then: a write from another one forgets them (a
+  new `play` is not paused by an old key).
 
 Sizes (x86-64, gcc -O2): audiod.o 10.5 KB of code with HDMI/DP and two
 controllers (6.4 KB before them; the program 24 KB with the library),
@@ -80,8 +89,9 @@ controller for CORB, RIRB and the buffer lists).
 ## HDMI and DisplayPort
 
 ```
-  igfx (Atlas), when it lights a monitor whose EDID says "basic audio":
+  igfx (Atlas), at its start if the VBT has monitor ports:
      display audio on (AUD_FREQ_CNTRL, AUD_PIN_BUF_CTL, the codec wake signal)
+  then when it lights a monitor whose EDID says "basic audio" (at the start or plugged in later):
      HDMI: HDMI mode (not DVI) and an AVI infoframe
      the transcoder's audio on, N/CTS by the hardware, the ELD (built from the EDID) ──┐
                                                                                       │ (inside the chip)
@@ -97,7 +107,8 @@ the codec is how audiod learns that a monitor with sound is there.
   `codec_wake_override`): when a monitor (not the panel) has a CEA block
   with basic audio, `user/lib/eld.h` builds its ELD (CEA revision, name,
   short audio descriptors, speaker allocation, manufacturer and product;
-  DP or HDMI). Before the outputs: `AUD_FREQ_CNTRL` 0x8010 (8T, 96 MHz
+  DP or HDMI). Before the outputs, whenever the VBT has a monitor port (so
+  that the codec is there for a monitor plugged in later): `AUD_FREQ_CNTRL` 0x8010 (8T, 96 MHz
   BCLK, i915's value for display 12), `AUD_PIN_BUF_CTL` on, and the codec
   wake signal (`AUD_CHICKENBIT` bit 15) pulsed and left on, so that
   audiod's link reset finds the HDMI codec; the power wells (PW2-PW4) are
@@ -105,7 +116,8 @@ the codec is how audiod learns that a monitor with sound is there.
   with an AVI infoframe (RGB, no VIC: full range). After its pipe starts:
   `AUD_PIN_ELD_CP_VLD` audio enable for the transcoder, `AUD_CFG` (DP: N
   by the hardware; HDMI: the pixel clock's class, 25.2 MHz if not one of
-  i915's table), the ELD into `AUD_EDID_DATA`, ELD valid. Logged in
+  i915's table), the ELD into `AUD_EDID_DATA`, ELD valid; unplugged: audio
+  off, ELD not valid (with its pipe). Logged in
   `/etc/igfx.log` (`sound: ELD ...`, `display audio on`, `pipe B: sound on`).
 - **The codec side** (`user/audiod/codec.c`, Linux's `patch_hdmi.c`): the
   digital pins with HDMI or DP capability and a connection (the pin
@@ -145,11 +157,15 @@ controller stops and each `AUDIO_WRITE` goes on to btd's port `btaudio`
 from where they landed in audiod's ring into btd's, the one copy more
 than for the speakers. btd encodes them (SBC), paces them by the media
 clock and holds the answer while its 170 ms ring is full, which paces
-the client. The volume is applied in the encoder. If btd says the
+the client. The volume is applied in the encoder, or, when the headset
+has absolute volume (AVRCP), by the headset: audiod sends each change on
+(`AUDIO_VOL` to `btaudio`), and the headset's own changes come back as
+`AUDIO_VOL` from btd. If btd says the
 headphones are gone, audiod goes back to the speakers and the client's
 write is answered 0 (sent again, to the speakers). With no HDA codec but
 a Bluetooth adapter (the Pis), audiod now stays up for headphones only
-(writes get -ENOENT until some connect). Sizes: audiod +1.0 KB.
+(writes get -ENOENT until some connect). Sizes: audiod +1.0 KB; media
+keys and the volume to btd +0.6 KB, play +0.3 KB.
 
 ## Tests
 
@@ -197,7 +213,10 @@ monitor unplugged.
   pins ... 4 converters each` (0 converters: the vendor verb did not take)
   and an `HDMI/DP sink` line. Silence while listed: DP M/N or HDMI N/CTS
   (the hardware's), the infoframe, or the codec wake left on are the
-  suspects. Only 48 kHz stereo PCM (no surround, no passthrough, no
-  hot-plug: igfx lights monitors only when Atlas starts). No software
+  suspects. Only 48 kHz stereo PCM (no surround, no passthrough). A
+  monitor plugged in later is lit by igfx with its ELD (hot-plug:
+  [desktop.md](desktop.md#how-it-works)): `vol out` and Settings list the
+  sinks again each time they are asked; when a stream starts on a monitor
+  that is gone, the sound goes back to the speakers. No software
   volume for monitors. Intel display versions other than 12 are not
   driven by igfx, so get no display-side set-up.

@@ -896,8 +896,15 @@ int aml_eval(int dev, const char *path, int argc, const int64_t *arg, int64_t *v
     if (eval(dev, path, argc, arg, &o)) return -1;
     if (o.t != V_PKG) { if (max > 0) *v = num(&o); return 1; }
     int n = 0;
-    for (; n < (int)o.n && n < max; n++) v[n] = num((val_t *)o.b + n);
+    for (val_t *e = (val_t *)o.b; n < (int)o.n && n < max; n++) v[n] = e[n].t == V_PKG ? -1 : num(e + n);   /* (a package in it: -1) */
     return n;
+}
+int aml_wake(int dev, int s, int on)
+{
+    int64_t v[2], a[3] = { on, s, 0 }, r;
+    if (aml_eval(dev, "_PRW", 0, 0, v, 2) != 2 || v[0] < 0 || v[1] < s) return -1;
+    if (on >= 0) aml_eval(dev, aml_find(dev, "_DSW") >= 0 ? "_DSW" : "_PSW", 3, a, &r, 1);
+    return (int)v[0];
 }
 /* PCI interrupt links ("PNP0C0F": the chipset's routing of the PCI lines
  * to interrupts): their current setting (_CRS) kept, or given back (_SRS),

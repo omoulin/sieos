@@ -25,7 +25,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 Test suites: `test`, `crash-test`, `gui-test`, `gui-test-real`,
 `kernel-test`, `power-test` (x86-64), `sig-test`, `posix-test`, `cxx-test`, `sia-test`, `demand-test`, `net-test`, `net-nic-test`, `ssh-test`, `make-test`, `py-test`, `git-test`, `mail-test`, `nvme-test` (both
 architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `cc-sieos`,
-`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`,
+`cc-a64-test`, `cc-a64-bootstrap`, `siefs-test`, `crypto-test`, `bt-test`, `aml-test`, `camera-test`, `hdmi-test`, `igfx-test`,
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
 
@@ -252,6 +252,20 @@ checklist in [raspberrypi.md](raspberrypi.md).
   text): btd +21.7 KB (sdp 4.0, a2dp 4.3, sbc 2.8, rfcomm 2.8, obex 4.4,
   btd.c +2.3, hci +1.1), bt +1.2 KB, audiod +1.0 KB, Atlas +0.7 KB; btd's
   RAM +58 KB (the 32 KB sound ring, 8 KB OBEX packet, 8 KB request buffer).
+- **2026-10-17, later.** Bluetooth remote control and a prompt for files
+  ([bluetooth.md](bluetooth.md#remote-control-avrcp)): AVRCP 1.4 over AVCTP
+  (PSM 0x17, two SDP records: target and controller). A headset's buttons
+  (play, pause, stop, next, previous, volume) go to audiod as media keys
+  (`AUDIO_KEY`, AV/C's own operation ids): pause holds the writer and
+  suspends the stream, next/previous/stop reach `play` (now several
+  files); absolute volume both ways (SetAbsoluteVolume, the headset's
+  changes as SIEOS's volume), the encoder then at full scale. Files pushed
+  by a phone wait for the user: Atlas shows Accept / Decline under the
+  strip (`bt accept` / `bt decline` as root), declined or 30 s unanswered:
+  "forbidden". btd's tick thread now also wakes for what goes to audiod
+  and Atlas. `make bt-test` 342 checks. Untested on hardware. Sizes
+  (x86-64, text): btd +3.4 KB (avrcp 1.9, obex +0.5, btd.c +0.6, sdp
+  +0.2), audiod +0.6 KB, play +0.3 KB, bt +0.2 KB, Atlas +0.4 KB.
 - **2026-10-16, later.** The laptop's camera and keyboard light, in the
   USB server ([usb-stack.md](usb-stack.md#cameras)). xHCI isochronous IN
   transfers (40 queued, an interrupt per 8); USB video class: the YUY2
@@ -281,3 +295,36 @@ checklist in [raspberrypi.md](raspberrypi.md).
   `suspend`; `make power-test`. Checked on the target platform's real tables
   on the host; untested on the laptop. Sizes: kernel.bin +3.3 KB, aml.o
   13.5 -> 17.6 KB, acpid 41 KB of code (acpid.o 10 KB), i2chid +4.4 KB (the interpreter), atlas +2.8 KB, sh +0.9 KB.
+- **2026-10-17.** Waking from sleep by the lid ([power.md](power.md),
+  Waking): acpid finds what can wake the machine from S3 (the lid's, the
+  power button's and the controller's `_PRW`: a GPE of GPE0, S3 or
+  deeper; `aml_wake()` in the interpreter), arms them before `_PTS(3)`
+  (`_DSW(1, 3, 0)`, else `_PSW(1)`), leaves only those GPEs and the power
+  button on (status cleared), and logs why it woke (`awake (PM1 status
+  ..., GPE ..)`); after `_WAK(3)` it disarms them, turns its GPEs back on,
+  runs the controller's pending queries and reads `_LID`: the desktop sees
+  the lid open and the wake (a wake now always reaches it, even when
+  nothing else changed) and turns the panel on. No loop: a sleep asked
+  within 1 s of waking is not done, and the desktop does not sleep on a
+  lid found closed in the wake's own status. The Legion's lid, power
+  button and controller have no `_PRW` (Linux's `/proc/acpi/wakeup`
+  agrees): its controller wakes the machine itself, told by `_PTS(3)`.
+  `suspend N` (N < 3600 s): woken by the CMOS clock's alarm (RTC_EN), as
+  `make power-test` now does in QEMU (no `_PRW` there); `make aml-test`
+  checks the laptop's `_PRW` patterns (the Legion's `GPRW`, `_DSW`/`_PSW`,
+  a GPE block, S1 only). Sizes: acpid.o +1.1 KB of code, aml.o +0.2 KB,
+  sh +0.15 KB, atlas unchanged.
+- **2026-10-17.** Monitor hot-plug on the laptop's Intel display
+  ([desktop.md](desktop.md#how-it-works)): a DP or HDMI monitor plugged in
+  after the start is lit as at the start (EDID, mode, the next free pipe,
+  sound if it has speakers); one unplugged has its pipe, port, DPLL and
+  sound turned off; the panel is never touched but for its DBUF share,
+  which follows i915's table as pipes come and go (each pipe moved at its
+  next frame once its blocks are free). Atlas reads the PCH's hot-plug pins
+  (SDEISR, TC1-TC4) twice a second from a thread of its own, 200 ms of
+  debounce; igfx's modeset code reused (a monitor's probe, the DBUF share
+  now functions). audiod: a stream starting on a monitor that is gone goes
+  back to the speakers (`vol out` already asked again). `make igfx-test`:
+  a fake display engine on the host. Not yet tried on the laptop. Sizes:
+  atlas.elf +1.3 KB of code (igfx.o +1.1 KB, atlas.o +0.25 KB), +1.4 KB
+  of bss (five outputs instead of three); audiod.o +54 bytes.

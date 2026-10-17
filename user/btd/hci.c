@@ -479,6 +479,7 @@ void bt_ready(void)
     input_init();
     sdp_init();
     a2dp_init();
+    avrcp_init();
     rf_init();
     bt_power(bt.on);
 }
@@ -486,6 +487,7 @@ void bt_ready(void)
 void bt_tick(void)
 {
     a2dp_tick();
+    avrcp_tick();
     opp_tick();
     if (bt.scan_left && !--bt.scan_left) { uint8_t p[2] = { 0 }; cmd(0x200C, p, 2); }
     if (bt.pair_left && !--bt.pair_left && bt.pair != BTP_DONE && bt.pair != BTP_FAILED) {

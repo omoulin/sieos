@@ -139,7 +139,7 @@ $(B)/user/lib/aml.o: UCFLAGS += -Os
 
 # Bluetooth (user/btd, docs/bluetooth.md): the server (its stack: hci, l2cap, smp, input; the Pis'
 # UART: uart.c) and the command (user/bt).
-BTD     := btd hci l2cap smp input sdp a2dp sbc rfcomm obex uart
+BTD     := btd hci l2cap smp input sdp a2dp avrcp sbc rfcomm obex uart
 $(B)/btd.elf: $(BTD:%=$(B)/user/btd/%.o) $(UCORE:%=$(B)/user/lib/%.o) $(ULIB) user/user.ld | $(TOOLDEP)
 	$(TLD) -T user/user.ld -z max-page-size=4096 -o $@ $(UCORE:%=$(B)/user/lib/%.o) $(BTD:%=$(B)/user/btd/%.o) $(ULIB)
 $(B)/user/btd/%.o: user/btd/%.c user/btd/btd.h user/lib/hidrep.h user/lib/mk.h include/mk/*.h $(TOOLDEP)
@@ -349,7 +349,7 @@ crash-test: all $(B)/host/fsck.siefs
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/crashtest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # power-test (x86-64): ACPI in QEMU (tools/powertest.py, user/acpid): suspend to RAM and
-# waking up (twice: once while fsloop works), the network and files after; reboot; the power button
+# waking up (three times: by the monitor, again while fsloop works, by the clock: `suspend 3`), the network and files after; reboot; the power button
 power-test: all $(B)/host/fsck.siefs
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/powertest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
@@ -430,7 +430,7 @@ git-test: all
 	python3 tools/gittest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # audio-test: sound (docs/audio.md) on QEMU's intel-hda + hda-duplex, output to a WAV file:
 # vol, play (the tone checked in QEMU's file), mute, rec (tools/audiotest.py); first the HDMI codec test (hdmi-test)
-audio-test: all hdmi-test
+audio-test: all hdmi-test igfx-test
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	python3 tools/audiotest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
@@ -667,7 +667,7 @@ crypto-test: $(B)/host/crypto-test
 # ---- Bluetooth (docs/bluetooth.md): btd's stack on the host, driven by
 # scripted HCI traces (tests/bt/hcitest.c: classic pairing and HID, LE SMP
 # and HID over GATT); hidrep.c and the stand-in mk.h copied beside it.
-BT_STACK := $(patsubst %,user/btd/%.c,hci l2cap smp input sdp a2dp sbc rfcomm obex)
+BT_STACK := $(patsubst %,user/btd/%.c,hci l2cap smp input sdp a2dp avrcp sbc rfcomm obex)
 $(B)/host/bt-test: tests/bt/hcitest.c tests/bt/btmk.h $(BT_STACK) user/btd/btd.h user/lib/hidrep.c user/lib/hidrep.h lib/btcrypt.c lib/aes.c lib/pubkey.c lib/sha2.c lib/chacha20.c lib/string.c include/mk/*.h
 	@mkdir -p $(B)/host/bt
 	cp user/lib/hidrep.c user/lib/hidrep.h $(B)/host/bt/ && cp tests/bt/btmk.h $(B)/host/bt/mk.h
@@ -684,12 +684,20 @@ $(B)/host/aml-test: tests/aml/test.c user/lib/aml.c user/lib/aml.h
 	gcc $(HOSTCFLAGS) -DAML_HOST -Iuser/lib -o $@ tests/aml/test.c user/lib/aml.c
 # ---- audiod's codec side (codec.c, eld.h) on the host: the laptop's real
 # codecs (their /proc/asound dumps) answered by a fake, two real EDIDs (tests/hdmi)
-$(B)/host/hdmi-test: tests/hdmi/test.c user/audiod/codec.c user/lib/eld.h
+$(B)/host/hdmi-test: tests/hdmi/test.c tests/hdmi/edid.h user/audiod/codec.c user/lib/eld.h
 	@mkdir -p $(@D)
 	gcc $(HOSTCFLAGS) -Iuser/lib -o $@ tests/hdmi/test.c
 hdmi-test: $(B)/host/hdmi-test
 	$(B)/host/hdmi-test tests/hdmi
 .PHONY: hdmi-test
+# ---- the Intel display's monitor hot-plug (igfx.c's screen_plug) on the host:
+# QEMU has no Intel GPU, so a fake display engine and monitors (tests/igfx)
+$(B)/host/igfx-test: tests/igfx/test.c tests/igfx/mk.h tests/hdmi/edid.h user/atlas/igfx.c user/lib/eld.h
+	@mkdir -p $(@D)
+	gcc $(HOSTCFLAGS) -DIGFX_HOST -Itests/igfx -Iuser/lib -o $@ tests/igfx/test.c
+igfx-test: $(B)/host/igfx-test
+	$(B)/host/igfx-test
+.PHONY: igfx-test
 aml-test: $(B)/host/aml-test
 	sh tests/aml/check.sh $(B)/host/aml-test
 .PHONY: aml-test

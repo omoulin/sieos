@@ -11,6 +11,7 @@
  *   bt connect ADDR     connect a bonded device (headphones: the sound goes there)
  *   bt disconnect ADDR
  *   bt send ADDR FILE   send a file to a bonded phone or computer (OBEX Object Push)
+ *   bt accept | bt decline  (root) the file a device offers (Atlas asks too)
  *   bt on | bt off      (root)
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -147,6 +148,12 @@ int main(int argc, char **argv)
         return 0;
     }
     if (!strcmp(argv[1], "list")) { list(); return 0; }
+    if (!strcmp(argv[1], "accept") || !strcmp(argv[1], "decline")) {
+        msg_t m = { .w = { BT_ACCEPT, argv[1][0] == 'a' } };
+        long r = call(&m);
+        if (r == -ENOENT) printf("bt: no file offered\n");
+        return r == -ENOENT || perm(r);
+    }
     if (!strcmp(argv[1], "on") || !strcmp(argv[1], "off")) {
         msg_t m = { .w = { BT_POWER, argv[1][1] == 'n' } };
         return perm(call(&m));
@@ -161,6 +168,6 @@ int main(int argc, char **argv)
         if (op) return perm(call(&m));
     }
     printf("usage: bt | bt scan | bt list | bt pair ADDR | bt forget ADDR | bt connect ADDR | bt disconnect ADDR\n"
-           "       bt send ADDR FILE | bt on | bt off\n");
+           "       bt send ADDR FILE | bt accept | bt decline | bt on | bt off\n");
     return 1;
 }
