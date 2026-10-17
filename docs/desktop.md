@@ -309,7 +309,7 @@ kind=terminal
 | `name` | what the strip and the menus show |
 | `run` | the program (absolute path) |
 | `args` | its arguments (one line) |
-| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `git`: the Git window; `mail`: opens Mail; `camera`: the Camera window; `install`: the Install window ([install.md](install.md)) |
+| `kind` | `terminal`: runs in a new terminal; `editor`: opens the editor on an empty, untitled file; `settings`: opens Settings; `git`: the Git window; `mail`: opens Mail; `camera`: the Camera window; `install`: the Install window ([install.md](install.md)); `window`: a program that opens its own window (the web browser): its terminal waits minimized |
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
   Settings, Mail, Camera, Services, Hello, Fetch a web page, Disk benchmark, Git. Yours are
@@ -317,6 +317,18 @@ kind=terminal
 - Starting an app opens a terminal **as you**; its shell runs the app's
   command when it first asks for a line. When the app ends, the shell
   stays (`exit` closes it).
+
+## Other programs' windows
+
+A program may draw a window of its own (`include/mk/atlas.h`): it asks
+atlas for one (`ATLAS_WIN_OPEN`), draws its insides into shared memory in
+the screen's own pixels, says what changed (`ATLAS_WIN_DAMAGE`, answered
+once on the screen) and waits for what the window gets: keys, the pointer
+and its wheel, a new size, focus, the close box. Atlas frames it like its
+own windows (tab, workspaces, zoom, minimize); at most 8 at once; only the
+user logged in may open one. The web browser (`/bin/web`,
+[webkit-plan.md](webkit-plan.md)) is the first; `tests/web/atlaswin.c` the
+smallest.
 
 ## Mail
 

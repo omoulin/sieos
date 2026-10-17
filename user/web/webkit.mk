@@ -75,3 +75,49 @@ web-test: all $(WB)/stamp/webkit $(WB)/web-render $(WB)/fonts/DejaVuSans.ttf use
 	for f in tests/web/pages/*; do $(B)/host/siefs $(B)/test.img put $$f /lib/web/$$(basename $$f) || exit 1; done
 	KRUN='$(WEB_RUNS)' python3 tools/ktest.py web $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 .PHONY: web-test
+
+# ---- /bin/web, the browser (user/web/browser.c) on SIEOS's WPE platform
+# (user/web/platform: windows of the desktop, mk/atlas.h)
+WEB_SRC   := user/web/browser.c user/web/platform/sieos-platform.c
+$(WB)/web: $(WEB_SRC) user/web/platform/sieos-platform.h include/mk/atlas.h $(WB)/stamp/webkit
+	for f in $(WEB_SRC); do $(PKGENV) $(WB)/bin/cc -Os -c -o $(WB)/$$(basename $$f .c).o $$f -Iuser/web -Iinclude $(WK_INC) \
+	    $$($(PKGENV) $(PKGCONF) --cflags gio-2.0 libsoup-3.0) || exit 1; done
+	cd $(WKB) && $(PKGENV) $(CURDIR)/$(WB)/bin/c++ -o $(CURDIR)/$@ $(CURDIR)/$(WB)/browser.o $(CURDIR)/$(WB)/sieos-platform.o $(WK_LINK) \
+	    $$($(PKGENV) $(PKGCONF) --static --libs $(WK_PKGS))
+# atlaswin (tests/web/atlaswin.c): a window of the desktop from a libposix program
+$(WB)/atlaswin: tests/web/atlaswin.c include/mk/atlas.h $(SYSROOT)/usr/lib/libc.a | $(WB)/toolchain.stamp
+	$(WB)/bin/cc -Os -Iinclude -o $@ $<
+
+# ---- browser-test (tools/browsertest.py): the desktop with the browser in
+# QEMU: another program's window (atlaswin), then /bin/web: pages, typing,
+# back, HTTPS. WEB_FILES: what the browser needs on a disk
+WEB_DATA  := user/web/toolbar.html user/web/start.html
+define web_files   # $(1): the disk image
+	for f in web.strip:/bin/web WPEWebProcess.strip:$(WK_EXEC)/WPEWebProcess WPENetworkProcess.strip:$(WK_EXEC)/WPENetworkProcess; do \
+	    $(B)/host/siefs $(1) put $(WB)/$${f%%:*} $${f#*:} && $(B)/host/siefs $(1) chmod 755 $${f#*:} || exit 1; done
+	for f in $(WB)/fonts/*.ttf; do $(B)/host/siefs $(1) put $$f /lib/fonts/$$(basename $$f) || exit 1; done
+	for f in $(WEB_DATA); do $(B)/host/siefs $(1) put $$f /lib/web/$$(basename $$f) || exit 1; done
+	$(B)/host/siefs $(1) put user/web/fonts.conf /etc/fonts/fonts.conf && $(B)/host/siefs $(1) put user/web/mime-globs2 /usr/share/mime/globs2
+endef
+browser-test: all $(WB)/web $(WB)/atlaswin $(WB)/stamp/webkit $(WB)/fonts/DejaVuSans.ttf $(WEB_DATA) user/web/fonts.conf user/web/mime-globs2 $(wildcard tests/web/pages/*)
+	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	for f in web build/webkit/bin/WPEWebProcess build/webkit/bin/WPENetworkProcess; do \
+	    $(LLVM)/bin/llvm-strip -o $(WB)/$$(basename $$f).strip $(WB)/$$f || exit 1; done
+	for d in /usr /usr/libexec $(WK_EXEC) /usr/share /usr/share/mime /lib/web /lib/fonts /etc/fonts; do \
+	    $(B)/host/siefs $(B)/test.img mkdir $$d 2>/dev/null; done; true
+	$(call web_files,$(B)/test.img)
+	for f in tests/web/pages/*; do $(B)/host/siefs $(B)/test.img put $$f /lib/web/$$(basename $$f) || exit 1; done
+	$(B)/host/siefs $(B)/test.img put $(WB)/atlaswin /bin/atlaswin && $(B)/host/siefs $(B)/test.img chmod 755 /bin/atlaswin
+	python3 tools/browsertest.py $(SMP) $(B)/screens-web $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) $(SCREEN) -display none -serial stdio
+.PHONY: browser-test
+
+# ---- web-disk: the browser onto $(B)/disk.img (make first; never while QEMU
+# runs on it): /bin/web, WebKit's processes, fonts, the toolbar, Web.app
+web-disk: $(B)/disk.img $(WB)/web $(WB)/stamp/webkit $(WB)/fonts/DejaVuSans.ttf $(WEB_DATA) user/web/web.app
+	for f in web build/webkit/bin/WPEWebProcess build/webkit/bin/WPENetworkProcess; do \
+	    $(LLVM)/bin/llvm-strip -o $(WB)/$$(basename $$f).strip $(WB)/$$f || exit 1; done
+	for d in /usr /usr/libexec $(WK_EXEC) /usr/share /usr/share/mime /lib/web /lib/fonts /etc/fonts; do \
+	    $(B)/host/siefs $(B)/disk.img mkdir $$d 2>/dev/null; done; true
+	$(call web_files,$(B)/disk.img)
+	$(B)/host/siefs $(B)/disk.img put user/web/web.app /etc/apps/web.app
+.PHONY: web-disk

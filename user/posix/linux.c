@@ -82,6 +82,25 @@ static long call(long *port, const char *name, msg_t *m)
     }
 }
 
+/* sieos/sieos.h: SIEOS's own services, for ported programs that need them
+ * (the desktop's windows). Port numbers cached by name. */
+long sieos_call(const char *port, msg_t *m)
+{
+    static struct { char name[16]; long port; } cache[8];
+    int i = 0;
+    while (i < 8 && cache[i].name[0] && strcmp(cache[i].name, port)) i++;
+    if (i == 8) i = 7;                                 /* (full: the last one goes) */
+    if (strcmp(cache[i].name, port)) { strncpy(cache[i].name, port, 15); cache[i].port = 0; }
+    return call(&cache[i].port, port, m);
+}
+long sieos_shm_create(uint64_t id, size_t size) { return S2(SYS_SHM_CREATE, id, size); }
+void *sieos_shm_map(uint64_t id)
+{
+    long a = S3(SYS_SHM_MAP, id, 0, PROT_READ | PROT_WRITE);
+    return a < 0 && a > -4096 ? 0 : (void *)a;
+}
+long sieos_shm_close(uint64_t id) { return S1(SYS_SHM_CLOSE, id); }
+
 /* A lock for this file's tables (threads may call at once): short holds. */
 static volatile char big;
 static void lock(void)   { while (__atomic_test_and_set(&big, __ATOMIC_ACQUIRE)) S0(SYS_YIELD); }

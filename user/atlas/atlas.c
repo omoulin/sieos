@@ -40,6 +40,7 @@
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "atlas.h"
+#include "mk/atlas.h"                /* other programs' windows (client.c) */
 #include "mk/crypto.h"               /* wipe: forget the password */
 
 #define ATLAS_INPUT 100             /* from our input thread: con_event_t[] in sbuf */
@@ -62,8 +63,8 @@
 #define W_MAIL (MAXTERM + 6)
 #define W_CAM (MAXTERM + 7)
 #define W_INST (MAXTERM + 8)
-#define NWIN (MAXTERM + 9)
-_Static_assert(NWIN == WM_MAX && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES && W_REPO == WM_REPO && W_MAIL == WM_MAIL && W_CAM == WM_CAM && W_INST == WM_INST, "wm.c knows the window ids");
+#define NWIN (MAXTERM + 9 + ATLAS_WIN_MAX)  /* (then W_CLIENT0..: other programs' windows, client.c) */
+_Static_assert(NWIN == WM_MAX && W_CLIENT0 == MAXTERM + 9 && W_SIA == WM_SIA && W_SET == WM_SET && W_EDIT == WM_EDIT && W_PINS == WM_PINS && W_FILES == WM_FILES && W_REPO == WM_REPO && W_MAIL == WM_MAIL && W_CAM == WM_CAM && W_INST == WM_INST, "wm.c knows the window ids");
 #define TBAR 48                     /* the insides of a window start this far below their top */
 
 typedef struct { char name[48], path[160]; int app; } item_t;
@@ -374,11 +375,12 @@ static void rescan(void)
 /* ---- Windows: what each one is. */
 static int win_used(int w)
 {
-    return w >= 0 && w < MAXTERM ? terms[w].used : w == W_EDIT ? edit_active() : w == W_SIA ? sia_on :
+    return w >= W_CLIENT0 ? client_used(w) : w >= 0 && w < MAXTERM ? terms[w].used : w == W_EDIT ? edit_active() : w == W_SIA ? sia_on :
            w == W_SET ? set_on : w == W_FILES ? files_on : w == W_PINS ? pins_on : w == W_REPO ? repo_on : w == W_MAIL ? mail_on() : w == W_CAM ? cam_on : w == W_INST ? inst_on : 0;
 }
 static void win_title(int w, char *t, size_t cap)
 {
+    if (w >= W_CLIENT0) { client_title(w, t, cap); return; }
     if (w < MAXTERM) { size_t n = strlcpy(t, "Terminal ", cap); t[n + num(t + n, terms[w].chan)] = 0; }
     else if (w == W_EDIT) { strlcpy(t, edit_name(), cap); if (edit_dirty()) strlcpy(t + strlen(t), " *", cap - strlen(t)); }
     else if (w == W_SIA) strlcpy(t, "sia", cap);
@@ -391,7 +393,7 @@ static void win_title(int w, char *t, size_t cap)
     else strlcpy(t, "Files", cap);
     if (w < MAXTERM && terms[w].back) { size_t n = strlen(t); n += strlcpy(t + n, " [history -", 16); t[n + num(t + n, terms[w].back)] = 0; strlcpy(t + strlen(t), "]", 2); }
 }
-static int win_icon(int w) { return w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : w == W_REPO ? I_GIT : w == W_MAIL ? I_MAIL : w == W_CAM ? I_CAM : w == W_INST ? I_APP : I_FOLDER; }
+static int win_icon(int w) { return w >= W_CLIENT0 ? I_FILE : w < MAXTERM ? I_TERM : w == W_EDIT ? I_FILE : w == W_SIA ? I_SIA : w == W_SET ? I_SETTINGS : w == W_PINS ? I_PINS : w == W_REPO ? I_GIT : w == W_MAIL ? I_MAIL : w == W_CAM ? I_CAM : w == W_INST ? I_APP : I_FOLDER; }
 int wm_icon(int w) { return win_icon(w); }
 
 /* wm.c asks: is it there, its title, draw its inside. */
@@ -401,6 +403,7 @@ void wm_title(int w, char *t, size_t cap) { win_title(w, t, cap); }
 void wm_info(int w, char *t, size_t cap)                 /* the strip's right side, its tab up */
 {
     t[0] = 0;
+    if (w >= W_CLIENT0) { client_info(w, t, cap); return; }
     if (w < MAXTERM) {                                   /* "80 x 25", "history -12" */
         char *p = t + strlcpy(t, terms[w].back ? "history -" : "", cap);
         if (terms[w].back) { p[num(p, terms[w].back)] = 0; return; }
@@ -414,7 +417,8 @@ void wm_info(int w, char *t, size_t cap)                 /* the strip's right si
 }
 void wm_body(int w, int x0, int y0, int x1, int y1, int keys)
 {
-    if (w < MAXTERM) draw_term_body(w, x0, y0, x1, y1, keys);
+    if (w >= W_CLIENT0) client_draw(w, x0, y0, x1, y1, keys);
+    else if (w < MAXTERM) draw_term_body(w, x0, y0, x1, y1, keys);
     else if (w == W_EDIT) edit_draw(x0, y0, x1, y1, keys);
     else if (w == W_SIA) panel_draw(x0, y0, x1, y1, keys);
     else if (w == W_SET) settings_draw(x0, y0, x1, y1, keys);
@@ -1050,6 +1054,7 @@ static void close_win(int w)
     if (w == W_MAIL) { mail_close(); say("atlas: mail closed\n"); }
     if (w == W_CAM) { cam_on = 0; cam_close(); say("atlas: camera closed\n"); }
     if (w == W_INST) { inst_on = 0; inst_close(); say("atlas: install closed\n"); }
+    if (w >= W_CLIENT0) { client_closed(w); say("atlas: window %d closed\n", w); }
     wm_gone(w);
     if (focus == w) focus = wm_top();
     settle();
@@ -1075,6 +1080,7 @@ static void logout(void)
     pins_logout();
     settings_close();
     mail_close();
+    client_logout();
     nitems = 0;
     mode = GREETER;
     uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = home[0] = 0; gfield = bt_ask = 0;
@@ -1252,6 +1258,7 @@ static void app_start(const char *path)
     }
     say("atlas: app %s started (terminal %d)\n", nm, terms[t].chan);
     show_win(t);
+    if (!strcmp(kind, "window")) { wm_min(t); focus = wm_top(); }   /* (it opens its own: its terminal waits on the Deskbar) */
     settle();
 }
 int atlas_run_app(const char *path) { app_start(path); return 0; }
@@ -1509,6 +1516,20 @@ static void open_result(int i)
     ask_sia(s);
 }
 
+/* Other programs' windows (client.c) */
+void atlas_client_show(int w)
+{
+    if (w >= 0) { show_win(w); say("atlas: window %d shown for its program\n", w); }
+    settle();
+}
+void atlas_client_gone(int w)
+{
+    wm_gone(w);
+    if (focus == w) focus = wm_top();
+    if (mode == SESSION) settle();
+}
+int atlas_client_visible(int w) { int x0, y0, x1, y1; return mode == SESSION && win_box(w, &x0, &y0, &x1, &y1); }
+
 static void focus_win(int w)
 {
     if (w < 0 || !win_used(w)) return;
@@ -1634,6 +1655,7 @@ static void key(int c)
     if (focus == W_MAIL) { if (mail_key(c)) redraw(); else if (c == 27) { focus = -1; redraw(); } return; }
     if (focus == W_CAM) { if (c == 27) { focus = -1; redraw(); } return; }
     if (focus == W_INST) { if (inst_key(c)) settle(); else if (c == 27) { focus = -1; redraw(); } return; }
+    if (focus >= W_CLIENT0) { client_key(focus, c); return; }
     term_t *t = &terms[focus];                           /* the focused terminal */
     int x0, x1, y0, y1;
     if (!win_box(focus, &x0, &y0, &x1, &y1)) x0 = x1 = y0 = y1 = 0;
@@ -1694,6 +1716,14 @@ static void mouse(const con_event_t *e)
     if (m_swap) b = (b & ~3) | (b & 1) << 1 | (b & 2) >> 1;   /* left-handed: the buttons swap */
     ptr_x = x; ptr_y = y;
     buttons = b;
+    if (mode == SESSION && !drag_on && !mn.on && !pr.on) {   /* another program's window: its own input */
+        int i = hit_at(x, y), w = i >= 0 && hit[i].kind == H_CLIENT ? hit[i].arg : focus;
+        if (w >= W_CLIENT0) {
+            int wh = m_rev ? -(int16_t)e->code : (int16_t)e->code;
+            if ((b & ~was) && w != focus) { focus_win(w); redraw(); }
+            if (client_pointer(w, x, y, b, wh)) { dl_pointer(x, y); present_pointer(ox, oy, x, y); return; }
+        }
+    }
     if (e->code && mode == SESSION) {                    /* the wheel */
         int16_t w = m_rev ? -(int16_t)e->code : (int16_t)e->code;
         int i = hit_at(x, y);
@@ -1937,6 +1967,10 @@ int main(int argc, char **argv)
             bt_ask = m.w[1] == 1 && mode == SESSION;
             say("atlas: note%s: %s\n", bt_ask ? " (asks)" : "", toast);
             if (mode == SESSION) settle();
+            continue;
+        }
+        if (m.w[0] >= ATLAS_WIN_OPEN && m.w[0] <= ATLAS_WIN_CLOSE) {   /* another program's window (client.c) */
+            client_msg(from, &m, buf, mode == SESSION ? uid : -1);
             continue;
         }
         if (m.w[3] == MAIL_CHAN) {                       /* Mail's helper, as the user */
