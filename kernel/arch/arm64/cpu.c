@@ -87,14 +87,15 @@ void arch_thread_start(task_t *t, uint64_t pc, uint64_t sp, uint64_t arg)
     t->ksp = (uint64_t)k;
 }
 
-/* A signal's function (task.c): pc(arg) on the thread's stack, 128 bytes
- * below sp and 16-aligned, in EL0 with interrupts on. It never returns:
- * it ends with SYS_SIGRETURN, which puts every register back (eret
- * always does). */
-void arch_sig_enter(regs_t *r, uint64_t pc, long arg)
+/* A signal's function (task.c): pc(arg, frame) on the thread's stack, 128
+ * bytes below sp and below the copy of its registers there (frame),
+ * 16-aligned, in EL0 with interrupts on. It never returns: it ends with
+ * SYS_SIGRETURN, which puts every register back (eret always does). */
+uint64_t arch_sig_frame(regs_t *r) { return (r->sp - 128 - sizeof(regs_t)) & ~15UL; }
+void arch_sig_enter(regs_t *r, uint64_t pc, long arg, uint64_t frame)
 {
-    r->sp = (r->sp - 128) & ~15UL;
-    r->pc = pc; r->x[0] = arg; r->x[30] = 0; r->pstate = 0;
+    r->sp = frame;
+    r->pc = pc; r->x[0] = arg; r->x[1] = frame; r->x[30] = 0; r->pstate = 0;
 }
 void arch_sig_return(regs_t *r) { (void)r; }
 
@@ -132,6 +133,7 @@ int trap_sync(regs_t *r)
     if ((ec == EC_DABT_LOW || ec == EC_IABT_LOW) && (fsc == 4 || fsc == 0xC) &&
         vm_fault(far, ec == EC_IABT_LOW ? PROT_EXEC : esr & (1 << 6) ? PROT_WRITE : PROT_READ))
         return 1;                                      /* memory given on first touch (vm.c) */
+    if (cur->proc->exiting) thread_exit();             /* (it is ending anyway: memory is no longer given) */
     diag_fault(4, esr, r->pc, far);                    /* (on a Pi's screen, before step 12: init itself) */
     kprintf("mk: %s (pid %d) killed: %s at %lx (syndrome %lx, address %lx)\n",
             cur->proc->name, cur->proc->pid,

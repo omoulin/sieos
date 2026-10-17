@@ -59,8 +59,9 @@ void switch_to(uint64_t *save_ksp, uint64_t ksp);   /* save this kernel stack, r
 void arch_thread_start(struct task *t, uint64_t pc, uint64_t sp, uint64_t arg);
                                            /* t's first switch_to enters user mode at pc */
 void arch_set_tls(struct cpu *c, uint64_t base);    /* the running thread's TLS register, now */
-void arch_sig_enter(regs_t *r, uint64_t pc, long arg);   /* a thread's registers on its way to
-                                              user mode: call pc(arg) on its stack, below where it was */
+uint64_t arch_sig_frame(regs_t *r);        /* where on its stack a signal's copy of its registers goes */
+void arch_sig_enter(regs_t *r, uint64_t pc, long arg, uint64_t frame);   /* a thread's registers on
+                                              its way to user mode: call pc(arg, frame), its stack below frame */
 void arch_sig_return(regs_t *r);           /* r was put back whole: leave with every register */
 
 /* ---- Floating-point and vector registers of user threads (fpu.c). */

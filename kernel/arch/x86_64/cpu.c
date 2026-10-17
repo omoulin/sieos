@@ -159,16 +159,17 @@ void arch_thread_start(task_t *t, uint64_t pc, uint64_t sp, uint64_t arg)
     t->ksp = (uint64_t)(k - 6);          /* rbp, rbx, r12-r15: zero */
 }
 
-/* A signal's function (task.c): pc(arg) on the thread's stack, below the
- * 128 bytes under rsp that the ABI lets code use without moving rsp (the
- * "red zone"), aligned as just after a call; flags: interrupts on (and the
- * direction flag clear, as the ABI wants). It never returns: it ends with
- * SYS_SIGRETURN, which puts every register back (iretq, not sysretq: rcx
- * and r11 too). */
-void arch_sig_enter(regs_t *r, uint64_t pc, long arg)
+/* A signal's function (task.c): pc(arg, frame) on the thread's stack,
+ * below the 128 bytes under rsp that the ABI lets code use without moving
+ * rsp (the "red zone") and the copy of its registers there (frame), aligned
+ * as just after a call; flags: interrupts on (and the direction flag
+ * clear, as the ABI wants). It never returns: it ends with SYS_SIGRETURN,
+ * which puts every register back (iretq, not sysretq: rcx and r11 too). */
+uint64_t arch_sig_frame(regs_t *r) { return (r->rsp - 128 - sizeof(regs_t)) & ~15UL; }
+void arch_sig_enter(regs_t *r, uint64_t pc, long arg, uint64_t frame)
 {
-    r->rsp = ((r->rsp - 128) & ~15UL) - 8;
-    r->rip = pc; r->rdi = arg; r->rflags = 0x202;
+    r->rsp = frame - 8;
+    r->rip = pc; r->rdi = arg; r->rsi = frame; r->rflags = 0x202;
 }
 void arch_sig_return(regs_t *r) { r->vec = 1; }   /* (syscall_entry: leave by iretq) */
 
@@ -197,6 +198,7 @@ int trap(regs_t *r)
     if (r->vec == 14 && vm_fault(cr2, r->err & 16 ? PROT_EXEC : r->err & 2 ? PROT_WRITE : PROT_READ))
         return 1;                           /* #PF: memory given on first touch (vm.c); the access runs again */
     if (r->vec < 32) {                      /* a user program did something wrong: its process dies */
+        if (cur->proc->exiting) thread_exit();   /* (it is ending anyway: memory is no longer given) */
         kprintf("mk: %s (pid %d) killed: exception %lu at %lx (error %lx, address %lx)\n",
                 cur->proc->name, cur->proc->pid, r->vec, r->rip, r->err, cr2);
         proc_exit(-1);

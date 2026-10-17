@@ -611,6 +611,25 @@ static void unsupported(long n)
 }
 
 #define A(x) ((void *)(x))
+/* abort(): before the end, the code addresses found on the stack, for
+ * llvm-symbolizer on the host (a port's crash, explained) */
+static void abort_trace(void)
+{
+    extern char __ehdr_start[] __attribute__((weak)), etext[] __attribute__((weak));
+    static const char hex[] = "0123456789abcdef";
+    char line[24 * 8 + 32] = "posix: abort, from:";
+    size_t len = 19;
+    uintptr_t *p = __builtin_frame_address(0), lo = (uintptr_t)__ehdr_start, hi = (uintptr_t)etext;
+    for (int i = 0, k = 0; hi && i < 2048 && k < 24; i++)
+        if (p[i] > lo && p[i] < hi) {
+            line[len++] = ' ';
+            for (int sh = 24; sh >= 0; sh -= 4) line[len++] = hex[p[i] >> sh & 15];
+            k++;
+        }
+    line[len++] = '\n';
+    do_rw(2, 1, line, len, -1);
+}
+
 long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
 {
     char p[FS_PATH], q[FS_PATH];
@@ -756,7 +775,11 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     case SYS_brk:        r = S1(SYS_BRK, a); return r < 0 ? S1(SYS_BRK, 0) : r;
     case SYS_mmap:       return do_mmap(a, b, c, d, e, f);
     case SYS_munmap:     return S3(SYS_MUNMAP, a, b, 0);
-    case SYS_mprotect:   return S3(SYS_MPROTECT, a, b, c & 7);
+    case SYS_mprotect:                       /* the program's own pages (below 16 TiB) keep their
+                                                rights: JavaScriptCore's frozen configuration stays
+                                                writable (docs/webkit-plan.md, phase 5) */
+        if ((uint64_t)a + (uint64_t)b <= 0x100000000000UL) return 0;
+        return S3(SYS_MPROTECT, a, b, c & 7);
     case SYS_madvise:    return c == 4 || c == 8 ? S3(SYS_MUNMAP, a & ~4095L, b, UNMAP_KEEP) : 0;   /* DONTNEED, FREE */
     case SYS_mremap:     return do_mremap(a, b, c, d);
     case SYS_mlock: case SYS_munlock: case SYS_msync: return 0;
@@ -795,8 +818,11 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     case SYS_getpgid:    return ident(0);
     case SYS_setpgid: case SYS_setsid: return 0;
     case SYS_kill:       return S2(SYS_KILL, a, b);
-    case SYS_tkill:      return S2(SYS_KILL, ident(0), b);
-    case SYS_tgkill:     return S2(SYS_KILL, a, c);
+    case SYS_tkill:      if (b == 6) abort_trace(); return S2(SYS_TKILL, a, b);     /* (6: SIGABRT) */
+    case SYS_tgkill:     if (c == 6 && a == ident(0)) abort_trace();
+                         return a == ident(0) ? S2(SYS_TKILL, b, c) : S2(SYS_KILL, a, c);
+    case SYS_rt_sigsuspend: return do_sigsuspend();
+    case SYS_sched_setattr: case SYS_sched_setscheduler: case SYS_sched_setparam: return 0;   /* (priorities: the kernel's own) */
     case SYS_rt_sigprocmask: if (d >= 8 && c) memset(A(c), 0, 8); return 0;   /* (no masks on SIEOS) */
     case SYS_rt_sigaction: return do_sigaction((int)a, A(b), A(c));
     case SYS_wait4:      if (d) memset(A(d), 0, 144); return do_wait4((int)a, A(b), (int)c);

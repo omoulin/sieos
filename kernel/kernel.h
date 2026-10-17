@@ -193,6 +193,8 @@ long thread_create(uint64_t entry, uint64_t stack, uint64_t arg);
 void thread_exit(void) __attribute__((noreturn));
 void proc_exit(int code) __attribute__((noreturn));
 long proc_kill(long pid, int sig);  /* SYS_KILL */
+long thread_kill(long tid, int sig);   /* SYS_TKILL */
+long sig_wait(void);            /* SYS_SIGWAIT */
 long sig_set(int sig, uint64_t entry);   /* SYS_SIGNAL */
 long sig_return(regs_t *r);     /* SYS_SIGRETURN */
 void sig_deliver(task_t *t);

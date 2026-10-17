@@ -2,13 +2,18 @@
  * ptest-threads (make posix-test): POSIX threads on the kernel's futexes:
  * 64 threads, a mutex, a condition variable, join with results,
  * thread-local variables, once, read-write locks, semaphores, detached
- * threads, timed waits; and the clocks.
+ * threads, timed waits; a thread suspended and resumed by signals; and
+ * the clocks.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
+#define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <signal.h>
+#include <stdint.h>
+#include <ucontext.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -69,6 +74,38 @@ static void *detached(void *a) { (void)a; detached_done = 1; sem_post(&sem); ret
 
 static double secs(struct timespec a, struct timespec b) { return (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9; }
 
+/* A thread suspended and resumed by another with signals, as WebKit's
+ * garbage collector does (WTF::Thread::suspend): the handler runs in that
+ * thread, sees the registers it was stopped with, waits in sigsuspend for
+ * the resume signal (taken there, the handler nested), and lets it go. */
+static sem_t sus;
+static volatile int spinning = 1, nested;
+static volatile uintptr_t seen_sp, seen_pc;
+static volatile long spins;
+static void on_usr1(int sig, siginfo_t *si, void *ucv)
+{
+    (void)si;
+    if (!ucv) { nested++; return; }          /* the resume, nested in sigsuspend */
+    ucontext_t *uc = ucv;
+#if defined(__x86_64__)
+    seen_sp = uc->uc_mcontext.gregs[REG_RSP]; seen_pc = uc->uc_mcontext.gregs[REG_RIP];
+#else
+    seen_sp = uc->uc_mcontext.sp; seen_pc = uc->uc_mcontext.pc;
+#endif
+    sem_post(&sus);
+    sigset_t all;
+    sigfillset(&all);
+    sigdelset(&all, sig);
+    sigsuspend(&all);
+    sem_post(&sus);
+}
+static void *spinner(void *a)
+{
+    (void)a;
+    while (spinning) spins++;
+    return 0;
+}
+
 int main(void)
 {
     pthread_t t[64];
@@ -110,6 +147,26 @@ int main(void)
     clock_gettime(CLOCK_MONOTONIC, &b);
     check("nanosleep 30 ms", secs(a, b) >= 0.029 && secs(a, b) < 0.5);
     check("the wall clock is after 2026", time(0) > 1767225600);
+    sem_init(&sus, 0, 0);
+    struct sigaction sa = { 0 };
+    sa.sa_sigaction = on_usr1;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigaction(SIGUSR1, &sa, 0);
+    pthread_t sp;
+    pthread_create(&sp, 0, spinner, 0);
+    while (!spins) sched_yield();
+    pthread_kill(sp, SIGUSR1);
+    sem_wait(&sus);                           /* suspended */
+    long c1 = spins;
+    nanosleep(&(struct timespec){ 0, 20000000 }, 0);
+    int stopped = spins == c1;
+    pthread_kill(sp, SIGUSR1);
+    sem_wait(&sus);                           /* resumed */
+    nanosleep(&(struct timespec){ 0, 20000000 }, 0);
+    int going = spins != c1;
+    spinning = 0;
+    pthread_join(sp, 0);
+    check("a thread suspended by a signal, its registers seen, resumed", stopped && going && nested == 1 && seen_sp && seen_pc);
     printf("ptest threads: %s\n", fails ? "FAIL" : "ok");
     return fails ? 1 : 0;
 }

@@ -303,21 +303,45 @@ static long do_waitid(int type, long id, int *info, int options)
     return 0;
 }
 
-/* ---- Signals: Linux's sigaction over SIEOS's one function per signal */
+/* ---- Signals: Linux's sigaction over SIEOS's one function per signal.
+ * SA_SIGINFO handlers get a ucontext_t with the registers the signal found
+ * (musl's layout: mcontext at 40 on x86-64, 176 on arm64; read only: the
+ * kernel puts its own copy back). */
 static struct { void (*h)(int, void *, void *); unsigned long flags; } act[65];
-static void trampoline(int sig)
+static void run_handler(int sig, void *uc)
 {
     void (*h)(int, void *, void *) = act[sig].h;
     unsigned long fl = act[sig].flags;
+    if ((uintptr_t)h <= 1) return;
     if (fl & 0x80000000UL) { act[sig].h = 0; S2(SYS_SIGNAL, sig, 0); }   /* SA_RESETHAND */
     if (fl & 4) {                                       /* SA_SIGINFO */
-        long info[16] = { sig };
-        h(sig, info, 0);
+        long info[16] = { sig, 0, -6 };                 /* si_code SI_TKILL */
+        h(sig, info, uc);
     } else {
         union { void (*three)(int, void *, void *); void (*one)(int); } u = { h };
         u.one(sig);
     }
+}
+static void trampoline(int sig, const mk_regs_t *r)
+{
+    uint64_t uc[580] = { 0 };                           /* (a ucontext_t: 4.5 KiB on arm64) */
+#if defined(__x86_64__)
+    const uint64_t g[18] = { r->r8, r->r9, r->r10, r->r11, r->r12, r->r13, r->r14, r->r15, r->rdi, r->rsi,
+                             r->rbp, r->rbx, r->rdx, r->rax, r->rcx, r->rsp, r->rip, r->rflags };
+    memcpy(uc + 5, g, sizeof g);                        /* gregs: r8-r15, rdi, rsi, rbp, rbx, rdx, rax, rcx, rsp, rip, eflags */
+#elif defined(__aarch64__)
+    memcpy(uc + 23, r, 34 * 8);                         /* after fault_address: x0-x30, sp, pc, pstate */
+#endif
+    run_handler(sig, uc);
     S0(SYS_SIGRETURN);
+}
+/* sigsuspend: in a handler, the signal it waits for is run here (nested); else
+ * the kernel runs it on the way out */
+static long do_sigsuspend(void)
+{
+    long r = S0(SYS_SIGWAIT);
+    if (r > 0) run_handler((int)r, 0);                  /* (no registers: it was waiting here) */
+    return -EINTR;
 }
 static long do_sigaction(int sig, const unsigned long *ka, unsigned long *old)
 {
@@ -328,7 +352,7 @@ static long do_sigaction(int sig, const unsigned long *ka, unsigned long *old)
     act[sig].h = (void (*)(int, void *, void *))ka[0];
     act[sig].flags = ka[1];
     if (sig >= NSIG) return 0;                         /* (musl's own, 32-34: never sent here) */
-    void (*entry)(int) = ka[0] == 0 ? SIG_DFL : ka[0] == 1 ? SIG_IGN : trampoline;
+    void (*entry)(int) = ka[0] == 0 ? SIG_DFL : ka[0] == 1 ? SIG_IGN : (void (*)(int))(void (*)(void))trampoline;
     long r = S2(SYS_SIGNAL, sig, entry);
     return r == -EINVAL ? 0 : r;
 }
