@@ -16,7 +16,7 @@ checked 2026-10-10: every test suite below passes, zero build warnings.
 | Desktop | yes | yes (ramfb) | yes; USB keyboard and mouse (PCIe start-up untested) | untested |
 | Network, TLS | yes: virtio (legacy, 1.0), e1000, e1000e; RTL8168h written, untested on the laptop | yes: virtio (MMIO, PCIe) | no driver yet | no driver yet |
 | SSH client and server | yes | yes | needs the network | needs the network |
-| Bluetooth (keyboards, mice, headphones, file transfer) | AX210 over USB: written, untested (`run-bt`); stack: `bt-test` | no controller | CYW43455 on the mini UART: untested | CYW43455 on the BCM2712 UART: untested |
+| Bluetooth (keyboards, mice, headphones, file transfer) | AX210, AX201 over USB: written, untested (`run-bt`); stack: `bt-test` | no controller | CYW43455 on the mini UART: untested | CYW43455 on the BCM2712 UART: untested |
 | Sound (Intel HDA) | yes: intel-hda, ich9-intel-hda | no driver (no HDA there) | no | no |
 | Assistant, local model | AVX2/VNNI | NEON (+ `sdot` if present) | NEON | NEON + `sdot` |
 | Assistant, remote (OpenAI-compatible) | yes | yes | needs the network | needs the network |
@@ -35,7 +35,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
   compaction ([sia.md](sia.md)).
 - The target laptop: its drivers are written and wait for a boot from
   the USB key: the Intel display (full modeset), NVMe (passes in QEMU), the
-  Realtek network card, the AX210 Wi-Fi ([net.md](net.md)), HD Audio
+  Realtek network card, the AX210 Wi-Fi ([net.md](net.md)) (and the
+  second laptop's AX201 Wi-Fi and Bluetooth), HD Audio
   (passes in QEMU, [audio.md](audio.md)), the touchpad
   ([touchpad.md](touchpad.md)), the camera and the keyboard light
   ([usb-stack.md](usb-stack.md#cameras)), Bluetooth
@@ -328,3 +329,17 @@ checklist in [raspberrypi.md](raspberrypi.md).
   a fake display engine on the host. Not yet tried on the laptop. Sizes:
   atlas.elf +1.3 KB of code (igfx.o +1.1 KB, atlas.o +0.25 KB), +1.4 KB
   of bss (five outputs instead of three); audiod.o +54 bytes.
+- **2026-10-17.** The second laptop's Wi-Fi and Bluetooth (Ice Lake,
+  CNVi AX201): `iwl.c` drives Intel's 22000 family next to the AX210
+  ([net.md](net.md#the-22000-family-ice-lakes-cnvi-wi-fi-ax201)): PCI
+  `8086:34f0` (and the other 22000 CNVi IDs in Linux's table: Comet
+  Lake, Tiger Lake...), the context info v1, no IML or PNVM, the older RX descriptor, ring entries, TX
+  command and byte counts, the scan's band byte, the integrated SoC
+  latency; the firmware (Qu B0, Qu C0, QuZ, version 77) chosen by the
+  chip's step and checked, like the AX210's now, against
+  `tools/wifi-firmware.sha256`. The comparison fixed the AX210's RX signal
+  offsets and seven command lengths. Bluetooth: btd's legacy Intel boot
+  (AX201 8087:0026, AX200 8087:0029; `ibt-19-0-4.sfi`)
+  ([bluetooth.md](bluetooth.md)); the usb server takes the chipset's xHCI
+  (00:14.0) over the CPU's Thunderbolt one. Untested on hardware. Sizes:
+  iwl.o +1.4 KB of code, btd.o +0.5 KB, usb's pci.o +77 bytes.

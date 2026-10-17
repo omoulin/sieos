@@ -3,11 +3,13 @@
  * forget, on/off for Settings and /bin/bt; bonded keyboards and mice come
  * back by themselves and type into the console like USB ones.
  *
- *   the PC     the Intel AX210's Bluetooth, a USB device: the usb server
- *              passes its packets (port "bthci", user/usb/btusb.c). It starts
- *              in its bootloader: Intel Read Version (TLV), the firmware
- *              ibt-<cnvi>-<cnvr>.sfi sent in Secure Send fragments, Intel
- *              Reset into it, then its DDC settings (as Linux's btintel.c)
+ *   the PC     Intel's Bluetooth, a USB device: the usb server passes its
+ *              packets (port "bthci", user/usb/btusb.c). It starts in its
+ *              bootloader: Intel Read Version (TLV: the AX210; legacy: the
+ *              AX201 8087:0026, AX200 8087:0029), the firmware sent in Secure
+ *              Send fragments (ibt-<cnvi>-<cnvr>.sfi, ECDSA or RSA header;
+ *              legacy: ibt-<variant>-<revision>-<fw revision>.sfi, RSA),
+ *              Intel Reset into it, then its DDC settings (as btintel.c)
  *   the Pis    the CYW43455's Bluetooth on a UART (uart.c): Broadcom's
  *              patch BCM4345C0.hcd (Download Minidriver, then its records;
  *              as Linux's btbcm.c), at the line's top speed
@@ -137,13 +139,23 @@ static int hci_sync(int op, const void *p, int n)
     return sync_st;
 }
 
-/* ---- Intel (btintel.c's "TLV" boot). */
-static struct { uint32_t cnvi, cnvr, cnvibt; int img, sbe, nn, ww, yy; } iv;
+/* ---- Intel (btintel.c's boot): the AX210's and later ones answer Read
+ * Version in TLVs; older ones (the 22000 family's AX201, AX200, 9560:
+ * variants 0x11-0x14) with a fixed "legacy" record, hw_platform 0x37. */
+static struct { uint32_t cnvi, cnvr, cnvibt; int img, sbe, nn, ww, yy, legacy; } iv;
 static int intel_version(void)
 {
     static const uint8_t ff = 0xFF;
     if (hci_sync(0xFC05, &ff, 1)) return -1;
     memset(&iv, 0, sizeof iv);
+    if (sync_n == 10 && sync_rsp[1] == 0x37) {           /* status, platform, variant, revision, fw variant, fw revision, build */
+        const uint8_t *v = sync_rsp;
+        iv.legacy = 1; iv.cnvibt = (uint32_t)v[2] << 16; iv.cnvi = v[3]; iv.cnvr = v[5];
+        iv.img = v[4] == 0x23 ? 3 : v[4] == 0x06 ? 1 : 0; iv.nn = v[6]; iv.ww = v[7]; iv.yy = v[8];
+        bt_log("bt: Intel (legacy): variant %02x, revision %d, firmware variant %02x (%s) revision %d, build %d week %d 20%02d\n",
+               v[2], v[3], v[4], iv.img == 1 ? "bootloader" : iv.img == 3 ? "operational firmware" : "?", v[5], iv.nn, iv.ww, iv.yy);
+        return 0;
+    }
     for (int i = 1; i + 2 <= sync_n && i + 2 + sync_rsp[i + 1] <= sync_n; i += 2 + sync_rsp[i + 1]) {
         const uint8_t *v = sync_rsp + i + 2;
         switch (sync_rsp[i]) {
@@ -175,11 +187,16 @@ static int intel_fw(char *name, int cap)
     int t = iv.cnvi & 0xFFF, r = iv.cnvr & 0xFFF, hv = iv.cnvibt >> 16 & 0x3F;
     int a = (t << 4 | (iv.cnvi >> 24 & 15)), b = (r << 4 | (iv.cnvr >> 24 & 15));
     char path[64];
-    fmt(name, cap, "ibt-%04x-%04x", (a >> 8 | a << 8) & 0xFFFF, (b >> 8 | b << 8) & 0xFFFF);
+    if (iv.legacy) fmt(name, cap, "ibt-%d-%d-%d", hv, iv.cnvi, iv.cnvr);   /* variant, revision, firmware revision */
+    else fmt(name, cap, "ibt-%04x-%04x", (a >> 8 | a << 8) & 0xFFFF, (b >> 8 | b << 8) & 0xFFFF);
     if (iv.img == 3) { bt_log("bt: Intel: the firmware runs already\n"); return 0; }
     fmt(path, sizeof path, "/lib/firmware/%s.sfi", name);
     size_t len = 0;
     uint8_t *fw = (uint8_t *)file_get(path, &len);
+    if (!fw && hv == 0x13) {                              /* linux-firmware: every ibt-19-* is ibt-19-0-4 */
+        fmt(name, cap, "ibt-19-0-4"); fmt(path, sizeof path, "/lib/firmware/%s.sfi", name);
+        fw = (uint8_t *)file_get(path, &len);
+    }
     if (!fw) { bt_log("bt: Intel: %s is missing (make usb puts it on the key)\n", path); return -1; }
     int off = hv >= 0x17 ? 964 : 644, ecdsa = hv >= 0x17 && iv.sbe;
     if (len < 1024 || g32(fw + 8) != 0x10000 || (hv >= 0x17 && (fw[644] != 6 || g32(fw + 652) != 0x20000))) {

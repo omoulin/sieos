@@ -556,18 +556,22 @@ $(B)/uefi/BOOTX64.EFI: boot/uefi/start.S boot/uefi/loader.c boot/uefi/efi.h boot
 USBMAKE = python3 tools/mkusb.py $(1) --size $(2) --efi $(B)/uefi/BOOTX64.EFI --kernel $(B)/kernel.bin \
           --module $(B)/init.elf --module $(B)/con.elf --module $(B)/usb.elf --module $(B)/vblk.elf --module $(B)/fs.elf \
           --mkfs $(B)/host/mkfs.siefs --siefs-tool $(B)/host/siefs --rootfs $(B)/rootfs --screen $(USBSCREEN)
-# The Intel AX210's firmware (not part of SIEOS: Intel's, under its own
-# licence), fetched once at a pinned commit of the linux-firmware repository
-# and copied onto the USB key, like the Pis' Wi-Fi firmware. Version 89.
+# The Intel Wi-Fi firmware (not part of SIEOS: Intel's, under its own
+# licence), fetched once at a pinned commit of the linux-firmware repository,
+# each file checked against tools/wifi-firmware.sha256, and copied onto the
+# USB key, like the Pis' Wi-Fi firmware: the AX210's (version 89) and the
+# 22000 family's AX201 ("hr" radio) for each chip step: Qu B0, Qu C0, QuZ (77).
 IWLFW_URL := https://gitlab.com/kernel-firmware/linux-firmware/-/raw/38c1a7096dfb2188f55f342b835f14c362c59409/intel/iwlwifi
-IWLFW := .hosttools/intel/iwlwifi-ty-a0-gf-a0-89.ucode .hosttools/intel/iwlwifi-ty-a0-gf-a0.pnvm
-.hosttools/intel/%:
-	mkdir -p $(@D) && curl -sfL -o $@ $(IWLFW_URL)/$*
-# Its Bluetooth's firmware (and the Pis' Bluetooth patch, for sdcard), the
-# same way, each file checked against tools/bt-firmware.sha256.
+IWLFW := $(patsubst %,.hosttools/intel/iwlwifi-%,ty-a0-gf-a0-89.ucode ty-a0-gf-a0.pnvm Qu-b0-hr-b0-77.ucode Qu-c0-hr-b0-77.ucode QuZ-a0-hr-b0-77.ucode)
+.hosttools/intel/%: tools/wifi-firmware.sha256
+	mkdir -p $(@D) && curl -sfL -o $@.part $(IWLFW_URL)/$*
+	echo "$$(grep ' $*$$' tools/wifi-firmware.sha256 | cut -d' ' -f1)  $@.part" | sha256sum -c --quiet && mv $@.part $@
+# Their Bluetooth's firmware (and the Pis' Bluetooth patch, for sdcard), the
+# same way, each file checked against tools/bt-firmware.sha256: the AX210's;
+# the AX201's (legacy boot, hardware variant 19: every ibt-19-* is this one).
 BTFW_URL  := https://gitlab.com/kernel-firmware/linux-firmware/-/raw/38c1a7096dfb2188f55f342b835f14c362c59409/intel
 BCMFW_URL := https://raw.githubusercontent.com/RPi-Distro/bluez-firmware/6851250bf9d51ff50e3c5b2cf2111e2419d4335b/broadcom
-BTFW := .hosttools/bt/ibt-0041-0041.sfi .hosttools/bt/ibt-0041-0041.ddc
+BTFW := $(patsubst %,.hosttools/bt/ibt-%,0041-0041.sfi 0041-0041.ddc 19-0-4.sfi 19-0-4.ddc)
 .hosttools/bt/%: tools/bt-firmware.sha256
 	mkdir -p $(@D) && curl -sfL -o $@.part $(if $(filter BCM%,$*),$(BCMFW_URL),$(BTFW_URL))/$*
 	echo "$$(grep ' $*$$' tools/bt-firmware.sha256 | cut -d' ' -f1)  $@.part" | sha256sum -c --quiet && mv $@.part $@

@@ -178,7 +178,8 @@ port `wifi` as a second network interface for netd, keeps the chosen
 network and joins it again at every start (`wifid.c`, one thread, the same
 shape on both architectures). One chip driver per architecture does the
 radio: `bcm.c` the Raspberry Pis' CYW43455 (below), `iwl.c` a PC's Intel
-AX210 (further down). Open and WPA2-PSK networks, one at a time. On a
+AX210 or 22000-family CNVi Wi-Fi (AX201; further down). Open and WPA2-PSK
+networks, one at a time. On a
 machine with neither chip, `wifid` ends at once and init does not start it
 again. **Both drivers are untested on hardware** (QEMU has neither chip).
 
@@ -295,9 +296,66 @@ scan already walks every bus behind the bridges, so nothing there changed.
 
 **The firmware** is Intel's, not part of SIEOS (its own licence). `make usb`
 fetches it once (pinned in the `Makefile`, `linux-firmware` commit
-`38c1a70`) and copies it onto the USB key, into `/lib/firmware/`:
+`38c1a70`, each file checked against `tools/wifi-firmware.sha256`) and
+copies it onto the USB key, into `/lib/firmware/`:
 `iwlwifi-ty-a0-gf-a0-89.ucode` and `iwlwifi-ty-a0-gf-a0.pnvm` (API version
-89). If they are missing, `wifid` says so and the radio stays off.
+89), and the 22000 family's below. If they are missing, `wifid` says so and
+the radio stays off.
+
+### The 22000 family: Ice Lake's CNVi Wi-Fi (AX201)
+
+The same `iwl.c` drives the Wi-Fi built into Intel's chipsets from Ice Lake
+to Tiger Lake: the MAC is in the PCH (**PCI `8086:34f0`** on Ice Lake-LP;
+also `02f0`/`06f0` Comet Lake, `3df0`, `4df0`, `43f0`/`a0f0` Tiger Lake, as in Linux's table),
+the radio on an M.2 "CRF" module, here the AX201 / Killer AX1650 ("hr").
+Linux's 22000 family (`cfg/22000.c`). Its firmware, version 77, has the
+same "MLD" command set as the AX210's (capability 110, the same command
+versions but for the scan), so the joining, WPA2 and CCMP code is shared;
+what differs:
+
+| | AX210 | 22000 (Qu, QuZ) |
+|---|---|---|
+| firmware | `ty-a0-gf-a0-89` + `.pnvm` | by `CSR_HW_REV`: MAC type 0x33 step 1 `Qu-b0-hr-b0-77`, step 2 `Qu-c0-hr-b0-77`, type 0x35 `QuZ-a0-hr-b0-77` (no PNVM; a `jf` radio, 9560, would want `-jf-b0-77`, not fetched) |
+| boot | context info v2 + peripheral scratch + image loader (IML); `UREG_CPU_INIT_RUN` at UMAC + 0x300000 | context info v1 (1792 bytes: RX rings, command queue, the sections' DRAM map) at `CSR 0x40`; no IML; the chip and radio steps into `HW_IF_CONFIG` first (mvm's `nic_config`); `UREG_CPU_INIT_RUN` without offset |
+| boot latency | `CSR_LTR` (discrete) | through `HPM_MAC_LTR_CSR`/`HPM_UMAC_LTR` (integrated) |
+| RX rings | free: 16 bytes (id, address); used: 32 bytes | free: 8 bytes (address \| id); used: 4 bytes (12-bit id) |
+| RX descriptor | 64 bytes (v3) | 48 bytes (v1): the 802.11 header and the signal earlier |
+| TX | byte counts in bytes, write pointer 16 bits; TX command gen3 (28 bytes) | byte counts in dwords, write pointer wraps at 256; TX command gen2 (20 bytes, offload and flags swapped) |
+| scan channels (UMAC scan v17 / v15) | band in the channel's flags (bit 30) | band in its own byte |
+| SoC configuration | discrete, 500 us | integrated, LTR delay and crystal latency per chipset (Ice Lake: 1820 us) |
+
+Rates: both firmwares take the same rate format (TX command version > 8),
+the same PHY context, link, station, queue, key and rate-scaling commands.
+While writing this, the AX210's path got the fixes the comparison with
+Linux showed: the RX signal and channel were read from the wrong bytes of
+the v3 descriptor (now 40-42), and seven commands had the wrong length
+(init config, NVM access done, TX antennas, DQA, device power and station
+removal: 4 bytes, not 8; the scan configuration: 12, with its RX chains).
+
+The firmware files (1.4 MB each) are all three on the key: which one the
+chip wants is known only from its step register.
+
+What to look for in the boot log (the Ice Lake laptop):
+
+```
+wifi: Intel 22000 CNVi at PCI 0:14.3 (8086:34f0), BAR ... (16 KiB), rev 331
+wifi: RF id 10a100            (hr: 10a or 10c in the middle digits)
+wifi: 22000 family, MAC type 33 step 1, radio type 10a: Qu-b0-hr-b0-77.ucode
+wifi: firmware release/core74::... (1406576 bytes)
+wifi: firmware: 14 + 15 sections, 20 paging, IML 0 bytes
+wifi: starting the firmware (context info v1)
+wifi: firmware alive (status cafe, LMAC 4d.x, UMAC 4d.x)
+wifi: NVM MAC xx:xx:xx:xx:xx:xx, antennas 3
+wifi: ready
+```
+
+(`rev 332`: step 2, `Qu-c0-hr-b0-77`; `rev 35x`: `QuZ-a0-hr-b0-77`.)
+
+then, on `wifi join`, as for the AX210: `looking for`, the BSSID line,
+`authenticated`, `associated (AID n, HT)`, `4-way handshake done`. If it
+stops: `no ALIVE` (the context info or boot: the `CSR_INT`/`GP_CNTRL`
+values), `the firmware refused command x` (a command's layout), `FIRMWARE
+ERROR` with the LMAC/UMAC error logs.
 
 ## The library: sockets, HTTP, TLS
 
@@ -461,7 +519,7 @@ takes `NET_NIC=CARD` (QEMU's `-device`), `NET_MACHINE=q35` and
 | HTTPS (ChaCha20-Poly1305), crypto alone on the host | 400 MB/s (AES-128-GCM: 31 MB/s, AES-256-GCM: 25 MB/s) |
 | Signature checks (host) | ECDSA ~2.2 ms, RSA ~1.7 ms |
 | Memory | vnet ~420-440 KiB (192 KiB of it DMA buffers; the device tree is dropped after setup), netd ~300 KiB plus 320 KiB per TCP connection |
-| Code (text, 2026-10-16) | netd 36 KB, vnet 24 KB (x86-64, with e1000 and RTL8168h: +3.3 KB) / 47 KB (arm64, with the two Pi backends), fetch 69 KB (with TLS 1.3 and 1.2 and the commands; TLS 1.2 added 5 KB to tls.o, 12.9 KB in all); wifid 52 KB on x86-64 (iwl.c 21 KB, wpa.c 2.2 KB) / 44 KB on arm64 (bcm.c 12 KB, sdio.c 6.5 KB) |
+| Code (text, 2026-10-16) | netd 36 KB, vnet 24 KB (x86-64, with e1000 and RTL8168h: +3.3 KB) / 47 KB (arm64, with the two Pi backends), fetch 69 KB (with TLS 1.3 and 1.2 and the commands; TLS 1.2 added 5 KB to tls.o, 12.9 KB in all); wifid 53 KB on x86-64 (iwl.c 22.3 KB with the 22000 family, which added 1.4 KB; wpa.c 2.2 KB) / 44 KB on arm64 (bcm.c 12 KB, sdio.c 6.5 KB) |
 
 ## Limits
 
@@ -478,12 +536,12 @@ takes `NET_NIC=CARD` (QEMU's `-device`), `NET_MACHINE=q35` and
   skips the certificates' validity dates (everything else is checked).
 - Raspberry Pi Ethernet and Wi-Fi are untested on hardware (see
   [raspberrypi.md](raspberrypi.md)); the Pi 5's Ethernet is polled. The
-  AX210 Wi-Fi is untested too (QEMU has no AX210): what to check on the
-  laptop is above.
+  AX210 and 22000-family (AX201) Wi-Fi are untested too (QEMU has
+  neither): what to check on the laptops is above.
 - Wi-Fi: open and WPA2-PSK only (no WPA3, no enterprise, no WEP); 2.4 and
   5 GHz as the firmware's regulatory blob allows; one network at a time; no
   access-point mode. On the Pis the chip's firmware runs the handshake; on
-  the AX210 the host does (`wpa.c`). The AX210 is station mode only, HT at
+  the Intel chips the host does (`wpa.c`). They are station mode only, HT at
   20 MHz, no power save and no aggregation, and it polls its queues (no PCI
   interrupt routed yet), so throughput is modest. A scan blocks the caller
   (and the desktop) for a few seconds.

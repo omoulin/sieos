@@ -139,7 +139,12 @@ not run on a board (QEMU has no Pi PCIe). To verify:
 
 ## Limits
 
-No MSI; one controller; the memory of an unplugged device is not given back;
+No MSI; one controller (on a PC with several, the chipset's at 00:14.0 when
+there is one: Intel laptops also have the CPU's Thunderbolt xHCI at
+00:0d.0, e.g. Ice Lake's 8086:8a13, first in PCI order but serving only the
+USB-C ports, while the built-in Bluetooth, camera and USB-A ports are on the
+chipset's, e.g. 8086:34ed; neither needs a quirk beyond Linux's power
+management ones); the memory of an unplugged device is not given back;
 isochronous transfers only at high speed (and full speed: written, not
 tried), up to 4 KiB per interval; one camera at a time;
 a USB disk is root only when there is no virtio or SD disk.

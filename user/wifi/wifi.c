@@ -9,7 +9,7 @@
  *   wifi forget          (root) leave the network and forget it
  *
  * wifid serves the port "wifi" (the Raspberry Pis' CYW43455, or a PC's
- * Intel AX210); on a machine without Wi-Fi it says so.
+ * Intel AX210 or AX201); on a machine without Wi-Fi it says so.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */

@@ -32,8 +32,13 @@ int pci_find(uint32_t cls, uint32_t mask, hc_info_t *h, int nth)
 }
 
 #if defined(__x86_64__)
+/* Intel laptops have two: the chipset's at 00:14.0 (the built-in Bluetooth,
+ * camera, USB-A ports) and, first in PCI order, the CPU's Thunderbolt one at
+ * 00:0d.0 (USB-C; 8086:8a13 on Ice Lake). We drive one: the chipset's. */
 int hc_find(hc_info_t *h, int nth)
 {
+    pci_t p;
+    for (int i = 0; !nth && !pci_scan(&p, 8, 0x0C033000, 0xFFFFFF00, i); i++) if (p.at == 0x14 << 11) { nth = i; break; }
     if (pci_find(0x0C0330, 0xFFFFFF, h, nth)) return -1;
     name_xhci(h);
     return 0;

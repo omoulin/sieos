@@ -17,6 +17,7 @@ the same from a shell.
 | Machine | Controller | Transport | Firmware |
 |---|---|---|---|
 | the laptop | Intel AX210 (USB 8087:0032, full speed) | the usb server's pipe, port `bthci` (`user/usb/btusb.c`): commands on the control endpoint, events on interrupt IN, ACL on bulk | `ibt-0041-0041.sfi` + `.ddc` from linux-firmware, in `/lib/firmware` (`make usb`) |
+| the second laptop (Ice Lake) | Intel AX201, the CNVi Wi-Fi's companion (USB 8087:0026; the AX200's 8087:0029 the same way) | the same pipe, on the chipset's xHCI (00:14.0) | `ibt-19-0-4.sfi` + `.ddc` (every `ibt-19-*` name in linux-firmware is this file), `make usb` |
 | Raspberry Pi 4 | CYW43455 | the **mini UART** on GPIO 30-33 (ALT5, RTS/CTS), H4; BT_ON: firmware GPIO expander line 0 | `BCM4345C0.hcd` (RPi-Distro bluez-firmware), `/lib/firmware/brcm` (`make sdcard`) |
 | Raspberry Pi 5 | CYW43455 | the BCM2712 UART at `0x107d50c000` (16550, auto RTS/CTS, 96 MHz) on GPIO 24-27; BT_ON: GPIO 29 | the same `.hcd` |
 
@@ -31,6 +32,17 @@ The firmware files are fetched once at pinned commits and checked against
   the "download done" vendor event; Intel Reset (`0xFC01`) with the boot
   address found in the file; the "booted" vendor event; the DDC settings
   (`0xFC8B`).
+- **Intel, legacy boot** (the AX201, AX200, 9560: hardware variants
+  0x11-0x14, as `btintel_bootloader_setup`): the same Read Version answers
+  with a fixed 10-byte record (`hw_platform` 0x37) instead of TLVs: hardware
+  variant, revision, firmware variant (0x06 bootloader, 0x23 operational) and
+  revision, build. The file is `ibt-<variant>-<revision>-<fw revision>.sfi`
+  in decimal (the AX201: `ibt-19-0-4`, which linux-firmware also installs
+  under every other `ibt-19-*` name; btd falls back to it). It has the RSA
+  header (128-byte CSS, 256-byte key, 256-byte signature at 388), the
+  command stream from byte 644; then the same download-done event, Intel
+  Reset, booted event and DDC. (Linux also reads the boot parameters,
+  `0xFC0D`, to log them: skipped.)
 - **Pi 4: the mini UART, not the PL011.** Linux puts Bluetooth on the PL011
   (UART0), but SIEOS's serial console is the PL011 on GPIO 14/15
   (`disable-bt`); GPIO 30-33 also offer the mini UART with flow control
@@ -299,6 +311,15 @@ Every step logs a `bt:` line on the serial console / kernel log: send them.
   CNVi/CNVr), `loading /lib/firmware/ibt-0041-0041.sfi ... boot address 100800`,
   `firmware loaded`, `booted`, `.ddc applied`, `ready: ... address ...`.
   Then `bt scan`, `bt pair` with a keyboard (passkey) and a mouse.
+- Ice Lake laptop (AX201): `usb: xHCI 8086:34ed at 00:14.0 ...` (the
+  chipset's controller, not the Thunderbolt one at 00:0d.0), `bt: adapter:
+  USB 8087:0026`, `bt: Intel (legacy): variant 13, revision 0, firmware
+  variant 06 (bootloader) revision 4, ...` (revision 0 or 32, firmware
+  revision 0-4: any `ibt-19-*` ends on `ibt-19-0-4`), `loading
+  /lib/firmware/ibt-19-0-4.sfi (801412 bytes), firmware 83-7.26, boot
+  address 24800`, `firmware loaded in N ms`, `booted in N ms`, the version
+  line again with `firmware variant 23 (operational firmware)`,
+  `ibt-19-0-4.ddc applied`, `ready: Intel ibt-19-0-4, Intel, Bluetooth 5.x`.
 - Pis: the UART line (`Pi 4 mini UART at ... Hz`), `Broadcom BCM4345C0`,
   `patch loaded`, `ready`. If nothing answers: the flow-control polarity
   (Pi 4: `CNTL` = 0xCF), BT_ON, and on the Pi 5 the pin functions.
