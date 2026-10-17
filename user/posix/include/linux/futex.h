@@ -7,6 +7,7 @@
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #pragma once
+#include <linux/types.h>
 #define FUTEX_WAIT            0
 #define FUTEX_WAKE            1
 #define FUTEX_REQUEUE         3

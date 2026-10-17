@@ -117,7 +117,7 @@ static long spawn(struct spawn_tmp *t, int *pid, const char *path, int search, c
     /* the child's table: ours (but close-on-exec ones), then the file actions */
     char kcwd[FS_PATH];
     memcpy(kcwd, cwd, sizeof kcwd);
-    for (int i = 0; i < 64; i++) { kid[i] = fds[i]; if (kid[i].cloexec || kid[i].kind == F_SOCK || kid[i].kind == F_EVENT) kid[i].kind = F_FREE; }
+    for (int i = 0; i < 64; i++) kid[i] = fds[i];     /* (the actions first, then close-on-exec, as exec would) */
     for (int i = 0; i < nfa; i++) {
         const sieos_fa_t *a = &fa[i];
         if (a->cmd <= SIEOS_FA_OPEN && (a->fd < 0 || a->fd >= 64)) return -EBADF;
@@ -146,6 +146,8 @@ static long spawn(struct spawn_tmp *t, int *pid, const char *path, int search, c
         }
         }
     }
+    for (int i = 0; i < 64; i++)
+        if (kid[i].cloexec || kid[i].kind == F_SOCK || kid[i].kind == F_EVENT || kid[i].kind == F_PIDFD) kid[i].kind = F_FREE;
     unix_desc_t desc[64];
     int nd = 0;
     out_t o = { blob + 64 * sizeof(unix_desc_t), 0, UNIX_MAX - 64 * sizeof(unix_desc_t) };
@@ -267,6 +269,38 @@ static long do_wait4(int pid, int *status, int options)
         *status = sig ? sig : st == -1 ? 11 : (st & 0xff) << 8;   /* (killed for a fault: SIGSEGV) */
     }
     return r;
+}
+
+/* ---- pidfds (GLib's child watches): poll says when the child has ended;
+ * waitid(P_PIDFD) collects it */
+static int ended(long pid)                             /* 1: ended (not collected yet), 0: runs, -1: no such child */
+{
+    mk_task_t t;
+    if (S3(SYS_TASKS, &t, 1, pid - 1) != 1 || t.pid != pid) return -1;
+    return t.state == TS_DEAD;
+}
+static long do_waitid(int type, long id, int *info, int options)
+{
+    if (type == 3) {                                   /* P_PIDFD */
+        fd_t *f = fd_get(id);
+        if (!f || f->kind != F_PIDFD) return -EBADF;
+        id = (long)f->id;
+    } else if (type == 0) id = -1;                     /* P_ALL */
+    else if (type != 1) return -EINVAL;                /* (P_PGID: not here) */
+    int st = 0;
+    long r = sc(SYS_WAIT, id, (long)&st, options & 1 ? WAIT_NOHANG : 0, 0, 0, 0);   /* (WNOHANG) */
+    if (r < 0) return r == -ESRCH ? -ECHILD : r;
+    if (info) {
+        memset(info, 0, 128);
+        if (r) {
+            int sig = EXIT_SIGNO(st) ? EXIT_SIGNO(st) : st == -1 ? 11 : 0;
+            info[0] = 17;                              /* si_signo: SIGCHLD */
+            info[2] = sig ? 2 : 1;                     /* si_code: CLD_KILLED, CLD_EXITED */
+            info[4] = (int)r;                          /* si_pid */
+            info[6] = sig ? sig : st & 0xff;           /* si_status */
+        }
+    }
+    return 0;
 }
 
 /* ---- Signals: Linux's sigaction over SIEOS's one function per signal */

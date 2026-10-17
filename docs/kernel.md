@@ -315,8 +315,12 @@ For big ported programs (the browser: [webkit-plan.md](webkit-plan.md)),
   `SYS_NOTE(pid)` adds one to it and wakes its futex waiters (root, or the
   same user): how unixd and netd tell libposix's `poll` to look again.
 - **The wall clock:** `SYS_TIME(0)`: ns since 1970, the real-time clock
-  (x86-64: CMOS; arm64: PL031) read on first use plus the monotonic
-  clock; `SYS_TIME(ns)`: root sets it (the Pis have no clock to read).
+  (x86-64: CMOS; arm64: PL031) read at boot, before any program runs (a
+  driver using the clock chip, acpid's alarm, is never interrupted
+  half-way), plus the monotonic clock; `SYS_TIME(ns)`: root sets it (the
+  Pis have no clock to read).
+- **A child's end** bumps its parent's note word too (libposix's pidfds:
+  GLib's child watches).
 - **Cost:** 9.3 KB of kernel code in all (x86-64; 9.7 KB arm64); nothing on the paths
   that existed (`ktest vm`, `ktest futex`, `ktest shm`; IPC round trip
   unchanged).

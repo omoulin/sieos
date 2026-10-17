@@ -109,6 +109,7 @@ void kernel_main(boot_info_t *bi)
     }
     if (!nmodules) panic("no boot modules: nothing to run\n");
     long err;
+    wall_init();                        /* the clock chip, read before any program may touch it */
     proc_t *p = proc_new(0, P2V(modules[0].pa), modules[0].len, modules[0].name, 0, 0, 0, 0, 0, &err);
     if (!p) panic("cannot start %s (error %ld)\n", modules[0].name, err);
     super = p;

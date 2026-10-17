@@ -440,6 +440,17 @@ void vm_thread_end(task_t *t)
  * tells a client this way that something it waits for may be ready (the
  * basis of poll in libposix); the client then looks again. Only root, or
  * a process of the same user, may note a process. */
+/* (under proc_lock) add one to t's note word -> its futex key, 0: none */
+uint64_t note_bump(proc_t *t)
+{
+    if (!t || t->zombie || t->exiting || !t->note) return 0;
+    uint32_t *w = (uint32_t *)arch_uaddr(t->as, t->note, 1);
+    if (!w && fault(t, t->note, PROT_WRITE)) w = (uint32_t *)arch_uaddr(t->as, t->note, 1);
+    if (!w) return 0;
+    __atomic_fetch_add(w, 1, __ATOMIC_SEQ_CST);
+    return (uint64_t)w;
+}
+void note_wake(uint64_t key) { if (key) while (futex_wake_key(key, 16) == 16) ; }
 long note(int pid)
 {
     proc_t *me = cur->proc;
@@ -449,13 +460,10 @@ long note(int pid)
     proc_t *t = proc_find(pid);
     if (t && !t->zombie && !t->exiting && t->note) {
         r = me->uid && me->uid != t->uid ? -EPERM : 0;
-        uint32_t *w = r ? 0 : (uint32_t *)arch_uaddr(t->as, t->note, 1);
-        if (!r && !w && fault(t, t->note, PROT_WRITE)) w = (uint32_t *)arch_uaddr(t->as, t->note, 1);
-        if (w) { __atomic_fetch_add(w, 1, __ATOMIC_SEQ_CST); key = (uint64_t)w; }
-        else if (!r) r = -EFAULT;
+        if (!r && !(key = note_bump(t))) r = -EFAULT;
     }
     spin_unlock(&proc_lock);
-    if (key) while (futex_wake_key(key, 16) == 16) ;
+    note_wake(key);
     return r;
 }
 long note_word(uint64_t uaddr)

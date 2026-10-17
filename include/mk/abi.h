@@ -123,7 +123,8 @@ enum {
     SYS_SHM_CLOSE,     /* (id) -> 0: the caller holds it once less                         */
     SYS_NOTE_WORD,     /* (addr): this process's note word (a 32-bit word in its memory)    */
     SYS_NOTE,          /* (pid) -> 0: add one to pid's note word and wake its futex waiters:
-                          "something you wait for may be ready" (root, or the same user)  */
+                          "something you wait for may be ready" (root, or the same user);
+                          the kernel does it too when one of its children ends           */
     SYS_TIME,          /* (ns) -> ns since 1970 (UTC): the wall clock, the real-time clock
                           read at boot plus the time since; ns != 0: set it (root only)   */
 };

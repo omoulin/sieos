@@ -23,19 +23,21 @@ static int used_unixd;                           /* (at the end: tell unixd we a
 typedef struct conn conn_t;
 static void conn_free(conn_t *c);
 static long self_pid(void);
+static int ended(long pid);
 
 /* How many fds refer to the same thing as f (not f itself). */
 static int others(const fd_t *f)
 {
     int n = 0;
     for (int i = 0; i < NFD; i++)
-        if (&fds[i] != f && fds[i].kind == f->kind && (f->kind == F_EVENT ? fds[i].obj == f->obj : fds[i].id == f->id)) n++;
+        if (&fds[i] != f && fds[i].kind == f->kind &&
+            (f->kind == F_EVENT || f->kind == F_EPOLL ? fds[i].obj == f->obj : fds[i].id == f->id)) n++;
     return n;
 }
 /* f is closed: what it held goes when no other fd refers to it. */
 static void release(fd_t *f)
 {
-    if (f->kind == F_EVENT) { if (!others(f)) free(f->obj); return; }
+    if (f->kind == F_EVENT || f->kind == F_EPOLL) { if (!others(f)) free(f->obj); return; }
     if (others(f)) return;
     if (f->kind == F_UNIX) { msg_t m = { .w = { UNIX_CLOSE, f->id } }; unixd(&m); }
     else if (f->kind == F_SHM && f->type) S1(SYS_SHM_CLOSE, f->id);
@@ -457,6 +459,7 @@ static long do_poll(struct pollfd *p, unsigned long n, int64_t ns)   /* ns < 0: 
                 continue;
             case F_SOCK: r = net_ready(f); break;
             case F_EVENT: r = (((event_t *)f->obj)->count ? NET_IN : 0) | NET_OUT; break;
+            case F_PIDFD: r = ended((long)f->id) ? NET_IN : 0; break;   /* (the kernel notes us when a child ends) */
             default: r = NET_IN | NET_OUT;                /* files, the terminal, devices: always */
             }
             p[i].revents = (short)(((r & NET_IN ? POLLIN | POLLRDNORM : 0) | (r & NET_OUT ? POLLOUT | POLLWRNORM : 0) |
@@ -504,3 +507,57 @@ static long do_select(int n, fd_set *rd, fd_set *wr, fd_set *ex, int64_t ns)
     return c;
 }
 static int64_t ts_or_inf(const struct timespec *t) { return t ? (int64_t)ts_ns(t) : -1; }
+
+/* ---- epoll: an interest list, waited on with poll (level-triggered; GLib
+ * uses it to ask whether a descriptor can be polled at all: regular files
+ * cannot, as on Linux) */
+typedef struct { int n, cap; struct { int fd; uint32_t events; uint64_t data; } *e; } epoll_t;
+static long epoll_new(int flags)
+{
+    epoll_t *ep = malloc(sizeof *ep);
+    if (!ep) return -ENOMEM;
+    *ep = (epoll_t){ 0, 0, 0 };
+    fd_t f = { .kind = F_EPOLL, .flags = O_RDWR, .cloexec = !!(flags & O_CLOEXEC), .obj = ep };
+    long r = fd_new(0, f);
+    if (r < 0) free(ep);
+    return r;
+}
+static long epoll_ctl_(int epfd, int op, int fd, const struct epoll_event *ev)
+{
+    fd_t *e = fd_get(epfd), *t = fd_get(fd);
+    if (!e || e->kind != F_EPOLL || !t) return -EBADF;
+    if (t->kind == F_FILE || t->kind == F_DIR) return -EPERM;
+    epoll_t *ep = e->obj;
+    int i = 0;
+    while (i < ep->n && ep->e[i].fd != fd) i++;
+    if (op == EPOLL_CTL_DEL) { if (i == ep->n) return -ENOENT; ep->e[i] = ep->e[--ep->n]; return 0; }
+    if (op == EPOLL_CTL_ADD && i < ep->n) return -EEXIST;
+    if (op == EPOLL_CTL_MOD && i == ep->n) return -ENOENT;
+    if (i == ep->n) {
+        if (ep->n == ep->cap) {
+            int cap = ep->cap ? ep->cap * 2 : 8;
+            void *n = malloc(cap * sizeof *ep->e);
+            if (!n) return -ENOMEM;
+            if (ep->e) { memcpy(n, ep->e, ep->n * sizeof *ep->e); free(ep->e); }
+            ep->e = n; ep->cap = cap;
+        }
+        ep->n++;
+    }
+    ep->e[i].fd = fd; ep->e[i].events = ev->events; ep->e[i].data = ev->data.u64;
+    return 0;
+}
+static long epoll_wait_(int epfd, struct epoll_event *out, int max, int64_t ns)
+{
+    fd_t *e = fd_get(epfd);
+    if (!e || e->kind != F_EPOLL) return -EBADF;
+    if (max <= 0) return -EINVAL;
+    epoll_t *ep = e->obj;
+    struct pollfd *p = malloc((ep->n ? ep->n : 1) * sizeof *p);
+    if (!p) return -ENOMEM;
+    for (int i = 0; i < ep->n; i++) p[i] = (struct pollfd){ ep->e[i].fd, (short)(ep->e[i].events & 0xffff), 0 };
+    long r = do_poll(p, ep->n, ns), k = 0;
+    for (int i = 0; r > 0 && i < ep->n && k < max; i++)
+        if (p[i].revents) { out[k].events = (uint32_t)p[i].revents; out[k].data.u64 = ep->e[i].data; k++; }
+    free(p);
+    return r < 0 ? r : k;
+}

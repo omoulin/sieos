@@ -23,7 +23,8 @@
 int main(int, char **, char **);
 int __libc_start_main(int (*)(int, char **, char **), int, char **, void (*)(void), void (*)(void), void (*)(void));
 extern const Elf64_Ehdr __ehdr_start;              /* the linker's: the program's own ELF header */
-void *__dso_handle = &__dso_handle;                /* (C++ static destructors name their module by it) */
+__attribute__((weak)) void *__dso_handle = &__dso_handle;   /* (C++ static destructors name their module by it;
+                                                              crtbegin.o has one too) */
 
 /* The personality's (linux.c): memory, randomness, the start-up folder. */
 void *__sieos_main_stack(size_t size);

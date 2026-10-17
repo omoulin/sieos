@@ -39,6 +39,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sys/epoll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 
@@ -136,15 +137,17 @@ static int absolute(const char *path, char *out)
 void __sieos_startdir(const char *dir) { char p[FS_PATH]; if (!absolute(dir, p)) memcpy(cwd, p, strlen(p) + 1); }
 
 /* ---- The fd table */
-enum { F_FREE, F_CON, F_FILE, F_DIR, F_NULL, F_ZERO, F_RANDOM, F_UNIX, F_SHM, F_EVENT, F_SOCK };
+enum { F_FREE, F_CON, F_FILE, F_DIR, F_NULL, F_ZERO, F_RANDOM, F_UNIX, F_SHM, F_EVENT, F_SOCK, F_PIDFD, F_EPOLL };
 typedef struct {
     int kind, flags, cloexec;
     long sh;                                      /* F_FILE, F_DIR: the file server's handle */
     uint64_t off;                                 /* the offset (F_DIR: the cursor; F_SHM: the size) */
     char *path;
-    uint64_t id;                                  /* F_UNIX: the end; F_SOCK: netd's handle; F_SHM: the object */
+    uint64_t id;                                  /* F_UNIX: the end; F_SOCK: netd's handle; F_SHM: the object;
+                                                     F_PIDFD: the child's pid */
     int type;                                     /* F_UNIX: UNIX_*; F_SOCK: SOCK_*; F_SHM: made */
-    void *obj;                                    /* F_EVENT: the counter; F_SOCK: a connect going on */
+    void *obj;                                    /* F_EVENT: the counter; F_SOCK: a connect going on;
+                                                     F_EPOLL: its interest list */
     uint32_t ip;                                  /* F_SOCK: the peer, our port */
     uint16_t port, lport;
 } fd_t;
@@ -788,6 +791,11 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
     case SYS_rt_sigprocmask: if (d >= 8 && c) memset(A(c), 0, 8); return 0;   /* (no masks on SIEOS) */
     case SYS_rt_sigaction: return do_sigaction((int)a, A(b), A(c));
     case SYS_wait4:      if (d) memset(A(d), 0, 144); return do_wait4((int)a, A(b), (int)c);
+    case SYS_waitid:     return do_waitid((int)a, b, A(c), (int)d);
+    case SYS_pidfd_open: {
+        fd_t pf = { .kind = F_PIDFD, .flags = O_RDONLY, .cloexec = 1, .id = (uint64_t)a };
+        return ended(a) < 0 ? -ESRCH : fd_new(0, pf);
+    }
     /* pipes, sockets, waiting (sock.c) */
 #ifdef SYS_pipe
     case SYS_pipe:       return new_pair(UNIX_PIPE, 0, A(a));
@@ -816,6 +824,14 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
         return r;
     }
     case SYS_memfd_create: return memfd_new((int)b);
+#ifdef SYS_epoll_create
+    case SYS_epoll_create: return epoll_new(0);
+    case SYS_epoll_wait:  return epoll_wait_((int)a, A(b), (int)c, d < 0 ? -1 : d * 1000000LL);
+#endif
+    case SYS_epoll_create1: return epoll_new((int)a);
+    case SYS_epoll_ctl:   return epoll_ctl_((int)a, (int)b, (int)c, A(d));
+    case SYS_epoll_pwait: return epoll_wait_((int)a, A(b), (int)c, d < 0 ? -1 : d * 1000000LL);
+    case SYS_epoll_pwait2: return epoll_wait_((int)a, A(b), (int)c, ts_or_inf(A(d)));
     case SYS_sigaltstack: return 0;
     case SYS_prlimit64:
         if (d) { unsigned long *l = A(d); l[0] = l[1] = b == 3 ? 8UL << 20 : ~0UL; }   /* RLIMIT_STACK: 8 MiB */
@@ -863,6 +879,10 @@ long __sieos_syscall(long n, long a, long b, long c, long d, long e, long f)
         return 0;
     }
     case SYS_statx:      return -ENOSYS;               /* (musl then uses fstatat) */
+    case SYS_fallocate:  return -EOPNOTSUPP;           /* (callers then just write) */
+    case SYS_prctl:                                    /* thread names and the like: nothing to do */
+        if (a == 16 && b) memcpy(A(b), "sieos", 6);    /* (PR_GET_NAME) */
+        return 0;
     case SYS_rseq:       return -ENOSYS;
     }
     unsupported(n);
