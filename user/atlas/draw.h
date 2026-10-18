@@ -49,6 +49,8 @@ int  text_w(int n, int scale);      /* width in pixels of n characters */
 void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *keys, const uint32_t *cols, int scale);
 void dl_image(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h);   /* w x h pixels (0x00RRGGBB, rows
                                        one after the other) stretched into the box; not copied: they must stay */
+void dl_client(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h, int raw);   /* the same; raw: another
+                                       program's pixels, shown as they are in every look (no tint, no scanlines) */
 void dl_pointer(int x, int y);      /* where the mouse pointer is drawn (on top of everything) */
 void present(int x0, int y0, int x1, int y1);   /* draw this region of the picture on the screen (picture coordinates) */
 void present_pointer(int ox, int oy, int x, int y);   /* the pointer moved from (ox, oy): both places */

@@ -46,7 +46,8 @@ a shelf.)
 - **Depth:** each window has a hard shadow down and to the right (two
   steps, a printed look rather than a blur) and a thin dark gap around its
   frame, so overlapping windows stay apart; the insides of every window
-  but the focused one are dimmed to three quarters.
+  but the focused one are dimmed to three quarters (not another
+  program's: those are shown as the program drew them).
 - **Resize** with the grip (bottom right) or any edge; the smallest is
   360 x 200. New windows go down and to the right of the front one, so
   every tab stays in view; sia opens on the right. Each kind opens at a
@@ -235,6 +236,20 @@ pixels only: windows are untouched). Amber also squares the
 corners and draws the grid as dots. Nothing else in the desktop knows
 about looks, so icons, terminals and new windows follow by themselves.
 
+**Other programs' insides keep their own colours.** A look is atlas's
+own: its frames, tabs, strip, Deskbar, pointer and built-in windows
+(terminals, Files, Settings...). The insides of another program's window
+(a web page, a document) go to the screen exactly as the program drew
+them, in every look: no tint, no scanlines, no glow, no dimming
+(`dl_client` in `draw.c` marks those strip pixels with bit 24, which no
+colour uses, and the look's table is skipped for them: one test per
+pixel, no measurable cost per frame). A shadow or a dimmed backdrop
+falling on them darkens them without tinting them. A program that wants
+the look follows it itself (the toolkit's theme, [ui.md](ui.md));
+`make ui-test` checks every pixel of exact colour patches
+(`tests/ui/uipatch.c`) in all four looks, and that the frame around them
+has the look's colours.
+
 BeOS changes the colours themselves rather than how they reach the
 screen: the desktop draws in a **palette** (`pal[]` in `draw.c`; the
 `C_...` names in `atlas.h` are its entries, by role: the desk, a panel,
@@ -326,7 +341,8 @@ atlas for one (`ATLAS_WIN_OPEN`), draws its insides into shared memory in
 the screen's own pixels, says what changed (`ATLAS_WIN_DAMAGE`, answered
 once on the screen) and waits for what the window gets: keys, the pointer
 and its wheel, a new size, focus, the close box. Atlas frames it like its
-own windows (tab, workspaces, zoom, minimize); at most 8 at once; only the
+own windows (tab, workspaces, zoom, minimize) and shows its insides in
+their own colours whatever the look; at most 8 at once; only the
 user logged in may open one. The web browser (`/bin/web`,
 [webkit-plan.md](webkit-plan.md)) is the first, Scriptures
 ([scriptures.md](scriptures.md)) the first written in SIEOS's own C;
@@ -464,7 +480,8 @@ a back buffer, then tells atlas, which swaps the buffers and draws only
 the picture's box before answering, so a frame is never shown half
 written. The picture is a display-list item of its own (`dl_image`: each
 screen pixel takes the nearest image pixel, through the look like
-everything else). Closing the window closes the camera, which powers
+everything else of atlas's own; another program's window is the same item,
+marked to bypass the look). Closing the window closes the camera, which powers
 down. atlas: +6.4 KB of code.
 
 ## How it works

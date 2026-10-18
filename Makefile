@@ -255,6 +255,7 @@ include user/web/deps.mk
 include user/web/jsc.mk
 include user/web/webkit.mk
 include user/scriptures/scriptures.mk
+include user/lib/ui/ui.mk
 
 # ---- the disk: a SieFS image of rootfs/ plus the programs in /bin.
 # build/rootfs is the staging copy. The image is made once (mkfs.siefs);
