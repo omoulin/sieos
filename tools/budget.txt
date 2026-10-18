@@ -30,6 +30,7 @@ btd           elf      116K    136K
 cc            elf      540K    620K
 crash         elf       14K     16K
 dmesg         elf       14K     17K
+man           elf       25K     29K
 fetch         elf       79K     94K
 fsloop        elf       15K     18K
 gfxhat        elf       14K     31K
@@ -67,6 +68,6 @@ python.pkg    file     202K    203K   pkg/python.pkg
 scriptures.pkg file    580K    576K   pkg/scriptures.pkg
 web.pkg       file    35.6M       -   pkg/web.pkg
 # -- the base system and its images
-rootfs        tree     3.9M    3.8M
+rootfs        tree      4.1M    4.0M
 usb-image     img     14.0M       -   sieos-usb.img
 sdcard-image  img         -   10.2M   sieos-pi4.img
