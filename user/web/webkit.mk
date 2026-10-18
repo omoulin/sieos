@@ -63,10 +63,10 @@ $(WB)/web-render: tests/web/render.c user/web/multicall.cpp $(WB)/stamp/webkit
 # /bin/web, the browser (user/web/browser.c) on SIEOS's WPE platform
 # (user/web/platform: windows of the desktop, mk/atlas.h)
 $(WB)/web: user/web/browser.c user/web/platform/sieos-platform.c user/web/platform/sieos-platform.h include/mk/atlas.h \
-           user/web/multicall.cpp $(WB)/stamp/webkit
+           include/sieos/ui.h $(WB)/libui-posix.a user/web/multicall.cpp $(WB)/stamp/webkit
 	$(WK_CC) -o $(WB)/browser.o user/web/browser.c
 	$(WK_CC) -o $(WB)/sieos-platform.o user/web/platform/sieos-platform.c
-	$(call wk_program,$@,$(WB)/browser.o $(WB)/sieos-platform.o)
+	$(call wk_program,$@,$(WB)/browser.o $(WB)/sieos-platform.o $(WB)/libui-posix.a)
 # atlaswin (tests/web/atlaswin.c): a window of the desktop from a libposix program
 $(WB)/atlaswin: tests/web/atlaswin.c include/mk/atlas.h $(SYSROOT)/usr/lib/libc.a | $(WB)/toolchain.stamp
 	$(WB)/bin/cc -Os -Iinclude -o $@ $<
@@ -104,8 +104,8 @@ web-test: all $(WB)/web-render $(WEB_BASE) $(wildcard tests/web/pages/*)
 # ---- browser-test (tools/browsertest.py): the desktop with the browser in
 # QEMU: another program's window (atlaswin), then /bin/web: pages, typing,
 # back, HTTPS
-WEB_DATA  := user/web/toolbar.html user/web/start.html
-browser-test: all $(WB)/web $(WB)/atlaswin $(WEB_BASE) $(WEB_DATA) $(wildcard tests/web/pages/*)
+WEB_DATA  := user/web/start.html
+browser-test: all $(WB)/web $(WB)/atlaswin $(WB)/uicxx $(WEB_BASE) $(WEB_DATA) $(wildcard tests/web/pages/*)
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(call web_base,$(B)/test.img,web)
 	for f in $(WEB_DATA) tests/web/pages/*; do $(B)/host/siefs $(B)/test.img put $$f /lib/web/$$(basename $$f) || exit 1; done
@@ -114,7 +114,7 @@ browser-test: all $(WB)/web $(WB)/atlaswin $(WEB_BASE) $(WEB_DATA) $(wildcard te
 .PHONY: browser-test
 
 # ---- web-disk: the browser onto $(B)/disk.img (make first; never while QEMU
-# runs on it): /bin/web, WebKit's process names, fonts, the toolbar, Web.app
+# runs on it): /bin/web, WebKit's process names, fonts, the start page, Web.app
 web-disk: $(B)/disk.img $(WB)/web $(WEB_BASE) $(WEB_DATA) user/web/web.app
 	$(call web_base,$(B)/disk.img,web)
 	for f in $(WEB_DATA); do $(B)/host/siefs $(B)/disk.img put $$f /lib/web/$$(basename $$f) || exit 1; done
@@ -123,7 +123,7 @@ web-disk: $(B)/disk.img $(WB)/web $(WEB_BASE) $(WEB_DATA) user/web/web.app
 
 # ---- WEB=1: the browser in the system's files ($(B)/rootfs), so that the
 # disks made from them have it (make WEB=1 newdisk, usb, sdcard): /bin/web,
-# WebKit's process names linked to it, the fonts, the toolbar, Web.app
+# WebKit's process names linked to it, the fonts, the start page, Web.app
 # ($(B)/web.flag, rewritten when WEB changes, remakes the files then)
 WEB_ROOTFS_DEPS = $(if $(WEB),$(WB)/web $(WEB_BASE) $(WEB_DATA) user/web/web.app) $(B)/web.flag
 $(shell mkdir -p $(B) && [ "`cat $(B)/web.flag 2>/dev/null`" = "web=$(WEB)" ] || echo "web=$(WEB)" > $(B)/web.flag)

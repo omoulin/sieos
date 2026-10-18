@@ -116,6 +116,12 @@ void draw_look(int k)
 int draw_look_get(void) { return look; }
 static int scanline(int y) { return look == LOOK_PHOSPHOR ? y % 3 == 2 : y % 4 == 3; }
 static int round_r(int r) { return look == LOOK_AMBER ? 0 : look == LOOK_BEOS ? (r > 3 ? 3 : r) : r; }   /* (amber: square corners; BeOS: almost) */
+int draw_radius(int r) { return round_r(r); }
+uint32_t draw_shown(uint32_t c)
+{
+    if (look != LOOK_PHOSPHOR && look != LOOK_AMBER) return c;
+    return lut[0][((c >> 16 & 255) * 77 + (c >> 8 & 255) * 150 + (c & 255) * 29) >> 8];
+}
 static uint32_t avg(uint32_t a, uint32_t b) { return ((a & 0xfefefe) >> 1) + ((b & 0xfefefe) >> 1); }
 static uint32_t halo(uint32_t a, uint32_t c) { return avg(a, avg(a, c)); }   /* a quarter of c over a: text's glow */
 

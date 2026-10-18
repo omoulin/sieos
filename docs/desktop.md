@@ -355,6 +355,11 @@ clipboard is the program's too: `ATLAS_WIN_CLIP_GET` reads it (a
 terminal's selection, or what a program put there), `ATLAS_WIN_CLIP_SET`
 sets it (up to 16 KiB). A new size (`ATW_SIZE`) says the desktop's zoom
 in its code (100: normal), so a program can size its text the same.
+`ATLAS_WIN_THEME` gives the desktop's theme (its palette as the look shows
+it, the look, the zoom, how round corners are, the text's size) and
+`ATW_THEME` tells every window when the user changes it: the UI toolkit
+([ui.md](ui.md)) draws its widgets with it, so a program's buttons and
+menus follow the look while its content keeps its own colours.
 
 ## Mail
 

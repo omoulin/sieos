@@ -932,6 +932,7 @@ void atlas_look(int k)
     look_save();
     say("atlas: look %d\n", k);
     redraw();
+    client_theme();
 }
 void atlas_zoom(int pct)
 {
@@ -940,6 +941,7 @@ void atlas_zoom(int pct)
     look_save();
     say("atlas: zoom %d%% (%d x %d)\n", pct, SW, SH);
     settle();
+    client_theme();
 }
 static void look_load(void)
 {
@@ -1970,7 +1972,7 @@ int main(int argc, char **argv)
             if (mode == SESSION) settle();
             continue;
         }
-        if (m.w[0] >= ATLAS_WIN_OPEN && m.w[0] <= ATLAS_WIN_CLIP_SET) {   /* another program's window (client.c) */
+        if (m.w[0] >= ATLAS_WIN_OPEN && m.w[0] <= ATLAS_WIN_THEME) {   /* another program's window (client.c) */
             client_msg(from, &m, buf, mode == SESSION ? uid : -1);
             continue;
         }

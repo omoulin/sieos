@@ -142,6 +142,8 @@ void client_closed(int w)               /* the user closed it */
     memset(c, 0, sizeof *c);
 }
 
+void client_theme(void) { for (int i = 0; i < ATLAS_WIN_MAX; i++) if (cl[i].used) post(&cl[i], ATW_THEME, draw_look_get(), 0, 0, 0); }
+
 void client_logout(void) { for (int i = 0; i < ATLAS_WIN_MAX; i++) if (cl[i].used) gone(&cl[i]); }
 
 /* A message on port "atlas" (ATLAS_WIN_...). uid: the user logged in (-1: none). */
@@ -165,6 +167,17 @@ void client_msg(long from, msg_t *m, const char *data, int uid)
     }
     if (m->w[0] == ATLAS_WIN_CLIP_GET) {                /* the clipboard (atlas.c's: a terminal's selection, or a program's) */
         msg_t r = { .w = { (uint64_t)clip_n }, .sbuf = clip, .slen = (uint64_t)clip_n };
+        ipc_reply(from, &r);
+        return;
+    }
+    if (m->w[0] == ATLAS_WIN_THEME) {                    /* the look, for programs that match it (sieos/ui.h) */
+        atlas_theme_t t;
+        memset(&t, 0, sizeof t);
+        t.size = sizeof t; t.look = (uint16_t)draw_look_get(); t.zoom = (uint16_t)atlas_zoom_get();
+        t.radius = (uint16_t)draw_radius(12);
+        t.text = (int32_t)(((int64_t)S(2) * draw_zoom_get()) >> 16);
+        for (int i = 0; i < ATT_N; i++) t.pal[i] = draw_shown(pal[i]);
+        msg_t r = { .w = { 0 }, .sbuf = &t, .slen = sizeof t };
         ipc_reply(from, &r);
         return;
     }

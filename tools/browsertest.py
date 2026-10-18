@@ -123,6 +123,12 @@ def count(img, rgb, box):
                 n += 1
     return n
 
+def look(rgb):
+    """What Phosphor (the default look) makes of one of atlas's colours, on a row that is not a scanline (draw.c)."""
+    r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
+    v = min(255, ((r * 77 + g * 150 + b * 29) >> 8) * 5 // 4)
+    return "".join(f"{c * v // 255:02x}" for c in (0x46, 0xff, 0x7a))
+
 def window(w):
     """The last place logged for window w (picture) -> its box in screen pixels."""
     pump(0.3)
@@ -208,12 +214,31 @@ time.sleep(0.5)
 type_text("file:///lib/web/script.html\n")
 until("the script page (its canvas)", lambda img: page_shown(img, ("008000", "800080")))
 shot("21-web-script")
-print("ok: web: an address typed in the toolbar (Ctrl-L), the page shown")
+print("ok: web: an address typed in the toolbar (Ctrl-L: the toolkit's text field), the page shown")
 
 x0, y0, x1, y1 = window(17)
-click((x0 + 2 * ZOOM + 24) / ZOOM, (y0 + 34 * ZOOM + 20) / ZOOM)   # the toolbar's back button (its insides: 2 and 34 in; the button 8..40, 6..34)
+img = shot("21b-web-toolbar")
+bar = (x0 + 4, y0 + 34 * ZOOM, x1 - 4, y0 + 34 * ZOOM + 38)    # the toolbar (the UI toolkit's): in the look's colours
+if count(img, look("2a3245"), bar) < 40 or count(img, "2a3245", bar):
+    fail("the toolbar is not in Phosphor's colours (its edges)")
+click((x0 + 2 * ZOOM + 20) / ZOOM, (y0 + 34 * ZOOM + 20) / ZOOM)   # the toolbar's back button (its insides: 2 and 34 in; the button 5..35)
 until("the basic page again", lambda img: page_shown(img, ("ff0000", "00ff00", "0000ff")))
-print("ok: web: back")
+print("ok: web: back (the toolkit's toolbar), the toolbar in the look's colours, the page in its own")
+
+def red(img):
+    x0, y0, x1, y1 = window(17)
+    return count(img, "ff0000", (x0 + 4, y0 + 80, x1 - 4, y1 - 4))
+before = red(shot("poll"))
+click((x1 - 2 * ZOOM - 20) / ZOOM, (y0 + 34 * ZOOM + 20) / ZOOM)   # the menu (the toolbar's last tool), then "Zoom in"
+time.sleep(0.6)
+shot("23-web-menu")
+for _ in range(4):                               # (Open an address, Reload, Stop, Zoom in)
+    keys("down")
+keys("ret")
+until("the page zoomed in (more red)", lambda img: red(img) > before * 1.3)
+keys("ctrl", "p")                                # Zoom in again, by its shortcut
+until("the page zoomed in again", lambda img: red(img) > before * 1.8)
+print("ok: web: the menu (zoom in), its shortcut (Ctrl-P)")
 
 keys("ctrl", "l")
 time.sleep(0.5)

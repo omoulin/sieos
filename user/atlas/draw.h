@@ -63,6 +63,8 @@ enum { PAL_BG, PAL_GLASS, PAL_LINE, PAL_ACC, PAL_TXT, PAL_DIM, PAL_BAR, PAL_TERM
 extern uint32_t pal[NPAL];
 void draw_look(int look);
 int  draw_look_get(void);
+uint32_t draw_shown(uint32_t c);    /* a colour as the look shows it (a row that is not a scanline) */
+int  draw_radius(int r);            /* a corner's radius in the look (Amber: square) */
 /* The zoom, 16.16: screen pixels per picture pixel (65536: 1:1). Then
  * redraw everything (SW and SH change). */
 void draw_zoom(int z);

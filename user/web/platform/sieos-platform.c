@@ -7,7 +7,9 @@
  *                memory), a keymap that passes key values through
  *   SieToplevel  an atlas window: its pixels in shared memory, a thread
  *                waiting for its input, which the main loop turns into
- *                WPE events for the view under the pointer (or with the keys)
+ *                WPE events for the view under the pointer (or with the keys);
+ *                or hosted: pixels the program gives (a UI toolkit canvas,
+ *                sieos/ui.h), its input passed on by the program
  *   SieView      a box in its window: each frame WebKit renders (a
  *                WPEBufferSHM) is copied there, and atlas told what changed
  *
@@ -59,6 +61,7 @@ typedef struct {
     SieosKeyHook hook; gpointer hdata;
     WPEView *focus, *pressed;
     int buttons;
+    const SieosHost *host;               /* hosted: the program's pixels (px, w x h), no window of its own */
 } SieToplevel;
 typedef struct { WPEToplevelClass parent; } SieToplevelClass;
 G_DEFINE_FINAL_TYPE(SieToplevel, sie_toplevel, WPE_TYPE_TOPLEVEL)
@@ -68,6 +71,7 @@ static guint32 now_ms(void) { return (guint32)(g_get_monotonic_time() / 1000); }
 
 static void damage(SieToplevel *t, const atlas_rect_t *r, int n)
 {
+    if (t->host) { for (int i = 0; i < n; i++) t->host->damage(t->host->data, r[i].x0, r[i].y0, r[i].x1 - r[i].x0, r[i].y1 - r[i].y0); return; }
     sieos_msg_t m = { .w = { ATLAS_WIN_DAMAGE, (uint64_t)t->win }, .sbuf = r, .slen = n * sizeof *r };
     atlas(&m);
 }
@@ -301,6 +305,7 @@ static gpointer reader(gpointer data)
 static void toplevel_set_title(WPEToplevel *tl, const char *title)
 {
     SieToplevel *t = (SieToplevel *)tl;
+    if (t->host && title) { if (t->host->title) t->host->title(t->host->data, title); return; }
     if (!t->win || !title) return;
     sieos_msg_t m = { .w = { ATLAS_WIN_TITLE, (uint64_t)t->win }, .sbuf = title, .slen = strlen(title) };
     atlas(&m);
@@ -322,6 +327,39 @@ WPEToplevel *sieos_toplevel_new(WPEDisplay *display, const char *title, guint ma
     wpe_toplevel_state_changed(WPE_TOPLEVEL(t), WPE_TOPLEVEL_STATE_ACTIVE);
     g_thread_unref(g_thread_new("sieos-window", reader, t));
     return WPE_TOPLEVEL(t);
+}
+
+/* ---- Hosted: the program's pixels, its input. */
+WPEToplevel *sieos_toplevel_new_hosted(WPEDisplay *display, guint max_views, const SieosHost *host)
+{
+    SieToplevel *t = g_object_new(sie_toplevel_get_type(), "display", display, "max-views", max_views, NULL);
+    t->host = host;
+    wpe_toplevel_state_changed(WPE_TOPLEVEL(t), WPE_TOPLEVEL_STATE_ACTIVE);
+    return WPE_TOPLEVEL(t);
+}
+void sieos_toplevel_set_pixels(WPEToplevel *tl, guint32 *px, int w, int h)
+{
+    SieToplevel *t = (SieToplevel *)tl;
+    t->px = px; t->w = w; t->h = h;
+    if (!px || w <= 0 || h <= 0) return;
+    wpe_toplevel_resized(tl, w, h);
+    if (t->layout) t->layout(tl, w, h, t->ldata);
+}
+void sieos_toplevel_key(WPEToplevel *tl, int code) { key((SieToplevel *)tl, code); }
+void sieos_toplevel_pointer(WPEToplevel *tl, int x, int y, int buttons, int wheel)
+{
+    atlas_event_t e = { ATW_POINTER, 0, (int16_t)x, (int16_t)y, (uint8_t)buttons, (int8_t)wheel, 0 };
+    pointer((SieToplevel *)tl, &e);
+}
+void sieos_toplevel_focus(WPEToplevel *tl, int in)
+{
+    SieToplevel *t = (SieToplevel *)tl;
+    if (t->focus) { if (in) wpe_view_focus_in(t->focus); else wpe_view_focus_out(t->focus); }
+}
+void sieos_toplevel_close(WPEToplevel *tl)
+{
+    wpe_toplevel_foreach_view(tl, close_view, 0);
+    wpe_toplevel_closed(tl);
 }
 
 void sieos_toplevel_set_key_hook(WPEToplevel *tl, SieosKeyHook hook, gpointer data)
