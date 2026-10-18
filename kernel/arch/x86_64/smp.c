@@ -415,14 +415,14 @@ static void tramp(cpu_t *c, uint64_t stack)
     *(uint64_t *)P2V(TRAMP + (ap_stack - ap_start)) = stack;
     *(uint64_t *)P2V(TRAMP + (ap_cpu - ap_start)) = (uint64_t)c;
 }
-static void init_all(void)               /* INIT resets the other CPUs, all at once; 10 ms before the SIPIs */
-{
-    ipi_all_others(0x4500);
-    for (uint64_t t = rdtsc(); rdtsc() - t < tsc_hz / 100; ) asm volatile("pause");   /* (TSC: the PIT may be off) */
-}
-static int ap_boot(cpu_t *c)             /* SIPI: c starts at 0x8000 -> 0: it runs idle() */
+/* INIT, 10 ms, then SIPI: c starts at 0x8000 -> 0: it runs idle(). One CPU
+ * at a time: a CPU waiting for its SIPI cannot enter SMM, and the firmware's
+ * SMIs then wait for it (up to a second each, on the Surface Pro 7). */
+static int ap_boot(cpu_t *c)
 {
     tramp(c, c->a.idle_stack);
+    send_ipi(c->a.apic_id, 0x4500);
+    for (uint64_t t = rdtsc(); rdtsc() - t < tsc_hz / 100; ) asm volatile("pause");   /* (TSC: the PIT may be off) */
     /* A second SIPI if it has not answered after 1 ms (the standard asks
      * for two; one is enough on most machines), then up to 1 s: a real
      * machine may take far longer than QEMU (a CPU that answers after we
@@ -444,9 +444,10 @@ void smp_start(void)
     tramp_pml4 = page_alloc(1);
     memcpy((uint64_t *)P2V(tramp_pml4) + 256, boot_pml4 + 256, 256 * 8);
     ((uint64_t *)P2V(tramp_pml4))[0] = ((uint64_t)pdpt_low - KVMA) | PTE_P | PTE_W;
-    if (napic > 1) kprintf("mk: starting %d more CPUs\n", napic - 1), init_all();
+    if (napic > 1) kprintf("mk: starting %d more CPUs\n", napic - 1);
     for (int i = 0; i < napic; i++) {
         if ((int)apic_ids[i] == cpus[0]->a.apic_id) continue;
+        if (opt_cpus && ncpu >= opt_cpus) break;
         cpu_t *c = cpu_alloc();
         uint64_t stack = page_alloc(1);  /* its idle stack, 4 KiB (deepest use measured: 600 bytes) */
         if (!c || !stack) break;
@@ -518,7 +519,6 @@ __attribute__((cold)) long arch_suspend(int n)
     outb(0x21, 0xFF); outb(0xA1, 0xFF);                  /* the 8259s: masked again */
     kprintf("mk: %s; TSC %s\n", r ? "suspend failed: still awake" : "awake", tsc_fix ? "carried on" : "kept running");
     if (rdmsr(0x2FF) != mtrr) kprintf("mk: the firmware did not restore the MTRRs (%lx, was %lx): memory may be uncached\n", rdmsr(0x2FF), mtrr);
-    if (n > 1) init_all();
     for (int i = 1; i < n; i++) { cpus[i]->online = 0; ap_boot(cpus[i]); }
     spin_lock(&io_lock);
     for (int irq = 1, pin, a; irq < MAXIRQ; irq++)

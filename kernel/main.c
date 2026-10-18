@@ -17,6 +17,7 @@ int nmodules;
 cpu_t *cpus[MAXCPU];
 int ncpu;
 int opt_pcores;
+int opt_cpus;                   /* boot option "cpus=N": start at most N CPUs (0: all) */
 char opt_root[40];              /* boot option "root=GUID": SIEOS's partition (SYS_INFO, for vblk) */
 
 /* ---- Locks. Every CPU may be in the kernel at once: each piece of shared
@@ -74,6 +75,8 @@ void spin_wait(spinlock_t *l, uint32_t t)
  * arm64: the device tree's /chosen bootargs; the UEFI loader's BOOT.CFG):
  *   pcores=N   pretend that CPUs 0..N-1 are P-cores and the others E-cores
  *              (to test the scheduler's placement where all cores are alike)
+ *   cpus=N     start at most N CPUs (cpus=1: the first alone, if starting
+ *              the others goes wrong on some machine)
  *   root=GUID  the unique GUID of SIEOS's SieFS partition: kept for the disk
  *              server (SYS_INFO), which takes that partition, on any drive */
 static void options(const char *s)
@@ -83,6 +86,8 @@ static void options(const char *s)
         while (s[n] && s[n] != ' ') n++;
         if (n > 7 && !memcmp(s, "pcores=", 7))
             for (int i = 7; i < n && s[i] >= '0' && s[i] <= '9'; i++) opt_pcores = opt_pcores * 10 + s[i] - '0';
+        if (n > 5 && !memcmp(s, "cpus=", 5))
+            for (int i = 5; i < n && s[i] >= '0' && s[i] <= '9'; i++) opt_cpus = opt_cpus * 10 + s[i] - '0';
         if (n > 5 && n < 45 && !memcmp(s, "root=", 5)) { memcpy(opt_root, s + 5, n - 5); opt_root[n - 5] = 0; }
         for (s += n; *s == ' '; s++) ;
     }

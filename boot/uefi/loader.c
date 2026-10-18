@@ -4,8 +4,9 @@
  *   1. reads \SIEOS\BOOT.CFG from its own partition (on a drive SIEOS was
  *      installed on, \EFI\SIEOS\BOOT.CFG): the boot modules
  *      ("module=init.elf", init first), a preferred screen size
- *      ("screen=1920x1080") and SIEOS's partition ("root=GUID", passed to
- *      the kernel as a boot option);
+ *      ("screen=1920x1080"), SIEOS's partition ("root=GUID", passed to
+ *      the kernel as a boot option) and more kernel options
+ *      ("options=cpus=1");
  *      then adds "SIEOS" to the firmware's boot menu if the installer asked
  *      (boot_entry below);
  *   2. loads \SIEOS\KERNEL.BIN where its multiboot header says (1 MiB),
@@ -99,7 +100,7 @@ static int read_all(efi_file_t *f, void *buf, uint64_t size)
 
 /* ---- The configuration: "key=value" lines. */
 static char cfg[2048];
-static const char *mods[SIEOS_BOOT_MODS], *rootid;
+static const char *mods[SIEOS_BOOT_MODS], *rootid, *kopts;
 static int nmods, want_w = 1920, want_h = 1080;
 
 static int number(const char **s)
@@ -122,6 +123,7 @@ static void read_config(void)
         *e = 0;
         if (!memcmp(l, "module=", 7) && nmods < SIEOS_BOOT_MODS) mods[nmods++] = l + 7;
         else if (!memcmp(l, "root=", 5) && strlen(l) < 45) rootid = l;
+        else if (!memcmp(l, "options=", 8)) kopts = l + 8;    /* more kernel options, e.g. "cpus=1" */
         else if (!memcmp(l, "screen=", 7)) {
             const char *s = l + 7;
             int w = number(&s), h = 0;
@@ -343,6 +345,7 @@ efi_status_t efi_main(void *image, efi_system_t *system)
     b->magic = SIEOS_BOOT_MAGIC;
     b->version = 2;
     if (rootid) strlcpy(b->cmdline, rootid, sizeof b->cmdline);
+    if (kopts) { size_t k = strlen(b->cmdline); if (k) b->cmdline[k++] = ' '; strlcpy(b->cmdline + k, kopts, sizeof b->cmdline - k); }
     b->self = (uint64_t)b;
     b->self_len = info_len;
     b->mmap = (uint64_t)b + PAGES(sizeof(sieos_boot_t)) * PAGE;

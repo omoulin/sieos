@@ -365,3 +365,9 @@ console):
    supported` at once.
 8. **Disk** (`vblk:` lines): the NVMe drive's model, perhaps `NVMe: at
    most N KiB per command`.
+
+## If starting the other CPUs goes wrong
+
+Add a line `options=cpus=1` to `\SIEOS\BOOT.CFG` on the key's EFI partition
+(FAT: editable from any computer): the kernel then runs on the first CPU
+alone. `cpus=N` starts at most N.

@@ -167,6 +167,7 @@ __attribute__((noreturn)) void panic(const char *fmt, ...);
 extern cpu_t *cpus[MAXCPU];
 extern int ncpu;
 static inline int ncpus(void) { return __atomic_load_n(&ncpu, __ATOMIC_ACQUIRE); }  /* (grows while CPUs start) */
+extern int opt_cpus;            /* boot option "cpus=N": at most N CPUs started (0: all) */
 extern char opt_root[40];       /* boot option "root=GUID" (SYS_INFO) */
 extern int opt_pcores;          /* boot option "pcores=N": CPUs 0..N-1 are P-cores, the others E-cores */
 /* mem.c */

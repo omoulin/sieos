@@ -26,8 +26,15 @@ static void add(range_t *r, int *n, int max, uint64_t pa, uint64_t len)
 /* ---- The log: COM1, polled. This is the only device the kernel drives
  * itself, and only for output (the console server enables its interrupts). */
 #define COM1 0x3F8
+static int com1;                         /* there is one: its scratch register keeps what it is given */
 void serial_init(void)
 {
+    /* Machines without one (the Surface Pro 7) may trap the port into the
+     * firmware's SMM: each access then costs a system management interrupt,
+     * up to a second once CPUs wait for their SIPI. Never touch it then. */
+    outb(COM1 + 7, 0xA5);
+    if (inb(COM1 + 7) != 0xA5 || inb(COM1 + 5) == 0xFF) return;
+    com1 = 1;
     outb(COM1 + 1, 0);       /* no interrupts */
     outb(COM1 + 3, 0x80);    /* set the speed: divisor 1 = 115200 bit/s */
     outb(COM1 + 0, 1);
@@ -38,6 +45,7 @@ void serial_init(void)
 void arch_putc(char c)
 {
     fbcon_putc(c);                      /* (and on the firmware's screen, until the desktop has it) */
+    if (!com1) return;
     while (!(inb(COM1 + 5) & 0x20)) ;   /* wait until the port can take a byte */
     outb(COM1, c);
 }
