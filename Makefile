@@ -47,6 +47,7 @@ SIEFS_CORE := crc tree space fs vol crypt   # the SieFS library, linked into the
 BINS    += unixd                        # pipes and unix sockets for libposix (docs/webkit-plan.md)
 BINS    += wifi wifid                  # Wi-Fi: the command and its server (the Pis' CYW43455, the PC's AX210)
 BINS    += kblight                     # a keyboard's light (the USB server's kbl.c)
+BINS    += dmesg                       # the log since boot; at boot, saved to /etc/boot.log
 BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid ipts install)   # install: SIEOS onto a PC's NVMe drive (UEFI)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
 ULIBOBJ += $(if $(filter x86_64,$(ARCH)),aml)       # the AML interpreter they share
 BINS    += python                       # MicroPython (user/python/python.mk)

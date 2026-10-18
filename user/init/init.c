@@ -100,6 +100,9 @@ static svc_t svc[MAXSVC] = {
     /* accounts: a login or a passwd now and then; 1 ms to start */
     { .i = { "auth",  0, 0, 0, 0, SVC_ALWAYS, 0, 0, "auth", 5 * MIN }, "/bin/auth", "auth", .watch = "auth" },
     { .i = { "login", 0, 0, 0, 0, SVC_ALWAYS, 0 }, "/bin/login", "login", .console = 1 },
+    /* the log since boot into /etc/boot.log, a few times in the first 5 min, then
+     * it ends with 0: a new machine's log, read from the key on another computer */
+    { .i = { "bootlog", 0, 0, 0, 0, SVC_ON_FAILURE, 0, .bg = 1 }, "/bin/dmesg", "dmesg -w" },
 #if defined(__x86_64__)
     /* ACPI (a driver): sleep types for the kernel, battery, lid, buttons; with no
      * ACPI tables it ends with 0 */
