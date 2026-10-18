@@ -201,6 +201,21 @@ slots, so the 324-byte `SET_MEM_WINDOW` goes in pieces; HBM; IPTS as a
 Pro 7 answers; touches through all 16 buffers; no message without a
 credit).
 
+After the first boot (2026-10-18): `IPTS: connect refused (5)`, again and
+again, and init restarting ipts six times. Status 5 is HBM's "not
+allowed"; the ME gives it for a connect to a **fixed-address client**
+(one that takes no connect: Linux's `mei_cl_connect` skips the HBM
+connect for those, sends with host address 0 and without flow-control
+credits), for a client with no connection left, or while another connect
+is under way. The Pro 7's iTouch MEI has a single client: ipts now logs
+its properties (`ME clients: 1; IPTS's: address 12 (protocol N, N
+connection(s), fixed address?, messages up to 324 bytes)`) and, if it is
+fixed, uses it without connecting; refused otherwise, it disconnects that
+client (a connection the firmware might have left) and tries once more.
+If IPTS still cannot start, ipts ends (0) after one line, `ipts: no touch
+screen: <why> (given up; 'svc restart ipts' tries again)`, and init leaves
+it. `ipts-test` covers the three cases (connectable, fixed, refused).
+
 Not done, with what it would take:
 
 - **The pen and several fingers** need the raw ("poll") mode, as Linux
@@ -370,8 +385,11 @@ console):
    (one finger), 16 buffers of N bytes`. Touch the screen: `touch at X, Y
    (of 32767)` for the first three touches, the pointer there, a click.
    If the pointer lands mirrored or rotated, the X/Y values in the log
-   say how. Trouble: `MEI: the ME is not ready`, `HBM: no answer`,
-   `IPTS: connect refused`, `no answer to N`.
+   say how. The `ME clients` line now gives the client's properties
+   (`fixed address`: used without a connect). Trouble: `MEI: the ME is
+   not ready`, `HBM: no answer`, `IPTS: connect refused (5: not allowed)`
+   (then `ipts: no touch screen: ...`, once, and no restarts), `no answer
+   to N`.
 6. **Sound** (`audiod:` lines, when something first plays): `HDA
    8086:34c8 at 00:1f.3, HDA mode, ...` (`DSP mode` would mean the
    firmware routes microphones to the DSP after all), `codecs on the link: 5` (the Realtek
