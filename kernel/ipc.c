@@ -449,7 +449,7 @@ long irq_bind(int irq, long id)
     port_t *p = port_get(id);
     int mine = p && p->owner == cur->proc;
     if (p) port_put(p);
-    if (irq < 1 || irq >= MAXIRQ || ARCH_IRQ_RESERVED(irq) || !mine) return -EINVAL;
+    if (irq < 1 || irq >= IRQ_MSI0 || ARCH_IRQ_RESERVED(irq) || !mine) return -EINVAL;   /* (MSI: irq_msi) */
     spin_lock(&irq_lock);
     int k = -1, first = 1;
     long r = 0;
@@ -468,6 +468,40 @@ long irq_bind(int irq, long id)
 out:
     spin_unlock(&irq_lock);
     return r;
+}
+
+/* SYS_IRQ_MSI: a free MSI "line" bound to the caller's port, on the next
+ * CPU in turn; msg gets what the device must write to raise it. Edge: the
+ * device sends one message per event, nothing to mask; it is free again
+ * when the port goes. */
+long irq_msi(long id, uint64_t umsg)
+{
+#if NMSI
+    if (!cur->proc->driver) return -EPERM;
+    port_t *p = port_get(id);
+    int mine = p && p->owner == cur->proc;
+    if (p) port_put(p);
+    if (!mine) return -EINVAL;
+    int irq = -1, cpu = 0;
+    spin_lock(&irq_lock);
+    for (int q = IRQ_MSI0; q < IRQ_MSI0 + NMSI && irq < 0; q++) {
+        int used = 0;
+        for (int i = 0; i < IRQSHARE; i++) used |= irq_port[q][i] != 0;
+        if (!used) { irq = q; irq_port[q][0] = id; irq_need[q] = 0; cpu = irq_cpu++ % ncpus(); }
+    }
+    spin_unlock(&irq_lock);
+    if (irq < 0) return -EBUSY;
+    uint32_t m[2];
+    arch_msi(irq, cpu, m);
+    if (vm_copy(cur->proc->as, (void *)umsg, 0, m, sizeof m)) {
+        spin_lock(&irq_lock); irq_port[irq][0] = 0; spin_unlock(&irq_lock);
+        return -EFAULT;
+    }
+    return irq;
+#else
+    (void)id; (void)umsg;
+    return -ENOSYS;
+#endif
 }
 
 long irq_ack(int irq)

@@ -35,6 +35,10 @@ void pci_cfgw(const pci_t *p, int reg, uint32_t v);
  * port), *len their size; given an address in the window if it had none;
  * decoding and bus mastering turned on. 0 if there is no such BAR. */
 uint64_t pci_bar(pci_t *p, int i, uint64_t *len);
+/* Its interrupt as a message (MSI, else MSI-X), delivered to port: -> the
+ * irq for irq_ack, *how "MSI" or "MSI-X"; -1: neither (or no kernel MSI:
+ * arm64), the line stays. */
+int pci_msi(pci_t *p, long port, const char **how);
 
 #if defined(__aarch64__)
 /* The bridge's 32-bit memory window in its "ranges" (or "dma-ranges": where

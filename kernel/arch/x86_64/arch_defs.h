@@ -32,7 +32,9 @@
 #define STACK_TOP 0x00007FFFFFFFF000UL
 #define USER_TOP  0x0000800000000000UL
 #define MAXCPU    256                 /* xAPIC ids are 8 bits */
-#define MAXIRQ    64                  /* interrupt lines (IOAPIC inputs, "GSIs") */
+#define MAXIRQ    80                  /* interrupt lines (IOAPIC inputs, "GSIs") 0-63, then MSI */
+#define IRQ_MSI0  64                  /* MSI "lines" 64-79: a PCI device's messages (SYS_IRQ_MSI) */
+#define NMSI      16
 #define ARCH_IRQ_RESERVED(irq) ((irq) == 2)   /* IRQ 2: where the old PICs were chained */
 
 /* Interrupt vectors: 0-31 CPU exceptions, 32-47 the (masked) 8259 PICs,
@@ -40,7 +42,7 @@
 #define VEC_TIMER    48               /* each CPU's local APIC timer */
 #define VEC_RESCHED  49               /* "there is work, or your timer must change" */
 #define VEC_TLB      50               /* "flush your TLB" (shootdown) */
-#define VEC_IRQ0     64               /* interrupt line n arrives as vector 64 + n */
+#define VEC_IRQ0     64               /* interrupt line n arrives as vector 64 + n (MSI: 128-143) */
 #define VEC_SPURIOUS 255
 
 /* Page table entry bits. */

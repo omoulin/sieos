@@ -28,10 +28,14 @@ built and booted (UEFI loader, `make usb`) is in [usb.md](usb.md).
   with interrupt moderation (40 µs). Memory comes from `dma_alloc`; `DMA_LOW`
   only when the controller cannot address 64 bits or on the Pis. Addresses
   given to the controller are bus addresses (physical + the DT's offset).
-- **Interrupts.** INTx (level), no MSI. The irq thread drains the event ring
-  and wakes the waiting thread. A slow poll thread backs it up; if no
-  interrupt has ever arrived after three timeouts the server switches to
-  fast polling (0.5 ms) and says so.
+- **Interrupts.** MSI when the controller has it (x86-64: `pci_msi`, the
+  kernel's `SYS_IRQ_MSI`), else MSI-X, else its INTx line (level); with
+  none (a laptop's firmware often leaves the line unset: the Surface Pro
+  7's), polling every 8 ms. The log says which: `usb: xHCI ..., 18 ports,
+  interrupts: MSI`. The irq thread drains the event ring and wakes the
+  waiting thread. A slow poll thread backs it up; if no interrupt has ever
+  arrived after three timeouts the server switches to fast polling (0.5 ms)
+  and says so. `make usb-test` boots with MSI, then MSI-X.
 - **Enumeration.** A port change wakes the enumeration thread: reset, Enable
   Slot, Address Device, the descriptors, Set Configuration, Configure
   Endpoint, then the class driver. Hubs (USB 2 and 3) get their own ports
@@ -139,7 +143,8 @@ not run on a board (QEMU has no Pi PCIe). To verify:
 
 ## Limits
 
-No MSI; one controller (on a PC with several, the chipset's at 00:14.0 when
+MSI and MSI-X on x86-64 only (the Pis' and QEMU virt's controllers use their
+lines); one controller (on a PC with several, the chipset's at 00:14.0 when
 there is one: Intel laptops also have the CPU's Thunderbolt xHCI at
 00:0d.0, e.g. Ice Lake's 8086:8a13, first in PCI order but serving only the
 USB-C ports, while the built-in Bluetooth, camera and USB-A ports are on the

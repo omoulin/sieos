@@ -17,8 +17,10 @@ typedef struct {
     int dwc3;                    /* a DWC3 core (the Pi 5's RP1): switch it to host mode first */
     int low;                     /* its DMA must be in the first GiB (the Pis' PCIe window) */
     char what[40];               /* for the log */
+    char how[24];                /* its interrupts, for the log: "MSI", "line 11", ... */
 } hc_info_t;
 int hc_find(hc_info_t *h, int nth);            /* 0: the nth controller, ready */
+int hc_irq(hc_info_t *h, long port);           /* its interrupt to port: -> the irq for irq_ack, -1: none */
 int pci_find(uint32_t cls, uint32_t mask, hc_info_t *h, int nth);   /* any PCI class (class code & mask) */
 
 /* ---- Rings of TRBs ("transfer request blocks", 16 bytes): the driver
@@ -62,7 +64,7 @@ struct usbdev {
 /* ---- xhci.c */
 extern int hc_ports;
 extern volatile int hc_polling;
-int  xhci_start(const hc_info_t *h);
+int  xhci_start(hc_info_t *h);
 void *dmem(size_t n, uint64_t *bus);           /* zeroed DMA memory (in the first GiB when the platform needs it); its bus address */
 void dsync(volatile void *p, size_t n);        /* before the device reads it / after it wrote */
 int  ring_init(ring_t *r, int n);

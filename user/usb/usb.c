@@ -402,8 +402,7 @@ int main(int argc, char **argv)
     hc_info_t h;
     if (hc_find(&h, 0)) return 0;                              /* no controller: nothing to do */
     if (xhci_start(&h)) { log_line("usb: %s does not start\n", h.what); return 1; }
-    log_line("usb: %s, %d ports, %s\n", h.what, hc_ports, hc_polling ? "polled" : "interrupts");
-    if (h.irq >= 0) log_line("usb: interrupt line %d%s\n", h.irq & 0xFF, h.irq & IRQ_LEVEL ? " (level)" : "");
+    log_line("usb: %s, %d ports, %s%s\n", h.what, hc_ports, hc_polling ? "polled" : "interrupts: ", hc_polling ? "" : h.how);
     enum_tid = thread_start(enum_thread, 0, 16384);
     enum_ready = 1;
 

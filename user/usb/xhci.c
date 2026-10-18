@@ -248,7 +248,7 @@ static void irq_thread(void *a)
         R32(rt, 0x20) = 3;                     /* interrupter 0: clear "pending", keep "enabled" */
         R32(op, 4) = 8;                        /* status: clear "event interrupt" */
         events();
-        irq_ack(hcirq & ~IRQ_LEVEL);
+        irq_ack(hcirq);
     }
 }
 
@@ -373,7 +373,7 @@ static int spin(volatile uint8_t *b, int off, uint32_t mask, uint32_t want, int 
     return -1;
 }
 
-int xhci_start(const hc_info_t *h)
+int xhci_start(hc_info_t *h)
 {
     bus_off = h->bus_off;
     dma_low = h->low;
@@ -441,13 +441,9 @@ int xhci_start(const hc_info_t *h)
     R32(rt, 0x24) = 160;                          /* at most one interrupt per 40 us */
     R32(rt, 0x20) = 2;                            /* interrupter 0 enabled */
 
-    hcirq = h->irq;
-    if (hcirq >= 0) {
-        irq_port = port_create(0);
-        if (irq_bind(hcirq, irq_port)) hcirq = -1;
-        else { thread_start(irq_thread, 0, 8192); thread_start(watch_thread, 0, 4096); }
-    }
-    if (hcirq < 0) start_polling("no interrupt line known");
+    irq_port = port_create(0);
+    if ((hcirq = hc_irq(h, irq_port)) >= 0) { thread_start(irq_thread, 0, 8192); thread_start(watch_thread, 0, 4096); }
+    else start_polling("no interrupt (no MSI, no line known)");
     R32(op, 0) = 1 | 4;                           /* run, with interrupts */
     if (spin(op, 4, 1, 0, 100)) return -1;
     if (hcc1 & 8) for (int p = 1; p <= hc_ports; p++) port_write(p, 1u << 9);   /* port power on */

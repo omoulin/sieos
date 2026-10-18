@@ -41,6 +41,8 @@
                                          AArch64 are bigger than x86-64's; make STACKCHECK=1
                                          measures the deepest use) */
 #define ARCH_IRQ_RESERVED(irq) 0      /* (x86-64 reserves IRQ 2) */
+#define IRQ_MSI0  MAXIRQ              /* no MSI (SYS_IRQ_MSI: -ENOSYS) */
+#define NMSI      0
 /* random.c's timing samples: the generic counter runs at tens of MHz, too
  * coarse for jitter; the performance monitor's cycle counter (PMCCNTR_EL0,
  * started by cpu.c) counts the processor's cycles. */

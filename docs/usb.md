@@ -183,8 +183,8 @@ controller and namespace, one I/O queue pair; read, write (128 KiB per
 command: two PRP entries, or a PRP list built once, the buffer never moves)
 and flush. One command at a time, as the file server sends them, and
 **polled** (a short spin, then yielding): the drive answers in
-microseconds, and its interrupts would need ACPI's routing or MSI-X, which
-SIEOS does not have yet. No copies: the data arrives by IPC in the buffer
+microseconds, so polling costs less than an interrupt's wake-up would (MSI,
+which the USB server uses, would serve if ever wanted). No copies: the data arrives by IPC in the buffer
 the drive reads. Sectors of 512 bytes or 4 KiB; partitions on 4 KiB
 boundaries. `vblk` grew by 2.4 KB of code (x86-64; arm64 3.6 KB).
 

@@ -55,6 +55,7 @@ static inline long ipc_reply(long token, msg_t *m)      { return SYS(SYS_REPLY, 
 static inline long ipc_reply_recv(long token, long port, msg_t *m) { return syscall4(SYS_REPLY_RECV, token, port, (long)m, 0); }
 static inline long irq_bind(int irq, long port)         { return SYS(SYS_IRQ_BIND, irq, port); }
 static inline long irq_ack(int irq)                     { return SYS(SYS_IRQ_ACK, irq, 0); }
+static inline long irq_msi(long port, uint32_t msg[2])  { return SYS(SYS_IRQ_MSI, port, msg); }   /* -> irq */
 static inline void *map_phys(uint64_t pa, size_t size)  { return (void *)SYS(SYS_MAP_PHYS, pa, size); }
 static inline long sys_brk(uintptr_t end)               { return SYS(SYS_BRK, end, 0); }
 static inline long sys_info(mk_info_t *in)              { return SYS(SYS_INFO, in, 0); }

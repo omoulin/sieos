@@ -79,6 +79,9 @@ int  irq_route(int irq, int cpu);
 void irq_set_level(int irq, int low);   /* level-triggered (IRQ_LEVEL), active low (IRQ_LOW: x86-64) */
 void irq_mask(int irq);
 void irq_unmask(int irq);
+/* An MSI "line" (IRQ_MSI0 + k, edge; x86-64): the address and data a PCI
+ * device writes to raise it on that CPU. */
+void arch_msi(int irq, int cpu, uint32_t msg[2]);
 
 /* ---- Time (smp.c): ns since boot; ticks() (arch_defs.h) is the fast clock. */
 uint64_t now_ns(void);

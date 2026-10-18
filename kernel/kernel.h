@@ -243,6 +243,7 @@ long ipc_reply(long token, msg_t *um);
 long ipc_reply_recv(long token, long port, msg_t *um);
 long irq_bind(int irq, long port);
 long irq_ack(int irq);
+long irq_msi(long port, uint64_t umsg);
 void irq_raise(int irq);
 void port_notify(long port, proc_t *owner, uint64_t note);
 long child_port(long port);
