@@ -30,7 +30,7 @@ started from this key.
 ```sh
 make usb                      # build/sieos-usb.img: 322 MiB, any key of 512 MB or more (it grows to fill the key)
 make usb USBDISK=7G           # a full-size image instead, as before (at most your key's size: "8 GB" is 7.5 GiB)
-make usb USBMODEL=1           # with the assistant's model in /models (1 GB)
+make usb PKGS="web model"     # with add-on packages: the browser, the assistant's model (docs/packages.md)
 make usb USBSCREEN=2560x1600  # the screen size the loader asks for first
 make run-usb                  # try it in QEMU first (UEFI firmware, the image as a USB stick)
 make usb-test                 # the automatic test (below)

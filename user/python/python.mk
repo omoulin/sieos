@@ -1,4 +1,5 @@
-# python.mk - /bin/python (docs/python.md): MicroPython, built for SIEOS by
+# python.mk - /bin/python (docs/python.md): MicroPython, an add-on package
+# (make pkg-python, the Makefile's end; docs/packages.md), built for SIEOS by
 # the Makefile's compiler (gcc on x86-64, sicc on AArch64) with the port in
 # user/python. MicroPython's sources are not kept in SIEOS: the release's
 # archive is fetched once into .hosttools (a pinned version, its checksum

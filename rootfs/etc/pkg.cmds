@@ -1,0 +1,6 @@
+# The commands of the add-on packages (docs/packages.md): "command package".
+# The shell names the package of a command that is not installed.
+# Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+python python
+web web
+scriptures scriptures

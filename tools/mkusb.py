@@ -21,7 +21,8 @@ partition and its file system to the key's end on the first start (the
 backup GPT is then moved to the key's end). The image is sparse: only what
 is written takes space. Usage:
   mkusb.py OUT [--size BYTES | --siefs MiB] --efi BOOTX64.EFI --kernel K --module M... \
-           --mkfs MKFS --siefs-tool SIEFS --rootfs DIR [--put SRC DST]... [--esp MiB] [--screen WxH]
+           --mkfs MKFS --siefs-tool SIEFS --rootfs DIR [--put SRC DST]... [--pkg PKG]... [--esp MiB] [--screen WxH]
+--pkg: an add-on package (tools/pkg.py, docs/packages.md) installed on the key.
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
@@ -29,6 +30,7 @@ import argparse, os, struct, subprocess, sys, tempfile, uuid, zlib
 
 sys.path.insert(0, os.path.dirname(__file__))
 from mksdcard import Fat32                       # our FAT32 writer (shared with the Pi's cards)
+import pkg                                       # add-on packages
 
 SECTOR = 512
 ESP_TYPE = uuid.UUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B")    # the UEFI standard's
@@ -80,6 +82,7 @@ def main():
     a.add_argument("--module", action="append", required=True)
     a.add_argument("--mkfs", required=True); a.add_argument("--siefs-tool", required=True)
     a.add_argument("--rootfs", required=True); a.add_argument("--put", nargs=2, action="append", default=[])
+    a.add_argument("--pkg", action="append", default=[])
     a.add_argument("--esp", type=int, default=64, help="the EFI partition's size, MiB")
     a.add_argument("--screen", default="1920x1080")
     o = a.parse_args()
@@ -88,7 +91,7 @@ def main():
     else:   # a small image: SIEOS grows its partition to the key's end on the first start (user/vblk, siefs_grow)
         files = [os.path.join(d, f) for d, _, fs in os.walk(o.rootfs) for f in fs] + [p for p, _ in o.put] + \
                 [o.efi, o.kernel] + o.module
-        need = sum((os.path.getsize(p) + 4095) // 4096 * 4096 for p in files if os.path.isfile(p))
+        need = sum((os.path.getsize(p) + 4095) // 4096 * 4096 for p in files if os.path.isfile(p)) + sum(map(pkg.size, o.pkg))
         mib = o.siefs or max(256, (need * 5 // 4 >> 20) + 128)    # the files + a quarter + 128 MiB
         o.size = (2 + o.esp + mib) << 20                   # (+1 MiB before, 1 MiB for the backup GPT)
 
@@ -116,6 +119,8 @@ def main():
         for src, dst in o.put + boot + [(m, "/boot/" + os.path.basename(m)) for m in o.module]:
             subprocess.run([o.siefs_tool, fsimg, "mkdir", os.path.dirname(dst)], stderr=subprocess.DEVNULL)
             subprocess.run([o.siefs_tool, fsimg, "put", src, dst], check=True)
+        for p in o.pkg:
+            pkg.install(o.siefs_tool, fsimg, p)
         subprocess.run([o.siefs_tool, fsimg, "snap", "factory"], check=True)
 
         # The EFI partition.

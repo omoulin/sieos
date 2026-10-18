@@ -7,9 +7,12 @@
 #                   then kill servers while they work and check that everything carries on
 #   make crash-test only that second part
 #   make newdisk    recreate build/disk.img from rootfs/ (DISK=64M: its size); your files on it are lost
-#   make WEB=1 newdisk   (or usb, sdcard) with the web browser (/bin/web, about 90 MB; built first: make webkit web)
+#   make PKGS="web python" newdisk   (or usb, sdcard) with add-on packages: web (the browser, about 90 MB;
+#                   WebKit built first: make webkit), python, scriptures, model (docs/packages.md)
+#   make pkg-web    (pkg-python, pkg-scriptures, pkg-model) a package: $(B)/pkg/NAME.pkg
 #   make STACKCHECK=1  a kernel that measures its stacks' deepest use (shown at power off)
 #   make ARCH=arm64 DIAG_TEST=n   a kernel that faults on purpose after boot step n (tests the Pi's boot-step screen)
+#   make budget     the size of each part against its limit (tools/budget.txt, docs/budgets.md)
 #   make clean
 #
 # Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -50,12 +53,31 @@ BINS    += kblight                     # a keyboard's light (the USB server's kb
 BINS    += dmesg                       # the log since boot; at boot, saved to /etc/boot.log
 BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid ipts install)   # install: SIEOS onto a PC's NVMe drive (UEFI)  # laptops' I2C touchpads; ACPI: power, battery, lid, sleep
 ULIBOBJ += $(if $(filter x86_64,$(ARCH)),aml)       # the AML interpreter they share
-BINS    += python                       # MicroPython (user/python/python.mk)
+BINS    += pkg                          # add-on packages: install, remove, list (docs/packages.md)
 BINS    += btd bt                       # Bluetooth: the server and the command
 BINS    += man                          # the manual (man/, installed in /usr/share/man: tools/man.py)
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
-all: $(B)/kernel.bin $(PROGS:%=$(B)/%.elf) $(KARCH_EXTRA) $(B)/disk.img
+# ---- add-on packages (docs/packages.md; their rules: the end of this file):
+# what is not in the base system. PKGS: those a new disk, key or card gets
+# installed (make PKGS="web python" usb); WEB=1, USBMODEL=1, SDMODEL=1 still
+# mean PKGS=web, PKGS=model.
+PKGS    ?=
+PKGS    := $(strip $(PKGS) $(if $(WEB),web) $(if $(USBMODEL)$(SDMODEL),model))
+PKGDIR  := $(B)/pkg
+PKGFILES = $(foreach p,$(PKGS),$(PKGDIR)/$(p).pkg)
+PKG     := python3 tools/pkg.py
+
+all: $(B)/kernel.bin $(PROGS:%=$(B)/%.elf) $(KARCH_EXTRA) $(B)/disk.img $(PKGDIR)/python.pkg $(PKGDIR)/scriptures.pkg
+	$(if $(NOBUDGET)$(STACKCHECK)$(DIAG_TEST),,@$(BUDGET) --quiet)
+
+# ---- size budgets (tools/budget.txt, docs/budgets.md): every build checks them
+# (above; NOBUDGET=1: not, e.g. sicc's builds of x86-64); make budget prints the
+# table for what was last built
+BUDGET  := python3 tools/budget.py $(B) $(ARCH)
+budget:
+	@$(BUDGET)
+.PHONY: budget
 
 # ---- the kernel: an ELF file, then flattened into the binary QEMU loads
 $(B)/kernel.elf: $(KOBJS:%=$(B)/kernel/%.o) $(KARCH_LDS) | $(TOOLDEP)
@@ -271,23 +293,22 @@ ROOTFS  := $(shell find rootfs -type f)
 # in /src/sieos, next to its Makefile (rootfs/src/sieos, docs/make.md)
 SELF_SRC := $(foreach p,hello sh make,user/$(p)/$(p).c)
 MANPAGES := $(wildcard man/*/*.[0-9])
-$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(MANPAGES) tools/man.py $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB) $(ROOTFS_FONTS) $(WEB_ROOTFS_DEPS)
+$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(MANPAGES) tools/man.py $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB)
 	rm -rf $(B)/rootfs && mkdir -p $(B)/rootfs && cp -R rootfs/. $(B)/rootfs/ && cp $(SELF_SRC) $(B)/rootfs/src/sieos/
 	mkdir -p $(B)/rootfs/bin $(B)/rootfs/home $(B)/rootfs/tmp
 	mkdir -p $(B)/rootfs/lib/sicc/include/mk && cp cc/include/*.h user/lib/mk.h user/lib/gpio.h siefs/siefs.h $(B)/rootfs/lib/sicc/include/ && \
 	    cp include/mk/*.h $(B)/rootfs/lib/sicc/include/mk/ && cp $(SICC_LIB) $(B)/rootfs/lib/sicc/
 	for p in $(BINS); do cp $(B)/$$p.elf $(B)/rootfs/bin/$$p; done
 	python3 tools/man.py install man $(B)/rootfs/usr/share/man
-	mkdir -p $(B)/rootfs/lib/fonts && cp $(ROOTFS_FONTS) $(B)/rootfs/lib/fonts/
+	mkdir -p $(B)/rootfs/lib/fonts
 	$(if $(filter atlas,$(KARCH_NOBINS)),cp $(B)/noscreen.elf $(B)/rootfs/bin/atlas)
 	for l in $(LINKS); do ln -s $${l%/*} $(B)/rootfs/bin/$${l#*/}; done
-	$(if $(WEB),$(WEB_ROOTFS))
 	chmod -R u=rwX,go=rX $(B)/rootfs && chmod 755 $(B)/rootfs/bin/* && chmod 1777 $(B)/rootfs/tmp
 	touch $@
-$(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs
+$(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs $(PKGFILES)
 	@if [ ! -f $@ ]; then \
 	    echo "mkfs.siefs: new disk $@ ($(DISK))"; \
-	    $(B)/host/mkfs.siefs -s $(DISK) -L SIEOS -d $(B)/rootfs $@; \
+	    $(B)/host/mkfs.siefs -s $(DISK) -L SIEOS -d $(B)/rootfs $@ $(if $(PKGS),&& $(PKG) install $(B)/host/siefs $@ $(PKGFILES)); \
 	else \
 	    echo "updating $@ with the changed files of $(B)/rootfs"; \
 	    cd $(B)/rootfs && for d in $$(find . -mindepth 1 -type d); do ../host/siefs ../disk.img mkdir /$${d#./} 2>/dev/null; done; \
@@ -404,6 +425,7 @@ kernel-test: all $(B)/ktest-sicc.elf
 # Ctrl-C on the console (busy, sleeping, reading, on the network; a handler), kill, Python
 sig-test: all $(B)/ktest-sicc.elf
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
+	$(PKG) install $(B)/host/siefs $(B)/test.img $(PKGDIR)/python.pkg
 	$(B)/host/siefs $(B)/test.img put $(B)/ktest-sicc.elf /bin/ktest-sicc && $(B)/host/siefs $(B)/test.img chmod 755 /bin/ktest-sicc
 	python3 tools/sigtest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # ipc-bench: the IPC round trip and 40 clients calling one server (SMP=1, 4, 8, 16...)
@@ -451,12 +473,13 @@ make-test: all
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
 	$(B)/host/siefs $(B)/test.img put tests/make/fail.mk /tmp/t/fail.mk
 	python3 tools/maketest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
-# py-test: /bin/python (MicroPython, docs/python.md): scripts, files, modules, the prompt, sockets
+# py-test: /bin/python (MicroPython, docs/python.md): its package installed by /bin/pkg (from the
+# host's web server, from a file; removed), then scripts, files, modules, the prompt, sockets
 py-test: all
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(B)/host/siefs $(B)/test.img mkdir /tmp/t && $(B)/host/siefs $(B)/test.img chmod 777 /tmp/t
-	for f in tests/python/*.py; do $(B)/host/siefs $(B)/test.img put $$f /tmp/t/$$(basename $$f) || exit 1; done
-	python3 tools/pythontest.py $(SMP) $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+	for f in tests/python/*.py $(PKGDIR)/python.pkg; do $(B)/host/siefs $(B)/test.img put $$f /tmp/t/$$(basename $$f) || exit 1; done
+	python3 tools/pythontest.py $(SMP) $(B)/test.img $(PKGDIR)/python.pkg $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 # git-test: /bin/git against the host's git (git daemon, git http-backend):
 # clone, commit, push, pull, merge; SIEOS's repositories checked by git fsck (tools/gittest.py)
 git-test: all
@@ -484,8 +507,8 @@ distclean:
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.
-#   make ARCH=arm64 PI=4 sdcard [FIRMWARE=dir] [SDMODEL=1]   an SD card image, build-arm64/sieos-pi4.img
-#                                                (SDMODEL=1: with the assistant's model, models/$(PIMODEL):
+#   make ARCH=arm64 PI=4 sdcard [FIRMWARE=dir] [PKGS=model]   an SD card image, build-arm64/sieos-pi4.img
+#                                                (PKGS=model: with the assistant's model, models/$(PIMODEL):
 #                                                smaller than a PC's, for the Pis' speed; sia takes it
 #                                                when the PC's default model is not on the disk)
 #   make ARCH=arm64 run-pi4                      QEMU's Raspberry Pi 4 (raspi4b) with that kind of card
@@ -496,9 +519,9 @@ distclean:
 # firmware files are added from FIRMWARE (see docs/raspberrypi.md).
 PI      ?= 4
 # SDDISK: the SieFS partition's size on the card image: small (256 MiB; 640 MiB
-# with SDMODEL=1), SIEOS extends it to the card's end on the first start;
+# with the model package), SIEOS extends it to the card's end on the first start;
 # SDDISK=7G makes a full-size image as before.
-SDDISK  ?= $(if $(SDMODEL),640M,256M)
+SDDISK  ?= $(if $(filter model,$(PKGS)),640M,256M)
 PIMODEL ?= smollm2-360m-instruct-q8_0.gguf
 .hosttools/rpi/%.dtb:
 	mkdir -p $(@D) && curl -sfL -o $@ https://raw.githubusercontent.com/raspberrypi/firmware/master/boot/$*.dtb
@@ -515,14 +538,15 @@ WIFIFW  := .hosttools/rpi/fw/brcmfmac43455-sdio.bin .hosttools/rpi/fw/brcmfmac43
 	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/cypress/cyfmac43455-sdio.clm_blob
 .hosttools/rpi/fw/brcmfmac43455-sdio.txt:
 	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/brcm/brcmfmac43455-sdio.txt
-sdcard: all $(WIFIFW) .hosttools/bt/BCM4345C0.hcd
+sdcard: all $(WIFIFW) .hosttools/bt/BCM4345C0.hcd $(PKGFILES)
 	rm -f $(B)/sd-siefs.img && $(B)/host/mkfs.siefs -s $(SDDISK) -L SIEOS -d $(B)/rootfs $(B)/sd-siefs.img
-	$(if $(SDMODEL),$(B)/host/siefs $(B)/sd-siefs.img mkdir /models && $(B)/host/siefs $(B)/sd-siefs.img put models/$(PIMODEL) /models/$(PIMODEL))
+	$(if $(PKGS),$(PKG) install $(B)/host/siefs $(B)/sd-siefs.img $(PKGFILES))
 	$(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware 2>/dev/null; $(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware/brcm 2>/dev/null; \
 	    for f in $(WIFIFW) .hosttools/bt/BCM4345C0.hcd; do $(B)/host/siefs $(B)/sd-siefs.img put $$f /lib/firmware/brcm/$$(basename $$f); done
 	python3 tools/mksdcard.py $(B)/sieos-pi$(PI).img --pi $(PI) --kernel $(B)/kernel.bin --initrd $(B)/modules.img \
 	    --siefs $(B)/sd-siefs.img $(if $(FIRMWARE),--firmware $(FIRMWARE))
 	rm -f $(B)/sd-siefs.img
+	$(if $(FIRMWARE)$(PKGS)$(filter-out 4,$(PI)),,@$(BUDGET) --only sdcard-image)
 # QEMU's raspi4b: the firmware's part (loading the kernel, the modules and the
 # device tree) is done by QEMU itself; the card holds the two partitions.
 # (QEMU wants a card size that is a power of two; it has no USB or Ethernet
@@ -568,8 +592,8 @@ sdhci-bench: all $(B)/host/fsck.siefs
 #                     written, a second boot finds them; the key is checked
 # The image is small (its files + room, about 330 MiB): SIEOS extends its SieFS
 # partition to the key's end on the first start. USBDISK=7G: a full-size image
-# instead (the key's size; sparse). USBMODEL=1: with the assistant's model
-# (models/$(MODEL)); USBSCREEN: the preferred screen size. run-usb makes the
+# instead (the key's size; sparse). PKGS="web model ...": with those add-on
+# packages (docs/packages.md; model: the assistant's, models/$(MODEL)); USBSCREEN: the preferred screen size. run-usb makes the
 # image RUNDISK big first, like a key (it grows on its first start).
 # USBBUS: how QEMU attaches the key: usb (QEMU's xHCI and USB storage: the
 # real case) or virtio (the image as a plain disk).
@@ -615,9 +639,10 @@ BTFW := $(patsubst %,.hosttools/bt/ibt-%,0041-0041.sfi 0041-0041.ddc 19-0-4.sfi 
 .hosttools/bt/%: tools/bt-firmware.sha256
 	mkdir -p $(@D) && curl -sfL -o $@.part $(if $(filter BCM%,$*),$(BCMFW_URL),$(BTFW_URL))/$*
 	echo "$$(grep ' $*$$' tools/bt-firmware.sha256 | cut -d' ' -f1)  $@.part" | sha256sum -c --quiet && mv $@.part $@
-usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW) $(BTFW)
-	$(call USBMAKE,$(B)/sieos-usb.img,$(if $(USBDISK),--size $(USBDISK))) $(if $(USBMODEL),--put models/$(MODEL) /models/$(MODEL)) \
+usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW) $(BTFW) $(PKGFILES)
+	$(call USBMAKE,$(B)/sieos-usb.img,$(if $(USBDISK),--size $(USBDISK))) $(foreach f,$(PKGFILES),--pkg $(f)) \
 	    $(foreach f,$(IWLFW) $(BTFW),--put $(f) /lib/firmware/$(notdir $(f)))
+	$(if $(USBDISK)$(PKGS),,@$(BUDGET) --only usb-image)
 QEMU_UEFI = qemu-system-x86_64 -smp $(SMP) -m $(MEM) $(ACCEL) -no-reboot \
            -bios $(UEFI_FW) \
            -drive if=none,id=k,file=$(1),format=raw \
@@ -687,12 +712,13 @@ gpt-test: $(B)/host/gpt-test
 	$(B)/host/gpt-test
 GROWKEY = python3 tools/mkusb.py $(B)/grow.img --siefs 64 --efi $(if $(filter x86_64,$(ARCH)),$(B)/uefi/BOOTX64.EFI,$(B)/kernel.bin) \
           --kernel $(B)/kernel.bin $(foreach m,init con usb vblk fs,--module $(B)/$(m).elf) \
-          --mkfs $(B)/host/mkfs.siefs --siefs-tool $(B)/host/siefs --rootfs $(B)/rootfs >/dev/null
+          --mkfs $(B)/host/mkfs.siefs --siefs-tool $(B)/host/siefs --rootfs $(B)/rootfs --pkg $(PKGDIR)/python.pkg >/dev/null
 grow-test: all gpt-test $(B)/host/mkfs.siefs $(B)/host/siefs $(B)/host/fsck.siefs $(if $(filter x86_64,$(ARCH)),$(B)/uefi/BOOTX64.EFI,$(B)/modules.img .hosttools/rpi/bcm2711-rpi-4-b.dtb)
 	rm -f $(B)/grow.img && $(GROWKEY)
 	python3 tools/growtest.py $(SMP) $(B)/host $(B)/grow.img $(GROWDISK) $(subst $(B)/disk.img,$(B)/grow.img,$(QEMU)) -display none -vga none -serial stdio
 ifeq ($(ARCH),arm64)
 	rm -f $(B)/grow-siefs.img $(B)/grow.img && $(B)/host/mkfs.siefs -s 64M -L SIEOS -d $(B)/rootfs $(B)/grow-siefs.img >/dev/null
+	$(PKG) install $(B)/host/siefs $(B)/grow-siefs.img $(PKGDIR)/python.pkg >/dev/null
 	python3 tools/mksdcard.py $(B)/grow.img --pi 4 --kernel $(B)/kernel.bin --initrd $(B)/modules.img --siefs $(B)/grow-siefs.img --fat 64 --pow2 >/dev/null
 	python3 tools/growtest.py 4 $(B)/host $(B)/grow.img $(GROWDISK) $(QEMU_PI4) -drive file=$(B)/grow.img,if=sd,format=raw -display none -serial stdio
 endif
@@ -862,8 +888,8 @@ cc-sieos: $(SICC)
 	@printf '#!/bin/sh\nexec %s --ar "$$@"\n' $(CURDIR)/$(SICC) > $(SB)/bin/ar
 	@printf '#!/bin/sh\nexec %s --objcopy "$$@"\n' $(CURDIR)/$(SICC) > $(SB)/bin/objcopy
 	@chmod +x $(SB)/bin/*
-	$(MAKE) B=$(SB) PATH=$(CURDIR)/$(SB)/bin:$$PATH all
-	$(MAKE) B=$(SB) PATH=$(CURDIR)/$(SB)/bin:$$PATH test
+	$(MAKE) B=$(SB) PATH=$(CURDIR)/$(SB)/bin:$$PATH NOBUDGET=1 all
+	$(MAKE) B=$(SB) PATH=$(CURDIR)/$(SB)/bin:$$PATH NOBUDGET=1 test
 cc-bench: $(SICC)
 	OUT=$(B)/cc-bench tests/cc/bench/run.sh $(SICC)
 # AArch64, under QEMU's user-mode emulator (a host tool for tests only): the one
@@ -961,3 +987,38 @@ mail-test: all $(B)/host/fsck.siefs
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 128M -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/mailtest.py $(SMP) $(B)/screens $(B)/test.img $(B)/host $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) $(SCREEN) -display none -serial stdio
 .PHONY: mail-test
+
+# ---- add-on packages (docs/packages.md, tools/pkg.py): what is not in the
+# base system, one file each in $(B)/pkg; /bin/pkg installs them on SIEOS,
+# PKGS="..." into a new disk, key or card (above).
+#   make pkg-web pkg-python pkg-scriptures pkg-model
+PKGVER   ?= $(shell date +%Y%m%d)
+# model: the assistant's default model, a smaller one for the Pis (PKGMODEL= another of models/)
+PKGMODEL ?= $(if $(filter arm64,$(ARCH)),$(PIMODEL),$(MODEL))
+PY_EXAMPLES := $(wildcard user/python/examples/*.py)
+$(PKGDIR)/python.pkg: $(B)/python.elf user/python/python.app $(PY_EXAMPLES) tools/pkg.py
+	@mkdir -p $(@D)
+	$(PKG) build $@ python $(PKGVER) --dir /src/python --file $(B)/python.elf /bin/python 755 \
+	    --file user/python/python.app /etc/apps/python.app 644 $(foreach f,$(PY_EXAMPLES),--file $(f) /src/python/$(notdir $(f)) 644)
+$(PKGDIR)/scriptures.pkg: $(B)/scriptures.elf $(SCR_FONTS) user/scriptures/scriptures.app tools/pkg.py
+	@mkdir -p $(@D)
+	$(PKG) build $@ scriptures $(PKGVER) --file $(B)/scriptures.elf /bin/scriptures 755 \
+	    $(foreach f,$(SCR_FONTS),--file $(f) /lib/fonts/$(notdir $(f)) 644) --file user/scriptures/scriptures.app /etc/apps/scriptures.app 644
+# web: /bin/web, WebKit's process names linked to it, the fonts, their
+# configuration, the MIME types of local files, the toolbar, Web.app
+$(PKGDIR)/web.pkg: $(WB)/web $(WEB_BASE) $(WEB_DATA) user/web/web.app tools/pkg.py
+	@mkdir -p $(@D)
+	$(PKG) build $@ web $(PKGVER) $(foreach d,/usr /usr/libexec $(WK_EXEC) /usr/share /usr/share/mime /lib/web /etc/fonts,--dir $(d)) \
+	    --file $(WB)/web.strip /bin/web 755 $(foreach p,WPEWebProcess WPENetworkProcess,--link /bin/web $(WK_EXEC)/$(p)) \
+	    $$(for f in $(WB)/fonts/*.ttf; do echo --file $$f /lib/fonts/$${f##*/} 644; done) \
+	    --file user/web/fonts.conf /etc/fonts/fonts.conf 644 --file user/web/mime-globs2 /usr/share/mime/globs2 644 \
+	    $(foreach f,$(WEB_DATA),--file $(f) /lib/web/$(notdir $(f)) 644) --file user/web/web.app /etc/apps/web.app 644
+$(PKGDIR)/model.pkg: models/$(PKGMODEL) tools/pkg.py
+	@mkdir -p $(@D)
+	$(PKG) build $@ model $(PKGVER) --dir /models --file models/$(PKGMODEL) /models/$(PKGMODEL) 644
+pkg-%: $(PKGDIR)/%.pkg
+	@$(PKG) show $< | sed -n 's/^\(name\|version\|size\) //p' | tr '\n' ' '; echo "-> $<, $$(du -k $< | cut -f1) KiB"
+# pkg-disk: the packages PKGS onto $(B)/disk.img (make first; never while QEMU runs on it)
+pkg-disk: $(B)/disk.img $(PKGFILES)
+	$(PKG) install $(B)/host/siefs $(B)/disk.img $(PKGFILES)
+.PHONY: pkg-disk

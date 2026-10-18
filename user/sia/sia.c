@@ -25,7 +25,7 @@ static long call(msg_t *m)
 
 static int fail(long e)
 {
-    printf("sia: %s\n", e == -ENOENT ? "no model: put a .gguf file in /models, or use a remote one (sia config backend=remote)"
+    printf("sia: %s\n", e == -ENOENT ? "no model: install the model package (pkg install model.pkg) or put a .gguf file in /models,\n     or use a remote one (sia config backend=remote)"
                       : e == -EIO ? "the remote model cannot be reached (sia info; sia config url=...)"
                       : e == -EPIPE ? "the assistant restarted during the answer; ask again"
                       : e == -ESRCH ? "the assistant is stopped (svc restart sia starts it)"

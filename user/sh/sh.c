@@ -506,6 +506,20 @@ static long job(const char *path, const char *args, int bg)
     return st;
 }
 
+/* A command that is not there: an add-on package's (/etc/pkg.cmds) says which. */
+static void not_found(const char *name, int bare)
+{
+    char *t = bare ? file_get("/etc/pkg.cmds", 0) : 0, *p = t;
+    size_t n = strlen(name);
+    while (p && *p && !(!memcmp(p, name, n) && p[n] == ' ')) p = strchr(p, '\n') ? strchr(p, '\n') + 1 : p + strlen(p);
+    if (p && *p) {
+        char *e = strchr(p + n + 1, '\n');
+        if (e) *e = 0;
+        printf("%s: not installed: it comes with the add-on package %s (pkg install FILE|URL)\n", name, p + n + 1);
+    } else printf("%s: unknown command (try 'help')\n", name);
+    free(t);
+}
+
 /* A program from the disk; it gets "name args" as its argument string.
  * -> its exit status (127: not found, 126: could not start). */
 static int program(int ac, char **av)
@@ -527,7 +541,7 @@ static int program(int ac, char **av)
     long r = job(path, args, bg);                    /* "cmd &": do not wait for it */
     if (bg && r > 0) { printf("[%ld]\n", r); return 0; }
     int sig = EXIT_SIGNO(r);
-    if (r == -ENOENT) { printf("%s: unknown command (try 'help')\n", av[0]); return 127; }
+    if (r == -ENOENT) { not_found(av[0], base == av[0]); return 127; }
     if (sig) { if (sig != SIGINT) printf("%s: %s\n", av[0], sigwhy(sig)); return 128 + sig; }   /* (Ctrl-C: "^C" shown) */
     if (r < 0) { printf("%s: %s\n", av[0], errstr(r)); return 126; }
     else if (r && !batch) printf("%s: exit status %ld\n", av[0], r);
