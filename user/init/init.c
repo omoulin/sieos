@@ -67,6 +67,8 @@
 #define GIVE_UP    5                    /* quick failures in a row */
 #define BACKOFF0   10000000L            /* 10 ms, doubled each quick failure, ... */
 #define BACKOFF1   1000000000L          /* ... up to 1 s */
+#define SHORT_NS   60000000000L         /* ended within a minute: a failure in a row too (a driver that loads */
+#define GIVE_UP2   5                    /* its firmware for 2 s, then fails, every time: given up after 5) */
 #define MIN        60000000000L         /* a minute, in ns */
 
 typedef struct {
@@ -75,6 +77,7 @@ typedef struct {
     int module;                         /* its boot module number, or 0: from the disk */
     int console;                        /* uses the console: never two at once (login) */
     int quick;                          /* quick failures in a row */
+    int fails;                          /* failures within a minute of starting, in a row */
     int64_t when;                       /* SVC_WAITING: when to start it (ns since boot) */
     int64_t died;                       /* when it ended, to measure the restart */
     uint64_t quota;                     /* its memory limit in bytes (0: none; SPAWN_QUOTA) */
@@ -239,16 +242,19 @@ static void ended(svc_t *s, int st)
     s->died = now;
     if (s->i.policy == SVC_NEVER || (s->i.policy == SVC_ON_FAILURE && st == 0)) { s->i.state = SVC_STOPPED; return; }
     s->quick = now - (int64_t)s->i.started_ns < QUICK_NS ? s->quick + 1 : 0;
+    s->fails = now - (int64_t)s->i.started_ns < SHORT_NS ? s->fails + 1 : 0;
     s->i.restarts++;
-    if (s->quick >= GIVE_UP) {
+    if (s->quick >= GIVE_UP || s->fails >= GIVE_UP2) {
         s->i.state = SVC_GIVEN_UP;
         if (s->i.port[0]) sys_want(s->i.port, -ESRCH);
-        say("init: %s keeps failing (%d times within 1 s of starting, last status %d): given up; "
-            "'svc restart %s' tries again\n", s->i.name, s->quick, st, s->i.name);
+        say("init: %s keeps failing (%d times within %s of starting, last status %d): given up; "
+            "'svc restart %s' tries again\n", s->i.name, s->quick >= GIVE_UP ? s->quick : s->fails,
+            s->quick >= GIVE_UP ? "1 s" : "a minute", st, s->i.name);
         return;
     }
     int64_t wait = 0;
     if (s->quick) { wait = BACKOFF0 << (s->quick - 1); if (wait > BACKOFF1) wait = BACKOFF1; }
+    else if (s->fails > 1) wait = BACKOFF1 << (s->fails - 2);   /* 1, 2, 4 s */
     say("init: %s (pid %d) ended with status %d: restarting%s\n", s->i.name, pid, st, wait ? " after a pause" : "");
     s->i.state = SVC_WAITING;
     s->when = now + wait;
@@ -376,7 +382,7 @@ static long serve(msg_t *m, msg_t *a, long from, char *req)
         if (m->uid) return -EPERM;
         if (!(s = find(req))) return -ENOENT;
         if (s->i.state == SVC_RUNNING) sys_kill(s->i.pid);      /* its end comes as NOTE_CHILD */
-        s->quick = 0;
+        s->quick = s->fails = 0;
         s->i.state = m->w[0] == INIT_STOP ? SVC_STOPPED : SVC_WAITING;
         if (s->i.state == SVC_STOPPED && s->i.port[0]) sys_want(s->i.port, -ESRCH);
         s->when = 0;

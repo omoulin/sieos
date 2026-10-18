@@ -384,7 +384,11 @@ static const char *bootfiles(char names[][16], char *cfg, uint64_t *size)
     }
     return 0;
 }
-static void put_esp(char names[][16], const char *cfg, const uint8_t *guid)
+/* A whole drive's EFI partition is SIEOS's alone: the loader also goes to
+ * the firmware's fallback path, \EFI\BOOT\BOOTX64.EFI, so the drive starts
+ * with no boot entry yet (the Surface Pro 7: "Couldn't find a bootable
+ * operating system"); that first start adds the entry (ADDENTRY). */
+static void put_esp(char names[][16], const char *cfg, const uint8_t *guid, int whole)
 {
     char n83[11], g[40], full[1100];
     printf("step: writing \\EFI\\SIEOS\\ in the EFI partition\n");
@@ -412,6 +416,18 @@ static void put_esp(char names[][16], const char *cfg, const uint8_t *guid)
     fat_put(dir, n83, full, strlen(full));
     fat_to83("ADDENTRY", n83);
     fat_put(dir, n83, "", 0);
+    if (whole) {
+        uint32_t fb = fat_dir(efi, "BOOT       ", 1);
+        char p[64];
+        size_t len;
+        join(p, SRC "/boot", names[0]);
+        char *d = file_get(p, &len);
+        if (!fb || !d) die("cannot write \\EFI\\BOOT\\BOOTX64.EFI");
+        fat_to83("BOOTX64.EFI", n83);
+        fat_put(fb, n83, d, (uint32_t)len);
+        free(d);
+        printf("step: the loader also at \\EFI\\BOOT\\BOOTX64.EFI (the firmware's fallback)\n");
+    }
     fat_flush();
     raw(DISK_RAW_FLUSH, 0, 0, 0);
     for (int i = 0; names[i][0]; i++) {          /* read back */
@@ -585,7 +601,7 @@ static int install(int whole, int extent)
         may_write(efirst, elast);
     }
     make_siefs(sfirst, slast);
-    put_esp(names, cfg, ne.guid);
+    put_esp(names, cfg, ne.guid, whole);
     printf("progress 95\n");
     if (!whole) {
         memcpy(ents + 128 * free_slot, &ne, 128);
