@@ -23,6 +23,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | [siefs.md](siefs.md) | SieFS, the file system: disk layout, commits, checksums, attributes, volumes, snapshots, encryption |
 | [accounts.md](accounts.md) | users, logins, the first start, Argon2id, account files |
 | [scriptures.md](scriptures.md) | Scriptures: the scriptures offline (footnotes, search, highlights, notes, Church Account sync), its port to SIEOS: an atlas window, HTTPS, the C library it needs, fonts, the test |
+| [ui.md](ui.md) | the UI toolkit (`sieos/ui.h`): widgets in the desktop's theme for programs' windows, menus, dialogs, a canvas; `uidemo`; the browser's toolbar |
 | [desktop.md](desktop.md) | the desktop: windows with title tabs, the Deskbar, workspaces, the sia strip, Files, Settings, Git, apps, the assistant |
 | [audio.md](audio.md) | sound: Intel HD Audio playing and recording, the audio server, `play`, `rec`, `vol`, the test |
 | [bluetooth.md](bluetooth.md) | Bluetooth: btd (HCI, L2CAP, SMP), the AX210 over USB and the Pis' UART, keyboards and mice (classic HID, HID over GATT), `bt`, Settings |

@@ -24,3 +24,20 @@ typedef gboolean (*SieosKeyHook)(WPEToplevel *toplevel, guint keyval, WPEModifie
 void sieos_toplevel_set_key_hook(WPEToplevel *toplevel, SieosKeyHook hook, gpointer data);
 /* The view that gets the keys (also given by a click in it). */
 void sieos_view_focus(WPEView *view);
+
+/* Hosted: views drawn into pixels of the program's (a canvas of the UI
+ * toolkit, sieos/ui.h), not a window of their own. damage: a view drew this
+ * box of them; title: the page's. The program gives the pixels (again at
+ * each new size: the layout runs), and passes on the input it gets for them
+ * (x, y in the pixels; keys, buttons, wheel and focus as mk/atlas.h's). */
+typedef struct {
+    void (*damage)(gpointer data, int x, int y, int width, int height);
+    void (*title)(gpointer data, const char *title);
+    gpointer data;
+} SieosHost;
+WPEToplevel *sieos_toplevel_new_hosted(WPEDisplay *display, guint max_views, const SieosHost *host);
+void sieos_toplevel_set_pixels(WPEToplevel *toplevel, guint32 *pixels, int width, int height);
+void sieos_toplevel_key(WPEToplevel *toplevel, int code);
+void sieos_toplevel_pointer(WPEToplevel *toplevel, int x, int y, int buttons, int wheel);
+void sieos_toplevel_focus(WPEToplevel *toplevel, int in);
+void sieos_toplevel_close(WPEToplevel *toplevel);

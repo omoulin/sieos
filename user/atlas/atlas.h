@@ -58,6 +58,7 @@ void client_focus(int w, int in);
 int  client_pointer(int w, int x, int y, int buttons, int wheel);  /* 1: it was over (or held from) its insides */
 void client_closed(int w);                            /* the user closed it */
 void client_logout(void);
+void client_theme(void);                              /* the look or the zoom changed: ATW_THEME to each */
 void atlas_client_show(int w);                        /* (atlas.c) a new window in front; -1: redraw */
 void atlas_client_gone(int w);                        /* (atlas.c) its program ended or closed it */
 int  atlas_client_visible(int w);

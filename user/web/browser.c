@@ -1,13 +1,16 @@
 /*
  * browser.c - /bin/web, SIEOS's web browser: WPE WebKit in a window of the
- * desktop (user/web/platform). Two views in one window: the toolbar, a
- * page of its own (/lib/web/toolbar.html: back, forward, reload or stop,
- * the address, the progress), and the page shown under it. They talk by
- * messages (the toolbar's "browser" handler) and ui.update().
+ * desktop. The window is the UI toolkit's (sieos/ui.h): a toolbar (back,
+ * forward, reload or stop, the address, the progress, a menu), drawn in the
+ * desktop's look, and the page under it in a canvas: WebKit's view drawn
+ * there (user/web/platform, hosted), in the page's real colours.
  *
  *   web [URL]       opens it (else /lib/web/start.html); words are searched
  *   Ctrl-L          the address; F5 or Ctrl-R reload; Ctrl-W closes
+ *   the menu        zoom in (Ctrl-P), out, actual size; reload, stop; quit
  *
+ * Two main loops in one: GLib's (WebKit) runs; a thread waits for the
+ * window's input (ui_wait) and hands it to GLib's loop (ui_dispatch).
  * Cookies, the cache and local storage in ~/.web; downloads to ~/Downloads;
  * certificates checked against /etc/ssl/roots (GIO's TLS on tls.c).
  *
@@ -18,14 +21,17 @@
 #include <string.h>
 #include <unistd.h>
 #include <wpe/webkit.h>
+#include <sieos/ui.h>
 #include "platform/sieos-platform.h"
 
-#define BAR_H 44
 #define START "file:///lib/web/start.html"
 #define SEARCH "https://html.duckduckgo.com/html/?q="
 
 static GMainLoop *loop;
-static WebKitWebView *bar, *page;
+static WebKitWebView *page;
+static WPEToplevel *top;
+static ui_app *app;
+static ui_widget *canvas, *url, *back, *fwd, *reload, *progress, *secure, *menu;
 
 static void say(const char *fmt, const char *s) { printf(fmt, s); putchar('\n'); fflush(stdout); }
 
@@ -41,17 +47,21 @@ static char *address(const char *text)
     return u;
 }
 
+/* ---- The toolbar follows the page. */
 static void update_bar(void)
 {
     const char *uri = webkit_web_view_get_uri(page);
     GTlsCertificate *cert = 0;
     GTlsCertificateFlags errors = 0;
-    gboolean secure = uri && !strncmp(uri, "https:", 6) && webkit_web_view_get_tls_info(page, &cert, &errors) && !errors;
-    char *u = g_strescape(uri ? uri : "", NULL);
-    char *js = g_strdup_printf("ui.update(\"%s\", %.2f, %d, %d, %d, %d)", u, webkit_web_view_get_estimated_load_progress(page),
-                               webkit_web_view_can_go_back(page), webkit_web_view_can_go_forward(page), webkit_web_view_is_loading(page), secure);
-    webkit_web_view_evaluate_javascript(bar, js, -1, NULL, NULL, NULL, NULL, NULL);
-    g_free(js); g_free(u);
+    gboolean tls = uri && !strncmp(uri, "https:", 6) && webkit_web_view_get_tls_info(page, &cert, &errors) && !errors;
+    int busy = webkit_web_view_is_loading(page);
+    if (!ui_has_focus(url)) ui_set_text(url, uri ? uri : "");   /* (not while the user types there) */
+    ui_set_enabled(back, webkit_web_view_can_go_back(page));
+    ui_set_enabled(fwd, webkit_web_view_can_go_forward(page));
+    ui_set_icon(reload, busy ? UI_ICON_STOP : UI_ICON_RELOAD);
+    ui_set_value(progress, busy ? (int)(webkit_web_view_get_estimated_load_progress(page) * 1000) : 0);
+    ui_set_text(secure, tls ? "TLS" : "");
+    ui_flush(app);
 }
 
 static void page_changed(GObject *o, GParamSpec *p, gpointer data)
@@ -60,7 +70,7 @@ static void page_changed(GObject *o, GParamSpec *p, gpointer data)
     if (!strcmp(p->name, "title")) {
         const char *t = webkit_web_view_get_title(page);
         char *title = g_strdup_printf("%s%sWeb", t && *t ? t : "", t && *t ? " - " : "");
-        wpe_toplevel_set_title(wpe_view_get_toplevel(webkit_web_view_get_wpe_view(page)), title);
+        ui_set_title(app, title);
         g_free(title);
     }
     update_bar();
@@ -84,30 +94,6 @@ static gboolean load_failed(WebKitWebView *v, WebKitLoadEvent e, char *uri, GErr
     g_free(html);
     say("web: failed %s", uri);
     return TRUE;
-}
-
-static void bar_message(WebKitUserContentManager *m, JSCValue *value, gpointer data)
-{
-    (void)m; (void)data;
-    char *json = jsc_value_to_string(value);
-    char *op = strstr(json, "\"op\":\""), *text = strstr(json, "\"text\":\"");
-    if (op) {
-        op += 6;
-        if (!strncmp(op, "go\"", 3) && text) {
-            text += 8;
-            char *end = strrchr(text, '"');
-            if (end) *end = 0;
-            char *t = g_strcompress(text), *u = address(t);
-            webkit_web_view_load_uri(page, u);
-            g_free(u); g_free(t);
-            sieos_view_focus(webkit_web_view_get_wpe_view(page));
-        } else if (!strncmp(op, "back\"", 5)) webkit_web_view_go_back(page);
-        else if (!strncmp(op, "forward\"", 8)) webkit_web_view_go_forward(page);
-        else if (!strncmp(op, "reload\"", 7)) webkit_web_view_reload(page);
-        else if (!strncmp(op, "stop\"", 5)) webkit_web_view_stop_loading(page);
-        else if (!strncmp(op, "page\"", 5)) sieos_view_focus(webkit_web_view_get_wpe_view(page));
-    }
-    g_free(json);
 }
 
 /* Links that ask for a new window open here. */
@@ -137,28 +123,76 @@ static void download_started(WebKitNetworkSession *s, WebKitDownload *dl, gpoint
     g_signal_connect(dl, "decide-destination", G_CALLBACK(decide_destination), NULL);
 }
 
-static void layout(WPEToplevel *tl, int w, int h, gpointer data)
+/* ---- The toolbar's and the menu's actions. */
+static void go(ui_widget *w, void *d)
 {
-    (void)tl; (void)data;
-    sieos_view_place(webkit_web_view_get_wpe_view(bar), 0, 0, w, BAR_H);
-    sieos_view_place(webkit_web_view_get_wpe_view(page), 0, BAR_H, w, h - BAR_H);
+    (void)d;
+    char *u = address(ui_text(w));
+    webkit_web_view_load_uri(page, u);
+    g_free(u);
+    ui_focus(canvas);
+}
+static void go_back(ui_widget *w, void *d) { (void)w; (void)d; webkit_web_view_go_back(page); }
+static void go_forward(ui_widget *w, void *d) { (void)w; (void)d; webkit_web_view_go_forward(page); }
+static void do_reload(ui_widget *w, void *d) { (void)w; (void)d; webkit_web_view_reload(page); }
+static void reload_or_stop(ui_widget *w, void *d) { (void)w; (void)d; if (webkit_web_view_is_loading(page)) webkit_web_view_stop_loading(page); else webkit_web_view_reload(page); }
+static void stop(ui_widget *w, void *d) { (void)w; (void)d; webkit_web_view_stop_loading(page); }
+static void edit_url(ui_widget *w, void *d) { (void)w; (void)d; ui_focus(url); ui_field_select(url, 0, -1); }
+static void zoom(ui_widget *w, void *d)
+{
+    (void)w;
+    long k = (long)d;
+    double z = webkit_web_view_get_zoom_level(page);
+    z = k == 0 ? 1.0 : k > 0 ? z * 1.25 : z / 1.25;
+    if (z < 0.25) z = 0.25;
+    if (z > 5.0) z = 5.0;
+    webkit_web_view_set_zoom_level(page, z);
+    printf("web: zoom %d%%\n", (int)(z * 100 + 0.5)); fflush(stdout);
+}
+static void quit(ui_widget *w, void *d) { (void)w; (void)d; ui_quit(app, 0); g_main_loop_quit(loop); }
+static void show_menu(ui_widget *w, void *d)
+{
+    int x, y, ww, hh;
+    (void)d;
+    ui_bounds(w, &x, &y, &ww, &hh);
+    ui_popup(menu, x + ww - ui_scale(app, 300), y + hh);
 }
 
-/* The window's own keys, before the views get them */
-static gboolean key(WPEToplevel *tl, guint k, WPEModifiers m, gpointer data)
+/* ---- The page in the canvas: its pixels, its input. */
+static void canvas_event(ui_widget *c, const ui_event *e, void *d)
 {
-    (void)tl; (void)data;
-    int ctrl = m & WPE_MODIFIER_KEYBOARD_CONTROL;
-    if (ctrl && k == 'l') {
-        sieos_view_focus(webkit_web_view_get_wpe_view(bar));
-        webkit_web_view_evaluate_javascript(bar, "ui.focusUrl()", -1, NULL, NULL, NULL, NULL, NULL);
-        return TRUE;
+    (void)d;
+    if (e->type == UI_EV_SIZE) { int w, h; guint32 *px = ui_canvas_pixels(c, &w, &h); sieos_toplevel_set_pixels(top, px, w, h); }
+    else if (e->type == UI_EV_POINTER) sieos_toplevel_pointer(top, e->x, e->y, e->buttons, e->wheel);
+    else if (e->type == UI_EV_KEY) sieos_toplevel_key(top, e->key);
+    else if (e->type == UI_EV_FOCUS) sieos_toplevel_focus(top, e->key);
+}
+static void host_damage(gpointer d, int x, int y, int w, int h) { (void)d; ui_canvas_damage(canvas, x, y, w, h); ui_flush(app); }
+static void host_title(gpointer d, const char *t) { (void)d; ui_set_title(app, t); }
+static const SieosHost host = { host_damage, host_title, 0 };
+static void layout(WPEToplevel *tl, int w, int h, gpointer data) { (void)tl; (void)data; sieos_view_place(webkit_web_view_get_wpe_view(page), 0, 0, w, h); }
+
+/* The window's input: a thread waits for it, GLib's loop dispatches it. */
+typedef struct { int n; ui_event ev[64]; } batch_t;
+static gboolean deliver(gpointer data)
+{
+    batch_t *b = data;
+    if (b->n < 0) { g_main_loop_quit(loop); return G_SOURCE_REMOVE; }
+    ui_dispatch(app, b->ev, b->n);
+    ui_flush(app);
+    if (ui_done(app)) { sieos_toplevel_close(top); g_main_loop_quit(loop); }
+    return G_SOURCE_REMOVE;
+}
+static gpointer reader(gpointer data)
+{
+    (void)data;
+    for (;;) {
+        batch_t *b = g_new0(batch_t, 1);
+        int n = b->n = ui_wait(app, b->ev, 64);
+        g_main_context_invoke_full(0, G_PRIORITY_DEFAULT, deliver, b, g_free);
+        if (n < 0) return 0;
     }
-    if ((ctrl && k == 'r') || k == WPE_KEY_F5) { webkit_web_view_reload(page); return TRUE; }
-    return FALSE;
 }
-
-static void closed(WPEView *v, gpointer data) { (void)v; (void)data; g_main_loop_quit(loop); }
 
 int sieos_webkit_process(int argc, char **argv, int *status);   /* (multicall.cpp) */
 
@@ -169,6 +203,8 @@ int main(int argc, char **argv)
     setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1);   /* no GL on SIEOS (user/web/patches/webkit-04-no-gl.patch) */
     setenv("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1", 1);
     loop = g_main_loop_new(NULL, FALSE);
+    app = ui_app_new("Web");
+    if (!app) { fprintf(stderr, "web: no window on the desktop\n"); return 1; }
     WPEDisplay *d = sieos_display_new();
     GError *err = NULL;
     if (!wpe_display_connect(d, &err)) { fprintf(stderr, "web: %s\n", err->message); return 1; }
@@ -181,10 +217,6 @@ int main(int argc, char **argv)
     webkit_cookie_manager_set_persistent_storage(webkit_network_session_get_cookie_manager(session), cookies, WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE);
     g_signal_connect(session, "download-started", G_CALLBACK(download_started), NULL);
 
-    WebKitUserContentManager *ucm = webkit_user_content_manager_new();
-    webkit_user_content_manager_register_script_message_handler(ucm, "browser", NULL);
-    g_signal_connect(ucm, "script-message-received::browser", G_CALLBACK(bar_message), NULL);
-    bar = g_object_new(WEBKIT_TYPE_WEB_VIEW, "display", d, "network-session", session, "user-content-manager", ucm, NULL);
     page = g_object_new(WEBKIT_TYPE_WEB_VIEW, "display", d, "network-session", session, NULL);
     g_signal_connect(page, "notify::uri", G_CALLBACK(page_changed), NULL);
     g_signal_connect(page, "notify::title", G_CALLBACK(page_changed), NULL);
@@ -193,22 +225,46 @@ int main(int argc, char **argv)
     g_signal_connect(page, "load-failed", G_CALLBACK(load_failed), NULL);
     g_signal_connect(page, "decide-policy", G_CALLBACK(decide), NULL);
 
-    WPEToplevel *tl = sieos_toplevel_new(d, "Web", 2);
-    if (!tl) return 1;
-    WPEView *bv = webkit_web_view_get_wpe_view(bar), *pv = webkit_web_view_get_wpe_view(page);
-    wpe_view_set_toplevel(bv, tl);
-    wpe_view_set_toplevel(pv, tl);
-    sieos_toplevel_set_layout(tl, layout, NULL);
-    sieos_toplevel_set_key_hook(tl, key, NULL);
-    g_signal_connect(pv, "closed", G_CALLBACK(closed), NULL);
-    sieos_view_focus(pv);
+    /* the window: the toolbar, the page */
+    menu = ui_menu(app, 0, "Web");
+    ui_item(menu, "Open an address", UI_CTRL('l'), edit_url, 0);
+    ui_item(menu, "Reload", UI_CTRL('r'), do_reload, 0);
+    ui_set_visible(ui_item(menu, "Reload", UI_KEY_F1 + 4, do_reload, 0), 0);   /* (F5 too) */
+    ui_item(menu, "Stop", 0, stop, 0);
+    ui_separator(menu);
+    ui_item(menu, "Zoom in", UI_CTRL('p'), zoom, (void *)1);
+    ui_item(menu, "Zoom out", 0, zoom, (void *)-1);
+    ui_item(menu, "Actual size", 0, zoom, (void *)0);
+    ui_separator(menu);
+    ui_set_enabled(ui_item(menu, "Find in the page (later)", 0, 0, 0), 0);
+    ui_item(menu, "Quit", UI_CTRL('q'), quit, 0);
+    ui_widget *bar = ui_toolbar(ui_root(app));
+    back = ui_tool(bar, UI_ICON_BACK, "Back", go_back, 0);
+    fwd = ui_tool(bar, UI_ICON_FORWARD, "Forward", go_forward, 0);
+    reload = ui_tool(bar, UI_ICON_RELOAD, "Reload", reload_or_stop, 0);
+    url = ui_field(bar, "", go, 0);
+    ui_set_stretch(url, 1);
+    secure = ui_label(bar, "");
+    ui_set_size(secure, 40, 0);
+    progress = ui_progress(bar);
+    ui_set_size(progress, 120, 0);
+    ui_tool(bar, UI_ICON_MENU, "Menu", show_menu, 0);
+    canvas = ui_canvas(ui_root(app), canvas_event, 0);
 
-    webkit_web_view_load_uri(bar, "file:///lib/web/toolbar.html");
+    top = sieos_toplevel_new_hosted(d, 1, &host);
+    WPEView *pv = webkit_web_view_get_wpe_view(page);
+    wpe_view_set_toplevel(pv, top);
+    sieos_toplevel_set_layout(top, layout, NULL);
+    sieos_view_focus(pv);
+    ui_focus(canvas);
+    g_thread_unref(g_thread_new("web-window", reader, NULL));
+
     char *start = argc > 1 ? address(argv[1]) : g_strdup(START);
     say("web: opening %s", start);
     webkit_web_view_load_uri(page, start);
     g_free(start);
     g_main_loop_run(loop);
+    ui_app_close(app);
     fflush(stdout);
     _exit(0);                        /* (WebKit's threads and its processes: not waited for) */
 }

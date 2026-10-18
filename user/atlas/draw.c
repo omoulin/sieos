@@ -28,8 +28,12 @@
  *   Amber 1984  the same in amber, with square corners, a grid of dots
  *               and lighter scanlines (every fourth row)
  *   Glass       the colours as drawn
- * So everything (icons, the pointer, a window's insides) changes with it,
- * and nothing else in the desktop knows about looks.
+ * So everything atlas draws (icons, the pointer, its own windows) changes
+ * with it, and nothing else in the desktop knows about looks. Except other
+ * programs' windows' insides (dl_client): their pixels are marked in the
+ * strip (bit 24, unused by colours) and go to the screen as the program
+ * drew them, in every look: a web page keeps its real colours, its frame
+ * and tab follow the look. (One test per pixel: no measurable cost.)
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -112,6 +116,12 @@ void draw_look(int k)
 int draw_look_get(void) { return look; }
 static int scanline(int y) { return look == LOOK_PHOSPHOR ? y % 3 == 2 : y % 4 == 3; }
 static int round_r(int r) { return look == LOOK_AMBER ? 0 : look == LOOK_BEOS ? (r > 3 ? 3 : r) : r; }   /* (amber: square corners; BeOS: almost) */
+int draw_radius(int r) { return round_r(r); }
+uint32_t draw_shown(uint32_t c)
+{
+    if (look != LOOK_PHOSPHOR && look != LOOK_AMBER) return c;
+    return lut[0][((c >> 16 & 255) * 77 + (c >> 8 & 255) * 150 + (c & 255) * 29) >> 8];
+}
 static uint32_t avg(uint32_t a, uint32_t b) { return ((a & 0xfefefe) >> 1) + ((b & 0xfefefe) >> 1); }
 static uint32_t halo(uint32_t a, uint32_t c) { return avg(a, avg(a, c)); }   /* a quarter of c over a: text's glow */
 
@@ -210,10 +220,12 @@ void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *
     if (p) { p->rows = rows; p->keys = keys; p->cols = cols; p->scale = s; p->r = w; p->t = h; }
 }
 
-void dl_image(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h)
+#define RAW 0x01000000u                /* a strip pixel from another program: shown as it is */
+void dl_image(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h) { dl_client(x0, y0, x1, y1, px, w, h, 0); }
+void dl_client(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h, int raw)
 {
     box(&x0, &y0, &x1, &y1);
-    prim_t *p = add(P_IMAGE, x0, y0, x1, y1, 0);
+    prim_t *p = add(P_IMAGE, x0, y0, x1, y1, raw ? RAW : 0);
     if (p) { p->cols = px; p->r = w; p->scale = (int)(((int64_t)w << 16) / (x1 - x0)); p->c2 = (uint32_t)(((int64_t)h << 16) / (y1 - y0)); }
 }
 
@@ -285,8 +297,8 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
         for (int y = ya; y < yb; y++) {
             int i = inset(y, p->y0, p->y1, round_r(p->r)), a = p->x0 + i > lo ? p->x0 + i : lo, b = p->x1 - i < hi ? p->x1 - i : hi;
             uint32_t *d = strip + (y - sy) * PW;
-            if (p->t >= 2) for (int x = a; x < b; x++) d[x] = d[x] >> 1 & 0x7f7f7f;
-            else for (int x = a; x < b; x++) d[x] -= d[x] >> 2 & 0x3f3f3f;
+            if (p->t >= 2) for (int x = a; x < b; x++) d[x] = (d[x] >> 1 & 0x7f7f7f) | (d[x] & RAW);   /* (a program's pixels stay */
+            else for (int x = a; x < b; x++) d[x] -= d[x] >> 2 & 0x3f3f3f;                          /*  its own: darkened, not tinted) */
         }
         break;
     case P_PIXMAP:                   /* each screen pixel: its map character's colour */
@@ -305,13 +317,15 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
             }
         }
         break;
-    case P_IMAGE: {                  /* each screen pixel: the nearest image pixel */
+    case P_IMAGE: {                  /* each screen pixel: the nearest image pixel (marked RAW: another program's) */
         int a = p->x0 > lo ? p->x0 : lo, b = p->x1 < hi ? p->x1 : hi;
+        uint32_t mark = p->c;
         for (int y = ya; y < yb; y++) {
             const uint32_t *s = p->cols + ((uint64_t)(y - p->y0) * p->c2 >> 16) * p->r;
             uint32_t *d = strip + (y - sy) * PW;
             uint64_t u = (uint64_t)(a - p->x0) * p->scale;
-            for (int x = a; x < b; x++, u += p->scale) d[x] = s[u >> 16];
+            if (p->scale == 65536) for (int x = a; x < b; x++, u += 65536) d[x] = (s[u >> 16] & 0xffffff) | mark;   /* (1:1, the usual case) */
+            else for (int x = a; x < b; x++, u += p->scale) d[x] = (s[u >> 16] & 0xffffff) | mark;
         }
         break;
     }
@@ -433,7 +447,7 @@ static void present_px(int x0, int y0, int x1, int y1)   /* (a box of the screen
             if (look == LOOK_PHOSPHOR || look == LOOK_AMBER) {   /* each pixel: its brightness, in the look's colour */
                 const uint32_t *t = lut[scanline(sy + r)];
                 for (int i = 0; i < x1 - x0; i++) {
-                    uint32_t c = src[i], v = t[((c >> 16 & 255) * 77 + (c >> 8 & 255) * 150 + (c & 255) * 29) >> 8];
+                    uint32_t c = src[i], v = c & RAW ? c & 0xffffff : t[((c >> 16 & 255) * 77 + (c >> 8 & 255) * 150 + (c & 255) * 29) >> 8];
                     d[i] = swap ? (v & 0xFF) << 16 | (v & 0xFF00) | (v >> 16 & 0xFF) : v;
                 }
             } else if (!swap) memcpy(d, src, (x1 - x0) * 4);

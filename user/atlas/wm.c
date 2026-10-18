@@ -358,7 +358,8 @@ static void draw_one(int w, int f, int keys)
     }
     dl_rect(x0 + 1, y0 + WM_STRIP - 1, x1 - 1, y0 + WM_STRIP, 0, C_LINE);
     wm_body(w, x0, y0 + WM_BODY_DY, x1, y1, keys);
-    if (!f) dl_shade(x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2, 10, 1);   /* (behind: its insides dimmed, the focused one stands out) */
+    if (!f && w < W_CLIENT0) dl_shade(x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2, 10, 1);   /* (behind: its insides dimmed, the focused one stands
+                                                         out; another program's insides stay as it drew them) */
     /* the grip: three short diagonals in the bottom-right corner */
     for (int i = 0; i < 3; i++)
         for (int k = 0; k <= 4 + 5 * i; k += 2)

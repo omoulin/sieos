@@ -124,7 +124,7 @@ def count(img, rgb, box):
     return n
 
 def look(rgb):
-    """What Phosphor (the default look) makes of a colour, on a row that is not a scanline (draw.c)."""
+    """What Phosphor (the default look) makes of one of atlas's colours, on a row that is not a scanline (draw.c)."""
     r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
     v = min(255, ((r * 77 + g * 150 + b * 29) >> 8) * 5 // 4)
     return "".join(f"{c * v // 255:02x}" for c in (0x46, 0xff, 0x7a))
@@ -181,14 +181,14 @@ time.sleep(0.5)
 x0, y0, x1, y1 = window(17)
 img = shot("10-atlaswin")
 inside = (x0 + 10, y0 + 60, x1 - 10, y1 - 10)
-red, blue = count(img, look("ff0000"), inside), count(img, look("0000ff"), inside)
+red, blue = count(img, "ff0000", inside), count(img, "0000ff", inside)   # (its own colours: atlas shows them as drawn)
 if red < 500 or blue < 500:
     fail(f"atlaswin's window does not show its pixels (red {red}, blue {blue})")
 cx, cy = (x0 + x1) / 2 / ZOOM - 100, (y0 + y1) / 2 / ZOOM
 click(cx, cy)
 time.sleep(0.8)
 img = shot("11-atlaswin-click")
-if count(img, look("ffffff"), (cx * ZOOM - 20, cy * ZOOM - 20, cx * ZOOM + 20, cy * ZOOM + 20)) < 20:
+if count(img, "ffffff", (cx * ZOOM - 20, cy * ZOOM - 20, cx * ZOOM + 20, cy * ZOOM + 20)) < 20:
     fail("the click in atlaswin's window was not drawn")
 type_text("q")
 time.sleep(0.5)
@@ -204,7 +204,7 @@ time.sleep(2)
 def page_shown(img, colours, n=200):
     x0, y0, x1, y1 = window(17)
     box = (x0 + 4, y0 + 100, x1 - 4, y1 - 4)
-    return all(count(img, look(c), box) >= n for c in colours)
+    return all(count(img, c, box) >= n for c in colours)   # (a page in its real colours, whatever the look)
 until("the basic page (its red, green and blue squares)", lambda img: page_shown(img, ("ff0000", "00ff00", "0000ff")))
 shot("20-web-basic")
 print(f"ok: web: a local page shown in its window ({time.time() - t0:.1f} s)")
@@ -214,12 +214,31 @@ time.sleep(0.5)
 type_text("file:///lib/web/script.html\n")
 until("the script page (its canvas)", lambda img: page_shown(img, ("008000", "800080")))
 shot("21-web-script")
-print("ok: web: an address typed in the toolbar (Ctrl-L), the page shown")
+print("ok: web: an address typed in the toolbar (Ctrl-L: the toolkit's text field), the page shown")
 
 x0, y0, x1, y1 = window(17)
-click((x0 + 2 * ZOOM + 24) / ZOOM, (y0 + 34 * ZOOM + 20) / ZOOM)   # the toolbar's back button (its insides: 2 and 34 in; the button 8..40, 6..34)
+img = shot("21b-web-toolbar")
+bar = (x0 + 4, y0 + 34 * ZOOM, x1 - 4, y0 + 34 * ZOOM + 38)    # the toolbar (the UI toolkit's): in the look's colours
+if count(img, look("2a3245"), bar) < 40 or count(img, "2a3245", bar):
+    fail("the toolbar is not in Phosphor's colours (its edges)")
+click((x0 + 2 * ZOOM + 20) / ZOOM, (y0 + 34 * ZOOM + 20) / ZOOM)   # the toolbar's back button (its insides: 2 and 34 in; the button 5..35)
 until("the basic page again", lambda img: page_shown(img, ("ff0000", "00ff00", "0000ff")))
-print("ok: web: back")
+print("ok: web: back (the toolkit's toolbar), the toolbar in the look's colours, the page in its own")
+
+def red(img):
+    x0, y0, x1, y1 = window(17)
+    return count(img, "ff0000", (x0 + 4, y0 + 80, x1 - 4, y1 - 4))
+before = red(shot("poll"))
+click((x1 - 2 * ZOOM - 20) / ZOOM, (y0 + 34 * ZOOM + 20) / ZOOM)   # the menu (the toolbar's last tool), then "Zoom in"
+time.sleep(0.6)
+shot("23-web-menu")
+for _ in range(4):                               # (Open an address, Reload, Stop, Zoom in)
+    keys("down")
+keys("ret")
+until("the page zoomed in (more red)", lambda img: red(img) > before * 1.3)
+keys("ctrl", "p")                                # Zoom in again, by its shortcut
+until("the page zoomed in again", lambda img: red(img) > before * 1.8)
+print("ok: web: the menu (zoom in), its shortcut (Ctrl-P)")
 
 keys("ctrl", "l")
 time.sleep(0.5)

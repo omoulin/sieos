@@ -63,10 +63,10 @@ $(WB)/web-render: tests/web/render.c user/web/multicall.cpp $(WB)/stamp/webkit
 # /bin/web, the browser (user/web/browser.c) on SIEOS's WPE platform
 # (user/web/platform: windows of the desktop, mk/atlas.h)
 $(WB)/web: user/web/browser.c user/web/platform/sieos-platform.c user/web/platform/sieos-platform.h include/mk/atlas.h \
-           user/web/multicall.cpp $(WB)/stamp/webkit
+           include/sieos/ui.h $(WB)/libui-posix.a user/web/multicall.cpp $(WB)/stamp/webkit
 	$(WK_CC) -o $(WB)/browser.o user/web/browser.c
 	$(WK_CC) -o $(WB)/sieos-platform.o user/web/platform/sieos-platform.c
-	$(call wk_program,$@,$(WB)/browser.o $(WB)/sieos-platform.o)
+	$(call wk_program,$@,$(WB)/browser.o $(WB)/sieos-platform.o $(WB)/libui-posix.a)
 # atlaswin (tests/web/atlaswin.c): a window of the desktop from a libposix program
 $(WB)/atlaswin: tests/web/atlaswin.c include/mk/atlas.h $(SYSROOT)/usr/lib/libc.a | $(WB)/toolchain.stamp
 	$(WB)/bin/cc -Os -Iinclude -o $@ $<
@@ -104,8 +104,8 @@ web-test: all $(WB)/web-render $(WEB_BASE) $(wildcard tests/web/pages/*)
 # ---- browser-test (tools/browsertest.py): the desktop with the browser in
 # QEMU: another program's window (atlaswin), then /bin/web (its package
 # installed on the test disk): pages, typing, back, HTTPS
-WEB_DATA  := user/web/toolbar.html user/web/start.html
-browser-test: all $(PKGDIR)/web.pkg $(WB)/atlaswin $(wildcard tests/web/pages/*)
+WEB_DATA  := user/web/start.html
+browser-test: all $(PKGDIR)/web.pkg $(WB)/atlaswin $(WB)/uicxx $(wildcard tests/web/pages/*)
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	$(PKG) install $(B)/host/siefs $(B)/test.img $(PKGDIR)/web.pkg
 	for f in tests/web/pages/*; do $(B)/host/siefs $(B)/test.img put $$f /lib/web/$$(basename $$f) || exit 1; done
