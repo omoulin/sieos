@@ -115,12 +115,8 @@ static int i2c_start(void)
     uint32_t id = pci_cfg(&c, 0);
     log_line("controller %s: PCI 00:%02x.%x, id %04x:%04x\n", a->bus, (int)(adr >> 16 & 31), (int)(adr & 7), id & 0xFFFF, id >> 16);
     if (id == 0xFFFFFFFF) return -1;
-    for (int cp = pci_cfg(&c, 0x34) & 0xFC, n = 0; cp && n < 16; cp = pci_cfg(&c, cp) >> 8 & 0xFC, n++)
-        if ((pci_cfg(&c, cp) & 0xFF) == 1) {                     /* power management: to D0 */
-            uint32_t pm = pci_cfg(&c, cp + 4);
-            if (pm & 3) { log_line("powering it up from D%d\n", pm & 3); pci_cfgw(&c, cp + 4, pm & ~3u); sys_sleep(10000000); }
-            break;
-        }
+    int was = pci_d0(&c);                                        /* power management: to D0 (its BARs kept) */
+    if (was) log_line("powered up from D%d\n", was);
     uint64_t len, pa = pci_bar(&c, 0, &len);
     if (!pa || (long)(d->ic = map_phys(pa, 4096)) < 0) { d->ic = 0; log_line("no registers (BAR0 %lx)\n", (long)pa); return -1; }
     R(LPSS_RESETS) = 0;                                          /* the LPSS block: reset, then out of it */

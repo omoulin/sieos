@@ -35,6 +35,9 @@ void pci_cfgw(const pci_t *p, int reg, uint32_t v);
  * port), *len their size; given an address in the window if it had none;
  * decoding and bus mastering turned on. 0 if there is no such BAR. */
 uint64_t pci_bar(pci_t *p, int i, uint64_t *len);
+/* Powered to D0 if it was lower (its BARs and command kept across the
+ * reset D3hot -> D0 may make): -> the state it was in, 0: already on. */
+int pci_d0(pci_t *p);
 /* Its interrupt as a message (MSI, else MSI-X), delivered to port: -> the
  * irq for irq_ack, *how "MSI" or "MSI-X"; -1: neither (or no kernel MSI:
  * arm64), the line stays. */

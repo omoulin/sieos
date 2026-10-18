@@ -126,7 +126,10 @@ a firmware variable (`PSBR`; 3,000,000 bit/s in the fallback branch).
 `user/acpid/ssam.c` (about 230 lines, after Linux's
 `drivers/platform/surface/aggregator`):
 
-- **The UART.** Powered to D0, LPSS out of reset, its clock: LPSS's 120
+- **The UART.** Powered to D0 with its BAR kept (the firmware leaves it in
+  D3hot, and a function without "no soft reset" comes out of D3hot reset,
+  its BAR cleared: the first boot's `SAM: UART: no registers`; Linux
+  restores the BARs the same way), LPSS out of reset, its clock: LPSS's 120
   MHz (Ice Lake: Linux's `spt_uart_info`) through the private fractional
   divider (register 0x200: M, N, update) set to 16 x the speed, divisor 1;
   8N1, FIFOs, automatic RTS/CTS. Read every 50 ms (1 ms while a request
@@ -371,7 +374,9 @@ console):
    UART \_SB.PCI0.UA00, PCI 00:1e.0 (8086:34a8), 3000000 bit/s, RTS/CTS
    (clock M/N 2/5)`, `SAM: firmware N.N.N`, `battery, AC adapter: the
    Surface Aggregator's`, then `battery NN%, charging: ...` and `AC on,
-   battery in, lid open`. Unplug the charger: a new status line within a
+   battery in, lid open`. The UART line now also says where its registers
+   are and `(was in D3)`; `SAM: UART 00:1e.0: no registers (BAR0 ...,
+   now ...; was in D3)` would give the BAR before and after powering it. Unplug the charger: a new status line within a
    second (and again 5 s later). `battery` in a shell shows the same.
    Trouble: `SAM: no ACK` (the UART's speed or clock: the M/N in the log,
    the speed `assumed`?), `SAM: no answer`, `battery events not on:

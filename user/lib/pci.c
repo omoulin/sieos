@@ -131,6 +131,28 @@ int pci_scan(pci_t *p, int reg, uint32_t val, uint32_t mask, int nth)
 }
 #endif
 
+/* Powered to D0 (PMCSR) if the firmware left it lower: -> the state it was
+ * in (0: it was on). A device without "no soft reset" comes out of D3hot
+ * reset, its BARs and command register cleared (an LPSS UART the Surface
+ * Pro 7's firmware left in D3: BAR0 then read 0): they are written back,
+ * as Linux's pci_restore_bars does. */
+int pci_d0(pci_t *p)
+{
+    for (int cp = pci_cfg(p, 0x34) & 0xFC, n = 0; cp && n < 48; cp = pci_cfg(p, cp) >> 8 & 0xFC, n++) {
+        if ((pci_cfg(p, cp) & 0xFF) != 1) continue;
+        uint32_t pm = pci_cfg(p, cp + 4), saved[7];
+        if (!(pm & 3)) return 0;
+        for (int i = 0; i < 6; i++) saved[i] = pci_cfg(p, 0x10 + 4 * i);
+        saved[6] = pci_cfg(p, 4);
+        pci_cfgw(p, cp + 4, pm & ~3u);
+        sys_sleep(10000000);                       /* (D3hot -> D0: 10 ms) */
+        for (int i = 0; i < 6; i++) if (pci_cfg(p, 0x10 + 4 * i) != saved[i]) pci_cfgw(p, 0x10 + 4 * i, saved[i]);
+        if ((pci_cfg(p, 4) & 0x407) != (saved[6] & 0x407)) pci_cfgw(p, 4, (pci_cfg(p, 4) & ~0x407u) | (saved[6] & 0x407));
+        return (int)(pm & 3);
+    }
+    return 0;
+}
+
 /* The device's interrupt as a message: MSI if it has the capability, else
  * MSI-X's first table entry (the kernel's address and data, SYS_IRQ_MSI),
  * its line (INTx) then off. Firmware often leaves no line on laptops (the
