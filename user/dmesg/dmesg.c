@@ -6,7 +6,10 @@
  *   dmesg -s FILE   save it to FILE
  *   dmesg -w        (init, at boot) save it to /etc/boot.log 20 s, 1, 2 and
  *                   5 min after starting, then end: on a new machine, the
- *                   key read on another computer tells what was found
+ *                   key read on another computer tells what was found. Only
+ *                   up to the console's first login prompt: what a session
+ *                   on the console prints after it is the user's (their
+ *                   files, in clear on the disk otherwise); root only (0600)
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -23,10 +26,13 @@ static size_t grab(void)
     return n;
 }
 
-static int save(const char *path)
+static int save(const char *path, int boot)
 {
     size_t n = grab();
-    long f = fs_open(path, FS_WRONLY | FS_CREAT | FS_TRUNC, 0644);
+    if (boot)
+        for (size_t i = 0; i + 7 <= n; i++)
+            if (!memcmp(buf + i, " login: ", i + 8 <= n ? 8 : 7)) { n = i + 8 <= n ? i + 8 : n; break; }
+    long f = fs_open(path, FS_WRONLY | FS_CREAT | FS_TRUNC, boot ? 0600 : 0644);
     if (f < 0) return 1;
     fs_write(f, 0, buf, n);
     fs_close(f);
@@ -35,12 +41,12 @@ static int save(const char *path)
 
 int main(int argc, char **argv)
 {
-    if (argc == 3 && !strcmp(argv[1], "-s")) return save(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "-s")) return save(argv[2], 0);
     if (argc == 2 && !strcmp(argv[1], "-w")) {
         static const int at[] = { 20, 60, 120, 300 };
         for (int i = 0, t = 0; i < 4; t = at[i++]) {
             sys_sleep((uint64_t)(at[i] - t) * 1000000000);
-            save("/etc/boot.log");
+            save("/etc/boot.log", 1);
         }
         return 0;
     }
