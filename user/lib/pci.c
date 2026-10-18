@@ -11,10 +11,15 @@
 uint32_t pci_cfg(const pci_t *p, int reg)            { return pci_read(p->at | reg); }
 void pci_cfgw(const pci_t *p, int reg, uint32_t v)   { pci_write(p->at | reg, v); }
 
-/* Every bus, from bus 0 through the bridges (their secondary bus). */
+/* Every bus, from bus 0 through the bridges (their secondary bus). A
+ * device found behind bridges gets memory decoding and bus mastering on
+ * each of them up to bus 0, as Linux does: a firmware may leave a root
+ * port's off (the Surface Pro 7's NVMe drive: its registers answered, its
+ * DMA never arrived). */
 int pci_scan(pci_t *p, int reg, uint32_t val, uint32_t mask, int nth)
 {
-    int bus[64] = { 0 }, nb = 1;
+    int bus[64] = { 0 }, up[64] = { -1 }, nb = 1;   /* a bus; the entry of the bus its bridge is on */
+    uint32_t br[64] = { 0 };                          /* that bridge */
     memset(p, 0, sizeof *p);
     for (int bi = 0; bi < nb; bi++)
         for (int d = 0; d < 32; d++)
@@ -22,8 +27,12 @@ int pci_scan(pci_t *p, int reg, uint32_t val, uint32_t mask, int nth)
                 p->at = (uint32_t)(bus[bi] << 16 | d << 11 | f << 8);
                 if (pci_cfg(p, 0) == 0xFFFFFFFF) { if (!f) break; continue; }
                 uint32_t hdr = pci_cfg(p, 0xC) >> 16;
-                if ((hdr & 0x7F) == 1 && nb < 64) bus[nb++] = pci_cfg(p, 0x18) >> 8 & 0xFF;
+                if ((hdr & 0x7F) == 1 && nb < 64) { br[nb] = p->at; up[nb] = bi; bus[nb++] = pci_cfg(p, 0x18) >> 8 & 0xFF; }
                 if ((pci_cfg(p, reg) & mask) == val && !nth--) {
+                    for (int b = bi; b > 0; b = up[b]) {
+                        uint32_t c = pci_read(br[b] | 4);
+                        if ((c & 6) != 6) pci_write(br[b] | 4, c | 6);
+                    }
                     int line = pci_cfg(p, 0x3C) & 0xFF;  /* routed by the chipset to an ISA IRQ: level */
                     p->irq = line && line < 0xFF ? line | IRQ_LEVEL : -1;
                     p->id = pci_cfg(p, 0);

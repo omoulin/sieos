@@ -9,13 +9,14 @@
  */
 #include "mk.h"
 
-/* A whole small file, 0-terminated, in malloc'd memory (0 if missing). */
+/* A whole file of at most 4 MiB (firmware: Intel Wi-Fi's is 1.4-1.7 MB),
+ * 0-terminated, in malloc'd memory (0 if missing or bigger). */
 char *file_get(const char *path, size_t *len)
 {
     siefs_stat_t st;
     long h = fs_open(path, FS_RDONLY, 0), n = -1;
     if (h < 0) return 0;
-    char *b = fs_fstat(h, &st) || st.size > (1 << 20) ? 0 : malloc(st.size + 1);
+    char *b = fs_fstat(h, &st) || st.size > (4 << 20) ? 0 : malloc(st.size + 1);
     if (b && (n = fs_read(h, 0, b, st.size)) >= 0) b[n] = 0;
     fs_close(h);
     if (n < 0) { free(b); return 0; }

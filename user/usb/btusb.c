@@ -93,7 +93,7 @@ static void bt_thread(void *a)
             m = (msg_t){ .rbuf = in, .rlen = sizeof in };
             from = ipc_recv(port, &m);
             continue;
-        } else if (m.w[0] == BTH_INFO) r = bt.d->vendor << 16 | bt.d->product;
+        } else if (m.w[0] == BTH_INFO) r = (long)((uint32_t)bt.d->vendor << 16 | bt.d->product);   /* (Intel's 8087: unsigned, or it reads as an error) */
         else if (m.w[0] == BTH_SEND && !m.w[1]) r = control(bt.d, 0x20, 0, 0, 0, in, (int)m.rlen) < 0 ? -EIO : 0;
         else if (m.w[0] == BTH_SEND && m.rlen <= 4096) {
             uint32_t len = (uint32_t)m.rlen, done;
