@@ -284,9 +284,15 @@ What changed earlier for Ice Lake's HDA controller (any Ice Lake laptop):
 ## Power
 
 - **No S3.** The FADT has `LOW_POWER_S0_IDLE` and no fixed power button
-  (flags 0x20C4F5), and there is no `\_S3`: `suspend` answers "not
-  supported" at once; the desktop offers no Sleep. s2idle (future work)
-  would also tell SAM ("display off", "D0 exit") and arm its wake pin.
+  (flags 0x20C4F5), and there is no `\_S3`: the DSDT declares it inside
+  `If (SS3)`, and the firmware's `SS3` is 0. The first boot logged `\_S3:
+  sleep type 5/0` all the same: the AML reader declared what an `If` holds
+  whatever its condition. It now decides an `If` on a plain name (Intel's
+  `SS1`-`SS4`) as it loads, as ACPICA runs such code (on the Pro 7's tables:
+  `\_S3` none, `\_S4` 6). Linux on the Pro 7 offers only s2idle too. So
+  `suspend` answers "not supported" at once and the desktop offers no
+  Sleep. s2idle (future work) would also tell SAM ("display off", "D0
+  exit") and arm its wake pin.
 - **Power button**: see [the buttons](#the-buttons). **Battery, AC**: SAM.
   **Lid**: GPE 0x4D.
 - Ice Lake laptops with Intel's HID event filter (`INT33D5`) or virtual
@@ -403,7 +409,8 @@ console):
    ADC .. <- pin ..`. `play` a WAV: the speakers; with headphones in: the
    headphones, the speakers quiet. `rec x.wav 5` records the built-in
    microphones.
-7. **Power**: `\_S3: none: no S3`, `FADT: SCI 9, PM1 events 1800/0,
+7. **Power**: `\_S3: none: no S3` (the first boot's `\_S3: sleep type
+   5/0` was the AML reader's mistake, see [Power](#power)), `FADT: SCI 9, PM1 events 1800/0,
    control 1804, GPE0 1860 (128), SMI b2, flags 20c4f5`, `FADT: low-power
    S0 idle (Modern Standby), no S3: ...`; `suspend`: `suspend: not
    supported` at once.
