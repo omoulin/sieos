@@ -30,6 +30,12 @@ architectures), `audio-test` (x86-64), `pi4-test`, `cc-test`, `cc-bootstrap`, `c
 `net-crypto-test`, `llm-test`, `llm-neon-test`. Real boards: see the
 checklist in [raspberrypi.md](raspberrypi.md).
 
+## Budgets
+
+Every build checks the size of the kernel, the boot modules, each program
+in `/bin`, the base system and its images against the limits in
+`tools/budget.txt`; `make budget` prints the table ([budgets.md](budgets.md)).
+
 ## Next
 
 - The assistant's memory: history across sessions and restarts, with

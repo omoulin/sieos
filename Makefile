@@ -10,6 +10,7 @@
 #   make WEB=1 newdisk   (or usb, sdcard) with the web browser (/bin/web, about 90 MB; built first: make webkit web)
 #   make STACKCHECK=1  a kernel that measures its stacks' deepest use (shown at power off)
 #   make ARCH=arm64 DIAG_TEST=n   a kernel that faults on purpose after boot step n (tests the Pi's boot-step screen)
+#   make budget     the size of each part against its limit (tools/budget.txt, docs/budgets.md)
 #   make clean
 #
 # Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
@@ -55,6 +56,15 @@ BINS    += btd bt                       # Bluetooth: the server and the command
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
 all: $(B)/kernel.bin $(PROGS:%=$(B)/%.elf) $(KARCH_EXTRA) $(B)/disk.img
+	$(if $(NOBUDGET)$(STACKCHECK)$(DIAG_TEST)$(WEB),,@$(BUDGET) --quiet)
+
+# ---- size budgets (tools/budget.txt, docs/budgets.md): every build checks them
+# (above; NOBUDGET=1: not, e.g. sicc's builds of x86-64); make budget prints the
+# table for what was last built
+BUDGET  := python3 tools/budget.py $(B) $(ARCH)
+budget:
+	@$(BUDGET)
+.PHONY: budget
 
 # ---- the kernel: an ELF file, then flattened into the binary QEMU loads
 $(B)/kernel.elf: $(KOBJS:%=$(B)/kernel/%.o) $(KARCH_LDS) | $(TOOLDEP)
@@ -513,6 +523,7 @@ sdcard: all $(WIFIFW) .hosttools/bt/BCM4345C0.hcd
 	python3 tools/mksdcard.py $(B)/sieos-pi$(PI).img --pi $(PI) --kernel $(B)/kernel.bin --initrd $(B)/modules.img \
 	    --siefs $(B)/sd-siefs.img $(if $(FIRMWARE),--firmware $(FIRMWARE))
 	rm -f $(B)/sd-siefs.img
+	$(if $(FIRMWARE)$(SDMODEL)$(WEB)$(filter-out 4,$(PI)),,@$(BUDGET) --only sdcard-image)
 # QEMU's raspi4b: the firmware's part (loading the kernel, the modules and the
 # device tree) is done by QEMU itself; the card holds the two partitions.
 # (QEMU wants a card size that is a power of two; it has no USB or Ethernet
@@ -608,6 +619,7 @@ BTFW := $(patsubst %,.hosttools/bt/ibt-%,0041-0041.sfi 0041-0041.ddc 19-0-4.sfi 
 usb: all $(B)/uefi/BOOTX64.EFI $(B)/host/mkfs.siefs $(B)/host/siefs $(IWLFW) $(BTFW)
 	$(call USBMAKE,$(B)/sieos-usb.img,$(if $(USBDISK),--size $(USBDISK))) $(if $(USBMODEL),--put models/$(MODEL) /models/$(MODEL)) \
 	    $(foreach f,$(IWLFW) $(BTFW),--put $(f) /lib/firmware/$(notdir $(f)))
+	$(if $(USBDISK)$(USBMODEL)$(WEB),,@$(BUDGET) --only usb-image)
 QEMU_UEFI = qemu-system-x86_64 -smp $(SMP) -m $(MEM) $(ACCEL) -no-reboot \
            -bios $(UEFI_FW) \
            -drive if=none,id=k,file=$(1),format=raw \
@@ -852,8 +864,8 @@ cc-sieos: $(SICC)
 	@printf '#!/bin/sh\nexec %s --ar "$$@"\n' $(CURDIR)/$(SICC) > $(SB)/bin/ar
 	@printf '#!/bin/sh\nexec %s --objcopy "$$@"\n' $(CURDIR)/$(SICC) > $(SB)/bin/objcopy
 	@chmod +x $(SB)/bin/*
-	$(MAKE) B=$(SB) PATH=$(CURDIR)/$(SB)/bin:$$PATH all
-	$(MAKE) B=$(SB) PATH=$(CURDIR)/$(SB)/bin:$$PATH test
+	$(MAKE) B=$(SB) PATH=$(CURDIR)/$(SB)/bin:$$PATH NOBUDGET=1 all
+	$(MAKE) B=$(SB) PATH=$(CURDIR)/$(SB)/bin:$$PATH NOBUDGET=1 test
 cc-bench: $(SICC)
 	OUT=$(B)/cc-bench tests/cc/bench/run.sh $(SICC)
 # AArch64, under QEMU's user-mode emulator (a host tool for tests only): the one

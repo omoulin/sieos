@@ -1,0 +1,66 @@
+# budget.txt - SIEOS's size budgets (docs/budgets.md), checked by every build
+# (make all runs tools/budget.py; make budget prints the table).
+# A limit is the size when it was set + about 7%: growing past it is a
+# decision. To raise one, edit its line here in the same commit as the
+# change that needs it, and say why in the commit message.
+#
+# elf:  text+data of B/ITEM.elf (the kernel: kernel.elf)
+# tree: every file of the base system (B/rootfs, what each disk starts with)
+# img:  the real data (allocated blocks) of a base image in B
+# -:    not built for that architecture
+#
+# item        measure  x86_64   arm64
+# -- the kernel and the boot modules
+kernel        elf       77K    104K
+init          elf       31K     35K
+con           elf       21K     38K
+usb           elf       61K     84K
+vblk          elf       29K     63K
+fs            elf       88K    112K
+# -- the programs in /bin
+acct          elf       18K     21K
+acpid         elf       57K       -
+atlas         elf      304K    336K
+audiod        elf       33K     45K
+auth          elf       34K     39K
+bench         elf       15K     18K
+bt            elf       18K     21K
+btd           elf      116K    136K
+cc            elf      540K    620K
+crash         elf       14K     16K
+dmesg         elf       14K     17K
+fetch         elf       79K     94K
+fsloop        elf       15K     18K
+gfxhat        elf       14K     31K
+git           elf      152K    172K
+gpio          elf       18K     21K
+gpiod         elf       17K     30K
+hello         elf       14K     16K
+i2chid        elf       52K       -
+install       elf      116K       -
+ipts          elf       32K       -
+kblight       elf       15K     18K
+ktest         elf       36K     46K
+login         elf       19K     21K
+mail          elf      108K    124K
+make          elf       43K     46K
+netd          elf       39K     48K
+play          elf       16K     20K
+python        elf      308K    452K
+racey         elf       15K     17K
+scriptures    elf      264K    332K
+sh            elf       34K     41K
+sia           elf       18K     21K
+siad          elf      152K    180K
+siastub       elf       15K     18K
+ssh           elf       59K     69K
+sshd          elf       62K     73K
+svc           elf       17K     20K
+unixd         elf       21K     25K
+vnet          elf       28K     52K
+wifi          elf       15K     18K
+wifid         elf       54K     48K
+# -- the base system and its images
+rootfs        tree     5.2M    5.2M
+usb-image     img     15.3M       -   sieos-usb.img
+sdcard-image  img         -   11.3M   sieos-pi4.img

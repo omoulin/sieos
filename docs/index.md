@@ -7,6 +7,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 | Page | What it covers |
 |---|---|
 | [status.md](status.md) | what works on each architecture, what is next, history |
+| [budgets.md](budgets.md) | size budgets: the limits every build checks (kernel, modules, programs, base system, images), `make budget`, raising a limit |
 | [kernel.md](kernel.md) | the guided tour: boot, messages, every server, crashes, on-demand servers, CPUs and time |
 | [arch.md](arch.md) | the portable core and its architectures: the interface, x86-64, AArch64 (QEMU `virt`) |
 | [raspberrypi.md](raspberrypi.md) | the Raspberry Pi 4 and 5: card images, serial console, what to check on real boards |
