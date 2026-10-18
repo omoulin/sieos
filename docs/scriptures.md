@@ -7,7 +7,10 @@ offline: footnotes, full-text search, highlights, notes and tags, several
 chapters open at once in tabs, and notes synced with a Church Account
 (Gospel Library). It is the **Scriptures** app (`/etc/apps/scriptures.app`,
 in the sia strip and the Deskbar's menu), a window of the desktop's own
-kind, drawn in the desktop's looks (Phosphor by default).
+kind, drawn in the desktop's looks (Phosphor by default). With its fonts it
+is 941 KiB, so it is an add-on package ([packages.md](packages.md)):
+`make pkg-scriptures`, then `pkg install scriptures.pkg`, or
+`make usb PKGS=scriptures`.
 
 ![Genesis 1 with a highlight and a note, the library on the left](screens/scriptures.png)
 

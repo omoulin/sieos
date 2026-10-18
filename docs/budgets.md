@@ -24,7 +24,9 @@ The check takes well under a second.
 | `img` | `usb-image` (x86-64), `sdcard-image` (arm64, Pi 4) | the real data of the base image (its allocated blocks; the file is sparse), checked by `make usb` and `make sdcard` |
 
 A program in the base system's `/bin` with no line in the table is an
-error too: a new program comes with its budget.
+error too: a new program comes with its budget. The add-on packages
+([packages.md](packages.md)) are not in the base system: their files are
+checked (`file`), not counted in `rootfs` or the images.
 
 ## Changing a limit
 

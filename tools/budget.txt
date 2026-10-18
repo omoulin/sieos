@@ -7,6 +7,7 @@
 # elf:  text+data of B/ITEM.elf (the kernel: kernel.elf)
 # tree: every file of the base system (B/rootfs, what each disk starts with)
 # img:  the real data (allocated blocks) of a base image in B
+# file: the size of a file in B (the add-on packages, docs/packages.md)
 # -:    not built for that architecture
 #
 # item        measure  x86_64   arm64
@@ -45,10 +46,9 @@ login         elf       19K     21K
 mail          elf      108K    124K
 make          elf       43K     46K
 netd          elf       39K     48K
+pkg           elf       87K    102K
 play          elf       16K     20K
-python        elf      308K    452K
 racey         elf       15K     17K
-scriptures    elf      264K    332K
 sh            elf       34K     41K
 sia           elf       18K     21K
 siad          elf      152K    180K
@@ -60,7 +60,13 @@ unixd         elf       21K     25K
 vnet          elf       28K     52K
 wifi          elf       15K     18K
 wifid         elf       54K     48K
+# -- the add-on packages' programs, and the packages
+python        elf      308K    452K
+scriptures    elf      264K    332K
+python.pkg    file     202K    203K   pkg/python.pkg
+scriptures.pkg file    580K    576K   pkg/scriptures.pkg
+web.pkg       file    35.6M       -   pkg/web.pkg
 # -- the base system and its images
-rootfs        tree     5.2M    5.2M
-usb-image     img     15.3M       -   sieos-usb.img
-sdcard-image  img         -   11.3M   sieos-pi4.img
+rootfs        tree     3.9M    3.8M
+usb-image     img     14.0M       -   sieos-usb.img
+sdcard-image  img         -   10.2M   sieos-pi4.img

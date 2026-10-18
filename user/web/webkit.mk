@@ -102,34 +102,19 @@ web-test: all $(WB)/web-render $(WEB_BASE) $(wildcard tests/web/pages/*)
 .PHONY: web-test
 
 # ---- browser-test (tools/browsertest.py): the desktop with the browser in
-# QEMU: another program's window (atlaswin), then /bin/web: pages, typing,
-# back, HTTPS
+# QEMU: another program's window (atlaswin), then /bin/web (its package
+# installed on the test disk): pages, typing, back, HTTPS
 WEB_DATA  := user/web/toolbar.html user/web/start.html
-browser-test: all $(WB)/web $(WB)/atlaswin $(WEB_BASE) $(WEB_DATA) $(wildcard tests/web/pages/*)
+browser-test: all $(PKGDIR)/web.pkg $(WB)/atlaswin $(wildcard tests/web/pages/*)
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s 1G -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
-	$(call web_base,$(B)/test.img,web)
-	for f in $(WEB_DATA) tests/web/pages/*; do $(B)/host/siefs $(B)/test.img put $$f /lib/web/$$(basename $$f) || exit 1; done
+	$(PKG) install $(B)/host/siefs $(B)/test.img $(PKGDIR)/web.pkg
+	for f in tests/web/pages/*; do $(B)/host/siefs $(B)/test.img put $$f /lib/web/$$(basename $$f) || exit 1; done
 	$(B)/host/siefs $(B)/test.img put $(WB)/atlaswin /bin/atlaswin && $(B)/host/siefs $(B)/test.img chmod 755 /bin/atlaswin
 	python3 tools/browsertest.py $(SMP) $(B)/screens-web $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) $(SCREEN) -display none -serial stdio
 .PHONY: browser-test
 
 # ---- web-disk: the browser onto $(B)/disk.img (make first; never while QEMU
-# runs on it): /bin/web, WebKit's process names, fonts, the toolbar, Web.app
-web-disk: $(B)/disk.img $(WB)/web $(WEB_BASE) $(WEB_DATA) user/web/web.app
-	$(call web_base,$(B)/disk.img,web)
-	for f in $(WEB_DATA); do $(B)/host/siefs $(B)/disk.img put $$f /lib/web/$$(basename $$f) || exit 1; done
-	$(B)/host/siefs $(B)/disk.img put user/web/web.app /etc/apps/web.app
+# runs on it): its package (make pkg-web, docs/packages.md) installed there
+web-disk:
+	$(MAKE) PKGS=web pkg-disk
 .PHONY: web-disk
-
-# ---- WEB=1: the browser in the system's files ($(B)/rootfs), so that the
-# disks made from them have it (make WEB=1 newdisk, usb, sdcard): /bin/web,
-# WebKit's process names linked to it, the fonts, the toolbar, Web.app
-# ($(B)/web.flag, rewritten when WEB changes, remakes the files then)
-WEB_ROOTFS_DEPS = $(if $(WEB),$(WB)/web $(WEB_BASE) $(WEB_DATA) user/web/web.app) $(B)/web.flag
-$(shell mkdir -p $(B) && [ "`cat $(B)/web.flag 2>/dev/null`" = "web=$(WEB)" ] || echo "web=$(WEB)" > $(B)/web.flag)
-define WEB_ROOTFS
-	mkdir -p $(B)/rootfs$(WK_EXEC) $(B)/rootfs/lib/web $(B)/rootfs/lib/fonts $(B)/rootfs/etc/fonts $(B)/rootfs/usr/share/mime $(B)/rootfs/etc/apps
-	cp $(WB)/web.strip $(B)/rootfs/bin/web && for p in WPEWebProcess WPENetworkProcess; do ln -sf /bin/web $(B)/rootfs$(WK_EXEC)/$$p; done
-	cp $(WB)/fonts/*.ttf $(B)/rootfs/lib/fonts/ && cp $(WEB_DATA) $(B)/rootfs/lib/web/ && cp user/web/fonts.conf $(B)/rootfs/etc/fonts/
-	cp user/web/mime-globs2 $(B)/rootfs/usr/share/mime/globs2 && cp user/web/web.app $(B)/rootfs/etc/apps/
-endef

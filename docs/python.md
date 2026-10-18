@@ -4,7 +4,10 @@ Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 `/bin/python` is [MicroPython](https://micropython.org) 1.29.0, the Python 3
 language in a small interpreter, with a SIEOS port in `user/python`. It is
-phase 1 of [python-plan.md](python-plan.md); CPython is for later.
+phase 1 of [python-plan.md](python-plan.md); CPython is for later. It is
+an add-on package, not in the base system ([packages.md](packages.md)):
+`make pkg-python`, then `pkg install python.pkg` on SIEOS, or
+`make usb PKGS=python`.
 
 ```sh
 python                        # the prompt: >>> and ... lines, Ctrl-D to leave
@@ -13,8 +16,8 @@ python -c print(2**100)       # CODE: the words after -c, joined by spaces
 python --version
 ```
 
-The desktop has it in its menu (`/etc/apps/python.app`: a terminal).
-Two examples are in `/src/python`: `primes.py N` and `words.py FILE...`.
+The desktop has it in its menu (`/etc/apps/python.app`: a terminal; both come
+with the package). Two examples are in `/src/python`: `primes.py N` and `words.py FILE...`.
 
 The shell splits a command line at spaces and removes double quotes, so in
 `python -c` use single quotes for strings: `python -c print('a b')`. A

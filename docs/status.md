@@ -35,6 +35,8 @@ checklist in [raspberrypi.md](raspberrypi.md).
 Every build checks the size of the kernel, the boot modules, each program
 in `/bin`, the base system and its images against the limits in
 `tools/budget.txt`; `make budget` prints the table ([budgets.md](budgets.md)).
+The browser, Python, Scriptures and the assistant's model are add-on
+packages, not in the base system ([packages.md](packages.md)).
 
 ## Next
 

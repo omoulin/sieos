@@ -12,6 +12,7 @@ Measures:
         sections that are loaded and stored in the file (not .bss)
   tree  the bytes of every file under B/rootfs (the base system's files)
   img   the real data of an image (its allocated blocks; the file is sparse)
+  file  the size of a file in B (an add-on package)
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
@@ -70,9 +71,9 @@ def main():
         elif measure == "tree":
             path = os.path.join(b, w[4] if len(w) > 4 else "rootfs")
             size = tree_bytes(path) if os.path.isdir(path) else None
-        elif measure == "img":
+        elif measure in ("img", "file"):
             path = os.path.join(b, w[4])
-            size = os.stat(path).st_blocks * 512 if os.path.isfile(path) else None
+            size = None if not os.path.isfile(path) else os.stat(path).st_blocks * 512 if measure == "img" else os.path.getsize(path)
         else:
             sys.exit(f"budget: {table}: unknown measure '{measure}' for {item}")
         rows.append((item, measure, size, num(lim), lim))

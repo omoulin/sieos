@@ -313,7 +313,8 @@ kind=terminal
 
 - Everyone's apps are in `/etc/apps`: Shell, Assistant chat, Text editor,
   Settings, Mail, Camera, Services, Hello, Fetch a web page, Disk benchmark, Git,
-  Scriptures ([scriptures.md](scriptures.md)). Yours are
+  Install; the add-on packages bring theirs: Web, Python, Scriptures
+  ([packages.md](packages.md), [scriptures.md](scriptures.md)). Yours are
   any `.app` file in your home folder (the strip and Files find them).
 - Starting an app opens a terminal **as you**; its shell runs the app's
   command when it first asks for a line. When the app ends, the shell

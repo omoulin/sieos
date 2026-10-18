@@ -574,7 +574,7 @@ int main(int argc, char **argv)
     long e = B->init(B, conf);
     ready = e == 0;
     if (!ready) sia_log("siad: the %s backend is not ready (error %ld): %s\n", B->name, -e,
-                        B == &sia_local ? "no model? put a .gguf file in /models, or: sia config backend=remote"
+                        B == &sia_local ? "no model? the model package (pkg install model.pkg), a .gguf file in /models, or: sia config backend=remote"
                                         : "check the url and key: sia config url=...");
     memory_on = !conf_is("memory", "off");
     compact_at = (int)conf_num("compact_at", 60);

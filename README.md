@@ -168,7 +168,11 @@ tour, file by file, with the crash and on-demand mechanisms:
   SIEOS's own hello, sh and make build there.
 - **Python** ([docs/python.md](docs/python.md)): `/bin/python` is
   MicroPython (the prompt, scripts, files and `os`, sockets and TLS,
-  json, re, hashlib...), also in the desktop's menu.
+  json, re, hashlib...), also in the desktop's menu; an add-on package.
+- **Add-on packages** ([docs/packages.md](docs/packages.md)): the base
+  system stays small (3.6 MiB of files); the browser, Python, Scriptures
+  and the assistant's model are packages: `make usb PKGS="web python"`, or
+  `pkg install` on SIEOS.
 - **git** ([docs/git.md](docs/git.md)): `/bin/git`, written for SIEOS in
   git's own formats (clone, commit, diff, log, branches, pull, push over
   git:// and HTTPS), and a Git window on the desktop.
@@ -218,6 +222,8 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make usb` / `run-usb` / `usb-test` | a USB key image for UEFI PCs / it in QEMU (OVMF) / its test |
 | `make model` | copy the assistant's model to the disk (`MODEL=` another file of `models/`) |
 | `make newdisk` | a fresh disk (your files on it are lost) |
+| `make pkg-web` / `pkg-python` / `pkg-scriptures` / `pkg-model` | an add-on package in `build/pkg` ([docs/packages.md](docs/packages.md)); `PKGS="web python"` installs them on `usb`, `sdcard`, `newdisk` |
+| `make budget` | the size of each part against its limit ([docs/budgets.md](docs/budgets.md)); every build checks it |
 | `make clean` / `distclean` | remove the build (keeping your disk) / everything |
 | `make test` | first start, logins, permissions, files, disk check, second boot, crash recovery |
 | `make crash-test` | only the crash recovery: servers killed while they work |
@@ -231,7 +237,7 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make sia-mem-test` | the assistant's memory ([docs/sia.md](docs/sia.md)) |
 | `make net-test` / `net-crypto-test` | the network end to end / its crypto against official vectors |
 | `make ssh-test` | ssh and sshd against OpenSSH, both ways |
-| `make py-test` | `/bin/python`: `-c`, scripts, files, modules, the prompt, sockets and TLS |
+| `make py-test` | `/bin/python`: its package (`pkg install` from a URL and a file, a damaged one refused, `pkg remove`), `-c`, scripts, files, modules, the prompt, sockets and TLS |
 | `make mail-test` | Mail (the window and `/bin/mail`) against IMAP, POP3 and SMTP servers on the host, over TLS |
 | `make pi4-test` | (ARCH=arm64) the boot and crash test on QEMU's Pi 4 |
 | `make pi4-sdbench`, `make sdhci-bench` | (ARCH=arm64) SD card speed: on QEMU's Pi 4, and on a PCI SD controller with DMA (`SDCAPS`, `SDBSIZE`, `SDMIB`) |

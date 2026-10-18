@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""/bin/python (MicroPython, docs/python.md): boot SIEOS without a window,
-then as alice on the serial console: python -c with integers, floats and
+"""/bin/python (MicroPython, docs/python.md): boot SIEOS without a window
+on a disk without it; as root, its add-on package (docs/packages.md):
+"python" names the package, a damaged one is refused, pkg install from a
+URL (the host's web server), pkg list. Then as alice on the serial console: python -c with integers, floats and
 strings; a script (tests/python/files.py, put in /tmp/t) that writes and
 reads files, lists folders, imports a module beside it and uses json, re,
 struct, binascii, hashlib, random, collections, time and math; deep
 recursion and a growing heap; an uncaught exception's traceback and exit
 status; the interactive prompt with a function typed on several lines;
 sockets: HTTP from a server on the host, TLS 1.3 (openssl s_server), and a
-listening socket reached from the host.
-Usage: pythontest.py <cpus> <disk image> <qemu command line...> (make py-test)
+listening socket reached from the host. Last, as root: pkg remove (all of
+it gone), pkg install from a file (/tmp/t/python.pkg), python runs again.
+Usage: pythontest.py <cpus> <disk image> <python.pkg> <qemu command line...> (make py-test)
 
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
@@ -16,7 +19,7 @@ import http.server, os, select, shutil, socket, subprocess, sys, tempfile, threa
 import qserial                                      # (tools/qserial.py: typing on the console)
 SLOW = float(os.environ.get("SIEOS_SLOW", "1"))     # emulated processors: everything takes longer
 
-cpus, image, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3:]
+cpus, image, pkg, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
 copy = image + ".py"
 shutil.copyfile(image, copy)
 cmdline = [a.replace(image, copy) if a.startswith("file=") else a for a in cmdline]
@@ -25,6 +28,9 @@ cmdline = [a.replace(image, copy) if a.startswith("file=") else a for a in cmdli
 # and a port forwarded to SIEOS's port 8080 (net.py serve).
 www = tempfile.mkdtemp()
 open(os.path.join(www, "hello.txt"), "w").write("hello from the host\n")
+shutil.copyfile(pkg, os.path.join(www, "python.pkg"))
+bad = bytearray(open(pkg, "rb").read()); bad[len(bad) // 2] ^= 0x55     # (a byte of its data changed)
+open(os.path.join(www, "bad.pkg"), "wb").write(bad)
 class Quiet(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **k): super().__init__(*a, directory=www, **k)
     def log_message(self, *a): pass
@@ -69,6 +75,11 @@ def run(cmd, timeout=60):
     send(cmd)
     return expect("$ ", timeout)
 
+def root(cmd, timeout=60):
+    """A command at root's prompt ("# ") -> its output."""
+    send(cmd)
+    return expect("# ", timeout)
+
 def ok(name, cond, detail=""):
     global fails
     print(f"{'ok' if cond else 'FAIL'}: {name}{(' (' + detail + ')') if detail else ''}")
@@ -83,6 +94,21 @@ for p in ("New password", "Again: "): expect(p); send("rootpass1")
 expect("user name"); send("alice")
 expect("full name"); send("Alice")
 for p in ("New password", "Again: "): expect(p); send("alicepass1")
+expect("login: "); send("root")
+expect("Password: "); send("rootpass1")
+expect("root@sieos:"); expect("# ")
+
+# the package, as root
+r = root("python -c print(1)")
+ok("no python in the base system: the shell names its package", "python: not installed: it comes with the add-on package python" in r, short(r))
+r = root(f"pkg install http://10.0.2.2:{wport}/bad.pkg", 120)
+ok("a damaged package: refused, nothing left", "not installed" in r and ("bad SHA-256" in r or "damaged" in r)
+   and "no such" in root("ls /bin/python") and "no packages" in root("pkg list"), short(r))
+r = root(f"pkg install http://10.0.2.2:{wport}/python.pkg", 120)
+ok("pkg install URL", "pkg: python" in r and "installed:" in r, short(r))
+r = root("pkg list")
+ok("pkg list", "python" in r and "KiB" in r, short(r))
+send("exit")
 expect("login: "); send("alice")
 expect("Password: "); send("alicepass1")
 expect("alice@sieos:"); expect("$ ")
@@ -176,6 +202,19 @@ r = expect("served")
 ok("socket: listen and accept (the host connects)", got == b"SHOUT THIS", repr(got))
 run("")
 
+# remove it, then install it again from a file
+send("exit")
+expect("login: "); send("root")
+expect("Password: "); send("rootpass1")
+expect("# ")
+r = root("pkg remove python")
+ok("pkg remove", "python removed" in r, short(r))
+r = root("ls /bin/python /src/python /etc/apps/python.app /etc/pkg/python") + root("pkg list") + root("python")
+ok("pkg remove: all of it gone", r.count("no such") == 4 and "no packages" in r and "not installed" in r, short(r))
+r = root("pkg install /tmp/t/python.pkg", 120)
+ok("pkg install FILE", "installed:" in r, short(r))
+r = root("python -c print(6*7)")
+ok("python runs again", "42" in r, short(r))
 send("exit")
 time.sleep(0.5)
 qemu.kill()

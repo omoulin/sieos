@@ -79,7 +79,7 @@ make ARCH=arm64 PI=5 sdcard FIRMWARE=~/rpi-fw     # build-arm64/sieos-pi5.img
 ```
 
 The image is small, 513 MiB (it was 2.3 GB): the SieFS partition holds
-256 MiB (640 MiB with `SDMODEL=1`), and SIEOS extends it to the card's end
+256 MiB (640 MiB with `PKGS=model`), and SIEOS extends it to the card's end
 on the first start (the MBR's last entry, then the file system: `fs: grew
 the root partition from 256 MiB to ... MiB`, once; [usb.md](usb.md#small-image-grown-on-the-first-start)
 has the details, `make ARCH=arm64 grow-test` tests it on QEMU's raspi4b).
@@ -104,8 +104,9 @@ RPi-Distro `firmware-nonfree` repository at a pinned commit
 If the fetch failed (no network at build time), Ethernet still works but
 Wi-Fi reports the firmware missing; re-run `make sdcard` with a network.
 
-The assistant's model is not on the card by default: add `SDMODEL=1` to
-copy `models/$(PIMODEL)` into `/models` on the card's SieFS partition.
+The assistant's model is not on the card by default: add `PKGS=model` to
+install its add-on package ([packages.md](packages.md)), `models/$(PIMODEL)`
+in `/models`, on the card's SieFS partition.
 A Pi's card carries **SmolLM2-360M** (8-bit, 386 MB), not the PC's 1.7B
 model (1 GB): the Pi 4 reads memory at 4-5 GB/s, so the 1.7B model would
 write 2-4 tokens a second, the 360M one 6-9 (the 135M one is faster but
