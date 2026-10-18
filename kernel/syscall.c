@@ -342,6 +342,7 @@ void syscall(regs_t *r)
     case SYS_REPLY:         ret = ipc_reply(a, (msg_t *)b); break;
     case SYS_IRQ_BIND:      ret = irq_bind(a, b); break;
     case SYS_IRQ_ACK:       ret = irq_ack(a); break;
+    case SYS_IRQ_MSI:       ret = irq_msi(a, b); break;
     case SYS_MAP_PHYS:      ret = map_phys(a, b); break;
     case SYS_BRK:           ret = brk(a); break;
     case SYS_INFO:          ret = info(a); break;

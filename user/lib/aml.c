@@ -708,8 +708,22 @@ static void load(const uint8_t *p, const uint8_t *end, int s, int run)
             e = getname(p + 2, &m) + (op == 0x101);
             if (!run) declare(s, &m, N_OTHER);
             break;
-        case 0xA0: case 0xA2:                                           /* If, While: what they hold is declared either way */
-            q = ev(pkg(p + 1, &e), &f, &v);
+        case 0xA0: case 0xA2:                                           /* If, While: what they hold is declared either way, */
+            q = pkg(p + 1, &e);
+            if (!run && op == 0xA0 && isname(*q) && e <= end && (k = find(s, (getname(q, &m), &m))) >= 0 && nd[k].kind == N_NAME) {
+                dry = 0; quiet++;                                       /* ... unless it is If (a Name): known now (Intel's */
+                q = ev(q, &f, &v);                                      /* "If (SS3) { Name (_S3...) }", SS3 set by the firmware) */
+                quiet--; dry = 1;
+                if (!err && v.t == V_INT) {
+                    k = v.i != 0;
+                    if (k) load(q, e, s, 0);
+                    if (e < end && *e == 0xA1) { q = pkg(e + 1, &e2); if (!k && e2 <= end) load(q, e2, s, 0); e = e2; }
+                    break;
+                }
+                err = 0;
+                q = pkg(p + 1, &e);
+            }
+            q = ev(q, &f, &v);
             if (e > end || err) break;
             if (!run) { load(q, e, s, 0); break; }
             k = num(&v) != 0;

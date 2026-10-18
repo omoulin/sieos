@@ -78,6 +78,23 @@ keyboard base, from hid-tools' tests; the Pro 7 cover's own descriptor
 was not available): the report protocol chosen, both `SET_REPORT`s, keys,
 volume keys, the mouse report, finger moves, a tap, the pad's click.
 
+After the first boot on the machine (2026-10-18): the pointer was "very
+sluggish". Two causes, both fixed:
+
+- **No interrupt.** The firmware leaves the xHCI's interrupt line unset
+  (`usb: no interrupt line known: reading the controller's events by
+  polling`), so every report waited for the next 8 ms look. The kernel now
+  has MSI (`SYS_IRQ_MSI`: one of 16 vectors, the address and data for the
+  device, x2APIC ids up to 255); the USB server uses the controller's MSI
+  (else MSI-X, else its line): `usb: xHCI 8086:34ed at 00:14.0, 18 ports,
+  interrupts: MSI`.
+- **A fixed scale.** The pad's movement was a fixed 2500 counts per pad
+  width. It is now by millimetres (the descriptor's physical size, logged:
+  `usb: 045e:09c0 touchpad: X 0-..., Y 0-..., NN x NN mm`) with
+  acceleration (libinput's flat-then-linear: 8 counts per mm up to 25
+  mm/s, up to 32 at 175 mm/s): slow moves precise, the 2736-pixel screen
+  in one quick stroke. The desktop's mouse speed still multiplies it.
+
 Not done: the cover's keyboard backlight (a feature report linux-surface
 sets off for suspend), the folded-back switch (Microsoft's report 0x22:
 0x22 normal, 0x33 folded; would tell the desktop it is a tablet).
@@ -109,7 +126,10 @@ a firmware variable (`PSBR`; 3,000,000 bit/s in the fallback branch).
 `user/acpid/ssam.c` (about 230 lines, after Linux's
 `drivers/platform/surface/aggregator`):
 
-- **The UART.** Powered to D0, LPSS out of reset, its clock: LPSS's 120
+- **The UART.** Powered to D0 with its BAR kept (the firmware leaves it in
+  D3hot, and a function without "no soft reset" comes out of D3hot reset,
+  its BAR cleared: the first boot's `SAM: UART: no registers`; Linux
+  restores the BARs the same way), LPSS out of reset, its clock: LPSS's 120
   MHz (Ice Lake: Linux's `spt_uart_info`) through the private fractional
   divider (register 0x200: M, N, update) set to 16 x the speed, divisor 1;
   8N1, FIFOs, automatic RTS/CTS. Read every 50 ms (1 ms while a request
@@ -184,6 +204,21 @@ slots, so the 324-byte `SET_MEM_WINDOW` goes in pieces; HBM; IPTS as a
 Pro 7 answers; touches through all 16 buffers; no message without a
 credit).
 
+After the first boot (2026-10-18): `IPTS: connect refused (5)`, again and
+again, and init restarting ipts six times. Status 5 is HBM's "not
+allowed"; the ME gives it for a connect to a **fixed-address client**
+(one that takes no connect: Linux's `mei_cl_connect` skips the HBM
+connect for those, sends with host address 0 and without flow-control
+credits), for a client with no connection left, or while another connect
+is under way. The Pro 7's iTouch MEI has a single client: ipts now logs
+its properties (`ME clients: 1; IPTS's: address 12 (protocol N, N
+connection(s), fixed address?, messages up to 324 bytes)`) and, if it is
+fixed, uses it without connecting; refused otherwise, it disconnects that
+client (a connection the firmware might have left) and tries once more.
+If IPTS still cannot start, ipts ends (0) after one line, `ipts: no touch
+screen: <why> (given up; 'svc restart ipts' tries again)`, and init leaves
+it. `ipts-test` covers the three cases (connectable, fixed, refused).
+
 Not done, with what it would take:
 
 - **The pen and several fingers** need the raw ("poll") mode, as Linux
@@ -249,9 +284,15 @@ What changed earlier for Ice Lake's HDA controller (any Ice Lake laptop):
 ## Power
 
 - **No S3.** The FADT has `LOW_POWER_S0_IDLE` and no fixed power button
-  (flags 0x20C4F5), and there is no `\_S3`: `suspend` answers "not
-  supported" at once; the desktop offers no Sleep. s2idle (future work)
-  would also tell SAM ("display off", "D0 exit") and arm its wake pin.
+  (flags 0x20C4F5), and there is no `\_S3`: the DSDT declares it inside
+  `If (SS3)`, and the firmware's `SS3` is 0. The first boot logged `\_S3:
+  sleep type 5/0` all the same: the AML reader declared what an `If` holds
+  whatever its condition. It now decides an `If` on a plain name (Intel's
+  `SS1`-`SS4`) as it loads, as ACPICA runs such code (on the Pro 7's tables:
+  `\_S3` none, `\_S4` 6). Linux on the Pro 7 offers only s2idle too. So
+  `suspend` answers "not supported" at once and the desktop offers no
+  Sleep. s2idle (future work) would also tell SAM ("display off", "D0
+  exit") and arm its wake pin.
 - **Power button**: see [the buttons](#the-buttons). **Battery, AC**: SAM.
   **Lid**: GPE 0x4D.
 - Ice Lake laptops with Intel's HID event filter (`INT33D5`) or virtual
@@ -315,11 +356,15 @@ Boot from the USB key (the Pro 7 boots USB with volume-down held while
 pressing power), then read the log (the log viewer, or the screen
 console):
 
-1. **Type Cover** (`usb:` lines): `usb: port N: 045e:09c0 Surface Type
+1. **Type Cover** (`usb:` lines): `usb: xHCI 8086:34ed at 00:14.0, 18
+   ports, interrupts: MSI` (`polled` there: no MSI, the old sluggishness),
+   `usb: port N: 045e:09c0 Surface Type
    Cover, ... speed: keyboard/mouse` (another product id is fine: the
    covers of the Pro 4 to 7 fit) and before it `usb: 045e:09c0
    interface 0: keyboard, touchpad (fingers), mouse, volume keys, its
-   reports`. Type; move a finger (the pointer moves), two fingers
+   reports` and `usb: 045e:09c0 touchpad: X 0-..., Y 0-..., NN x NN mm`
+   (about 100 x 55 mm; `size not given: assumed` means 10 cm was taken).
+   Type; move a finger (the pointer moves; quick strokes go further), two fingers
    (scroll), tap (click), press the pad (click). `touchpad (as a mouse)`
    instead of `(fingers)`: the input mode was refused (the pointer still
    moves, no tap or scroll). The volume keys of the top row: the volume
@@ -335,7 +380,9 @@ console):
    UART \_SB.PCI0.UA00, PCI 00:1e.0 (8086:34a8), 3000000 bit/s, RTS/CTS
    (clock M/N 2/5)`, `SAM: firmware N.N.N`, `battery, AC adapter: the
    Surface Aggregator's`, then `battery NN%, charging: ...` and `AC on,
-   battery in, lid open`. Unplug the charger: a new status line within a
+   battery in, lid open`. The UART line now also says where its registers
+   are and `(was in D3)`; `SAM: UART 00:1e.0: no registers (BAR0 ...,
+   now ...; was in D3)` would give the BAR before and after powering it. Unplug the charger: a new status line within a
    second (and again 5 s later). `battery` in a shell shows the same.
    Trouble: `SAM: no ACK` (the UART's speed or clock: the M/N in the log,
    the speed `assumed`?), `SAM: no answer`, `battery events not on:
@@ -349,8 +396,11 @@ console):
    (one finger), 16 buffers of N bytes`. Touch the screen: `touch at X, Y
    (of 32767)` for the first three touches, the pointer there, a click.
    If the pointer lands mirrored or rotated, the X/Y values in the log
-   say how. Trouble: `MEI: the ME is not ready`, `HBM: no answer`,
-   `IPTS: connect refused`, `no answer to N`.
+   say how. The `ME clients` line now gives the client's properties
+   (`fixed address`: used without a connect). Trouble: `MEI: the ME is
+   not ready`, `HBM: no answer`, `IPTS: connect refused (5: not allowed)`
+   (then `ipts: no touch screen: ...`, once, and no restarts), `no answer
+   to N`.
 6. **Sound** (`audiod:` lines, when something first plays): `HDA
    8086:34c8 at 00:1f.3, HDA mode, ...` (`DSP mode` would mean the
    firmware routes microphones to the DSP after all), `codecs on the link: 5` (the Realtek
@@ -359,7 +409,8 @@ console):
    ADC .. <- pin ..`. `play` a WAV: the speakers; with headphones in: the
    headphones, the speakers quiet. `rec x.wav 5` records the built-in
    microphones.
-7. **Power**: `\_S3: none: no S3`, `FADT: SCI 9, PM1 events 1800/0,
+7. **Power**: `\_S3: none: no S3` (the first boot's `\_S3: sleep type
+   5/0` was the AML reader's mistake, see [Power](#power)), `FADT: SCI 9, PM1 events 1800/0,
    control 1804, GPE0 1860 (128), SMI b2, flags 20c4f5`, `FADT: low-power
    S0 idle (Modern Standby), no S3: ...`; `suspend`: `suspend: not
    supported` at once.

@@ -245,6 +245,7 @@ static void     io_write(int a, int reg, uint32_t v) { ioapic[a].r[0] = reg; ioa
 /* The I/O APIC and input of an irq ("irq" in the API: an ISA IRQ 0-15, or a GSI 16+). */
 static int io_find(int irq, int *pin)
 {
+    if (irq >= IRQ_MSI0) return -1;                  /* (MSI: no line, nothing to mask) */
     int gsi = irq < 16 ? irq_gsi[irq] : irq;
     for (int a = 0; a < nioapic; a++)
         if (gsi >= ioapic[a].base && gsi < ioapic[a].base + ioapic[a].count) { *pin = gsi - ioapic[a].base; return a; }
@@ -278,6 +279,16 @@ static void irq_set_mask(int irq, int m)
     uint32_t lo = io_read(a, 0x10 + 2 * pin);
     io_write(a, 0x10 + 2 * pin, m ? lo | 1 << 16 : lo & ~(1u << 16));
     spin_unlock(&io_lock);
+}
+/* MSI: the device writes data (the vector; fixed delivery, edge) to
+ * 0xFEE00000 | the CPU's APIC id << 12. Without interrupt remapping the id
+ * has 8 bits, in x2APIC mode too: a CPU with a larger one is not chosen. */
+void arch_msi(int irq, int cpu, uint32_t msg[2])
+{
+    uint32_t id = (uint32_t)cpus[cpu]->a.apic_id;
+    if (id > 255) id = (uint32_t)cpus[0]->a.apic_id;
+    msg[0] = 0xFEE00000u | (id & 0xFF) << 12;
+    msg[1] = (uint32_t)(VEC_IRQ0 + irq);
 }
 void irq_mask(int irq)   { irq_set_mask(irq, 1); }
 void irq_unmask(int irq) { irq_set_mask(irq, 0); }

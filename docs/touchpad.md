@@ -52,8 +52,12 @@ touchpad is on its USB Type Cover and its touch screen behind Intel's ME:
   screen" collection, unless a mouse collection comes first) gets mode 2;
   its first finger is then the pointer's place, the left button down while
   it touches.
-- **Gestures** (`hidrep.c`): one finger moves the pointer (relative, about
-  2500 counts across the pad, then the console's speed), two fingers
+- **Gestures** (`hidrep.c`): one finger moves the pointer (relative, by
+  millimetres on the pad: its size from the descriptor's physical units,
+  logged at start as `touchpad: X 0-2020, Y 0-1321, 101 x 66 mm`, 10 cm
+  wide if not given; accelerated as libinput's touchpad profile: 8 counts
+  per mm up to 25 mm/s, rising with speed to 32 at 175 mm/s, a count about
+  a pixel at the desktop's normal speed, then its speed setting), two fingers
   scroll (natural direction), a touch shorter than 0.2 s that hardly moved
   is a click (two fingers: right), pressing the pad clicks (with two
   fingers down: right); contacts the pad calls palms are ignored.

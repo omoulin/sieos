@@ -80,7 +80,10 @@ The kernel is a portable core (`kernel/*.c`) and one processor's part
    (below), and loading ELF programs (`SYS_SPAWN`).
 7. **`kernel/ipc.c`**: ports, `call` / `recv` / `reply` (and `reply_recv`,
    the server's fast path), interrupts as messages (several drivers may
-   share a line), and on-demand names. **The heart of the microkernel.**
+   share a line; on x86-64 also PCI MSI and MSI-X: `SYS_IRQ_MSI` gives a
+   driver one of 16 message vectors and the address and data its device
+   must write, `pci_msi` in `user/lib/pci.c` programs the capability), and
+   on-demand names. **The heart of the microkernel.**
 8. **`kernel/syscall.c`**: the system call table. The contract with
    programs is `include/mk/abi.h`; the servers' message formats are
    `include/mk/proto.h`.

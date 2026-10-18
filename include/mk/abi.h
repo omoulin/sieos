@@ -134,6 +134,12 @@ enum {
                           caught one runs the function first and this returns -EINTR;
                           in one (where others wait), the first waiting is taken: its
                           number returned (sigsuspend in a handler)                       */
+    SYS_IRQ_MSI,       /* (port, uint32_t msg[2]) -> irq: a message-signalled interrupt
+                          (PCI MSI or MSI-X) for the caller's device, delivered to port
+                          as an irq_bind'ed line is (and answered with SYS_IRQ_ACK); msg
+                          gets the address and data the driver writes into the device's
+                          MSI capability or MSI-X table. x86-64 (16 of them); -ENOSYS on
+                          arm64, -EBUSY when all are taken. Drivers only               */
 };
 /* SYS_SIGNAL: the registers a signal found its thread with (read only:
  * SYS_SIGRETURN restores the kernel's own copy), as the kernel saves them. */

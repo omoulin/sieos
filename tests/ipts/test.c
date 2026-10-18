@@ -7,7 +7,10 @@
  * answered "invalid parameters", as there), then single-touch reports
  * written into the data buffers: the console must get an absolute pointer.
  * Checked too: no message sent to the ME without its credit, none from it
- * without ours.
+ * without ours. Then the same ME with IPTS as a "fixed address" client
+ * (connect refused, "not allowed": used without connecting or credits,
+ * host address 0), and one that refuses the connection outright (a
+ * disconnect, one more try, then a clear failure).
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -41,6 +44,7 @@ static struct {
     uint32_t hcsr, mecsr, hring[256], mering[256];
     uint8_t hwp, hrp, mwp, mrp;
     int ready, me_credit, host_credits, violations, pieces, ready_asked, mode;
+    int fixed, refuse, disconnects;                                  /* IPTS a fixed-address client; connects refused */
     uint8_t msg[1024]; int msgn;
     uint8_t *data[16]; volatile uint32_t *doorbell;
     uint32_t pending[64][100]; int npend, plen[64], pme[64];   /* client answers waiting for the host's credit */
@@ -54,6 +58,7 @@ static void me_put(int meaddr, int host, const void *p, int n)        /* a messa
 }
 static void me_client(const void *p, int n)                         /* to the host's client: needs its credit */
 {
+    if (me.fixed) { me_put(7, 0, p, n); return; }                     /* (no flow control, host address 0) */
     if (me.host_credits) { me.host_credits--; me_put(7, 1, p, n); return; }
     memcpy(me.pending[me.npend], p, n); me.plen[me.npend++] = n;
 }
@@ -93,14 +98,16 @@ static void me_take(void)                                              /* the ho
             uint8_t r[40] = { (uint8_t)(m[0] | 0x80) };
             if (m[0] == 0x01) { r[1] = m[3] == 2; r[2] = 2; r[3] = 2; me_put(0, 0, r, 4); }
             else if (m[0] == 0x04) { r[4] = 1 << 2; r[4 + 7 / 8] |= 1 << 7; me_put(0, 0, r, 36); }
-            else if (m[0] == 0x05) { r[1] = m[1]; memcpy(r + 4, m[1] == 7 ? uuid : (const uint8_t *)"another client..", 16); r[25] = 0x10; me_put(0, 0, r, 28); }
-            else if (m[0] == 0x06) { r[1] = m[1]; r[2] = m[2]; r[3] = m[1] == 7 && m[2] == 1 ? 0 : 1; me_put(0, 0, r, 4); if (!r[3]) me_credit_to_host(); }
+            else if (m[0] == 0x05) { r[1] = m[1]; memcpy(r + 4, m[1] == 7 ? uuid : (const uint8_t *)"another client..", 16); r[20] = 1; r[21] = 1; r[22] = me.fixed && m[1] == 7 ? 7 : 0; r[25] = 0x10; me_put(0, 0, r, 28); }
+            else if (m[0] == 0x06) { r[1] = m[1]; r[2] = m[2]; r[3] = me.fixed || me.refuse ? 5 : m[1] == 7 && m[2] == 1 ? 0 : 1; me_put(0, 0, r, 4); if (!r[3]) me_credit_to_host(); }
+            else if (m[0] == 0x07) { r[1] = m[1]; r[2] = m[2]; me.disconnects++; me_put(0, 0, r, 4); }
             else if (m[0] == 0x08 && m[1] == 7) {
                 me.host_credits++;
                 if (me.npend) { me.host_credits--; me_put(7, 1, me.pending[0], me.plen[0]); memmove(me.pending, me.pending[1], --me.npend * sizeof me.pending[0]); memmove(me.plen, me.plen + 1, me.npend * sizeof(int)); }
             }
             continue;
         }
+        if (me.fixed) { if (a != 7 || host) me.violations++; else me_ipts(m, len); continue; }
         if (a != 7 || host != 1 || !me.me_credit) { me.violations++; continue; }
         me.me_credit = 0;
         me_ipts(m, len);
@@ -160,6 +167,18 @@ int main(void)
     for (int i = 0; i < 20; i++) { touch(1, 100 * i, 50 * i); serve(); }
     check("20 more: through all 16 buffers and round again", ninj == 23 && *me.doorbell == 23 && inj[22].x == 1900 * 65535 / 32767);
     check("no message without a credit, our ring never overfilled", !me.violations && !me.npend);
+
+    printf("ipts-test: IPTS as a fixed-address client\n");
+    me = (typeof(me)){ .fixed = 1 };
+    me_addr = -1; credits = 0;
+    check("connected without a connect: host address 0, no credits", !mei_reset() && !connect() && me_addr == 7 && host == 0);
+    check("IPTS started on it; a touch, a lift", !ipts_start() && me.ready_asked == 1 && (ninj = 0, touch(1, 3000, 4000), serve(), touch(0, 3000, 4000), serve(), ninj == 2) &&
+          inj[0].buttons == MB_LEFT && !inj[1].buttons && !me.violations);
+
+    printf("ipts-test: an ME that refuses the connection\n");
+    me = (typeof(me)){ .refuse = 1 };
+    me_addr = -1; credits = 0;
+    check("refused (not allowed): disconnected, tried once more, then a clear failure", !mei_reset() && connect() && refused && me.disconnects == 1 && why && strstr(why, "refuses"));
     printf(fails ? "ipts-test: %d of %d checks FAILED\n" : "ipts-test: all %d checks passed\n", fails ? fails : checks, checks);
     return fails != 0;
 }

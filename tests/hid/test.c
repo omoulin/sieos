@@ -117,6 +117,19 @@ int main(int argc, char **argv)
     int dx = 0, dy = 0, down = 0;
     for (int i = 0; i < ninj; i++) dx += inj[i].dx, dy += inj[i].dy, down |= inj[i].buttons;
     check("one finger moved right and down: the pointer moved so (relative), no click", ninj == 2 && dx > 200 && dy > 0 && !down);
+    check("the pad's size from its descriptor: 101 x 66 mm (X 0-2020, Y 0-1321)", r->tw == 101000 && r->th / 1000 == 66 && r->tymax == 1321);
+    /* acceleration: 1 cm slowly (1 mm per 40 ms: 25 mm/s), then 5 cm quickly (1 cm per 20 ms: 500 mm/s) */
+    int slow = 0, fast = 0;
+    ninj = 0; now += 1000000000;
+    for (int i = 0; i <= 10; i++, now += 40000000) finger(1, 100 + 20 * i, 500, 0);
+    for (int i = 0; i < ninj; i++) slow += inj[i].dx;
+    finger(0, 0, 0, 0); now += 1000000000;
+    ninj = 0;
+    for (int i = 0; i <= 5; i++, now += 20000000) finger(1, 100 + 202 * i, 500, 0);
+    for (int i = 0; i < ninj; i++) fast += inj[i].dx;
+    finger(0, 0, 0, 0); now += 1000000000;
+    printf("  (1 cm slowly: %d counts; 5 cm quickly: %d)\n", slow, fast);
+    check("slow moves 8 counts a mm, quick ones 32 (accelerated): a 2736-pixel screen in one quick 9 cm stroke", slow >= 75 && slow <= 85 && fast >= 1550 && fast <= 1650);
     ninj = 0;
     finger(1, 600, 600, 0); now += 50000000;
     finger(0, 0, 0, 0);

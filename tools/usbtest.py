@@ -111,6 +111,9 @@ wait("SIEOS loader: starting the kernel", 60)
 t_kernel = time.time() - t0
 wait("mk: started by the UEFI loader")
 wait(f"mk: {cpus} CPUs running")
+irq = wait("usb: xHCI ")                   # its interrupts: MSI (its line is turned off then)
+if "interrupts: MSI" not in irq or b"by polling" in full:
+    fail(f"the xHCI does not use MSI: {irq}")
 got = wait("vblk: ")                       # (a virtio disk, or the key through the USB driver)
 while got.startswith("root "):              # (the key's partition GUID, BOOT.CFG's root=: then the disk)
     got = wait("vblk: ")
@@ -143,10 +146,17 @@ type_text("echo written on the key > keep.txt\n")
 wait("atlas: files: ")
 shot("usb-02-session")
 print("ok: accounts created on the screen, alice's file written")
+if b"by polling" in full or b"did not announce" in full:
+    fail("the xHCI's MSI did not arrive (polled)")
 power_off()
 
-# ---- 2: a second boot finds them (the greeter, not the first start)
+# ---- 2: a second boot finds them (the greeter, not the first start); the
+# xHCI without MSI this time: MSI-X (an entry of a table in its registers)
+cmdline = [a.replace("qemu-xhci", "qemu-xhci,msi=off") if a == "qemu-xhci" else a for a in cmdline]
 boot()
+irq = wait("usb: xHCI ", 60)
+if "interrupts: MSI-X" not in irq:
+    fail(f"the xHCI without MSI does not use MSI-X: {irq}")
 wait("atlas: greeter", 60)
 if b"accounts needed" in full:
     fail("the second boot asked for the first start again: the accounts were not kept")
@@ -156,6 +166,9 @@ type_text("alice\talicepass1\n")
 wait("fs: /home/alice unlocked")                   # her password opened her encrypted home
 wait("atlas: login alice: ok")
 print("ok: second boot: the accounts were kept (alice logged in, her encrypted home opened)")
+if b"by polling" in full or b"did not announce" in full:
+    fail("the xHCI's MSI-X did not arrive (polled)")
+print(f"ok: the xHCI's interrupts: MSI on the first boot, MSI-X on the second (its line off both times)")
 power_off()
 
 # ---- 3: the key on the host: its SieFS partition checked, the file read back

@@ -9,8 +9,8 @@
 #include "x86.h"
 
 extern void syscall_entry(void);
-#define NSTUB 129
-extern const uint64_t isr_table[NSTUB];   /* entry.S: vectors 0-127, then 255 */
+#define NSTUB 145
+extern const uint64_t isr_table[NSTUB];   /* entry.S: vectors 0-143, then 255 */
 
 volatile int halting;                     /* the machine is stopping: NMIs halt the CPUs */
 

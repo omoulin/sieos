@@ -17,7 +17,11 @@
  *     clients (a bitmap), each one's properties (a UUID), connect to IPTS's
  *     (3e8d0870-271a-4208-8eb5-9acb9402ae04). Flow control: one message
  *     each way per credit (we give one before each answer we want; the ME
- *     gives one before each command it takes).
+ *     gives one before each command it takes). A "fixed address" client
+ *     takes no connect (the ME refuses one: status 5, "not allowed") and no
+ *     credits; its messages carry host address 0 (Linux's mei_cl_connect).
+ *     A connect refused otherwise: a disconnect (a connection the firmware
+ *     left?), then once more.
  *  3. IPTS: GET_DEVICE_INFO (the sensor: vendor, product, buffer sizes,
  *     "EDS" interface version), SET_MODE, SET_MEM_WINDOW (16 data buffers,
  *     16 feedback buffers, a doorbell, a work queue, in DMA memory), then
@@ -32,7 +36,8 @@
  *     to iptsd in user space (not done: docs/surface-pro-7.md).
  *
  * Every step is logged (the serial console, the log viewer). With no
- * iTouch MEI it ends at once (0) and init does not start it again.
+ * iTouch MEI, or one that will not start (3 tries), it ends (0) after one
+ * line saying why, and init does not start it again.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -129,24 +134,27 @@ static int mei_recv(uint8_t *buf, int cap, int *me, int *host)
 
 /* ---- HBM and the IPTS client. */
 static const uint8_t ipts_uuid[16] = { 0x70, 0x08, 0x8d, 0x3e, 0x1a, 0x27, 0x08, 0x42, 0x8e, 0xb5, 0x9a, 0xcb, 0x94, 0x02, 0xae, 0x04 };
-enum { HOST = 1 };                                 /* our client's address */
-static int me_addr = -1, credits, maxmsg;
+enum { HOST = 1 };                                 /* our client's address (0 for a fixed-address one) */
+static int me_addr = -1, host = HOST, credits, maxmsg;
+static const char *why;                            /* the last failure, for the final line */
+static int refused;
 static uint8_t rx[512];
 
 /* An HBM answer (command | 0x80), waited for (up to 3 s); the ME's flow
  * control credits taken on the way. -> its length, -1 */
 static int hbm_wait(int cmd)
 {
-    int me, host, n;
+    int me, ho, n;
     for (int64_t t = sys_clock() + 3000000000; sys_clock() < t; ) {
-        if ((n = mei_recv(rx, sizeof rx, &me, &host)) < 0) return -1;
+        if ((n = mei_recv(rx, sizeof rx, &me, &ho)) < 0) return -1;
         if (!n) { sys_sleep(1000000); continue; }
-        if (me || host) continue;                  /* (a client's message now: dropped) */
+        if (me || ho) continue;                    /* (a client's message now: dropped) */
         if (rx[0] == 0x08 && rx[1] == me_addr) credits++;
         else if (rx[0] == cmd) return n;
         else log_line("HBM: %02x while waiting for %02x\n", rx[0], cmd);
     }
     log_line("HBM: no answer %02x\n", cmd);
+    why = "the ME does not answer";
     return -1;
 }
 static int hbm(const uint8_t *m, int n, int answer) { return mei_send(0, 0, m, n) ? -1 : answer ? hbm_wait(answer) : 0; }
@@ -164,19 +172,31 @@ static int connect(void)
     uint8_t e[4] = { 0x04 }, valid[32];
     if (hbm(e, 4, 0x84) < 36) return -1;
     memcpy(valid, rx + 4, 32);
-    int n = 0;
+    int n = 0, ver = 0, conns = 0, fixed = 0, single = 0;
     for (int a = 1; a < 256; a++) {
         if (!(valid[a / 8] >> a % 8 & 1)) continue;
         n++;
         uint8_t q[4] = { 0x05, (uint8_t)a };
         if (hbm(q, 4, 0x85) < 28 || rx[2]) continue;
-        if (!memcmp(rx + 4, ipts_uuid, 16)) me_addr = a, maxmsg = rx[24] | rx[25] << 8 | rx[26] << 16 | rx[27] << 24;
+        if (!memcmp(rx + 4, ipts_uuid, 16))        /* its properties: protocol version, connections, fixed address, single buffer, size */
+            me_addr = a, ver = rx[20], conns = rx[21], fixed = rx[22], single = rx[23] & 1, maxmsg = rx[24] | rx[25] << 8 | rx[26] << 16 | rx[27] << 24;
     }
-    log_line("ME clients: %d; IPTS's: %s %d (messages up to %d bytes)\n", n, me_addr < 0 ? "none" : "address", me_addr, maxmsg);
-    if (me_addr < 0) return -1;
-    uint8_t c[4] = { 0x06, (uint8_t)me_addr, HOST };
-    if (hbm(c, 4, 0x86) < 4 || rx[3]) { log_line("IPTS: connect refused (%d)\n", rx[3]); return -1; }
-    return 0;
+    log_line("ME clients: %d; IPTS's: %s %d (protocol %d, %d connection%s%s%s, messages up to %d bytes)\n", n, me_addr < 0 ? "none" : "address", me_addr,
+             ver, conns, conns == 1 ? "" : "s", fixed ? ", fixed address" : "", single ? ", one buffer" : "", maxmsg);
+    if (me_addr < 0) { why = "the ME has no IPTS client"; return -1; }
+    if (fixed) { host = 0; credits = 1 << 30; return 0; }   /* (no connect, no flow control) */
+    host = HOST;
+    for (int k = 0; k < 2; k++) {
+        uint8_t c[4] = { 0x06, (uint8_t)me_addr, HOST };
+        if (hbm(c, 4, 0x86) < 4) return -1;
+        if (!rx[3]) return 0;
+        log_line("IPTS: connect refused (%d: %s)%s\n", rx[3], rx[3] == 1 ? "no such client" : rx[3] == 2 ? "already connected" : rx[3] == 3 ? "no resources" :
+                 rx[3] == 5 ? "not allowed" : "?", k ? "" : ": disconnecting it, then again");
+        uint8_t d[4] = { 0x07, (uint8_t)me_addr, HOST };   /* (a connection left by the firmware) */
+        if (!k && hbm(d, 4, 0x87) < 4) break;
+    }
+    why = "the ME refuses the connection to its IPTS client"; refused = 1;
+    return -1;
 }
 
 /* An IPTS command (code, payload), and its answer (code | 1 << 31): status,
@@ -188,21 +208,21 @@ static int command(uint32_t code, const void *p, int n)
     memcpy(c, &code, 4);
     if (n) memcpy(c + 4, p, n);
     for (int64_t t = sys_clock() + 1000000000; !credits; ) {   /* the ME's credit to send */
-        int me, host, k = mei_recv(rx, sizeof rx, &me, &host);
-        if (k < 0 || sys_clock() > t) { log_line("IPTS: no credit to send %x\n", code); return -1; }
+        int me, ho, k = mei_recv(rx, sizeof rx, &me, &ho);
+        if (k < 0 || sys_clock() > t) { log_line("IPTS: no credit to send %x\n", code); why = "no flow control credit"; return -1; }
         if (!k) sys_sleep(1000000);
-        else if (!me && !host && rx[0] == 0x08 && rx[1] == me_addr) credits++;
+        else if (!me && !ho && rx[0] == 0x08 && rx[1] == me_addr) credits++;
     }
     credits--;
-    uint8_t fc[8] = { 0x08, (uint8_t)me_addr, HOST };   /* our credit: its answer */
-    return mei_send(0, 0, fc, 8) || mei_send(me_addr, HOST, c, 4 + n) ? -1 : 0;
+    uint8_t fc[8] = { 0x08, (uint8_t)me_addr, HOST };   /* our credit: its answer (a fixed-address client takes none) */
+    return (host && mei_send(0, 0, fc, 8)) || mei_send(me_addr, host, c, 4 + n) ? -1 : 0;
 }
 /* Its answer: -> 1 (in ans), 0: not yet, -1: gone. Credits, other messages on the way. */
 static int answer(uint32_t code)
 {
-    int me, host, k;
-    while ((k = mei_recv(rx, sizeof rx, &me, &host)) > 0) {
-        if (!me && !host) { if (rx[0] == 0x08 && rx[1] == me_addr) credits++; else log_line("HBM: %02x\n", rx[0]); continue; }
+    int me, ho, k;
+    while ((k = mei_recv(rx, sizeof rx, &me, &ho)) > 0) {
+        if (!me && !ho) { if (rx[0] == 0x08 && rx[1] == me_addr) credits++; else log_line("HBM: %02x\n", rx[0]); continue; }
         uint32_t c = rx[0] | rx[1] << 8 | rx[2] << 16 | (uint32_t)rx[3] << 24;
         if (c == (code | 1u << 31)) { memcpy(ans, rx, k < 88 ? k : 88); return 1; }
         log_line("IPTS: answer %x while waiting for %x\n", c, code);
@@ -218,6 +238,7 @@ static int call(uint32_t code, const void *p, int n)    /* a command and its ans
         if (r) { int st = ans[4]; return st == 0x0A ? 0 : st; }   /* (COMPAT_CHECK_FAIL: some always say it; Linux goes on) */
     }
     log_line("IPTS: no answer to %x\n", code);
+    why = "IPTS does not answer";
     return -1;
 }
 
@@ -303,6 +324,7 @@ int main(int argc, char **argv)
     int k = 0;
     while (k < 2 && pci_scan(&p, 0, ids[k], ~0u, 0)) k++;
     if (k == 2) { log_line("no iTouch MEI: no IPTS touch screen\n"); return 0; }
+    why = "the ME does not start";
     uint64_t len, pa = pci_bar(&p, 0, &len);
     if (!pa || (long)(mm = map_phys(pa, 4096)) < 0) { log_line("MEI: no registers\n"); return 0; }
     uint32_t hfs = pci_cfg(&p, 0x40);
@@ -314,7 +336,7 @@ int main(int argc, char **argv)
     }
     for (int tries = 0; tries < 3; tries++, sys_sleep(1000000000)) {
         me_addr = -1; credits = 0;
-        if (mei_reset() || connect() || ipts_start()) continue;
+        if (mei_reset() || connect() || ipts_start()) { if (refused) break; continue; }   /* (refused twice: trying again changes nothing) */
         hid_send(0, 0);                             /* con: a pointer is here */
         int64_t last = sys_clock();
         for (;;) {                                  /* every 4 ms while touched lately, else every 50 ms */
@@ -326,7 +348,7 @@ int main(int argc, char **argv)
         log_line("the ME reset or stopped: starting again\n");
         tries = 0;
     }
-    log_line("given up\n");
-    return 1;
+    log_line("no touch screen: %s (given up; 'svc restart ipts' tries again)\n", why ? why : "?");
+    return 0;
 }
 #endif

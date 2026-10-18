@@ -180,17 +180,18 @@ int sam_start(int dev)
     pci_t c = { .at = (uint32_t)((adr >> 16 & 31) << 11 | (adr & 7) << 8) };
     uint32_t id = pci_cfg(&c, 0);
     if (id == 0xFFFFFFFF) { log_line("SAM: %s: no PCI device at 00:%02x.%x\n", r.bus, (int)(adr >> 16 & 31), (int)(adr & 7)); return -1; }
-    for (int cp = pci_cfg(&c, 0x34) & 0xFC, n = 0; cp && n < 16; cp = pci_cfg(&c, cp) >> 8 & 0xFC, n++)
-        if ((pci_cfg(&c, cp) & 0xFF) == 1) {       /* power management: to D0 */
-            uint32_t pm = pci_cfg(&c, cp + 4);
-            if (pm & 3) { pci_cfgw(&c, cp + 4, pm & ~3u); sys_sleep(10000000); }
-            break;
-        }
+    uint32_t bar = pci_cfg(&c, 0x10), barh = pci_cfg(&c, 0x14);
+    int was = pci_d0(&c);                          /* power management: to D0, its BAR kept (the firmware leaves it in D3) */
     uint64_t len, pa = pci_bar(&c, 0, &len);
     volatile uint8_t *b = pa ? map_phys(pa, 4096) : 0;
-    if (!pa || (long)b < 0) { log_line("SAM: UART: no registers\n"); return -1; }
+    if (!pa || (long)b < 0) {
+        log_line("SAM: UART 00:%02x.%x: no registers (BAR0 %08x%08x, now %08x%08x; was in D%d)\n", (int)(adr >> 16 & 31), (int)(adr & 7),
+                 barh, bar, pci_cfg(&c, 0x14), pci_cfg(&c, 0x10), was);
+        return -1;
+    }
     volatile uint32_t *priv = (volatile uint32_t *)(b + 0x200);
-    priv[1] = 0; sys_sleep(1000000); priv[1] = 7;   /* LPSS: reset, then out of it (function, DMA) */
+    priv[1] = 0; sys_sleep(1000000); priv[1] = 7;   /* LPSS: reset, then out of it (function, DMA; Linux's intel-lpss) */
+    sys_sleep(1000000);
     /* the clock: 120 MHz x M / N = 16 x the speed */
     uint32_t want = 16 * baud, g = gcd(want, 120000000), m = want / g, nn = 120000000 / g;
     while (m > 0x7FFF || nn > 0x7FFF) m >>= 1, nn >>= 1;
@@ -198,13 +199,17 @@ int sam_start(int dev)
     priv[0] = m << 1 | nn << 16 | 1 | 1u << 31;
     ua = (volatile uint32_t *)b;
     ua[IER] = 0;
-    ua[LCR] = 0x80; ua[DLL] = 1; ua[DLH] = 0;       /* divisor 1 */
-    ua[LCR] = 3;                                    /* 8 bits, no parity, 1 stop bit */
     ua[FCR] = 0x87;                                 /* FIFOs on and emptied; RTS dropped at half full */
+    for (int t = 0; t < 10; t++) {                  /* (DesignWare: LCR ignored while busy receiving: Linux's dw8250_check_lcr) */
+        ua[LCR] = 0x80; ua[DLL] = 1; ua[DLH] = 0;   /* divisor 1 */
+        ua[LCR] = 3;                                /* 8 bits, no parity, 1 stop bit */
+        if ((ua[LCR] & 0xFF) == 3) break;
+        ua[FCR] = 0x87; while (ua[LSR] & 1) (void)ua[RBR];
+    }
     ua[MCR] = r.flow ? 0x23 : 0x03;                 /* RTS, DTR; automatic RTS/CTS */
     while (ua[LSR] & 1) (void)ua[RBR];
-    log_line("SAM: UART %s, PCI 00:%02x.%x (%04x:%04x), %u bit/s%s (clock M/N %u/%u)%s\n", r.bus, (int)(adr >> 16 & 31), (int)(adr & 7),
-             id & 0xFFFF, id >> 16, baud, r.flow ? ", RTS/CTS" : "", m, nn, r.baud > 1 ? "" : "; speed not in its _CRS: assumed");
+    log_line("SAM: UART %s, PCI 00:%02x.%x (%04x:%04x) at %lx%s, %u bit/s%s (clock M/N %u/%u)%s\n", r.bus, (int)(adr >> 16 & 31), (int)(adr & 7),
+             id & 0xFFFF, id >> 16, (long)pa, was == 3 ? " (was in D3)" : was ? " (was in D1/D2)" : "", baud, r.flow ? ", RTS/CTS" : "", m, nn, r.baud > 1 ? "" : "; speed not in its _CRS: assumed");
     sam.getc = u_getc; sam.put = u_put; sam.wait = u_wait; sam.now = u_now; sam.event = u_event;
     uint8_t v[4], k;
     int e = req(SSAM_TC_SAM, 0, 0x13, 0, 0, v, 4);

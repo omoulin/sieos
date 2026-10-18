@@ -131,6 +131,67 @@ int pci_scan(pci_t *p, int reg, uint32_t val, uint32_t mask, int nth)
 }
 #endif
 
+/* Powered to D0 (PMCSR) if the firmware left it lower: -> the state it was
+ * in (0: it was on). A device without "no soft reset" comes out of D3hot
+ * reset, its BARs and command register cleared (an LPSS UART the Surface
+ * Pro 7's firmware left in D3: BAR0 then read 0): they are written back,
+ * as Linux's pci_restore_bars does. */
+int pci_d0(pci_t *p)
+{
+    for (int cp = pci_cfg(p, 0x34) & 0xFC, n = 0; cp && n < 48; cp = pci_cfg(p, cp) >> 8 & 0xFC, n++) {
+        if ((pci_cfg(p, cp) & 0xFF) != 1) continue;
+        uint32_t pm = pci_cfg(p, cp + 4), saved[7];
+        if (!(pm & 3)) return 0;
+        for (int i = 0; i < 6; i++) saved[i] = pci_cfg(p, 0x10 + 4 * i);
+        saved[6] = pci_cfg(p, 4);
+        pci_cfgw(p, cp + 4, pm & ~3u);
+        sys_sleep(10000000);                       /* (D3hot -> D0: 10 ms) */
+        for (int i = 0; i < 6; i++) if (pci_cfg(p, 0x10 + 4 * i) != saved[i]) pci_cfgw(p, 0x10 + 4 * i, saved[i]);
+        if ((pci_cfg(p, 4) & 0x407) != (saved[6] & 0x407)) pci_cfgw(p, 4, (pci_cfg(p, 4) & ~0x407u) | (saved[6] & 0x407));
+        return (int)(pm & 3);
+    }
+    return 0;
+}
+
+/* The device's interrupt as a message: MSI if it has the capability, else
+ * MSI-X's first table entry (the kernel's address and data, SYS_IRQ_MSI),
+ * its line (INTx) then off. Firmware often leaves no line on laptops (the
+ * Surface Pro 7's xHCI): Linux uses MSI there too. */
+int pci_msi(pci_t *p, long port, const char **how)
+{
+    int msi = 0, msix = 0;
+    if (pci_cfg(p, 4) >> 20 & 1)                   /* a capability list */
+        for (int cp = pci_cfg(p, 0x34) & 0xFC, n = 0; cp && n < 48; cp = pci_cfg(p, cp) >> 8 & 0xFC, n++) {
+            int id = pci_cfg(p, cp) & 0xFF;
+            if (id == 5 && !msi) msi = cp;
+            if (id == 0x11 && !msix) msix = cp;
+        }
+    uint32_t m[2];
+    long irq;
+    if ((!msi && !msix) || (irq = irq_msi(port, m)) < 0) return -1;
+    if (msi) {                                     /* address (64-bit: high half 0), data, its vector unmasked, enabled */
+        uint32_t ctl = pci_cfg(p, msi);
+        int b64 = ctl >> 23 & 1, data = msi + (b64 ? 12 : 8);
+        pci_cfgw(p, msi + 4, m[0]);
+        if (b64) pci_cfgw(p, msi + 8, 0);
+        pci_cfgw(p, data, m[1]);
+        if (ctl >> 24 & 1) pci_cfgw(p, data + 4, 0); /* (per-vector mask bits) */
+        pci_cfgw(p, msi, (ctl & ~(7u << 20)) | 1u << 16);   /* one message, on */
+        *how = "MSI";
+    } else {                                       /* the table: in a BAR, entry 0 */
+        uint32_t t = pci_cfg(p, msix + 4), ctl = pci_cfg(p, msix);
+        uint64_t len, pa = pci_bar(p, t & 7, &len);
+        volatile uint32_t *e = pa ? map_phys(pa + (t & ~7u), 16) : 0;
+        if (!pa || (long)e < 0) return -1;         /* (the MSI stays taken: harmless) */
+        pci_cfgw(p, msix, ctl | 1u << 30);         /* (function masked while written) */
+        e[0] = m[0]; e[1] = 0; e[2] = m[1]; e[3] = 0;
+        pci_cfgw(p, msix, (ctl & ~(1u << 30)) | 1u << 31);
+        *how = "MSI-X";
+    }
+    pci_cfgw(p, 4, pci_cfg(p, 4) | 1u << 10);      /* its line off */
+    return (int)irq;
+}
+
 /* Sizing: write all ones, read back which bits stick, restore. A memory BAR
  * with no address in the window (none given yet) gets one: device d's BAR i
  * at the window's d-th 16 MiB slot + i MiB (aligned to its size), so drivers

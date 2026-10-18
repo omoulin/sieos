@@ -19,12 +19,28 @@
 
 static void name_xhci(hc_info_t *h) { char t[40]; strlcpy(t, h->what, sizeof t); sfmt(h->what, sizeof h->what, "xHCI %s", t); }
 
+static pci_t found;                                /* (the device pci_find found last, for hc_irq) */
+
+/* Its interrupt: a message (MSI, MSI-X) when it can send one, else its
+ * line, else none (the caller polls). */
+int hc_irq(hc_info_t *h, long port)
+{
+    const char *how;
+    int irq = found.id ? pci_msi(&found, port, &how) : -1;
+    if (irq >= 0) { strlcpy(h->how, how, sizeof h->how); return irq; }
+    if (h->irq < 0 || irq_bind(h->irq, port)) return -1;
+    sfmt(h->how, sizeof h->how, "line %d%s", h->irq & 0xFF, h->irq & IRQ_LEVEL ? " (level)" : "");
+    return h->irq & ~IRQ_LEVEL;
+}
+
 /* An ordinary PCI device (user/lib/pci.c): BAR 0 and its line. */
 int pci_find(uint32_t cls, uint32_t mask, hc_info_t *h, int nth)
 {
     pci_t p;
     memset(h, 0, sizeof *h);
+    found.id = 0;
     if (pci_scan(&p, 8, cls << 8, mask << 8, nth) || !(h->mmio = pci_bar(&p, 0, &h->len))) return -1;
+    found = p;
     h->irq = p.irq;
     h->bus_off = p.bus_off;
     sfmt(h->what, sizeof h->what, "%04x:%04x at %02x:%02x.%x", p.id & 0xFFFF, p.id >> 16, p.at >> 16, p.at >> 11 & 31, p.at >> 8 & 7);
