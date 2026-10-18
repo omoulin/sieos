@@ -1,0 +1,61 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/wifi/wifid.c user/wifi/wifi.h include/mk/proto.h
+.TH WIFID 4
+.SH NAME
+wifid \- the Wi-Fi server (port "wifi")
+.SH SYNOPSIS
+Port
+.BR wifi .
+.B /bin/wifid
+is started at boot by
+.BR init (8),
+with device rights, so the port is there to find; on a machine with no
+Wi-Fi chip it ends with status 0 and is not started again.
+.SH DESCRIPTION
+.B wifid
+is a second network interface for
+.BR netd (4),
+and keeps the chosen network.
+One chip driver per architecture does the rest:
+on arm64 the Raspberry Pis' CYW43455 on SDIO (its firmware joins and runs
+the handshake); on x86-64 an Intel AX210 on PCIe (SIEOS joins and runs the
+WPA2 handshake itself).
+.PP
+To netd it looks like a network card: it answers
+.B NIC_INFO
+and
+.B NIC_SEND
+as
+.BR vnet (4)
+does, and sends
+.B NET_FRAMES
+and
+.B NET_LINK
+to "net".
+The chosen network is joined again at every start.
+.SH MESSAGES
+.TP
+.B WIFI_STATUS
+rbuf <\- wifi_status_t: the state (off, idle, scanning, joining, up,
+failed), signal in dBm, channel, security, the network's name, why the last
+attempt failed, the addresses, the chip and its firmware. \-> 0.
+.TP
+.B WIFI_SCAN
+look for networks (a few seconds); rbuf <\- wifi_net_t[] (name, BSSID,
+channel, signal, security) \-> how many.
+.TP
+.B WIFI_JOIN
+(root) sbuf = "ssid\e0passphrase" (empty: an open network): saved in
+.B /etc/wifi.conf
+and joined; WIFI_STATUS follows it. \-> 0.
+.TP
+.B WIFI_FORGET
+(root) leave the network and forget it. \-> 0.
+.SH FILES
+.TP
+.B /etc/wifi.conf
+the chosen network and its passphrase (root only)
+.SH SEE ALSO
+.BR wifi (1),
+.BR wifi.conf (5),
+.BR netd (4)

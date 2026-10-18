@@ -1,0 +1,31 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH SYS_YIELD 2
+.SH NAME
+sys_yield \- let another thread run (SYS_YIELD)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_yield(void);
+.fi
+.SH DESCRIPTION
+.B sys_yield
+gives the processor to another ready thread, if there is one. The calling
+thread stays ready: it goes to the back of its processor's run queue and
+runs again in its turn.
+.PP
+Waiting for something is better done with a call that sleeps until it
+happens
+.RB ( ipc_recv (2),
+.BR sys_futex (2),
+.BR sys_sleep (2)):
+a loop around
+.B sys_yield
+keeps a processor busy.
+.SH RETURN VALUE
+Always 0.
+.SH SEE ALSO
+.BR sys_sleep (2),
+.BR sys_place (2),
+.BR intro (2)

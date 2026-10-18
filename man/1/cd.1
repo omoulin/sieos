@@ -1,0 +1,31 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH CD 1
+.SH NAME
+cd, pwd \- change or show the current directory
+.SH SYNOPSIS
+.B cd
+.RI [ dir ]
+.br
+.B pwd
+.SH DESCRIPTION
+.B cd
+and
+.B pwd
+are commands built into the shell,
+.BR sh (1).
+.B cd
+makes
+.I dir
+the current directory: the one relative paths start from, for the shell
+and the programs it starts. Without
+.IR dir ,
+it goes to the user's home (from
+.BR /etc/users ).
+.B pwd
+prints the current directory.
+.SH EXIT STATUS
+0, or 1 if the directory cannot be entered.
+.SH SEE ALSO
+.BR ls (1),
+.BR sh (1)

@@ -1,0 +1,43 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/kprintf.c
+.TH SYS_LOG 2
+.SH NAME
+sys_log \- read the console's log (SYS_LOG)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_log(void *buf, size_t size, uint64_t *pos);
+.fi
+.SH DESCRIPTION
+.B sys_log
+copies the console's log into
+.IR buf :
+what a serial wire shows, the kernel's messages and the console server's
+output (which goes through
+.BR sys_debug (2)),
+from byte
+.I *pos
+since boot, and advances
+.IR *pos .
+The kernel keeps the last
+.B LOG_KEEP
+(32 KiB) bytes; a position older than that is moved up to the oldest
+kept. At most 1024 bytes come per call: call again until it returns 0.
+.PP
+Anyone may read it: it is what the serial wire shows.
+.BR dmesg (1)
+prints it.
+.SH RETURN VALUE
+The number of bytes copied (0: nothing new), or a negative error.
+.SH ERRORS
+.TP
+.B EFAULT
+.I buf
+or
+.I pos
+is not the caller's memory.
+.SH SEE ALSO
+.BR dmesg (1),
+.BR sys_debug (2),
+.BR con (4)

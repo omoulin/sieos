@@ -1,0 +1,37 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH SYS_TIME 2
+.SH NAME
+sys_time \- the wall clock (SYS_TIME)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+int64_t sys_time(int64_t set);
+.fi
+.SH DESCRIPTION
+.B sys_time
+with
+.I set
+0 returns the date and time: nanoseconds since 1970-01-01 00:00 UTC. It
+is the real-time clock (the battery-backed clock chip), read once at
+boot before any program runs, plus the time since boot
+.RB ( sys_clock (2)).
+.PP
+With
+.I set
+not 0, root sets the clock to that many nanoseconds since 1970; the time
+since boot keeps counting from there. The clock chip itself is not written.
+.PP
+.B date_str
+(mk.h) turns the value into "YYYY-MM-DD HH:MM".
+.SH RETURN VALUE
+Nanoseconds since 1970 (after setting, the new time), or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+.I set
+is not 0 and the caller is not root.
+.SH SEE ALSO
+.BR sys_clock (2),
+.BR stat (1)

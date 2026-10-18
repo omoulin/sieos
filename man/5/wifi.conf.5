@@ -1,0 +1,33 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/wifi/wifid.c
+.TH WIFI.CONF 5
+.SH NAME
+wifi.conf \- the Wi-Fi network to join
+.SH SYNOPSIS
+.B /etc/wifi.conf
+.SH DESCRIPTION
+The Wi-Fi server,
+.BR wifid (4),
+keeps the chosen network here and joins it again at every start.
+It writes the file when root joins a network
+.RB ( wifi (1),
+or Settings on the desktop) and removes it when root forgets the network.
+Mode 0600: root only, since it holds the passphrase in clear.
+.PP
+Two
+.IB key = value
+lines:
+.TP
+.BI ssid= NAME
+the network's name, at most 32 bytes
+.TP
+.BI passphrase= WORDS
+its WPA2 passphrase, at most 64 bytes; empty for an open network
+.SH EXAMPLES
+.nf
+ssid=home
+passphrase=correct horse battery staple
+.fi
+.SH SEE ALSO
+.BR wifi (1),
+.BR wifid (4)

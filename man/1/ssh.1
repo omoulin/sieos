@@ -1,0 +1,80 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/ssh/ssh.c
+.TH SSH 1
+.SH NAME
+ssh \- the SSH client: a remote shell or command
+.SH SYNOPSIS
+.B ssh
+.RB [ \-p
+.IR port ]
+.RB [ \-i
+.IR key ]
+.RI [ user @] host
+.RI [ command ...]
+.SH DESCRIPTION
+.B ssh
+connects to
+.I host
+over SSH-2 (curve25519-sha256, an ssh-ed25519 host key, then
+chacha20-poly1305@openssh.com: OpenSSH's default algorithms) and runs a
+shell there, or
+.I command
+when one is given.
+.I user
+is your own name unless said.
+.PP
+On the first connection to a host, its key's fingerprint
+.RB ( SHA256:... ,
+as OpenSSH shows it) is shown with
+"Are you sure you want to continue connecting (yes/no)?";
+.B yes
+adds it to
+.I ~/.ssh/known_hosts
+.RI ( host
+for port 22,
+.RI [ host ]: port
+otherwise, OpenSSH's format). A host whose key changed is refused, with its
+new fingerprint and the line to remove.
+.PP
+Authentication: the key
+.I ~/.ssh/id_ed25519
+(or the one of
+.BR \-i )
+if the server takes it, else a password, read without echo (three tries).
+.PP
+A shell gets a terminal on the server (80 x 24) and the console goes raw:
+every key goes to the server as typed, and the server echoes.
+.B ~.
+after Enter disconnects. A command gets no terminal and no input.
+.SH OPTIONS
+.TP
+.BI \-p " port"
+The server's port (22 by default).
+.TP
+.BI \-i " key"
+The private key file to authenticate with.
+.SH EXIT STATUS
+The remote command's (or shell's) status; 255 for ssh's own errors.
+.SH FILES
+.TP
+.I ~/.ssh/id_ed25519
+Your private key (made by
+.BR ssh-keygen (1)).
+.TP
+.I ~/.ssh/known_hosts
+The keys of the hosts you accepted.
+.SH EXAMPLES
+.nf
+ssh alice@10.0.2.2
+ssh \-p 2222 10.0.2.2 uname \-a
+.fi
+.SH SEE ALSO
+.BR ssh-keygen (1),
+.BR sshd (8)
+.SH BUGS
+One channel per connection: no port forwarding, agent, X11, scp or sftp.
+No re-keying: OpenSSH asks for new keys after 1 GiB each way, and the
+connection then ends. Ed25519 keys only, unencrypted key files only (one
+with a passphrase is reported and skipped). The remote terminal is
+80 x 24 whatever the window. A session ended by a signal reports status
+255.

@@ -1,0 +1,68 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH SYS_TASKS 2
+.SH NAME
+sys_tasks \- list the processes (SYS_TASKS)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_tasks(mk_task_t *t, long max, int after);
+
+typedef struct {
+    int32_t pid, uid, state, cpu;
+    int32_t threads, ppid;   /* ppid 0: started by the kernel */
+    uint64_t pages;          /* memory in use, 4 KiB pages */
+    char name[16];
+    uint64_t quota;          /* memory limit in pages (0: none) */
+} mk_task_t;
+.fi
+.SH DESCRIPTION
+.B sys_tasks
+fills
+.I t
+with up to
+.I max
+processes whose pid is above
+.IR after ,
+in pid order. To list them all, call again with the last pid received
+until fewer than
+.I max
+come back.
+.PP
+A process's
+.I state
+is its most active thread's:
+.BR TS_RUN ,
+.BR TS_READY ,
+.B TS_SEND
+(queued on a port),
+.B TS_RECV
+(waiting for a message),
+.B TS_REPLY
+(waiting for an answer),
+.B TS_LOOKUP
+(waiting for a port's name),
+.B TS_SLEEP
+or
+.B TS_WAIT
+(for a child).
+.I cpu
+is where that thread runs, or last ran.
+.I name
+is the program's first word, at most 15 characters.
+.PP
+Anyone may call it;
+.BR ps (1)
+prints it.
+.SH RETURN VALUE
+The number of entries filled, or a negative error.
+.SH ERRORS
+.TP
+.B EFAULT
+.I t
+is not writable.
+.SH SEE ALSO
+.BR ps (1),
+.BR sys_info (2),
+.BR sys_ident (2)

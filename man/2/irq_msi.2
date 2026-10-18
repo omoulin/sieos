@@ -1,0 +1,56 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/ipc.c kernel/arch/x86_64
+.TH IRQ_MSI 2
+.SH NAME
+irq_msi \- a message-signalled interrupt for a driver (SYS_IRQ_MSI)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long irq_msi(long port, uint32_t msg[2]);
+.fi
+.SH DESCRIPTION
+.B irq_msi
+takes a free message-signalled interrupt (PCI MSI or MSI-X) for the
+caller's device and binds it to
+.IR port ,
+one of the caller's ports, on the next processor in turn. It is delivered
+as a line bound with
+.BR irq_bind (2)
+is, and answered with
+.BR irq_ack (2).
+.PP
+.I msg
+receives the address
+.RI ( msg[0] )
+and data
+.RI ( msg[1] )
+the driver writes into the device's MSI capability or MSI-X table
+(user/lib/pci.c does it). The interrupt is edge-triggered: the device
+sends one message per event. It is free again when the port goes.
+.PP
+x86-64 only, 16 of them for the whole system. Drivers only.
+.SH RETURN VALUE
+The interrupt number, or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+The caller is not a driver.
+.TP
+.B EINVAL
+.I port
+is not the caller's.
+.TP
+.B EBUSY
+All of them are taken.
+.TP
+.B EFAULT
+.I msg
+is not writable.
+.TP
+.B ENOSYS
+Not on this architecture (arm64).
+.SH SEE ALSO
+.BR irq_bind (2),
+.BR ipc_recv (2),
+.BR pci_read (2)

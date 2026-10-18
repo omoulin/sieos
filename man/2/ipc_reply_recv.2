@@ -1,0 +1,76 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH IPC_REPLY_RECV 2
+.SH NAME
+ipc_reply_recv \- answer a message, then wait for the next (SYS_REPLY_RECV)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long ipc_reply_recv(long token, long port, msg_t *m);
+.fi
+.SH DESCRIPTION
+.B ipc_reply_recv
+does
+.BR ipc_reply (2)
+then
+.BR ipc_recv (2)
+in one call, with the same
+.BR msg_t :
+.I m\->sbuf
+and
+.I m\->slen
+carry the reply,
+.I m\->rbuf
+and
+.I m\->rlen
+take the next message. It is the fast path of a server's loop.
+.PP
+If no message is waiting, the server is about to sleep, so the client it
+answered takes this processor at once: a whole round trip then stays on
+one processor, with no interrupt between processors.
+.PP
+A stale
+.I token
+(or 0, for the first message) is ignored: the server just receives. The
+reply goes out even if
+.I port
+is not the caller's.
+.SH RETURN VALUE
+As
+.BR ipc_recv (2):
+the next sender's token, 0 for interrupts and kernel events, or a
+negative error.
+.SH ERRORS
+.TP
+.B EPERM
+No such port, or it is not the caller's (the reply was sent all the same).
+.TP
+.B EINTR
+A signal the process catches came while it waited.
+.TP
+.B EPIPE
+The process is ending.
+.TP
+.B EFAULT
+.I m
+or its buffers are not the caller's memory.
+.SH EXAMPLES
+An echo server:
+.nf
+long port = port_create("echo"), tok = 0;
+char in[256];
+msg_t m = { 0 };
+for (;;) {
+    m.rbuf = in; m.rlen = sizeof in;
+    tok = ipc_reply_recv(tok, port, &m);  /* m.sbuf, m.slen: the reply */
+    if (tok <= 0) { tok = 0; continue; }  /* (interrupts, errors) */
+    m.w[0] = m.rlen;                      /* the result */
+    m.sbuf = in; m.slen = m.rlen;         /* the data back */
+}
+.fi
+.SH SEE ALSO
+.BR ipc_recv (2),
+.BR ipc_reply (2),
+.BR ipc_call (2),
+.BR ipc (7)

@@ -1,0 +1,34 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fetch/fetch.c
+.TH IFCONFIG 1
+.SH NAME
+ifconfig \- the network interface in use
+.SH SYNOPSIS
+.B ifconfig
+.SH DESCRIPTION
+.B ifconfig
+prints what the network server knows of the interface in use:
+.B nic0
+(the cable) or
+.B wifi
+(Wi-Fi), its link (up, down or unknown), the card's MAC address and the
+MTU; the address and mask, the gateway and the DNS server (from DHCP); the
+packets and bytes received and sent, the number of sockets open; and the
+time (seconds since 1970, from the clock chip). It prints
+.B no network card
+when there is none.
+.PP
+.B ifconfig
+is another name of
+.BR fetch (1)
+.RB ( "fetch \-i"
+is its older name). It only shows: the address comes from DHCP, and the
+Wi-Fi network is chosen with
+.BR wifi (1).
+.SH EXIT STATUS
+0, or 1 if there is no network card or no network server.
+.SH SEE ALSO
+.BR netstat (1),
+.BR wifi (1),
+.BR fetch (1),
+.BR netd (4)

@@ -1,0 +1,20 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: tools/siefs/siefs-dump.c
+.TH SIEFS-DUMP 8
+.SH NAME
+siefs-dump \- show what is inside a SieFS image
+.SH SYNOPSIS
+.B build/host/siefs-dump
+.I image
+.SH DESCRIPTION
+.B siefs-dump
+runs on the build machine (Linux). It prints both superblocks, then
+every node of the trees with its items decoded (inodes, inline data,
+extents, directory entries, attributes and their index, volumes), for
+learning and debugging.
+.SH EXIT STATUS
+0; 1 if the image cannot be opened; 2 for a usage error.
+.SH SEE ALSO
+.BR siefs (8),
+.BR fsck.siefs (8),
+.BR siefs (5)

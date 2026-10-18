@@ -1,0 +1,101 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/svc/svc.c
+.TH SVC 8
+.SH NAME
+svc \- the services init supervises
+.SH SYNOPSIS
+.B svc
+.br
+.B svc restart
+.I name
+.br
+.B svc stop
+.I name
+.br
+.B svc idle
+.I name seconds
+.br
+.B svc add
+.RB [ \-p
+.I port
+.RB [ \-i
+.IR seconds ]]
+.RB [ \-w
+.IR port ]
+.RB [ \-b ]
+.I name path
+.RB [ always | on-failure | never ]
+.RI [ arg ...]
+.SH DESCRIPTION
+.B svc
+asks
+.BR init (8)
+(port
+.BR init )
+about the services it supervises. Without arguments it lists them: name,
+state
+.RB ( running ,
+.BR waiting ,
+.BR "GIVEN UP" ,
+.BR stopped ,
+.BR idle ),
+pid, restarts, last exit status, policy, uptime, memory and its limit,
+starts, and for a service started on demand the port that starts it and
+its idle time. Everything else is for root.
+.TP
+.B restart
+Stop it if it runs, start it again (also after init gave up on it).
+.TP
+.B stop
+Stop it for good.
+.TP
+.B idle
+An on-demand service stops after
+.I seconds
+unused (0: never).
+.TP
+.B add
+Supervise the program
+.I path
+from the disk as
+.IR name ,
+with its arguments and a policy: start it again
+.B always
+(the default),
+.B on-failure
+(a status other than 0), or
+.BR never .
+.SH OPTIONS
+.TP
+.BI \-p " port"
+Start it on demand, when
+.I port
+is looked up, not at once.
+.TP
+.BI \-i " seconds"
+With
+.BR \-p :
+its idle time.
+.TP
+.BI \-w " port"
+Watch it: init pings
+.I port
+and ends the server if it stops answering (30 s), so it is started
+again.
+.TP
+.B \-b
+Background work: on E-cores where the processor has them.
+.SH EXAMPLES
+.nf
+svc
+svc restart sshd
+svc add \-w stuck hung /bin/crash never hang stuck
+.fi
+.SH SEE ALSO
+.BR init (8),
+.BR ps (1),
+.BR kill (1)
+.SH BUGS
+Services added with
+.B svc add
+are forgotten at the next start: init's own table is built into it.

@@ -1,0 +1,54 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/ssh/ssh.c
+.TH SSH-KEYGEN 1
+.SH NAME
+ssh-keygen \- make a new SSH key pair
+.SH SYNOPSIS
+.B ssh-keygen
+.RB [ \-t
+.BR ed25519 ]
+.RB [ \-f
+.IR file ]
+.RB [ \-C
+.IR comment ]
+.SH DESCRIPTION
+.B ssh-keygen
+makes a new Ed25519 key pair in OpenSSH's file format (unencrypted): the
+private key in
+.I ~/.ssh/id_ed25519
+(or
+.IR file )
+and the public key, one line, in the same name with
+.B .pub
+added, which it also prints. Copy that line into the server's
+.I ~/.ssh/authorized_keys
+to log in there with the key. An existing key is never overwritten.
+.PP
+.B ssh-keygen
+is another name of
+.BR ssh (1)
+.RI ( /bin/ssh-keygen
+is a link to it).
+.SH OPTIONS
+.TP
+.B \-t ed25519
+The key type; Ed25519 is the only one.
+.TP
+.BI \-f " file"
+Where to write the private key.
+.TP
+.BI \-C " comment"
+The public key's comment
+.RI ( user @ host
+by default).
+.SH EXIT STATUS
+0; 255 if the file exists or cannot be written; 1 for a usage error.
+.SH FILES
+.TP
+.I ~/.ssh/id_ed25519 \fRand\fP ~/.ssh/id_ed25519.pub
+The key pair.
+.SH SEE ALSO
+.BR ssh (1),
+.BR sshd (8)
+.SH BUGS
+Ed25519 only; no passphrase.

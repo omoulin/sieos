@@ -1,0 +1,102 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: Makefile rootfs tools/mkusb.py user/auth/auth.c user/sia/memory.c
+.TH HIER 7
+.SH NAME
+hier \- the file tree of SIEOS
+.SH DESCRIPTION
+.TP
+.B /bin
+the programs; a name typed at the shell runs /bin/NAME. Some are other names
+(symbolic links) of one program: passwd, su, useradd, userdel (acct);
+ssh-keygen (ssh); rec, vol (play); ping, host, nslookup, ifconfig, netstat,
+traceroute, nc, curl, wget (fetch).
+.TP
+.B /boot
+on a USB key, the boot files (loader.efi, kernel.bin, boot.cfg, the boot
+modules) the installer copies onto a PC's drive.
+.TP
+.B /etc
+the machine's settings:
+.RS
+.TP
+.BR users ", " groups ", " secrets
+the accounts,
+.BR users (5)
+.TP
+.BR hostname ", " motd
+the machine's name, the welcome message,
+.BR hostname (5)
+.TP
+.B apps/
+everyone's app launchers,
+.BR app (5)
+.TP
+.B ssl/roots
+the certificate authorities TLS trusts
+.TP
+.B ssh/
+the SSH server's switch and host key,
+.BR authorized_keys (5)
+.TP
+.BR wifi.conf ", " bluetooth.keys
+the Wi-Fi network,
+.BR wifi.conf (5);
+Bluetooth's bonds (both root only)
+.TP
+.BR display.conf ", " kblight ", " gfxhat.conf
+the screen, the keyboard light, a Pi's GFX HAT
+.TP
+.BR sia.conf ", " sia.key
+the assistant,
+.BR sia.conf (5)
+.TP
+.B boot.log
+the log since boot, saved a few times in the first 5 minutes (root only)
+.RE
+.TP
+.B /home/NAME
+each user's home, mode 0700, an encrypted volume of its own; dot files
+there hold the user's settings
+.RB ( ~/.mail ,
+.BR ~/.look ,
+.BR ~/.mouse ,
+.BR ~/.ssh/ ),
+and
+.B ~/Downloads
+takes files received.
+.TP
+.B /root
+root's home.
+.TP
+.B /lib/sicc
+what
+.BR cc (1)
+builds programs with: headers (include/, include/mk/), the start file, the
+library, the linker script.
+.TP
+.B /lib/fonts
+fonts for programs that draw text.
+.TP
+.B /models
+language models (.gguf) for the assistant.
+.TP
+.B /src
+sources SIEOS builds itself: sieos/ (the shell, make, hello and their
+Makefile), hello-make/, python/ (examples).
+.TP
+.B /tmp
+for everyone, sticky (mode 1777): a user may not delete other people's
+files.
+.TP
+.B /usr/share/man
+these manual pages, one directory per section.
+.TP
+.B /var/sia
+the assistant's conversations, one folder per uid (siad alone).
+.TP
+.B .snapshots
+at the root of every volume, a hidden directory listing its snapshots.
+.SH SEE ALSO
+.BR intro (7),
+.BR siefs (5),
+.BR snap (1)

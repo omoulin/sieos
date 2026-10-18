@@ -1,0 +1,34 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/login/login.c
+.TH LOGIN 8
+.SH NAME
+login \- the console's login prompt
+.SH SYNOPSIS
+.B /bin/login
+(started by
+.BR init (8))
+.SH DESCRIPTION
+.B login
+only talks: it reads a name and a password (hidden) and asks the
+accounts server,
+.BR auth (8),
+which checks the password and starts the user's shell as a child of
+.BR login .
+login waits for it to end; then the prompt comes back. It never sees a
+hash. If login itself crashes, init adopts the running session and
+starts a new login only once that session has ended: never two on the
+console.
+.PP
+On the very first start there is no account at all. The accounts are
+created on the screen, by the desktop's welcome screen; login says so
+and waits. Only when there is no screen (no display card: the desktop
+ended without one, or keeps failing) does login ask for root's password
+and a first user itself.
+.SH FILES
+.TP
+.B /etc/hostname
+the name in the prompt.
+.SH SEE ALSO
+.BR auth (8),
+.BR sh (1),
+.BR users (5)

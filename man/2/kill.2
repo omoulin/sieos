@@ -1,0 +1,75 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH KILL 2
+.SH NAME
+kill, sys_kill, raise \- send a signal to a process or a group (SYS_KILL)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long kill(int pid, int sig);
+long sys_kill(int pid);          /* SIGKILL */
+int raise(int sig);              /* to the caller itself */
+.fi
+.SH DESCRIPTION
+.B kill
+sends signal
+.I sig
+to process
+.IR pid ,
+or, if
+.I pid
+is negative, to every process of group
+.RI - pid
+(a shell's job,
+.BR SPAWN_PGROUP ).
+Signal 0 sends nothing: it only checks that it could be sent.
+.PP
+The signals:
+.B SIGHUP
+(1, the terminal went away),
+.B SIGINT
+(2, Ctrl-C on the terminal's foreground job),
+.B SIGKILL
+(9),
+.B SIGUSR1
+(10),
+.B SIGUSR2
+(12),
+.B SIGTERM
+(15); any number below
+.B NSIG
+(32) may be sent. Unless the process catches or ignores it
+.RB ( signal (2)),
+a signal ends the process at once, its exit status
+.BR EXIT_SIGNAL ( sig );
+.B SIGKILL
+always does. An ignored one is dropped. A caught one goes to the thread
+that set its function: if it waits (a message, a reply, a sleep, a
+child), that call returns
+.B EINTR
+first.
+.PP
+Root may signal any process but the supervisor; others only their own
+processes.
+.SH RETURN VALUE
+0 if it went to at least one process, or a negative error.
+.SH ERRORS
+.TP
+.B EINVAL
+.I sig
+is out of range, or
+.I pid
+is 0.
+.TP
+.B ESRCH
+No such process or group.
+.TP
+.B EPERM
+The process (every one of the group) is not the caller's to signal.
+.SH SEE ALSO
+.BR signal (2),
+.BR tkill (2),
+.BR sigwait (2),
+.BR sys_wait (2),
+.BR kill (1)

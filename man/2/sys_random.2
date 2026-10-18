@@ -1,0 +1,46 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/random.c
+.TH SYS_RANDOM 2
+.SH NAME
+sys_random \- unpredictable bytes (SYS_RANDOM)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_random(void *buf, size_t n);
+.fi
+.SH DESCRIPTION
+.B sys_random
+fills
+.I buf
+with
+.I n
+unpredictable bytes, at most 4096 per call, for keys, nonces and
+passwords' salts. They come from a ChaCha20 generator whose key is
+hashed (BLAKE2b) from a pool of sources: the processor's own generator
+when present (RDSEED, else RDRAND, on x86-64), the timing jitter of a
+small loop at boot, and the time of interrupts. It reseeds at most once a
+second, and replaces its key after each call (fast key erasure), so a
+later look at the kernel's memory cannot recover earlier output.
+.PP
+Until enough entropy has been gathered after boot (256 bits, counted
+cautiously), the call fails with
+.BR EAGAIN ;
+try again a moment later.
+.SH RETURN VALUE
+.IR n ,
+or a negative error.
+.SH ERRORS
+.TP
+.B EINVAL
+.I n
+is above 4096.
+.TP
+.B EAGAIN
+Not seeded yet.
+.TP
+.B EFAULT
+.I buf
+is not writable.
+.SH SEE ALSO
+.BR intro (2)

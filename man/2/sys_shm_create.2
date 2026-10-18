@@ -1,0 +1,85 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/vm.c
+.TH SYS_SHM_CREATE 2
+.SH NAME
+sys_shm_create, sys_shm_map, sys_shm_hold, sys_shm_close \- shared memory objects (SYS_SHM_CREATE, SYS_SHM_MAP, SYS_SHM_HOLD, SYS_SHM_CLOSE)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_shm_create(uint64_t id, size_t size);
+void *sys_shm_map(uint64_t id, void *addr, int flags);
+long sys_shm_hold(uint64_t id, int pid);
+long sys_shm_close(uint64_t id);
+.fi
+.SH DESCRIPTION
+A shared memory object is a set of zeroed pages named by
+.IR id ,
+a random 63-bit number its creator chose (with
+.BR sys_random (2)).
+Knowing
+.I id
+is the right to use it: map it, hold it. It is how big data goes between
+processes without copies (the desktop's windows, the POSIX layer's
+shared files and program images).
+.PP
+.B sys_shm_create
+creates an object of
+.I size
+bytes (at most 256 MiB, counted in the creator's quota); the caller holds
+it.
+.B sys_shm_map
+maps the whole object into the caller, with the rights in
+.I flags
+.RB ( PROT_READ ,
+.BR PROT_WRITE ,
+.BR PROT_EXEC ),
+at
+.I addr
+with
+.BR MAP_FIXED ,
+else where the kernel chooses, as
+.BR sys_mmap (2).
+.B sys_shm_hold
+makes process
+.I pid
+(0: the caller) hold it once more, so it outlives the creator;
+.B sys_shm_close
+makes the caller hold it once less.
+.PP
+An object lives while it is held or mapped; a process's holds end with
+it. Unmapping is
+.BR sys_munmap (2).
+.SH RETURN VALUE
+.BR sys_shm_map :
+the address, or a negative error (cast to a pointer). The others: 0, or
+a negative error.
+.SH ERRORS
+.TP
+.B EEXIST
+.RB ( sys_shm_create )
+The id is taken.
+.TP
+.B EINVAL
+.RB ( sys_shm_create )
+.I id
+is 0 or has its top bit set, or
+.I size
+is 0 or above 256 MiB.
+.RB ( sys_shm_map )
+Bad flags or address.
+.TP
+.B ENOENT
+No object
+.I id
+(or, for
+.BR sys_shm_close ,
+none the caller holds).
+.TP
+.B ENOMEM
+No memory, or the quota is reached.
+.SH SEE ALSO
+.BR sys_mmap (2),
+.BR sys_spawn (2),
+.BR sys_futex (2),
+.BR sys_random (2)

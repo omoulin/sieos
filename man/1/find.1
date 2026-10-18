@@ -1,0 +1,34 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH FIND 1
+.SH NAME
+find \- files with an attribute
+.SH SYNOPSIS
+.B find
+.IB key = value
+.SH DESCRIPTION
+.B find
+is a command built into the shell,
+.BR sh (1).
+It prints the path of every file whose attribute
+.I key
+is
+.I value
+(set with
+.BR tag (1)),
+anywhere on the disk, one per line. It reads only the attribute index, not
+the directories.
+.SH EXIT STATUS
+0, or 1 on failure.
+.SH EXAMPLES
+.nf
+find project=SIEOS
+.fi
+.SH SEE ALSO
+.BR tag (1),
+.BR siefs (5)
+.SH BUGS
+Not Unix's
+.BR find :
+it does not walk directories or match names. Only values of at most 255
+bytes are indexed.

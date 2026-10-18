@@ -1,0 +1,52 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/atlas/settings.c user/atlas/atlas.c user/atlas/screen.c user/atlas/igfx.c
+.TH DISPLAY.CONF 5
+.SH NAME
+display.conf, .look, .mouse \- the desktop's settings
+.SH SYNOPSIS
+.B /etc/display.conf
+.br
+.B ~/.look
+.br
+.B ~/.mouse
+.SH DESCRIPTION
+The desktop,
+.BR atlas (4),
+keeps what its Settings window chooses in small files of
+.IB key = value
+lines.
+.TP
+.B /etc/display.conf
+the machine's, the login screen's too:
+.RS
+.TP
+.BI size= W x H
+the screen size, where the screen can take any (QEMU's VGA and ramfb, the
+Pi 4, the Intel display); by default 1920x1080
+.TP
+.BI brightness= N
+the panel's backlight, in % (the Intel display)
+.TP
+.BR lid=sleep " or " lid=off
+what closing a laptop's lid does: sleep, or the screen off
+.RE
+.TP
+.B ~/.look
+the user's own, applied at login:
+.B look=
+the look's number (Phosphor, Amber 1984, Glass, BeOS; Phosphor before a
+login) and
+.B zoom=
+the size of everything in % (50 to 400, 100 by default)
+.TP
+.B ~/.mouse
+the user's own, applied at login:
+.B speed=
+the pointer's speed in % (25 to 400, 100 by default),
+.B swap=1
+left-handed buttons,
+.B reverse=1
+the wheel reversed
+.SH SEE ALSO
+.BR atlas (4),
+.BR con (4)

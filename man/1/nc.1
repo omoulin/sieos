@@ -1,0 +1,48 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fetch/fetch.c
+.TH NC 1
+.SH NAME
+nc \- connect to a TCP or UDP port, or wait for a connection
+.SH SYNOPSIS
+.B nc
+.RB [ \-u ]
+.I host port
+.br
+.B nc \-l
+.RB [ \-u ]
+.I port
+.SH DESCRIPTION
+.B nc
+connects to
+.I port
+of
+.I host
+(TCP, or UDP with
+.BR \-u ):
+each line typed goes there, and what comes back is shown. Ctrl-D ends it.
+.PP
+.B nc
+is another name of
+.BR fetch (1).
+.SH OPTIONS
+.TP
+.B \-u
+UDP instead of TCP.
+.TP
+.B \-l
+Listen: wait on
+.I port
+for one connection (with
+.BR \-u ,
+the lines typed go to the last sender).
+.SH SEE ALSO
+.BR netstat (1),
+.BR fetch (1),
+.BR netd (4)
+.SH BUGS
+.B nc
+works a line at a time (the console gives typed lines); when the other
+side closes, it ends at the next Enter (a console read under way cannot be
+taken back). No
+.B nc
+in a pipe: the shell has no pipes.

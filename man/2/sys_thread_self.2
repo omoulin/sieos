@@ -1,0 +1,28 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/vm.c
+.TH SYS_THREAD_SELF 2
+.SH NAME
+sys_thread_self \- this thread's id, and a word cleared when it ends (SYS_THREAD_SELF)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_thread_self(volatile void *clear);
+.fi
+.SH DESCRIPTION
+.B sys_thread_self
+returns the calling thread's id. If
+.I clear
+is not 0, it also registers that 32-bit word: when this thread ends, the
+kernel writes 0 there and wakes one thread sleeping on it with
+.BR sys_futex (2).
+That is how a thread waits for another to end (pthread_join; Linux's
+set_tid_address).
+.PP
+A process's first thread has the process's pid as its id.
+.SH RETURN VALUE
+The thread's id. It cannot fail.
+.SH SEE ALSO
+.BR thread_start (2),
+.BR sys_futex (2),
+.BR tkill (2)

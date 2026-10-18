@@ -1,0 +1,39 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/ipts/ipts.c user/lib/hidrep.c
+.TH IPTS 4
+.SH NAME
+ipts \- a Surface's touch screen (Intel Precise Touch & Stylus)
+.SH SYNOPSIS
+No port: it sends touches to the console.
+x86-64 only.
+.B /bin/ipts
+is started at boot by
+.BR init (8),
+with device rights; with no iTouch MEI, or one that will not start (3
+tries), it ends with status 0 after one line saying why, and is not started
+again.
+.SH DESCRIPTION
+A Surface's touch controller is not a HID device the host sees: Intel's
+Management Engine runs it, and talks to SIEOS through its own MEI function,
+the "iTouch" one (Ice Lake: PCI 00:16.4, 8086:34e4; Kaby Lake: 8086:9d3e).
+.PP
+.B ipts
+resets the MEI (two rings of 32-bit slots, polled), asks the bus for its
+clients and connects to IPTS's (a fixed-address client is used without
+connecting), gets the sensor's information, gives it 16 data buffers and 16
+feedback buffers in DMA memory, then reads each buffer the sensor fills and
+gives it back.
+On the Surface Pro 4 to 7 the Management Engine turns the sensor's frames
+into a single-touch HID report, which user/lib/hidrep.c reads as a touch
+screen: the console gets an absolute position
+.RB ( CON_INJECT ),
+the left button while touching.
+.PP
+Every step is logged (the serial console,
+.BR dmesg (1)).
+.SH SEE ALSO
+.BR con (4),
+.BR i2chid (4)
+.SH BUGS
+One finger only: several fingers and the pen need the raw mode (heat maps,
+the pen's own reports), not done.

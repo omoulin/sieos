@@ -1,0 +1,62 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/acct/acct.c
+.TH USERADD 8
+.SH NAME
+useradd, userdel, acct \- add and remove users
+.SH SYNOPSIS
+.B useradd
+.I name
+[\fI"full name"\fR]
+.br
+.B userdel
+.I name
+.SH DESCRIPTION
+.B useradd
+(root) adds a user: it asks for the password twice (hidden), and the
+accounts server gives the next uid from 1000 up, a group of the same
+number, membership of
+.B users
+(gid 100), and the home
+.BI /home/ name
+(mode 0700, an encrypted volume whose key is wrapped by the password).
+The full name defaults to the login name.
+.PP
+.B userdel
+(root) removes a user; the home folder stays.
+.PP
+A login name has 1 to 31 characters: lower-case letters, digits,
+.B _
+or
+.BR \- ;
+it starts with a letter or
+.BR _ ,
+and is not
+.BR root .
+A password has at least 8 characters and is not the name.
+.PP
+.BR passwd (1),
+.BR su (1),
+.B useradd
+and
+.B userdel
+are one program,
+.BR /bin/acct ,
+under four names (symbolic links); it does what its name says, and run
+as
+.B acct
+it only says so. Each only asks the accounts server,
+.BR auth (8),
+which decides from the caller's identity.
+.SH EXIT STATUS
+0 on success; 1 otherwise.
+.SH FILES
+.BR /etc/users ,
+.BR /etc/groups ,
+.B /etc/secrets
+(written by
+.BR auth (8)).
+.SH SEE ALSO
+.BR passwd (1),
+.BR su (1),
+.BR users (5),
+.BR auth (8)

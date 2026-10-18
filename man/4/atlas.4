@@ -1,0 +1,84 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/atlas/atlas.c user/atlas/client.c include/mk/atlas.h include/mk/proto.h
+.TH ATLAS 4
+.SH NAME
+atlas \- the desktop: screen, windows, terminals (port "atlas")
+.SH SYNOPSIS
+Port
+.B atlas
+(its terminals are channels on it, "atlas#N").
+.B /bin/atlas
+is started at boot by
+.BR init (8),
+with device rights (the screen); with no display card it ends with status 0
+and is not started again.
+.SH DESCRIPTION
+.B atlas
+is the SIEOS desktop, laid out as BeOS was.
+One process does it all, to keep the system small: it drives the screen,
+draws, shows the login screen and the first start, is the terminal of the
+shells in its windows, edits files, lists folders, keeps the settings and
+talks to the assistant.
+It takes the keyboard and mouse from the console
+.RB ( CON_INPUT ,
+.BR con (4)).
+.PP
+Each terminal window is a console for the shell in it: the shell's identity
+names "atlas#N", and its CON_WRITE and CON_READ come to atlas on that
+channel, with the same line editing as the text console.
+Apps are started from launchers,
+.BR app (5).
+Nothing runs when nothing happens: the picture changes only on an event, and
+only the changed region is sent to the screen.
+.PP
+Other programs may open windows of their own
+.RB ( <mk/atlas.h> ):
+they draw the insides into shared memory, in 32-bit 0x00RRGGBB pixels, and
+atlas frames them; at most 8 at once; only the user logged in, or root.
+.SH MESSAGES
+.TP
+.B ATLAS_WIN_OPEN
+sbuf = the title \-> a window id; its first event is ATW_SIZE.
+.TP
+.B ATLAS_WIN_BUFFER
+w[1] = window, w[2] = a shared memory object
+.RB ( sys_shm_create (2))
+with its pixels, w[3] = width | height << 16 \-> 0.
+.TP
+.B ATLAS_WIN_DAMAGE
+w[1] = window, sbuf = atlas_rect_t[]: what changed \-> 0 once it is on the
+screen (pace frames by it).
+.TP
+.B ATLAS_WIN_EVENT
+w[1] = window; rbuf <\- atlas_event_t[] (ATW_KEY, ATW_POINTER, ATW_SIZE,
+ATW_FOCUS, ATW_CLOSE); waits for input \-> how many.
+.TP
+.BR ATLAS_WIN_TITLE ", " ATLAS_WIN_CLOSE
+a new title; close the window.
+.TP
+.BR ATLAS_WIN_CLIP_GET ", " ATLAS_WIN_CLIP_SET
+the clipboard's text (at most 16 KiB).
+.TP
+.B ATLAS_NOTE
+(root: btd) sbuf = a line to show for a while; w[1] = 1: a question, with
+Accept and Decline.
+.PP
+Errors: \-EPERM (not the user's desktop), \-EBADF (no such window),
+\-EMFILE (too many).
+.SH FILES
+.TP
+.B /etc/apps/*.app
+everyone's launchers;
+.B ~/*.app
+the user's own
+.TP
+.B /etc/display.conf
+the screen size, the panel's brightness, what the lid does
+.TP
+.BR ~/.look ", " ~/.mouse
+the user's look and size, and mouse settings
+.SH SEE ALSO
+.BR app (5),
+.BR display.conf (5),
+.BR con (4),
+.BR siad (4)

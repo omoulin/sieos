@@ -1,0 +1,118 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/python/main.c
+.TH PYTHON 1
+.SH NAME
+python \- MicroPython, the Python 3 language
+.SH SYNOPSIS
+.B python
+.br
+.B python
+.I file
+.RI [ args ...]
+.br
+.B python \-c
+.IR code ...
+.br
+.B python \-\-version
+.SH DESCRIPTION
+.B python
+is MicroPython, the Python 3 language in a small interpreter. Without
+arguments it gives the prompt
+.RB ( >>>
+and
+.B ...
+lines; Ctrl-D leaves). With a
+.IR file ,
+it runs that script, with
+.B sys.argv
+=
+.RI [ file ", " args ...].
+Ctrl-C raises KeyboardInterrupt.
+.PP
+Modules:
+.BR sys ,
+.BR os ,
+.BR time ,
+.BR math ,
+.BR json ,
+.BR re ,
+.BR struct ,
+.BR binascii ,
+.BR hashlib ,
+.BR random ,
+.BR collections ,
+.BR heapq ,
+.BR errno ,
+.BR io ,
+.BR array ,
+.BR gc ,
+.BR micropython ,
+.B socket
+(TCP and UDP through the network server) and
+.B ssl
+(TLS 1.3 or 1.2, certificates checked against
+.IR /etc/ssl/roots ).
+.B os.system
+runs
+.B sh \-c
+and returns its status.
+.B import
+reads
+.B .py
+files from the script's folder (or the current one), then
+.IR /lib/python .
+.PP
+The shell splits a command line at spaces and removes double quotes, so
+in
+.B python \-c
+use single quotes for strings. A program's command line has room for 256
+bytes.
+.SH OPTIONS
+.TP
+.BI \-c " code"
+Run
+.IR code :
+the words after
+.BR \-c ,
+joined by spaces.
+.TP
+.BR \-\-version ", " \-V
+Print the version.
+.SH FILES
+.TP
+.I /lib/python
+Modules for
+.BR import .
+.TP
+.I /src/python
+Two examples:
+.BI primes.py " n"
+and
+.BI words.py " file" \fR...
+.SH EXAMPLES
+.nf
+python /src/python/primes.py 1000
+python \-c print('a b', 2**100)
+.fi
+.SH SEE ALSO
+.BR sh (1),
+.BR cc (1)
+.SH BUGS
+No
+.BR signal ,
+.BR os.path ,
+.BR os.environ ,
+.BR subprocess ,
+.BR threading ,
+.BR select ,
+.BR zlib ,
+.B datetime
+or
+.B cmath
+modules; no
+.B \-m
+.IR module ;
+no
+.B .mpy
+files. On AArch64 a 17-digit float literal can be one unit off in the
+last place.

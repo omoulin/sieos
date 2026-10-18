@@ -1,0 +1,63 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/auth/auth.c
+.TH AUTH 8
+.SH NAME
+auth \- the accounts server
+.SH SYNOPSIS
+.B /bin/auth
+(started as root by
+.BR init (8),
+on demand: port
+.BR auth )
+.SH DESCRIPTION
+.B auth
+is the only program that reads the password hashes and changes the
+account files. A program run by a user has that user's identity, so it
+can neither read the hashes nor start a program as someone else; it asks
+.BR auth ,
+which knows who asks (the kernel stamps the caller's uid on every
+message) and decides. That is how
+.BR login (8),
+.BR su (1),
+.BR passwd (1)
+and
+.BR sshd (8)
+work without any program that changes its own identity.
+.PP
+After checking a password
+.RB ( AUTH_LOGIN )
+it starts the user's shell with the user's identity, as a child of the
+asker, and answers its pid; the asker waits for it. So sessions do not
+depend on auth: if it crashes and is restarted, they go on. The user's
+password also opens their encrypted home: auth derives the
+key-encryption key (Argon2id) and hands only that to the file server.
+.PP
+Passwords are hashed with Argon2id (16 MiB, 24 passes, 1 lane, a 16-byte
+random salt); the memory is given back right after. A wrong password
+costs one more second; an unknown name costs the same time as a known
+one.
+.PP
+The first start (no account yet) is decided here: the desktop says
+"I am a screen, I do it", or "there is no screen" and login does it.
+Only that owner may create the accounts, all at once, and only while
+root has no account.
+.SH FILES
+Each change is written to
+.IB file .new
+and renamed over
+.I file
+in one step.
+.TP
+.B /etc/users
+name, uid, gid, home, shell, full name (mode 0644)
+.TP
+.B /etc/groups
+name, gid, members (0644)
+.TP
+.B /etc/secrets
+name, method, memory, passes, lanes, salt, hash (0600)
+.SH SEE ALSO
+.BR users (5),
+.BR login (8),
+.BR useradd (8),
+.BR security (7)

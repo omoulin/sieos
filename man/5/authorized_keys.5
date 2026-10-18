@@ -1,0 +1,56 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/ssh/ssh.c user/sshd/sshd.c user/lib/ssh.c
+.TH AUTHORIZED_KEYS 5
+.SH NAME
+authorized_keys, known_hosts, sshd_config \- the SSH files
+.SH SYNOPSIS
+.B ~/.ssh/authorized_keys
+.br
+.B ~/.ssh/known_hosts
+.br
+.BR ~/.ssh/id_ed25519 ", " ~/.ssh/id_ed25519.pub
+.br
+.B /etc/ssh/sshd_config
+.br
+.BR /etc/ssh/ssh_host_ed25519_key ", " .pub
+.SH DESCRIPTION
+SIEOS's SSH uses OpenSSH's file formats, Ed25519 keys only.
+.TP
+.B ~/.ssh/authorized_keys
+the keys
+.BR sshd (8)
+lets in as this user: "ssh-ed25519 KEY comment" lines.
+Options before the key are skipped, not applied.
+A locked encrypted home cannot be read, so its keys count only while it is
+open (the user logged in elsewhere); a password works always.
+.TP
+.B ~/.ssh/known_hosts
+the servers
+.BR ssh (1)
+has seen: "host" (port 22) or "[host]:port", then the key.
+A first connection asks, and yes adds the line; a host whose key changed is
+refused, with its new fingerprint and the line to remove.
+.TP
+.BR ~/.ssh/id_ed25519 ", " id_ed25519.pub
+the user's key, made by
+.BR ssh-keygen (1):
+OpenSSH's private key format, unencrypted (a key with a passphrase is
+reported and skipped), and its public line.
+.TP
+.B /etc/ssh/sshd_config
+the switch: sshd starts at boot only if this file exists. Nothing in it is
+read yet.
+.TP
+.BR /etc/ssh/ssh_host_ed25519_key ", " .pub
+the server's host key, made on its first start (mode 0600, root only).
+.SH EXAMPLES
+To turn the server on (as root):
+.nf
+mkdir /etc/ssh
+echo on > /etc/ssh/sshd_config
+svc restart sshd
+.fi
+.SH SEE ALSO
+.BR ssh (1),
+.BR ssh-keygen (1),
+.BR sshd (8)

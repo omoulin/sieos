@@ -1,0 +1,51 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH SYS_PLACE 2
+.SH NAME
+sys_place \- P-cores or E-cores for a thread (SYS_PLACE)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_place(int tid, int place);
+.fi
+.SH DESCRIPTION
+On a processor with P-cores (fast) and E-cores (efficient),
+.B sys_place
+says where a thread of the calling process runs:
+.B PLACE_NORMAL
+(P-cores first, for speed) or
+.B PLACE_BACKGROUND
+(E-cores first).
+.I tid
+0 is the caller, which moves at once if it is on the wrong kind; -1 is
+the whole process, its later threads too; another thread of the process
+moves from its next wake-up.
+.PP
+A thread is placed when it wakes: an idle core of its kind, else one of
+the other kind; a normal thread may also ask a P-core running background
+work to give way. Where all cores are alike, it has no effect. Processes
+started with
+.B SPAWN_BACKGROUND
+.RB ( sys_spawn (2))
+begin as background work.
+.SH RETURN VALUE
+0, or a negative error.
+.SH ERRORS
+.TP
+.B EINVAL
+.I place
+is neither of the two.
+.TP
+.B ESRCH
+No thread
+.I tid
+in this process.
+.SH BUGS
+Tested in QEMU only, with the boot option
+.BR pcores= ;
+not yet on a real hybrid PC.
+.SH SEE ALSO
+.BR sys_info (2),
+.BR sys_spawn (2),
+.BR thread_start (2)

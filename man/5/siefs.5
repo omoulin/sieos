@@ -1,0 +1,100 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: siefs/siefs.h siefs/siefs_int.h siefs/space.c siefs/tree.c siefs/crypt.c
+.TH SIEFS 5
+.SH NAME
+siefs \- the SieFS on-disk format
+.SH DESCRIPTION
+SieFS keeps files so that they survive anything: a crash or power cut at any
+moment leaves either the state of the last commit or the one before it,
+never a mix, and every block read is checked against a checksum.
+Five ideas: never overwrite (a change goes to free space); one B+tree holds
+everything (inodes, directory entries, extents, small files, attributes:
+items sorted by a key); a commit flips one block (the superblock); parents
+hold their children's checksums; small files (up to 1536 bytes) live inside
+the tree.
+.SS Layout
+Blocks are 4 KiB, numbers little-endian.
+.nf
+block 0         unused (room for a boot record)
+block 1, 2      the superblock, slots 0 and 1: commit s writes slot s % 2
+idx[0], bm[0]   bitmap copy 0: its index (a CRC per bitmap block), 1 bit per block
+idx[1], bm[1]   the same, copy 1
+data_start ...  tree nodes and file data, anywhere
+.fi
+A bitmap block covers 32768 blocks (128 MiB); an index block holds 1024
+checksums.
+.SS The superblock
+magic "SIEFSv1\e0", version 1, block size 4096, the volume's size, the commit
+number
+.B seq
+(its slot is seq % 2), a block pointer to the root tree, the layout, used
+blocks, creation time, UUID, label, the CRC of each index block of this
+slot's bitmap copy, and a CRC-32C of the whole block.
+Mounting takes the valid slot with the highest seq; if anything in it fails,
+the other one: the previous commit, intact.
+.SS Block pointers
+40 bytes: block (8), gen (8: the commit that wrote it, checked on read),
+csum (4: the block's CRC-32C), flags (4), mac (16: an encrypted block's tag).
+.SS Tree nodes
+One block: a 32-byte header ("NODE", level, item count, data start, commit,
+tree); a leaf holds items (key 16 bytes, value offset and length) growing
+up and values (at most 1900 bytes) growing down; an internal node holds
+entries (key, block pointer), 72 per node.
+.SS Keys and items
+A key is (object id, type << 56 | offset).
+Types:
+.B INODE
+1 (mode, uid, gid, links, size, parent, flags, times in ns),
+.B INLINE
+2 (a small file's contents or a symlink's target),
+.B EXTENT
+3 (at a byte offset: first block, up to 32 blocks, a CRC per block),
+.B DIRENT
+4 (by the name's hash: object, type, name),
+.B XATTR
+5 (attributes),
+.B XINDEX
+6 (the attribute index), and in the root tree
+.B VOLUME
+16,
+.B VOLNAME
+17 (a snapshot's name),
+.B DEAD
+18 (blocks a snapshot still uses),
+.B VOLKEY
+19 (an encrypted volume's sealed key).
+The root directory is object 2; ids are never reused.
+.SS Volumes, snapshots, encryption
+The superblock points at a root tree whose items are volumes, each with its
+own file tree; volume 1 is "/", others (a user's home) are mounted at a
+directory entry.
+An object's number is volume << 48 | id.
+A snapshot is a read-only volume record sharing its head's tree at one
+commit; each volume's root shows them in a hidden
+.B .snapshots
+directory.
+An encrypted volume seals every tree node (but its header) and data block
+with ChaCha20-Poly1305 under a 32-byte volume key, itself sealed in VOLKEY
+by a key-encryption key derived from the owner's password (Argon2id).
+.SH FILES
+.TP
+.B build/host/
+the host tools:
+.B mkfs.siefs
+(make a volume),
+.B fsck.siefs
+(check it),
+.B siefs
+(read and write it),
+.B siefs-dump
+(show its superblocks and nodes)
+.SH SEE ALSO
+.BR fs (4),
+.BR mkfs.siefs (8),
+.BR snap (1),
+docs/siefs.md
+.SH BUGS
+Files up to 2^56 bytes, volumes up to 113 TiB, names up to 255 bytes,
+attribute values up to 1024 bytes.
+No quotas; access times are not updated; directory listings are in hash
+order.

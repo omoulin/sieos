@@ -1,0 +1,60 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH PORT_LOOKUP 2
+.SH NAME
+port_lookup, port_find \- find a named port (SYS_PORT_LOOKUP)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long port_lookup(const char *name);
+long port_find(const char *name);   /* LOOKUP_NOWAIT */
+.fi
+.SH DESCRIPTION
+.B port_lookup
+returns the number of the port called
+.IR name .
+If there is none yet, it waits until a server creates it, so programs
+need not care in which order the servers start.
+.B port_find
+passes
+.B LOOKUP_NOWAIT
+and answers at once.
+.PP
+If the name is one the supervisor starts on demand (declared with
+.BR sys_want (2)),
+a waiting lookup also tells the supervisor, which starts the server; the
+caller wakes when its port appears. If that server cannot start, the
+supervisor fails the waiting lookups with its error.
+.B port_find
+never starts anything.
+.SH RETURN VALUE
+The port's number (> 0), or a negative error.
+.SH ERRORS
+.TP
+.B ENOENT
+.RB ( port_find )
+No port has this name.
+.TP
+.B EINVAL
+.I name
+is empty or longer than 15 characters.
+.TP
+.B EFAULT
+.I name
+is not readable.
+.TP
+.B EINTR
+A signal the process catches came while it waited.
+.TP
+.B EPIPE
+The process is ending.
+.PP
+Any other error is the one the supervisor gave with
+.BR sys_want (2)
+for a server that cannot start.
+.SH SEE ALSO
+.BR port_create (2),
+.BR ipc_call (2),
+.BR sys_want (2),
+.BR init (8)

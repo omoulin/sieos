@@ -1,0 +1,50 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH SYS_IDENT 2
+.SH NAME
+sys_ident \- who a process is (SYS_IDENT)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_ident(int pid, mk_ident_t *id);
+
+typedef struct { int32_t n, g[NGROUPS]; } mk_groups_t;
+typedef struct {
+    int32_t pid, uid, gid;
+    mk_groups_t groups;   /* the other groups, at most 16 */
+    char console[16];     /* its terminal */
+} mk_ident_t;
+.fi
+.SH DESCRIPTION
+.B sys_ident
+fills
+.I id
+with the identity of process
+.IR pid ,
+or of the caller if
+.I pid
+is 0: its pid, user, primary group, the other groups it belongs to, and
+its terminal ("port" or "port#channel"; empty: the system console, port
+"console").
+.PP
+The kernel stamps uid and gid on every message; a server asks for the
+other groups with this call only when they matter. A process's identity
+never changes, so the answer may be kept. The terminal is inherited by
+children: the client library sends its console requests there, which is
+how a shell in a window of the desktop talks to that window.
+.SH RETURN VALUE
+0, or a negative error.
+.SH ERRORS
+.TP
+.B ESRCH
+No such process (or it has ended).
+.TP
+.B EFAULT
+.I id
+is not writable.
+.SH SEE ALSO
+.BR sys_spawn (2),
+.BR ipc_recv (2),
+.BR id (1),
+.BR security (7)

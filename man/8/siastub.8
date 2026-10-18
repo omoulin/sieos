@@ -1,0 +1,22 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/siastub/siastub.c
+.TH SIASTUB 8
+.SH NAME
+siastub \- a stand-in for the assistant server (tests only)
+.SH SYNOPSIS
+.B siastub &
+.SH DESCRIPTION
+.B siastub
+serves the port
+.B sia
+with canned answers sent one word at a time, 30 ms apart, so the
+desktop's assistant panel can be tested without a model.
+.B "make gui-test"
+starts it by hand. A question with "slowly" in it gets a long answer (to
+test Stop); any other gets a short one with two actions: a file to open
+and the files with an attribute to list.
+.PP
+If the real assistant already runs, it says so and ends.
+.SH SEE ALSO
+.BR sia (1),
+.BR siad (4)

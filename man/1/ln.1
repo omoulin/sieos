@@ -1,0 +1,38 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH LN 1
+.SH NAME
+ln \- link a file
+.SH SYNOPSIS
+.B ln
+.I from to
+.br
+.B ln \-s
+.I target path
+.SH DESCRIPTION
+.B ln
+is a command built into the shell,
+.BR sh (1).
+It gives the existing file
+.I from
+a second name,
+.I to
+(a hard link: both names are the same file).
+.SH OPTIONS
+.TP
+.B \-s
+A symbolic link instead:
+.I path
+holds the text
+.IR target ,
+which need not exist; it is followed when
+.I path
+is opened.
+.SH EXIT STATUS
+0, or 1 on failure.
+.SH SEE ALSO
+.BR ls (1),
+.BR mv (1),
+.BR sh (1)
+.SH BUGS
+Hard links do not cross volumes.

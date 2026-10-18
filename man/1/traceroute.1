@@ -1,0 +1,29 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fetch/fetch.c
+.TH TRACEROUTE 1
+.SH NAME
+traceroute \- the routers on the way to a host
+.SH SYNOPSIS
+.B traceroute
+.I host
+.SH DESCRIPTION
+.B traceroute
+sends pings with a growing time to live, 1 to 30: each router on the way
+answers "time exceeded", and its address and the time are printed, one
+line per hop
+.RB ( *
+when nothing answered within 2 seconds). It stops when
+.I host
+itself answers.
+.PP
+.B traceroute
+is another name of
+.BR fetch (1).
+.SH EXIT STATUS
+0 if the host was reached within 30 hops, 1 otherwise.
+.SH SEE ALSO
+.BR ping (1),
+.BR fetch (1)
+.SH BUGS
+QEMU's user network does not count the time to live, so every host is one
+hop away there; the answers of real routers are untested.

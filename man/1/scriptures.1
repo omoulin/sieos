@@ -1,0 +1,67 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/scriptures/app.c
+.TH SCRIPTURES 1
+.SH NAME
+scriptures \- the scriptures, offline
+.SH SYNOPSIS
+.B scriptures
+.RI [ place ...]
+.SH DESCRIPTION
+.B scriptures
+reads the scriptures from churchofjesuschrist.org offline: footnotes,
+full-text search, highlights, notes and tags, several chapters open at once
+in tabs, and notes synced with a Church Account (Gospel Library). It is the
+.B Scriptures
+app of the desktop
+.RB ( /etc/apps/scriptures.app ),
+a window of the desktop's own kind.
+.PP
+The first start shows an empty library:
+.B Download...
+picks the language and the volumes; the standard works are about 1,600
+pages and take a few minutes. The tabs open last time come back at the
+next start. Each
+.I place
+(a path that starts with
+.BR / ,
+as the content uses:
+.BR /scriptures/ot/gen/1 )
+is opened as well.
+.SS Keys
+.TP
+.B Ctrl+F
+search
+.TP
+.B Ctrl+Shift+N
+every note, in a tab
+.TP
+.B Ctrl+L
+show or hide the library
+.TP
+.BR Ctrl+5 " .. " Ctrl+9
+tab 5 .. 9 (Ctrl+1 .. 4 are the desktop's workspaces)
+.TP
+.BR Left ", " Right
+the previous and next chapter
+.TP
+.BR Ctrl+C ", " Ctrl+V
+copy the selection with its reference; paste in a field
+.TP
+.B middle button
+open a chapter, a result, a note or a link in a new tab
+.SH FILES
+.TP
+.B ~/.scriptures/
+the library: chapters, the search index,
+.BR notes.json ,
+.BR settings.txt ,
+the session
+.TP
+.B ~/.scriptures/account
+the Church Account's session (mode 600)
+.SH SEE ALSO
+.BR atlas (4),
+.BR app (5)
+.SH BUGS
+The desktop sends no Alt and no Ctrl with a click, and keeps Ctrl+T and
+Ctrl+Tab: use the tab bar instead.

@@ -1,0 +1,135 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/mail/mail.c
+.TH MAIL 1
+.SH NAME
+mail \- read mail with IMAP or POP3, send it with SMTP
+.SH SYNOPSIS
+.B mail
+.RB [ \-a
+.IR n ]
+.RB [ list
+.RI [ folder ]]
+.br
+.B mail
+.RB [ \-a
+.IR n ]
+.B folders
+.br
+.B mail
+.RB [ \-a
+.IR n ]
+.BR read | delete
+.I id
+.RI [ folder ]
+.br
+.B mail
+.RB [ \-a
+.IR n ]
+.B save
+.I id
+.RI [ folder " [" n " [" dir ]]]
+.br
+.B mail
+.RB [ \-a
+.IR n ]
+.B send
+.I file
+.br
+.B mail mailto:\fIurl\fP
+.br
+.B mail \-S
+.SH DESCRIPTION
+.B mail
+reads mail with IMAP or POP3 and sends it with SMTP, always over TLS. The
+accounts are in
+.I ~/.mail
+(made by the desktop's Mail window, or by hand: see
+.BR mail (5)).
+Ports 993, 995 and 465 speak TLS at once; others (143, 110, 587) start
+in clear and must switch to TLS (STARTTLS, STLS) before the password is
+sent, or nothing is sent. IMAP keeps its connection between commands;
+POP3 copies new messages into
+.IR ~/Mail/INBOX ,
+one file each, named by the server's UIDL.
+.SH COMMANDS
+.TP
+.BR list " [\fIfolder\fP]"
+The newest 300 messages of
+.I folder
+(INBOX by default): id,
+.B *
+if unread, date, from, subject (tab-separated). The default command.
+.TP
+.B folders
+The folders and their unread messages (POP3: INBOX only).
+.TP
+.BI read " id " \fR[\fIfolder\fR]
+A message as text (its text/plain part, else its HTML with the tags
+stripped), and marked read.
+.TP
+.BI save " id " "\fR[\fIfolder \fR[\fIn \fR[\fIdir\fR]]]"
+Its attachments (only the
+.IR n th
+with
+.IR n )
+into
+.I ~/Downloads
+(or
+.IR dir ).
+.TP
+.BI delete " id " \fR[\fIfolder\fR]
+Into the Trash; from the Trash (or with POP3), for good.
+.TP
+.BI send " file"
+Send a draft:
+.BR To: ,
+.BR Cc: ,
+.B Subject:
+and
+.B Attach:
+(a file, one a line) lines, a blank line, the text. A copy goes into the
+Sent folder (IMAP) unless the account says
+.BR sent=0 .
+.TP
+.BI mailto: url
+A message to the link's address (its subject, Cc and body filled in): the
+text is typed, and a line with only
+.B .
+sends it.
+.SH OPTIONS
+.TP
+.BI \-a " n"
+The
+.IR n th
+account of
+.I ~/.mail
+(from 0; the first by default).
+.TP
+.B \-S
+Serve the desktop's Mail window: commands from the console, one a line,
+words separated by tabs; each answer ends with a line of one 0x1e byte.
+.SH FILES
+.TP
+.I ~/.mail
+The accounts.
+.TP
+.I ~/Mail/INBOX
+POP3's messages (another account's in
+.IR ~/Mail/INBOX-N );
+read ones carry the attribute
+.BR seen=1 .
+.TP
+.I ~/Downloads
+Where attachments are saved.
+.SH EXAMPLES
+.nf
+mail
+mail read 4711
+mail \-a 1 folders
+.fi
+.SH SEE ALSO
+.BR mail (5),
+.BR atlas (4),
+.BR fetch (1)
+.SH BUGS
+Messages over 8 MiB are left on the POP3 server. At most 8 accounts.

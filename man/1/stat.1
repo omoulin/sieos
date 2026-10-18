@@ -1,0 +1,24 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH STAT 1
+.SH NAME
+stat \- details of files
+.SH SYNOPSIS
+.B stat
+.IR path ...
+.SH DESCRIPTION
+.B stat
+is a command built into the shell,
+.BR sh (1).
+For each
+.I path
+it prints its object number on the disk, type and permissions, size in
+bytes and in blocks, number of links, owner and group numbers, and three
+times (UTC): last modified, last changed, created. A symbolic link is
+described itself, not what it points to.
+.SH EXIT STATUS
+0, or 1 at the first path that cannot be read.
+.SH SEE ALSO
+.BR ls (1),
+.BR df (1),
+.BR sh (1)

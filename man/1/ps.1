@@ -1,0 +1,51 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH PS 1
+.SH NAME
+ps \- the running programs
+.SH SYNOPSIS
+.B ps
+.SH DESCRIPTION
+.B ps
+is a command built into the shell,
+.BR sh (1).
+It prints one line per process, from the kernel's list
+.RB ( sys_tasks (2)):
+.TP
+.B PID PPID UID
+its number, its parent's (0: started by the kernel), its user's
+.TP
+.B CPU
+where its first thread runs (or last ran)
+.TP
+.B THR
+its number of threads
+.TP
+.B STATE
+its most active thread's:
+.B run
+or
+.B ready
+(running or about to),
+.B send
+and
+.B reply
+(waiting for a server's answer),
+.B recv
+(a server waiting for messages),
+.B lookup
+(waiting for a server to exist),
+.BR sleep ,
+.B wait
+(for a child),
+.B dead
+.TP
+.B MEM
+the memory it uses, KiB
+.TP
+.B NAME
+its program's name
+.SH SEE ALSO
+.BR kill (1),
+.BR mem (1),
+.BR svc (8)

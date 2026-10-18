@@ -1,0 +1,127 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fetch/fetch.c
+.TH FETCH 1
+.SH NAME
+fetch, curl, wget \- get a URL over HTTP or HTTPS
+.SH SYNOPSIS
+.B fetch
+.RB [ \-v ]
+.RB [ \-k ]
+.RB [ \-o
+.IR file ]
+.I url
+.br
+.B curl
+.RB [ \-v ]
+.RB [ \-k ]
+.RB [ \-o
+.IR file ]
+.I url
+.br
+.B wget
+.RB [ \-k ]
+.RB [ \-O
+.IR file ]
+.I url
+.br
+.B fetch \-i
+.br
+.B fetch \-p
+.I host
+.RI [ count ]
+.br
+.B fetch \-r
+.I host
+.br
+.B fetch \-l
+.I port
+.SH DESCRIPTION
+.B fetch
+gets the body of an
+.B http://
+or
+.B https://
+URL and shows it on the screen, or writes it into a file. HTTPS speaks
+TLS 1.3 or 1.2: the server's certificate chain is followed to one of the
+trusted roots in
+.IR /etc/ssl/roots ,
+every signature checked, its dates checked against the clock chip's date
+and its name against the certificate's names.
+.PP
+.B fetch
+is one program with many names: the network's everyday commands
+.RB ( ping ,
+.BR host ,
+.BR nslookup ,
+.BR ifconfig ,
+.BR netstat ,
+.BR traceroute ,
+.BR nc ,
+.BR curl ,
+.BR wget )
+are symbolic links to
+.IR /bin/fetch ,
+and the name it was started by says which command it is.
+.B curl
+is the same as
+.BR fetch .
+.B wget
+writes into a file named as the URL's last part, else
+.IR index.html .
+.PP
+When the body goes into a file (or with
+.BR \-v ),
+the size, the time and the speed are printed at the end.
+.SH OPTIONS
+.TP
+.B \-v
+Also print the HTTP status, the headers and the TLS cipher.
+.TP
+.B \-k
+Do not check the server's certificate (tests only).
+.TP
+.BI \-o " file\fR, " \-O " file"
+Write the body into
+.I file
+instead of the screen.
+.TP
+.B \-i
+The older name of
+.BR ifconfig (1).
+.TP
+.BI \-p " host " \fR[\fIcount\fR]
+The older name of
+.BR ping (1)
+(3 pings by default).
+.TP
+.BI \-r " host"
+The older name of
+.BR host (1).
+.TP
+.BI \-l " port"
+Answer one HTTP request on
+.I port
+with a short text, then end (a test; it waits at most a minute).
+.SH EXIT STATUS
+0 on success; 1 on a network error or an HTTP status of 400 or more;
+2 for a usage error.
+.SH FILES
+.TP
+.I /etc/ssl/roots
+The trusted root certificates (Mozilla's list, in DER).
+.SH EXAMPLES
+.nf
+fetch https://example.com/
+wget https://example.com/notes.txt
+curl \-v \-o page.html https://example.com/
+.fi
+.SH SEE ALSO
+.BR ping (1),
+.BR host (1),
+.BR ifconfig (1),
+.BR netstat (1),
+.BR traceroute (1),
+.BR nc (1),
+.BR netd (4)
+.SH BUGS
+Only GET; no resumption of TLS sessions.

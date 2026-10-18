@@ -1,0 +1,77 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/vm.c
+.TH SYS_MMAP 2
+.SH NAME
+sys_mmap, sys_munmap, sys_mprotect \- memory given on first touch (SYS_MMAP, SYS_MUNMAP, SYS_MPROTECT)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+void *sys_mmap(void *addr, size_t size, int flags);
+long sys_munmap(void *addr, size_t size, int flags);
+long sys_mprotect(void *addr, size_t size, int prot);
+.fi
+.SH DESCRIPTION
+.B sys_mmap
+reserves
+.I size
+bytes (rounded up to 4 KiB pages) of anonymous memory in the calling
+process. Nothing is given yet: each page is given, zeroed, when first
+touched. Without
+.B MAP_FIXED
+in
+.I flags
+the kernel chooses where (the first gap that fits, above 16 TiB;
+.I addr
+is ignored); with it, exactly at
+.I addr
+(page-aligned), replacing what was there.
+.PP
+The rights, or-ed into
+.I flags
+and
+.I prot
+(Linux's values):
+.BR PROT_READ ,
+.BR PROT_WRITE ,
+.BR PROT_EXEC ;
+.B PROT_NONE
+(0) gives no access at all (guard pages). Writable and executable
+together is allowed on anonymous memory (a JIT's code pool); programs'
+own files stay W^X.
+.PP
+.B sys_munmap
+removes the memory in the range, and its pages; with
+.B UNMAP_KEEP
+in
+.I flags
+it only gives the pages back, and they come back zeroed when touched
+(MADV_DONTNEED). Shared memory keeps its contents.
+.B sys_mprotect
+gives new rights to memory that
+.B sys_mmap
+gave; every page of the range must be reserved.
+.PP
+Pages count in the process's memory quota when they are given.
+.SH RETURN VALUE
+.BR sys_mmap :
+the address, or a negative error (cast to a pointer). The others: 0, or
+a negative error.
+.SH ERRORS
+.TP
+.B EINVAL
+.I size
+is 0 or too big, an unknown flag, or an address that is not page-aligned
+or outside the area for such memory.
+.TP
+.B ENOMEM
+No gap big enough, no kernel memory, or
+.RB ( sys_mprotect )
+part of the range is not reserved.
+.SH NOTES
+Touching a page beyond the quota or free memory is a fault, as a bad
+address is: the process ends (the kernel logs "out of memory").
+.SH SEE ALSO
+.BR sys_brk (2),
+.BR sys_shm_create (2),
+.BR sys_futex (2)

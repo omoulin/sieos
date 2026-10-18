@@ -1,0 +1,40 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH SYS_BRK 2
+.SH NAME
+sys_brk \- grow or shrink the heap (SYS_BRK)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_brk(uintptr_t end);
+.fi
+.SH DESCRIPTION
+.B sys_brk
+moves the end of the calling process's heap, which starts just after its
+program, to
+.IR end :
+pages are added (zeroed) or given back. 0 only asks where the end is.
+.PP
+The heap may grow up to 64 GiB above its start (a language model's
+weights and cache take a few GiB); the real limits are the process's
+memory quota
+.RB ( SPAWN_QUOTA ,
+.BR sys_spawn (2))
+and free memory. The pages are given at once, not on first touch: memory
+given on first touch is
+.BR sys_mmap (2).
+.B malloc
+uses this call.
+.SH RETURN VALUE
+The new end (or the current one, for 0), or a negative error.
+.SH ERRORS
+.TP
+.B ENOMEM
+.I end
+is below the heap's start or more than 64 GiB above it, or the quota or
+the memory is exhausted (the heap is left as it was).
+.SH SEE ALSO
+.BR sys_mmap (2),
+.BR sys_spawn (2),
+.BR sys_info (2)

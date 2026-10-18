@@ -1,0 +1,77 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sia/siad.c user/sia/memory.c user/sia/local.c user/sia/remote.c include/mk/proto.h
+.TH SIAD 4
+.SH NAME
+siad \- the assistant server (port "sia")
+.SH SYNOPSIS
+Port
+.BR sia .
+.B /bin/siad
+is started on demand by
+.BR init (8),
+stopped after 15 minutes unused; it may use 4.5 GiB at most.
+.SH DESCRIPTION
+.B siad
+answers questions with a language model: the local one (SIEOS's own engine
+on this machine's processors, a GGUF file) or a remote one with an
+OpenAI-compatible API, as
+.BR sia.conf (5)
+says.
+.PP
+A client opens a session, sends a message, and receives the answer in
+pieces: the reply to SIA_ASK comes at once, then each SIA_NEXT returns the
+next piece.
+Several sessions may run at once, each with its own conversation; they take
+turns, one piece each.
+Every conversation is saved as it goes, in /var/sia/UID (the caller's uid,
+as the kernel stamped it), so it can be resumed after a restart; a long one
+is compacted (its older turns replaced by a summary the model writes).
+sia also keeps a few facts about each user, given to the model at the start
+of every conversation.
+.SH MESSAGES
+.TP
+.B SIA_OPEN
+w[1] = flags (SIA_RESUME: w[2] = a conversation, 0: the last) \-> a
+session; reply w[1] = the conversation, w[2] = 1 if resumed.
+.TP
+.B SIA_ASK
+w[1] = session; sbuf = the user's message (UTF-8, at most 4096 bytes) \-> 0.
+.TP
+.B SIA_NEXT
+w[1] = session; rbuf <\- the next piece \-> bytes, 0: the end.
+.TP
+.BR SIA_STOP ", " SIA_CLOSE
+stop generating now; forget the session.
+.TP
+.B SIA_INFO
+rbuf <\- sia_info_t: the backend, ready, sessions, context length, memory
+used, the last speed (tokens/s x 100), the model's name.
+.TP
+.B SIA_CONFIG
+(root) sbuf = "key=value": saved in /etc/sia.conf (the API key in
+/etc/sia.key); siad then ends and init starts it again with it.
+.TP
+.BR SIA_LIST ", " SIA_FORGET
+the caller's conversations, "id<TAB>turns<TAB>tokens<TAB>title" lines,
+newest first; delete one (0: all).
+.TP
+.B SIA_FACTS
+w[1] = SIA_F_GET, SIA_F_ADD (sbuf), SIA_F_DEL (w[2] = its line), SIA_F_CLEAR,
+SIA_F_OFFERED (facts the model proposed, to be confirmed).
+.TP
+.B SIA_CONTEXT
+w[1] = session; sbuf = extra instructions for this conversation.
+.SH FILES
+.TP
+.BR /etc/sia.conf ", " /etc/sia.key
+settings; the API key (root only)
+.TP
+.B /models/*.gguf
+local models
+.TP
+.B /var/sia/UID
+each user's conversations and facts (siad alone)
+.SH SEE ALSO
+.BR sia (1),
+.BR sia.conf (5),
+.BR atlas (4)

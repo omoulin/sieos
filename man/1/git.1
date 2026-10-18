@@ -1,0 +1,181 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/git/
+.TH GIT 1
+.SH NAME
+git \- version control, in git's own formats
+.SH SYNOPSIS
+.B git
+.RB [ \-C
+.IR dir ]
+.I command
+.RI [ args ...]
+.SH DESCRIPTION
+.B git
+is git written for SIEOS: not a port, but the same formats, so a
+repository made on SIEOS is an ordinary git repository for another
+machine's git, and one cloned from elsewhere works here. The desktop has a
+Git window on top of it.
+.PP
+The shell splits words and drops quotes, so everything after
+.B \-m
+is the message:
+.B git commit \-m Fix the parser
+(the same for
+.BR "git config user.name Alice Example" ).
+.PP
+Revisions:
+.BR HEAD ,
+a branch, a tag, a remote's branch
+.RB ( origin/main ),
+a hash or its first 4 or more digits, then
+.BI ~ n
+and
+.B ^
+or
+.BR ^2 .
+.SH COMMANDS
+.TP
+.BR init " [\fIdir\fP]"
+A new, empty repository.
+.TP
+.BI clone " url " \fR[\fIdir\fR]
+Copy a repository, and check out its branch.
+.TP
+.BR status " [" \-s | \-\-short | \-\-porcelain "] [" \-b | \-\-branch ]
+What changed: staged, not staged, untracked.
+.B \-s
+the short form;
+.B \-b
+with the branch.
+.TP
+.BI add " path" "\fR... | " \-A
+Stage files
+.RB ( \-A " or " \-\-all :
+every change).
+.TP
+.BR rm " [" \-\-cached "] \fIpath\fP..."
+Remove files (with
+.BR \-\-cached ,
+only from the index).
+.TP
+.BR reset " [\fIpath\fP...]"
+Unstage; only the index is reset
+.RB ( \-\-hard " and " \-\-soft
+are refused).
+.TP
+.BR restore " [" \-\-staged "] \fIpath\fP..."
+The files as the index has them (with
+.BR \-\-staged ,
+the index as HEAD has it).
+.TP
+.BR commit " [" \-a | \-\-all "] " \-m " \fImessage\fP"
+Commit the index
+.RB ( \-a :
+every tracked file's changes first;
+.B \-am
+both).
+.TP
+.BR log " [" \-\-oneline "] [" \-n " \fIn\fP] [\fIrev\fP]"
+The history.
+.TP
+.BR show " [\fIrev\fP]"
+A commit and its changes.
+.TP
+.BR diff " [" \-\-cached | \-\-staged "] [\fIpath\fP...]"
+The files against the index (with
+.BR \-\-cached ,
+the index against HEAD).
+.TP
+.BR branch " [" \-a " | " \-d " \fIname\fP | \fIname\fP [\fIrev\fP]]"
+List the branches
+.RB ( \-a :
+the remotes' too), delete one
+.RB ( \-d " or " \-D ),
+or make one.
+.TP
+.BR checkout " [" \-b " \fInew\fP] \fIbranch\fP | " "checkout \-\-" " \fIpath\fP..."
+Go to a branch (with
+.BR \-b ,
+a new one); none of the tracked files may have uncommitted changes. With
+.BR \-\- ,
+take files back from the index.
+.TP
+.BR switch " [" \-c " \fInew\fP] \fIbranch\fP"
+The same as
+.BR checkout .
+.TP
+.BR fetch " [\fIremote\fP]"
+Get a remote's new commits.
+.TP
+.BR pull " [\fIremote\fP [\fIbranch\fP]]"
+Fetch, then fast-forward, or make a merge commit when no file changed on
+both sides; otherwise stop before changing anything and list the files
+("CONFLICT: x changed on both sides").
+.TP
+.BR push " [" \-u | \-\-set\-upstream "] [\fIremote\fP [\fIbranch\fP]]"
+Send commits; only fast-forwards.
+.B \-u
+remembers the branch's upstream.
+.TP
+.BR remote " [" \-v "] | " "remote add" " \fIname url\fP"
+List the remotes, or add one.
+.TP
+.BR config " [" \-\-global "] \fIkey\fP [\fIvalue\fP]"
+Show or set a setting in
+.I .git/config
+(or
+.IR ~/.gitconfig ).
+.SH OPTIONS
+.TP
+.BI \-C " dir"
+Work in
+.I dir
+(first, before the command).
+.SH URLS
+.BR git:// \fIhost\fP[: \fIport\fP] / \fIpath\fP
+(port 9418), and
+.BR http(s):// [\fIuser\fP[: \fItoken\fP] @ ] \fIhost\fP / \fIpath\fP
+(smart HTTP over TLS, the server's certificate checked). HTTP credentials
+are asked only when the server answers 401: from the URL, else
+.B credential.username
+and
+.B credential.token
+in the configuration, else on the terminal.
+.SH FILES
+.TP
+.I .git/
+The repository: objects, packs, refs, index, config (version 2 of git's
+formats).
+.TP
+.I ~/.gitconfig
+Your settings
+.RB ( user.name ,
+.BR user.email ;
+without them, the account's full name and
+.IR name @ hostname ).
+.TP
+.I .gitignore \fRand\fP .git/info/exclude
+Ignored files: globs with
+.BR * ,
+.BR ? ,
+.BR ** ;
+no
+.BR ! .
+.SH EXIT STATUS
+0 on success, 1 on an error, 128 outside a repository.
+.SH EXAMPLES
+.nf
+git clone https://example.org/project.git
+git add \-A
+git commit \-m Fix the parser
+git push
+.fi
+.SH SEE ALSO
+.BR make (1),
+.BR cc (1)
+.SH BUGS
+No merges inside one file (conflict markers), rebase, stash, tags made
+here, submodules, shallow clones, SSH transport, protocol v2, dumb HTTP,
+diff between two commits, SHA-256 repositories, or delta compression of
+what is pushed. Packs are read whole into memory: fine for projects of a
+few tens of MB.

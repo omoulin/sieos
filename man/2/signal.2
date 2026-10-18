@@ -1,0 +1,73 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c user/lib/sig.c
+.TH SIGNAL 2
+.SH NAME
+signal, sigreturn \- what a signal does to this process (SYS_SIGNAL, SYS_SIGRETURN)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+sighandler_t signal(int sig, sighandler_t fn);
+
+syscall4(SYS_SIGNAL, sig, entry, 0, 0);
+syscall4(SYS_SIGRETURN, 0, 0, 0, 0);
+.fi
+.SH DESCRIPTION
+.B SYS_SIGNAL
+sets what signal
+.I sig
+does to the calling process:
+.B SIG_DFL
+(the default: the process ends),
+.B SIG_IGN
+(nothing), or a function that the calling thread runs when the signal
+comes:
+.IR entry ( sig ,
+.IR regs ),
+on its own stack, where
+.I regs
+is a copy of the registers the signal found it with
+.RB ( mk_regs_t ,
+read only). The thread's registers stay in the kernel meanwhile; the
+function starts with fresh floating-point registers. It ends with
+.BR SYS_SIGRETURN ,
+which takes the thread back where the signal found it, all its registers
+as they were. If the thread waited (a message, a reply, a sleep, a
+child), that call returns
+.BR EINTR .
+While the function runs, further signals wait (or are taken by
+.BR sigwait (2)).
+.B SIGKILL
+cannot be caught or ignored.
+.PP
+The library's
+.B signal
+keeps one function per signal and gives the kernel its own entry, which
+calls it then
+.BR SYS_SIGRETURN .
+The function must return, not jump out. It returns the previous
+function, or
+.B SIG_ERR
+for a signal that cannot be caught.
+.SH RETURN VALUE
+.BR SYS_SIGNAL :
+0, or a negative error.
+.BR SYS_SIGRETURN
+does not return to its caller; outside a signal's function it fails.
+.SH ERRORS
+.TP
+.B EINVAL
+.RB ( SYS_SIGNAL )
+.I sig
+is out of range or
+.BR SIGKILL ,
+or
+.I entry
+is not a user address.
+.RB ( SYS_SIGRETURN )
+The thread is not in a signal's function.
+.SH SEE ALSO
+.BR kill (2),
+.BR tkill (2),
+.BR sigwait (2),
+.BR kill (1)

@@ -1,0 +1,45 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/arch/x86_64/platform.c
+.TH SYS_SCREEN 2
+.SH NAME
+sys_screen \- the screen the firmware set up (SYS_SCREEN)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_screen(mk_screen_t *s);
+
+typedef struct {
+    uint64_t pa, size;                 /* physical address, bytes */
+    uint32_t width, height, pitch, format;
+} mk_screen_t;
+.fi
+.SH DESCRIPTION
+.B sys_screen
+describes the frame buffer the firmware had set up when SIEOS started
+(SIEOS's UEFI loader passes it on): its physical address and size, its
+width and height in pixels,
+.I pitch
+(pixels per row), and
+.IR format :
+0 for bytes R, G, B, x in memory, 1 for bytes B, G, R, x (0x00RRGGBB
+words). The desktop maps it with
+.BR map_phys (2)
+to draw on it.
+.PP
+Anyone may call it.
+.SH RETURN VALUE
+0, or a negative error.
+.SH ERRORS
+.TP
+.B ENOSYS
+No such screen: started without the UEFI loader (QEMU's own boot, or
+arm64, where the screen comes from the device tree).
+.TP
+.B EFAULT
+.I s
+is not writable.
+.SH SEE ALSO
+.BR map_phys (2),
+.BR sys_fdt (2),
+.BR atlas (4)

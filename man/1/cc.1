@@ -1,0 +1,137 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: cc/main.c
+.TH CC 1
+.SH NAME
+cc \- sicc, the C compiler
+.SH SYNOPSIS
+.B cc
+.RB [ \-c | \-S | \-E ]
+.RB [ \-o
+.IR file ]
+.RB [ \-I \fIdir\fR]
+.RB [ \-D \fIname\fR[=\fIvalue\fR]]
+.RB [ \-U \fIname\fR]
+.RB [ \-O0 | \-O | \-O2 | \-Os ]
+.RB [ \-l \fIlib\fR]
+.RB [ \-L \fIdir\fR]
+.I file ...
+.SH DESCRIPTION
+.B cc
+is sicc, SIEOS's own C compiler, built as a SIEOS program: the same
+compiler that builds SIEOS on the development machine, for x86-64 and
+AArch64. It preprocesses, compiles, assembles and links in one program;
+C11 with the GNU extensions SIEOS uses.
+.PP
+Sources are files ending in
+.BR .c ,
+.B .S
+or
+.B .s
+(assembly) and
+.B .i
+(preprocessed); other words are objects or libraries for the link.
+Without
+.BR \-c ,
+.B \-S
+or
+.BR \-E ,
+the result is a SIEOS program linked as SIEOS's own are
+.RB ( user.ld ,
+.BR crt0.o ,
+.BR lib.o ,
+.B libsieos.a
+and sicc's runtime
+.BR rt.o ,
+all in
+.BR /lib/sicc ),
+made executable;
+.B a.out
+if there is no
+.BR \-o .
+The driver defines
+.B __SIEOS__
+and reads its headers in
+.BR /lib/sicc/include .
+.SH OPTIONS
+.TP
+.B \-c
+Compile to an object only.
+.TP
+.B \-S
+Assembly text only.
+.TP
+.B \-E
+Preprocessed text only.
+.TP
+.BI \-o " file"
+The output's name (one source only with
+.BR \-c ,
+.B \-S
+or
+.BR \-E ).
+.TP
+.BI \-I " dir\fR,\fP " \-isystem " dir"
+Look for headers in
+.I dir
+too.
+.TP
+.BI \-D " name\fR[\fP=value\fR],\fP " \-U " name"
+Define or undefine a macro.
+.TP
+.BR \-O0 ", " \-O ", " \-O2 ", " \-Os
+No optimization, the optimizer, or the optimizer for size
+.RB ( \-Oz
+too).
+.TP
+.BR \-g ", " \-g0
+Debug information on or off.
+.TP
+.BR \-ffreestanding ", " \-fpic ", " \-mgeneral-regs-only ", " \-mavx2 ", " \-march= \fIarch\fR
+Code generation as gcc's options of the same names
+.RB ( \-march=
+also selects AArch64's LSE atomics and dot products).
+.TP
+.BI \-l " lib" "\fR, \fP" \-L " dir" "\fR, \fP" \-T " script" "\fR, \fP" \-Wl, args
+Passed to the linker, as are
+.BR \-nostdlib ,
+.B \-static
+and
+.BR \-r ;
+.BR \-nostdlib ,
+.B \-T
+and
+.B \-r
+leave out SIEOS's start and library.
+.TP
+.BI \-\-target= arch
+.B x86_64
+or
+.B aarch64
+(default: the machine it runs on).
+.PP
+Other options
+.RB ( \-W ...,
+.BR \-std= ...,
+.BR \-f ...,
+.BR \-m ...)
+are accepted and ignored.
+.SH FILES
+.TP
+.B /lib/sicc
+headers, start files, library and linker script programs are built with.
+.SH EXAMPLES
+.nf
+cc hello.c \-o hello
+\&./hello
+cc \-O2 \-c a.c
+.fi
+.SH SEE ALSO
+.BR make (1),
+.BR sh (1)
+.SH BUGS
+On x86-64,
+.B long double
+constants are read at
+.B double
+precision. A program's arguments, with its folder, must fit in 256 bytes
+and 31 words.

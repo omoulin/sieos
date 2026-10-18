@@ -1,0 +1,67 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/vblk/vblk.c user/vblk/nvme.c user/vblk/sd.c include/mk/proto.h
+.TH VBLK 4
+.SH NAME
+vblk \- the disk server (port "disk")
+.SH SYNOPSIS
+Port
+.BR disk .
+A boot module, started by
+.BR init (8)
+with device rights; restarted if it ends (the requests to it are simply
+sent again).
+.SH DESCRIPTION
+.B vblk
+serves SIEOS's disk in 4 KiB blocks to its only client, the file server
+.BR fs (4).
+The disk is, in this order:
+a virtio block device (QEMU's virtio-blk, PCI on x86-64, MMIO on arm64);
+on arm64 an SD card (the Raspberry Pis);
+the first NVMe namespace with a SieFS partition;
+the first USB disk with a SieFS partition (from
+.BR usb (4)).
+A drive without a SieFS partition is never used: a PC's own drives hold its
+other systems.
+.PP
+With the boot option
+.BI root= GUID
+(the UEFI loader's
+.BR boot.cfg (5)),
+the disk is the SieFS partition with that unique GUID, on whichever drive it
+is.
+Partitions: a GUID partition table (the SieFS partition by its type), or an
+MBR (type 0x5E); a disk without either is SieFS whole if a superblock says so.
+.PP
+No copies of its own: a client's data arrives by IPC straight into the buffer
+the device reads, and read data is copied out from where the device wrote it.
+One request at a time, up to 128 KiB each.
+.SH MESSAGES
+.TP
+.B DISK_INFO
+\-> the number of 4 KiB blocks; reply w[1] = the SD controller's physical
+address when the disk is an SD card (0: not).
+.TP
+.B DISK_READ
+w[1] = first block, w[2] = count; the data comes in rbuf. \-> 0.
+.TP
+.B DISK_WRITE
+w[1] = first block, w[2] = count; the data in sbuf. \-> 0.
+.TP
+.B DISK_FLUSH
+make every write so far durable. \-> 0.
+.TP
+.BR DISK_RAW_INFO ", " DISK_RAW_READ ", " DISK_RAW_WRITE ", " DISK_RAW_FLUSH
+(root: the installer) the PC's NVMe drives whole, in their own sectors:
+w[1] = the drive, w[2] = first sector, w[3] = count; DISK_RAW_INFO fills a
+disk_raw_t (model, serial, sector size, sectors; \-ENOENT: no more drives).
+\-EBUSY while SIEOS itself runs from an NVMe drive.
+.PP
+A message moves at most DISK_MAX (128 KiB).
+The USB server's
+.BR usbdisk N
+ports speak the same protocol.
+.SH SEE ALSO
+.BR fs (4),
+.BR usb (4),
+.BR siefs (5),
+.BR install (8)

@@ -1,0 +1,37 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c user/lib/lib.c
+.TH SET_FS 2
+.SH NAME
+set_fs \- this thread's thread pointer, for thread-local storage (SYS_SET_FS)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+syscall4(SYS_SET_FS, address, 0, 0, 0);
+.fi
+.SH DESCRIPTION
+.B SYS_SET_FS
+sets the calling thread's thread pointer to
+.IR address :
+the FS base on x86-64, TPIDR_EL0 on arm64. Compilers reach thread-local
+variables
+.RB ( _Thread_local )
+at a fixed offset from it. The kernel loads it on every switch to the
+thread.
+.PP
+The library does it for each thread
+.RB ( thread_start (2)):
+it copies the program's template of thread-local variables and places it
+by the processor's convention: on x86-64 just below the thread pointer,
+whose own word holds its address (%fs:0); on arm64 16 bytes above it,
+past a control block. Programs without thread-local variables skip this.
+.SH RETURN VALUE
+0, or a negative error.
+.SH ERRORS
+.TP
+.B EINVAL
+.I address
+is not a user address.
+.SH SEE ALSO
+.BR thread_start (2),
+.BR sys_thread_self (2)

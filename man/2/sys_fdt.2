@@ -1,0 +1,39 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/arch/arm64/platform.c
+.TH SYS_FDT 2
+.SH NAME
+sys_fdt \- a copy of the firmware's device tree (SYS_FDT)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_fdt(void *buf, size_t size);
+.fi
+.SH DESCRIPTION
+.B sys_fdt
+copies the device tree the firmware gave the kernel (a flattened device
+tree blob) into
+.IR buf ,
+on machines that have one: arm64 (QEMU's
+.B virt
+machine, the Raspberry Pis). Drivers find their devices in it, with
+lib/fdt.c: registers, interrupts, clocks.
+.PP
+If
+.I size
+is smaller than the tree, nothing is copied and the tree's size is
+returned: call again with a buffer that big.
+.SH RETURN VALUE
+The tree's size in bytes, or a negative error.
+.SH ERRORS
+.TP
+.B ENOSYS
+No device tree (x86-64).
+.TP
+.B EFAULT
+.I buf
+is not writable.
+.SH SEE ALSO
+.BR sys_acpi (2),
+.BR map_phys (2),
+.BR irq_bind (2)

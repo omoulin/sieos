@@ -1,0 +1,113 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/man/man.c
+.TH MAN 1
+.SH NAME
+man \- show a page of the manual
+.SH SYNOPSIS
+.B man
+.RI [ section ]
+.I name
+.br
+.B man
+.B \-k
+.I word
+.SH DESCRIPTION
+.B man
+shows the page
+.I name
+of the manual, kept in
+.BR /usr/share/man .
+Without a
+.IR section ,
+it looks in sections 1, 8, 2, 4, 5 and 7, in that order, and shows the
+first page found. A name that is not a page's file name is looked for in
+the pages' NAME lines: a page may tell several commands
+.RB ( "man pwd"
+shows the page of
+.BR cd ).
+A
+.I name
+with a
+.B /
+in it is a file, shown as a page (to read one being written).
+.PP
+The words are filled to the width of the screen; bold and underlined words
+use the terminal's attributes (on the PC's text screen: bright and cyan; a
+terminal that has none shows plain text). A page longer than the screen is
+shown a screen at a time; the last line tells where you are. The keys:
+.TP
+.BR space ", " f
+the next screen
+.TP
+.B b
+the screen before
+.TP
+.BR Enter ", " j ", " Down
+one line on
+.TP
+.BR k ", " Up
+one line back
+.TP
+.BR g ", " G
+the top, the end
+.TP
+.BI / word
+the next line with
+.I word
+(any case);
+.B n
+finds the next one
+.TP
+.BR q ", " Ctrl\-C
+quit
+.SS Sections
+.TP
+.B 1
+commands: programs and the shell's built-in commands
+.TP
+.B 2
+system calls: what the kernel offers
+.TP
+.B 4
+servers and devices: the programs that drive the hardware and their messages
+.TP
+.B 5
+file formats: the system's files
+.TP
+.B 7
+overviews: the system as a whole
+.TP
+.B 8
+administration: services, users, installing, the host tools
+.SH OPTIONS
+.TP
+.BI \-k " word"
+List the pages whose names or one-line summary contain
+.I word
+(any case), as apropos does.
+.SH EXIT STATUS
+0; 1 if there is no such page (or nothing for
+.BR \-k );
+2 for a wrong command line.
+.SH FILES
+.TP
+.BI /usr/share/man/ section / name . section
+the pages, as written in man/ of SIEOS's sources, without their comments
+.TP
+.B /usr/share/man/whatis
+every page's section, file, names and summary, one line each, made when
+the disk is built
+.SH EXAMPLES
+.nf
+man sh
+man 2 ipc_call
+man \-k file
+.fi
+.SH SEE ALSO
+.BR man (7),
+.BR intro (7),
+.BR help (1)
+.SH BUGS
+A terminal cannot tell its size yet: pages are filled to 78 columns and
+shown 23 lines at a time. The desktop's terminal windows show no bold or
+underline.

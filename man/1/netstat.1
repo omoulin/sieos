@@ -1,0 +1,23 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fetch/fetch.c
+.TH NETSTAT 1
+.SH NAME
+netstat \- the sockets open, and their programs
+.SH SYNOPSIS
+.B netstat
+.SH DESCRIPTION
+.B netstat
+lists the sockets the network server has open (at most 64): TCP or UDP,
+our port, the other side's address and port
+.RB ( *
+when there is none), the TCP state (listen, established, time-wait...)
+and the pid of the process that owns it.
+.PP
+.B netstat
+is another name of
+.BR fetch (1).
+.SH SEE ALSO
+.BR ifconfig (1),
+.BR ps (1),
+.BR fetch (1),
+.BR netd (4)

@@ -1,0 +1,65 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH SYS_INFO 2
+.SH NAME
+sys_info \- system information (SYS_INFO)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_info(mk_info_t *in);
+
+typedef struct {
+    uint64_t uptime_ns;               /* time since boot */
+    uint64_t pages_total, pages_free; /* memory, 4 KiB pages */
+    int32_t self_pid, self_uid;
+    int32_t nprocs, nthreads, ncpus;
+    uint32_t hwcap;                   /* HWCAP_* */
+    int32_t ecores;                   /* E-cores (0: all alike) */
+    int32_t cpu, cpu_e;               /* the caller's CPU now */
+    char root[40];                    /* boot option root=GUID */
+} mk_info_t;
+.fi
+.SH DESCRIPTION
+.B sys_info
+fills
+.I in
+with the state of the system: the time since boot, memory in 4 KiB
+pages, the caller's pid and uid, the numbers of processes, threads and
+processors, how many of the processors are E-cores (0 where all cores are
+alike), the processor the caller runs on now and whether it is an E-core,
+and the boot option
+.B root=
+(the partition SIEOS runs from, or "").
+.PP
+.I hwcap
+tells what the processor can do, as the kernel read it at boot (some
+AArch64 ID registers cannot be read from user mode):
+.B HWCAP_AVX2
+(and the kernel saves AVX state),
+.B HWCAP_FMA
+and
+.B HWCAP_AVXVNNI
+on x86-64;
+.B HWCAP_DOTPROD
+(SDOT/UDOT: the Pi 5 has it, the Pi 4 not) and
+.B HWCAP_LSE
+on AArch64.
+.PP
+Anyone may call it;
+.BR mem (1)
+and
+.BR uptime (1)
+print it.
+.SH RETURN VALUE
+0, or a negative error.
+.SH ERRORS
+.TP
+.B EFAULT
+.I in
+is not writable.
+.SH SEE ALSO
+.BR sys_tasks (2),
+.BR sys_clock (2),
+.BR mem (1),
+.BR uptime (1)

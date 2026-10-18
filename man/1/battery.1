@@ -1,0 +1,23 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH BATTERY 1
+.SH NAME
+battery \- battery, AC and lid
+.SH SYNOPSIS
+.B battery
+.SH DESCRIPTION
+.B battery
+is a command built into the shell,
+.BR sh (1).
+It asks the ACPI server,
+.BR acpid (4),
+and prints on one line: the battery's charge in percent, whether it is
+charging, not charging or discharging, the time to full or left, its
+charge now, when full and by design (mWh or mAh), the rate and the
+voltage; then whether AC power is on, whether the lid is open or closed,
+and how many times the machine woke from sleep.
+.SH EXIT STATUS
+0, or 1 when there is no ACPI server (not a PC, or not a laptop).
+.SH SEE ALSO
+.BR acpid (4),
+.BR poweroff (8)

@@ -1,0 +1,30 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH MV 1
+.SH NAME
+mv \- rename or move a file
+.SH SYNOPSIS
+.B mv
+.I from to
+.SH DESCRIPTION
+.B mv
+is a command built into the shell,
+.BR sh (1).
+It gives the file or directory
+.I from
+the name
+.IR to ,
+in the same directory or another, in one step: nothing is copied.
+.I to
+is the full new name, not a directory to move into.
+.SH EXIT STATUS
+0, or 1 on failure.
+.SH SEE ALSO
+.BR cp (1),
+.BR ln (1),
+.BR sh (1)
+.SH BUGS
+A file cannot move between volumes (a user's home is one): "not across
+volumes". Copy it with
+.BR cp (1)
+then remove it.

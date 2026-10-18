@@ -1,0 +1,78 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/mail/mail.c
+.TH MAIL 5
+.SH NAME
+\&.mail \- the mail accounts
+.SH SYNOPSIS
+.B ~/.mail
+.SH DESCRIPTION
+.BR mail (1)
+and the desktop's Mail window read the user's accounts from
+.BR ~/.mail :
+.IB key = value
+lines, only the user's to read (it holds passwords).
+A line starting with
+.B [
+(such as
+.BR [account] )
+starts the next account; the first is account 0
+.RB ( "mail \-a" " N"
+picks another).
+At most 8 accounts.
+.TP
+.B name
+the name shown as the sender
+.TP
+.B address
+the e-mail address
+.TP
+.B in
+.B imap
+or
+.B pop3
+.TP
+.BR in_host ", " in_port
+the server to read from; the port's default is 993 (IMAP) or 995 (POP3)
+.TP
+.BR out_host ", " out_port
+the SMTP server to send through; default port 465
+.TP
+.BR user ", " pass
+the login on both servers
+.TP
+.B keep
+POP3: 1 (the default) leaves the messages on the server, 0 deletes them
+.TP
+.B sent
+0: no copy in Sent (IMAP); a copy by default
+.TP
+.B selfsigned
+1: a certificate no authority signed may be accepted: its SHA-256 is then
+pinned in
+.B in_pin
+and
+.B out_pin
+(64 hex digits each), and any other refused
+.TP
+.B fav
+the Mail window's favourite folders
+.PP
+Ports 993, 995 and 465 speak TLS at once; others (143, 110, 587) start in
+clear and must switch to TLS (STARTTLS, STLS) before the password goes.
+POP3 copies new messages into
+.BR ~/Mail/INBOX ,
+one file each, named by the server's UIDL.
+.SH EXAMPLES
+.nf
+[account]
+name=Alice Example
+address=alice@example.org
+in=imap
+in_host=imap.example.org
+out_host=smtp.example.org
+user=alice@example.org
+pass=secret
+.fi
+.SH SEE ALSO
+.BR mail (1),
+.BR atlas (4)

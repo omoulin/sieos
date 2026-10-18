@@ -1,0 +1,18 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH CLEAR 1
+.SH NAME
+clear \- clear the screen
+.SH SYNOPSIS
+.B clear
+.SH DESCRIPTION
+.B clear
+is a command built into the shell,
+.BR sh (1).
+It clears the terminal and puts the cursor at its top left (it writes
+.BR "ESC[H ESC[J" ,
+which the console, the desktop's terminals and other terminals
+understand).
+.SH SEE ALSO
+.BR con (4),
+.BR sh (1)

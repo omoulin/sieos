@@ -1,0 +1,67 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/lib/acct.c user/auth/auth.c
+.TH USERS 5
+.SH NAME
+users, groups, secrets \- the account files
+.SH SYNOPSIS
+.B /etc/users
+.br
+.B /etc/groups
+.br
+.B /etc/secrets
+.SH DESCRIPTION
+The accounts of SIEOS live in three text files: one record per line, fields
+separated by a tab;
+.B #
+starts a comment.
+Only the accounts server,
+.BR auth (8),
+changes them, and only it reads
+.BR /etc/secrets .
+Each change is written to FILE.new and renamed over FILE in one step, so a
+crash leaves the old file or the new one, never a mix.
+.TP
+.B /etc/users
+(mode 0644) name, uid, gid, home, shell, full name.
+.TP
+.B /etc/groups
+(mode 0644) name, gid, members (comma-separated names).
+.TP
+.B /etc/secrets
+(mode 0600) name, method
+.RB ( argon2id ),
+memory (KiB), passes, lanes, salt (hex), hash (hex).
+.PP
+uid 0 is root.
+Users get uids from 1000 up; each has a group of its own (the same number).
+Users created after the first start are also members of
+.B users
+(gid 100).
+.PP
+A password is never stored, only its Argon2id hash: a 16-byte random salt,
+a 32-byte result, 16 MiB of memory, 24 passes, 1 lane.
+The parameters are stored with each hash, so they can change later without
+breaking older passwords.
+.PP
+The rules auth checks: a login name of 1 to 31 characters, lower-case
+letters, digits,
+.B _
+or
+.BR \- ,
+starting with a letter or
+.BR _ ,
+not
+.BR root ;
+a full name of up to 63 characters, no tab; a password of at least 8
+characters, not the account's name.
+.SH EXAMPLES
+.nf
+alice	1000	1000	/home/alice	/bin/sh	Alice Example
+users	100	alice,bob
+.fi
+.SH SEE ALSO
+.BR passwd (1),
+.BR su (1),
+.BR useradd (8),
+.BR auth (8),
+.BR security (7)

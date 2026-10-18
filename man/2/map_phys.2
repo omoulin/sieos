@@ -1,0 +1,50 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH MAP_PHYS 2
+.SH NAME
+map_phys \- map a device's registers or memory, for drivers (SYS_MAP_PHYS)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+void *map_phys(uint64_t pa, size_t size);
+.fi
+.SH DESCRIPTION
+.B map_phys
+maps
+.I size
+bytes of physical address space from
+.I pa
+into the caller, uncached, and returns where. It is how a driver reaches
+its device's registers, or memory like a frame buffer. The mapping lasts
+as long as the process.
+.PP
+.I size
+may be or-ed with
+.BR MAP_WC :
+memory a device only reads, such as a frame buffer, where writes may be
+gathered and reordered (much faster drawing on arm64; x86-64 maps it
+uncached as usual).
+.PP
+Never RAM, which would let a driver read anyone's memory (the frame
+buffer the firmware set up is allowed), and never the interrupt
+controllers, which are the kernel's. Drivers only.
+.SH RETURN VALUE
+The address of
+.I pa
+in the caller's memory, or a negative error (cast to a pointer).
+.SH ERRORS
+.TP
+.B EPERM
+The caller is not a driver, or the range is RAM or the kernel's.
+.TP
+.B EINVAL
+.I size
+is 0 or above 1 GiB, or the range wraps around.
+.TP
+.B ENOMEM
+No memory for the page tables.
+.SH SEE ALSO
+.BR dma_alloc (2),
+.BR irq_bind (2),
+.BR sys_screen (2)

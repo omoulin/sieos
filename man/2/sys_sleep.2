@@ -1,0 +1,52 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH SYS_SLEEP 2
+.SH NAME
+sys_sleep, sys_wake \- sleep, and end another thread's sleep (SYS_SLEEP, SYS_WAKE)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_sleep(uint64_t ns);
+long sys_wake(int tid);
+.fi
+.SH DESCRIPTION
+.B sys_sleep
+puts the calling thread to sleep for at least
+.I ns
+nanoseconds. The timer is tickless: the thread is woken when its time
+comes, not at the next tick. 0 just lets other threads run, as
+.BR sys_yield (2).
+.PP
+.B sys_wake
+ends the sleep of thread
+.I tid
+of the same process early: its
+.B sys_sleep
+returns 1. If that thread is not asleep, its next sleep ends at once: a
+wake-up is never lost.
+.SH RETURN VALUE
+.BR sys_sleep :
+0 when the time has passed, 1 when another thread woke it, or a negative
+error.
+.BR sys_wake :
+0, or a negative error.
+.SH ERRORS
+.TP
+.B EINTR
+.RB ( sys_sleep )
+A signal the process catches came.
+.TP
+.B EPIPE
+.RB ( sys_sleep )
+The process is ending.
+.TP
+.B ESRCH
+.RB ( sys_wake )
+No thread
+.I tid
+in this process.
+.SH SEE ALSO
+.BR sys_clock (2),
+.BR sys_futex (2),
+.BR sleep (1)

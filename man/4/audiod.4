@@ -1,0 +1,57 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/audiod/audiod.c user/audiod/codec.c include/mk/proto.h
+.TH AUDIOD 4
+.SH NAME
+audiod \- the audio server (port "audio")
+.SH SYNOPSIS
+Port
+.BR audio .
+.B /bin/audiod
+is started on demand by
+.BR init (8),
+with device rights, by its first user, then kept (the volume).
+.SH DESCRIPTION
+.B audiod
+drives Intel High Definition Audio controllers (QEMU's intel-hda and
+ich9-intel-hda, PC chipsets, an NVIDIA GPU's HDMI one) and their codecs.
+It has one output and one input stream: 48 kHz, 16-bit, stereo, 4 bytes a
+frame.
+The output goes to the speakers, to an HDMI or DisplayPort monitor with
+sound, or to Bluetooth headphones (each write then goes on to
+.BR btd (4)).
+.PP
+Each stream is a 128 KiB ring in DMA memory: a write lands by IPC straight
+in the ring the controller plays from; a read is answered straight out of
+the one it records into.
+What has been played is zeroed, so it plays silence when writes stop
+coming, and stops a moment after all is played.
+Recording runs while someone reads.
+.SH MESSAGES
+.TP
+.B AUDIO_WRITE
+sbuf = frames; playing starts. \-> bytes taken (0: there was no room; the
+reply waited for some: send again).
+.TP
+.B AUDIO_READ
+w[1] = rbuf's size; recording starts \-> bytes in rbuf (waits for some).
+.TP
+.B AUDIO_VOL
+w[1] = the volume 0-100, | AUDIO_MUTE; AUDIO_ASK: no change \-> the volume.
+.TP
+.B AUDIO_OUT
+w[1] = the output (0 the speakers, 1... monitors with sound, then Bluetooth
+headphones), AUDIO_BT, or AUDIO_ASK \-> the one playing, reply w[1] = how
+many; rbuf: their names, one a line.
+.TP
+.B AUDIO_KEY
+w[1] = a media key (MK_PLAY, MK_PAUSE, MK_STOP, MK_NEXT, MK_PREV, MK_VOLUP,
+MK_VOLDOWN; from btd: a headset's buttons). Pause holds the writer's
+AUDIO_WRITE until play; stop, next, previous: its next reply has w[1] = the
+key. \-> 0.
+.SH SEE ALSO
+.BR play (1),
+.BR btd (4)
+.SH BUGS
+No mixing of several programs, no other rates (convert files beforehand).
+No jack interrupts, no microphone choice (the first one wired), no record
+level.

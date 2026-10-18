@@ -1,0 +1,67 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH SYS_WAIT 2
+.SH NAME
+sys_wait \- wait for a child to end (SYS_WAIT)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_wait(int pid, int *status, int flags);
+.fi
+.SH DESCRIPTION
+.B sys_wait
+collects an ended child of the caller: child
+.IR pid ,
+or any if
+.I pid
+is -1. If none has ended yet, it waits, unless
+.I flags
+has
+.BR WAIT_NOHANG :
+then it returns 0 at once. The child's exit status goes to
+.I *status
+(if
+.I status
+is not 0), and the child is gone for good.
+.PP
+The status is the value given to
+.BR sys_exit (2)
+(or returned by
+.BR main ),
+or, for a process a signal ended,
+.BR EXIT_SIGNAL ( sig );
+.BR EXIT_SIGNO ( status )
+gives that signal back (0 if none), and
+.B EXIT_KILLED
+is
+.BR EXIT_SIGNAL ( SIGKILL ).
+.PP
+A server that must not block learns of its children's end in its own
+message loop instead
+.RB ( sys_child_port (2)),
+then collects them with
+.BR WAIT_NOHANG .
+.SH RETURN VALUE
+The pid of the child collected, 0 with
+.B WAIT_NOHANG
+if none has ended, or a negative error.
+.SH ERRORS
+.TP
+.B ECHILD
+The caller has no such child.
+.TP
+.B EINTR
+A signal the process catches came while it waited.
+.TP
+.B EPIPE
+The process is ending.
+.TP
+.B EFAULT
+.I status
+is not writable.
+.SH SEE ALSO
+.BR sys_spawn (2),
+.BR sys_exit (2),
+.BR sys_child_port (2),
+.BR kill (2)

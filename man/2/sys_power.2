@@ -1,0 +1,77 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c kernel/arch/x86_64/platform.c
+.TH SYS_POWER 2
+.SH NAME
+sys_power \- power off, restart, suspend (SYS_POWER)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_power(int how, long arg);
+long power(int how);            /* through acpid */
+.fi
+.SH DESCRIPTION
+.B sys_power
+is for root only.
+.I how
+is one of:
+.TP
+.B POWER_OFF
+Stop every other processor and turn the machine off.
+.TP
+.B POWER_RESTART
+The same, then restart it.
+.TP
+.B POWER_SLEEP
+Suspend to RAM (ACPI S3, x86-64): the other processors are stopped, the
+machine sleeps, and the call returns once it is awake again.
+.TP
+.B POWER_SET
+For the ACPI server,
+.BR acpid (4):
+.I arg
+is the state (3 or 5), or-ed with the firmware's ACPI sleep types a
+(shifted left 8) and b (shifted left 16) from its \e_S3 and \e_S5; the
+kernel then uses them to enter those states.
+.PP
+Nothing is written to the disk first: programs call the library's
+.B power
+instead, which commits the files
+.RB ( fs_sync )
+and asks the ACPI server (port "acpi"), which tells the firmware; without
+that server it calls
+.B sys_power
+itself. That is what
+.BR poweroff (8),
+.BR reboot (8)
+and
+.BR suspend (8)
+do.
+.SH RETURN VALUE
+0 (after waking up, for
+.BR POWER_SLEEP ;
+off and restart do not return), or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+The caller is not root.
+.TP
+.B EINVAL
+An unknown
+.IR how ,
+or a
+.B POWER_SET
+state other than 3 or 5.
+.TP
+.B EBUSY
+A suspend is already under way.
+.TP
+.B ENOSYS
+.B POWER_SLEEP
+or
+.B POWER_SET
+on arm64; or no S3 on this machine.
+.SH SEE ALSO
+.BR poweroff (8),
+.BR acpid (4),
+.BR sys_time (2)

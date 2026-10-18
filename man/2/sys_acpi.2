@@ -1,0 +1,46 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/arch/x86_64/smp.c
+.TH SYS_ACPI 2
+.SH NAME
+sys_acpi \- the firmware's ACPI tables, for drivers (SYS_ACPI)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_acpi(void *buf, size_t size);
+.fi
+.SH DESCRIPTION
+.B sys_acpi
+copies the firmware's ACPI tables into
+.IR buf ,
+one after the other: the FADT, the DSDT, then each SSDT (up to 64
+tables), each with its own header and length. The AML interpreter
+(user/lib/aml.c) reads them: the ACPI server
+.BR acpid (4)
+for power, battery, lid and sleep, and the touchpad server
+.BR i2chid (4)
+for its devices.
+.PP
+If
+.I size
+is smaller than all the tables together, nothing is copied and their
+total size is returned: call again with a buffer that big.
+.PP
+x86-64 only; drivers only.
+.SH RETURN VALUE
+The total size of the tables in bytes, or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+The caller is not a driver.
+.TP
+.B ENOSYS
+No ACPI (arm64).
+.TP
+.B EFAULT
+.I buf
+is not writable.
+.SH SEE ALSO
+.BR sys_fdt (2),
+.BR sys_power (2),
+.BR acpid (4)

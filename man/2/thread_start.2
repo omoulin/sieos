@@ -1,0 +1,70 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c user/lib/lib.c
+.TH THREAD_START 2
+.SH NAME
+thread_start, sys_thread_exit \- start and end threads (SYS_THREAD_CREATE, SYS_THREAD_EXIT)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long thread_start(void (*fn)(void *), void *arg, size_t stack);
+void sys_thread_exit(void);
+
+syscall4(SYS_THREAD_CREATE, entry, stack_top, arg, 0);
+.fi
+.SH DESCRIPTION
+.B SYS_THREAD_CREATE
+starts a new thread in the calling process: it enters user mode at
+.I entry
+with
+.I arg
+as its first argument, on the stack whose top is
+.I stack_top
+(aligned down to 16 bytes, as if called). It shares the process's memory,
+ports and identity, and may run at once on any processor.
+.PP
+The library's
+.B thread_start
+allocates
+.I stack
+bytes (plus the thread's copy of the thread-local variables, set with
+.BR set_fs (2)),
+and runs
+.IR fn ( arg );
+when
+.I fn
+returns, the thread ends.
+.PP
+.B sys_thread_exit
+ends the calling thread. The process ends with its last thread, with
+status 0; to end it at once with a status, see
+.BR sys_exit (2).
+A word registered with
+.BR sys_thread_self (2)
+is cleared and its futex waiter woken.
+.SH RETURN VALUE
+The new thread's id, or a negative error.
+.B sys_thread_exit
+does not return.
+.SH ERRORS
+.TP
+.B EINVAL
+.I entry
+or
+.I stack_top
+is not a user address.
+.TP
+.B ENOMEM
+No memory for the thread (or, in
+.BR thread_start ,
+for its stack).
+.SH BUGS
+A stack from
+.B thread_start
+is not freed when its thread ends.
+.SH SEE ALSO
+.BR sys_thread_self (2),
+.BR set_fs (2),
+.BR sys_futex (2),
+.BR sys_place (2),
+.BR sys_exit (2)

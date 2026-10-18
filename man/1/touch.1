@@ -1,0 +1,21 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH TOUCH 1
+.SH NAME
+touch \- create a file, or set its time to now
+.SH SYNOPSIS
+.B touch
+.IR file ...
+.SH DESCRIPTION
+.B touch
+is a command built into the shell,
+.BR sh (1).
+A
+.I file
+that does not exist is created, empty (mode 0644); one that exists keeps
+its contents and gets the time now as its time of last change.
+.SH EXIT STATUS
+0, or 1 on the first failure (or without a name).
+.SH SEE ALSO
+.BR stat (1),
+.BR sh (1)

@@ -1,0 +1,46 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/i2chid/i2chid.c user/lib/aml.c user/lib/hidrep.c
+.TH I2CHID 4
+.SH NAME
+i2chid \- touchpads and touch screens on I2C (HID over I2C)
+.SH SYNOPSIS
+No port: it sends what it reads to the console.
+x86-64 only.
+.B /bin/i2chid
+is started at boot by
+.BR init (8),
+with device rights; with no I2C HID device it ends with status 0 and is not
+started again.
+.SH DESCRIPTION
+.B i2chid
+drives up to two devices of a laptop (a 2-in-1 has a touchpad and a touch
+screen):
+.IP 1. 4
+The firmware's ACPI tables
+.RB ( sys_acpi (2))
+say where each device is: a device "PNP0C50", its I2C address and speed,
+the I2C controller, its interrupt pin and its HID descriptor's register.
+.IP 2. 4
+The controller: Intel's LPSS ("Serial IO") I2C, a Synopsys DesignWare core,
+powered up and out of reset, a master at the bus's speed.
+.IP 3. 4
+HID over I2C: the HID descriptor, power on, reset, the report descriptor
+(user/lib/hidrep.c reads it). A precision touchpad is switched to its own
+mode (fingers), else it stays a mouse; a touch screen to its multi-touch
+mode, its first finger then an absolute pointer.
+.IP 4. 4
+Reports: when the device pulls its interrupt pin low, it has one; it is
+read and its moves and clicks go to the console
+.RB ( CON_INJECT ,
+like a USB mouse or tablet). Without the pin, or if interrupts do not come,
+the device is read every 8 ms.
+.PP
+Everything is logged (the serial console,
+.BR dmesg (1)),
+so a laptop's log says what was found and where it stopped.
+.SH SEE ALSO
+.BR con (4),
+.BR acpid (4),
+.BR ipts (4)
+.SH BUGS
+Two devices on one controller: only the first.

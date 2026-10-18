@@ -1,0 +1,141 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sia/sia.c
+.TH SIA 1
+.SH NAME
+sia \- talk to the assistant
+.SH SYNOPSIS
+.B sia
+.RI [ question ...]
+.br
+.B sia new
+.RI [ question ...]
+.br
+.B sia resume
+.I n
+.br
+.B sia list
+|
+.B forget
+.IR n | all
+.br
+.B sia memory
+.RB [ forget
+.I n
+|
+.BR clear ]
+.br
+.B sia remember
+.I fact
+.br
+.B sia info
+.br
+.B sia config
+.IB key = value
+.SH DESCRIPTION
+.B sia
+talks to the assistant,
+.BR siad (4),
+which runs a language model on this machine or asks an OpenAI-compatible
+service. With a
+.IR question ,
+it shows one answer as it is written, in your last conversation. Without,
+it holds a conversation: one message per line
+.RB ( you> ),
+an empty line ends it.
+.PP
+When sia ends an answer with a line
+.BI [remember: " ..." ] ,
+.B sia
+asks "keep it? [y/N]": nothing is remembered without your OK.
+Conversations and facts are kept by siad in
+.IR /var/sia/ uid ,
+which only siad reads: a user only ever reaches their own memory.
+.SH COMMANDS
+.TP
+.BR new " [\fIquestion\fP...]"
+The same, in a new conversation.
+.TP
+.BI resume " n"
+Continue conversation
+.IR n .
+.TP
+.B list
+Your saved conversations: number, turns, about how many tokens, the first
+question.
+.TP
+.BR forget " \fIn\fP | " all
+Delete conversation
+.IR n ,
+or all of them.
+.TP
+.B memory
+What sia remembers about you, numbered.
+.TP
+.BI "memory forget" " n\fR, " "memory clear"
+Remove fact
+.IR n ,
+or all of them.
+.TP
+.BI remember " fact"
+Add a fact (at most 2 KB of them in all).
+.TP
+.B info
+The backend (local or remote, ready or not), the model, the context, the
+conversations open, its memory, the speed of the last answer.
+.TP
+.BI config " key" = value
+(root) Change a setting in
+.I /etc/sia.conf
+(the API key goes to
+.IR /etc/sia.key );
+the assistant restarts with it. Keys:
+.B backend=local
+or
+.BR remote ,
+.BI model= /models/x.gguf\fR,
+.BI ctx= n\fR,
+.BI threads= n\fR,
+.BI url= https://.../v1\fR,
+.BI api_model= name\fR,
+.BI api_key= key\fR,
+and
+.BR memory ,
+.BR compact_at ,
+.BR keep_turns ,
+.BR max_convs ,
+.BR max_log_kb ,
+.BR remote_ctx .
+.SH EXIT STATUS
+0, or 1 on a failure (no model, the remote model unreachable, not root...).
+.SH FILES
+.TP
+.I /models
+The models
+.RB ( .gguf );
+with no
+.BR model= ,
+the 1.7B one, or the first one there.
+.TP
+.I /etc/sia.conf
+The settings
+.RI ( key = value
+lines).
+.TP
+.I /etc/sia.key
+The remote service's API key (root only).
+.TP
+.I /var/sia/
+Each user's conversations and facts (only siad's).
+.SH EXAMPLES
+.nf
+sia what is a microkernel?
+sia config backend=remote
+sia config url=https://api.example.com/v1
+.fi
+.SH SEE ALSO
+.BR siad (4),
+.BR svc (8)
+.SH BUGS
+Summaries and offered facts are only as good as the model. One warm cache
+only: a conversation continued after another one was used is read again.
+Root can read every user's memory.

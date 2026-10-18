@@ -1,0 +1,57 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH IPC_REPLY 2
+.SH NAME
+ipc_reply, reply_val \- answer a message (SYS_REPLY)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long ipc_reply(long token, msg_t *m);
+long reply_val(long token, long v);
+.fi
+.SH DESCRIPTION
+.B ipc_reply
+answers the call received from
+.I token
+(the value
+.BR ipc_recv (2)
+returned): the words
+.I m\->w[]
+and
+.I m\->slen
+bytes from
+.I m\->sbuf
+go back into the caller's
+.BR msg_t ,
+and the caller wakes. The server does not wait: it goes on at once.
+.B reply_val
+answers with just
+.I v
+in
+.IR w[0] .
+.PP
+A server may keep a token and answer later, from any of its threads, as
+the console does for a read that waits for a typed line. A token names
+the client thread and its call: a call that a signal interrupted, or a
+client that ended, makes it stale, and the reply goes nowhere, never into
+a later call.
+.SH RETURN VALUE
+0 on success, or a negative error.
+.SH ERRORS
+.TP
+.B ESRCH
+The token is stale: that client is gone, or that call was answered or
+interrupted.
+.TP
+.B EFAULT
+.IR m ,
+its
+.I sbuf
+or the client's
+.I rbuf
+is not readable or writable.
+.SH SEE ALSO
+.BR ipc_reply_recv (2),
+.BR ipc_recv (2),
+.BR ipc_call (2)

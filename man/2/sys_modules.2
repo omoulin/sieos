@@ -1,0 +1,43 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH SYS_MODULES 2
+.SH NAME
+sys_modules \- the boot modules' names, for the supervisor (SYS_MODULES)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_modules(char *buf, size_t size);
+.fi
+.SH DESCRIPTION
+.B sys_modules
+copies into
+.I buf
+the names of the programs loaded with the kernel (the boot modules), one
+after the other, each ended by a 0 byte, in order: "init\e0con\e0vblk\e0...".
+A module's place in the list is its number for
+.B SPAWN_MODULE
+.RB ( sys_spawn (2));
+number 0 is the supervisor itself.
+.PP
+Only the supervisor,
+.BR init (8),
+may call it.
+.SH RETURN VALUE
+The number of bytes copied, or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+The caller is not the supervisor.
+.TP
+.B EINVAL
+.I size
+is too small for all the names.
+.TP
+.B EFAULT
+.I buf
+is not writable.
+.SH SEE ALSO
+.BR sys_spawn (2),
+.BR init (8),
+.BR boot (7)

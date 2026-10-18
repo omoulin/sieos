@@ -1,0 +1,83 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: include/mk/abi.h kernel/syscall.c kernel/task.c kernel/mem.c user/fs/fs.c user/auth/auth.c
+.TH SECURITY 7
+.SH NAME
+security \- who may do what in SIEOS
+.SH DESCRIPTION
+.SS Identity
+The kernel gives every process an identity when it starts: a user number
+(uid), a group number (gid) and up to 16 more groups.
+It never changes afterwards.
+The kernel stamps the sender's pid, uid and gid on every message, so a
+server always knows who asks and can trust it; the other groups it asks with
+.BR sys_ident (2).
+uid 0 is
+.BR root ,
+the administrator.
+.PP
+Only root may start a program under another identity
+.RB ( sys_spawn (2)
+with a uid, gid and groups); every other program's children get their
+parent's identity.
+There is nothing like a program that gains rights when run: a user who
+needs something done that their identity does not allow asks a server that
+is allowed, and that server decides.
+.SS The supervisor and drivers
+The first process,
+.BR init (8),
+is the supervisor: it alone may give device rights (I/O ports, interrupts,
+device memory, DMA:
+.BR SPAWN_DRIVER ),
+start boot modules, and declare servers started on demand.
+Only drivers may map device memory (never RAM), bind interrupts, allocate
+DMA memory or reach PCI configuration space.
+A dead driver's DMA buffers stay unused for 100 ms before they are reused.
+.SS Root only
+Powering off, restarting and suspending
+.RB ( sys_power (2)),
+setting the clock, starting programs as another user, signalling other
+users' processes (no one may signal the supervisor), changing a file's owner,
+making volumes.
+A process may signal its own processes;
+.BR sys_note (2)
+reaches root's or the same user's.
+.SS Files
+The file server
+.RB ( fs (4))
+checks every access with the caller's uid, gid and groups against the
+owner, group and the usual rwx bits; root may do anything.
+.B /tmp
+is sticky: a user may not delete other people's files there.
+Homes are mode 0700 and each is a volume of its own,
+.BR encrypted :
+its key is wrapped by a key derived from the user's password (Argon2id), so
+on the disk nothing of it can be read without the password.
+It opens at a login with the password, and stays open until the machine
+stops: what it protects is the disk at rest, not a running system, where
+root can read everything anyway.
+.SS Passwords
+Only the accounts server,
+.BR auth (8),
+reads the password hashes
+.RB ( users (5)).
+A wrong password costs one more second; an unknown name costs the same time
+as a known one; comparisons take the same time wherever the bytes differ;
+passwords are erased from memory after use.
+.SS Memory
+Programs' own files are mapped W^X: no page is both writable and
+executable (anonymous memory may be, for a JIT's code pool).
+A process may get a memory quota (SPAWN_QUOTA); a child never gets more than
+its parent's.
+A shared memory object is named by a random 63-bit number: knowing it is the
+right to use it.
+.SS Remote logins
+.BR sshd (8)
+checks passwords through auth, as login does; root may log in with a key
+only; 6 tries per connection, 2 minutes to log in.
+.SH SEE ALSO
+.BR users (5),
+.BR auth (8),
+.BR fs (4),
+.BR ipc (7),
+.BR sys_spawn (2),
+.BR sys_kill (2)

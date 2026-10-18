@@ -1,0 +1,74 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/ktest/ktest.c
+.TH KTEST 1
+.SH NAME
+ktest \- checks of the kernel's thread services
+.SH SYNOPSIS
+.B ktest
+.I check
+.RI [ threads ]
+.SH DESCRIPTION
+.B ktest
+checks what programs rely on from the kernel, and prints
+.B "ktest NAME: ok"
+or
+.BR "... FAIL" .
+.I threads
+is 1 to 64 (default 16). The checks:
+.TP
+.B fpu
+Many threads compute in floating point at once, preempted; each result
+must equal the same computation done again alone, bit for bit.
+.TP
+.B avx
+The 16 AVX registers hold a pattern through a long busy loop (x86-64,
+not in the build by sicc).
+.TP
+.B tls
+Thread-local variables: each thread its own copy.
+.TP
+.B quota
+A child limited to 16 MiB gets about that much, and cannot give its own
+child more.
+.TP
+.B ipc
+The message round trip between two threads, with and without floating
+point and AVX.
+.TP
+.BR ipcmany " [" \fIn\fR ]
+.I n
+client threads (default 40) calling one server thread at once: the time
+per call.
+.TP
+.B place
+P-cores and E-cores (boot with
+.BI pcores= n
+where all cores are alike).
+.TP
+.B log
+The console's log
+.RB ( SYS_LOG ).
+.TP
+.B sig
+Signals: caught, ignored, default, the waits they interrupt, a process
+group, registers through a storm of them.
+.TP
+.B vm
+Anonymous memory given on first touch,
+.BR MAP_FIXED ,
+faults that still end a process.
+.TP
+.B futex
+A futex mutex shared by 8 threads, time limits, a thread's end waking
+its joiner.
+.TP
+.B shm
+Shared memory between two processes, notes, the wall clock, code shared
+between two processes started from one image.
+.TP
+.BR hang " " spin | sleep | read | net
+Wait forever (for Ctrl-C).
+.SH EXIT STATUS
+0 if the check passed; 1 if not; 2 for an unknown check.
+.SH SEE ALSO
+.BR intro (2)

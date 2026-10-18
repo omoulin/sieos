@@ -1,0 +1,55 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH KILL 1
+.SH NAME
+kill \- send a signal to programs
+.SH SYNOPSIS
+.B kill
+.RB [ \-INT | \-TERM | \-KILL | \-HUP | \-USR1 | \-USR2 | \-\fIn\fP ]
+.IR pid ...
+.SH DESCRIPTION
+.B kill
+is a command built into the shell,
+.BR sh (1).
+It sends a signal to each process
+.I pid
+(see
+.BR ps (1)),
+.B SIGTERM
+unless another is named. Unless the program catches or ignores it, the
+signal ends it;
+.B SIGKILL
+always does. A user may signal only their own processes; root any but the
+supervisor,
+.BR init (8).
+.SH OPTIONS
+.TP
+.B \-INT
+SIGINT (2), what Ctrl-C sends
+.TP
+.B \-TERM
+SIGTERM (15), the default
+.TP
+.B \-KILL
+SIGKILL (9): cannot be caught
+.TP
+.B \-HUP
+SIGHUP (1), what a terminal that goes away sends
+.TP
+.BR \-USR1 ", " \-USR2
+SIGUSR1 (10), SIGUSR2 (12)
+.TP
+.BI \- n
+the signal numbered
+.I n
+(1 to 31)
+.SH EXIT STATUS
+0, or 1 if a signal could not be sent.
+.SH SEE ALSO
+.BR ps (1),
+.BR kill (2),
+.BR sh (1)
+.SH BUGS
+Process groups
+.RI ( \-pid )
+cannot be named here.

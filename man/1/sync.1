@@ -1,0 +1,23 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH SYNC 1
+.SH NAME
+sync \- write everything to the disk now
+.SH SYNOPSIS
+.B sync
+.SH DESCRIPTION
+.B sync
+is a command built into the shell,
+.BR sh (1).
+It asks the file server to commit now what was written, instead of at its
+next regular commit.
+.BR poweroff (8)
+and
+.B reboot
+do it themselves.
+.SH EXIT STATUS
+0, or 1 on failure.
+.SH SEE ALSO
+.BR df (1),
+.BR fs (4),
+.BR poweroff (8)

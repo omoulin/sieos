@@ -1,0 +1,33 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH RM 1
+.SH NAME
+rm \- remove files
+.SH SYNOPSIS
+.B rm
+.RB [ \-f ]
+.IR file ...
+.SH DESCRIPTION
+.B rm
+is a command built into the shell,
+.BR sh (1).
+It removes each
+.I file
+(a name: the file itself goes when its last link does), and stops at the
+first one it cannot remove. In
+.B /tmp
+(sticky) only a file's owner may remove it. Directories are removed with
+.BR rmdir (1).
+.SH OPTIONS
+.TP
+.B \-f
+A file that does not exist is not an error.
+.B \-f
+must come first.
+.SH EXIT STATUS
+0, or 1 on the first failure.
+.SH SEE ALSO
+.BR mkdir (1),
+.BR ln (1),
+.BR snap (1),
+.BR sh (1)

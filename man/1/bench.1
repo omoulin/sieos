@@ -1,0 +1,27 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/bench/bench.c
+.TH BENCH 1
+.SH NAME
+bench \- measure the disk path from a program
+.SH SYNOPSIS
+.B bench
+.RI [ mib ]
+.SH DESCRIPTION
+.B bench
+measures the way a file request travels: program, file server, disk
+driver, disk, every step a message. It writes
+.I mib
+MiB (default 16) to
+.B /tmp/bench.dat
+in requests of 128 KiB and commits it, reads it back, then creates 500
+small files, looks one up, and deletes them. Each line gives a rate and
+the time it took.
+.SH FILES
+.B /tmp/bench.dat
+and
+.BR /tmp/b. *
+(removed at the end).
+.SH SEE ALSO
+.BR fs (4),
+.BR vblk (4),
+.BR df (1)
