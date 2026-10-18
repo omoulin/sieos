@@ -424,10 +424,12 @@ static int ap_boot(cpu_t *c)             /* SIPI: c starts at 0x8000 -> 0: it ru
 {
     tramp(c, c->a.idle_stack);
     /* A second SIPI if it has not answered after 1 ms (the standard asks
-     * for two; one is enough on most machines). */
+     * for two; one is enough on most machines), then up to 1 s: a real
+     * machine may take far longer than QEMU (a CPU that answers after we
+     * gave up would run on a trampoline already set up for the next one). */
     for (int s = 0; s < 2 && !c->online; s++) {
         send_ipi(c->a.apic_id, 0x4600 | TRAMP >> 12);
-        for (uint64_t end = rdtsc() + ns_to_ticks(s ? 100000000 : 1000000); !c->online && rdtsc() < end; )
+        for (uint64_t end = rdtsc() + ns_to_ticks(s ? 1000000000 : 1000000); !c->online && rdtsc() < end; )
             arch_lock_wait(cpus[0]);    /* (the CPUs already started may ask us for a shootdown) */
     }
     if (!c->online) kprintf("mk: CPU with APIC id %d did not start\n", c->a.apic_id);

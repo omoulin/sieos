@@ -98,6 +98,7 @@ _start:                                 /* eax = 0x2BADB002, ebx = boot informat
     or   $0x901, %eax                   /* SCE | LME | NXE */
     wrmsr
     mov  %cr0, %eax
+    and  $0x9FFFFFFF, %eax              /* caches on (CD, NW clear), whatever the firmware left */
     or   $0x80010001, %eax              /* PG (paging) | WP (protect read-only pages from the kernel too) | PE */
     mov  %eax, %cr0
 
@@ -183,6 +184,7 @@ _start64:
     or   $0x901, %eax
     wrmsr
     mov  %cr0, %rax
+    and  $0x9FFFFFFF, %eax              /* caches on (CD, NW clear), whatever the firmware left */
     or   $0x10000, %eax                 /* WP */
     mov  %rax, %cr0
     lgdt boot_gdtr64

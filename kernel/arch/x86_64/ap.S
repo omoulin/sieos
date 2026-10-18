@@ -25,6 +25,7 @@ ap_start:
     mov  %ax, %ds
     lgdtl TR(ap_gdtr)
     mov  %cr0, %eax
+    and  $0x9FFFFFFF, %eax              /* caches on: a processor starts with CD and NW set (KVM ignores them; real ones crawl) */
     or   $1, %eax                       /* protected mode */
     mov  %eax, %cr0
     ljmpl $0x18, $TR(ap32)
