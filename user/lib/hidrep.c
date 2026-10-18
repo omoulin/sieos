@@ -6,7 +6,8 @@
  * A precision touchpad ("PTP", digitizer page, Windows' touchpads) reports
  * its fingers, in absolute positions, once it is told to (input mode 3;
  * until then it acts as a mouse). Here: one finger moves the pointer
- * (relative, like a mouse), two fingers scroll, a short touch is a click
+ * (relative, like a mouse; by millimetres on the pad, from the descriptor's
+ * physical size, faster the faster the finger goes), two fingers scroll, a short touch is a click
  * (two fingers: the right button), pressing the pad is a click (with two
  * fingers down: the right button). Contacts the pad thinks are a palm
  * (confidence 0) are left out.
@@ -109,19 +110,36 @@ static int32_t bits(const uint8_t *r, int len, int pos, int sz, int sign)
     return (int32_t)v;
 }
 
+/* A physical extent in µm: units centimetres (0x11) or inches (0x13),
+ * times 10^exponent. 0: no length given. */
+static int phys_um(int32_t pmin, int32_t pmax, int exp, uint32_t unit)
+{
+    int64_t v = (int64_t)(pmax - pmin) * ((unit & 0xFF) == 0x11 ? 10000 : (unit & 0xFF) == 0x13 ? 25400 : 0);
+    for (; exp > 0 && v < 10000000; exp--) v *= 10;
+    for (; exp < 0; exp++) v /= 10;
+    return v > 0 && v < 1000000 ? (int)v : 0;
+}
+
 /* Where the buttons, X, Y, wheel and fingers are. */
 void hid_parse(hidrep_t *h, const uint8_t *p, int n)
 {
-    int page = 0, size = 0, count = 0, rid = 0, pos = 0, umin = 0, nu = 0, usages[16], depth = 0, app = 0, finger = -1, fdepth = 0;
-    int32_t lmax = 0;
+    int page = 0, size = 0, count = 0, rid = 0, pos = 0, umin = 0, nu = 0, usages[16], depth = 0, app = 0, finger = -1, fdepth = 0, uexp = 0;
+    int32_t lmin = 0, lmax = 0, pmin = 0, pmax = 0;
+    uint32_t unit = 0;
     for (int i = 0; i < n; ) {
         int b = p[i], sz = (b & 3) == 3 ? 4 : b & 3, type = b >> 2 & 3, tag = b >> 4;
         uint32_t v = 0;
         for (int k = 0; k < sz && i + 1 + k < n; k++) v |= (uint32_t)p[i + 1 + k] << 8 * k;
         i += 1 + sz;
         if (type == 1) {                                     /* global */
+            int32_t s = sz == 1 ? (int8_t)v : sz == 2 ? (int16_t)v : (int32_t)v;
             if (tag == 0) page = v;
-            else if (tag == 2) lmax = sz == 1 ? (int8_t)v : sz == 2 ? (int16_t)v : (int32_t)v;
+            else if (tag == 1) lmin = s;
+            else if (tag == 2) lmax = s;
+            else if (tag == 3) pmin = s;
+            else if (tag == 4) pmax = s;
+            else if (tag == 5) uexp = v & 8 ? (int)(v & 0xF) - 16 : (int)(v & 0xF);
+            else if (tag == 6) unit = v;
             else if (tag == 7) size = v;
             else if (tag == 8) { rid = v; pos = 0; }
             else if (tag == 9) count = v;
@@ -144,8 +162,8 @@ void hid_parse(hidrep_t *h, const uint8_t *p, int n)
                         if (finger < 0) { if (page == 9 && u == 1) h->tbpos = at + 1; continue; }
                         if (page == 0x0D && u == 0x42) h->ftip[finger] = at;
                         if (page == 0x0D && u == 0x47) h->fok[finger] = at + 1;
-                        if (page == 1 && u == 0x30) { h->fx[finger] = at; h->fsz = size; h->txmax = lmax; h->trid = rid; }
-                        if (page == 1 && u == 0x31) h->fy[finger] = at;
+                        if (page == 1 && u == 0x30) { h->fx[finger] = at; h->fsz = size; h->txmin = lmin; h->txmax = lmax; h->trid = rid; h->tw = phys_um(pmin, pmax, uexp, unit); }
+                        if (page == 1 && u == 0x31) { h->fy[finger] = at; h->tymin = lmin; h->tymax = lmax; h->th = phys_um(pmin, pmax, uexp, unit); }
                     } else if (app == 0x010006) {            /* a keyboard */
                         if (page == 7 && (v & 2) && size == 1 && u == 0xE0) { h->kpos = at; h->krid = rid; }
                         if (page == 7 && !(v & 2) && size == 8 && !k && !h->kn) { h->kkeys = at; h->kn = count; }
@@ -185,12 +203,39 @@ static void pointer(hidrep_t *h, const uint8_t *r, int len)
     hid_send(&v, 1);
 }
 
-/* Touchpad units -> mouse counts (x16): the pad's width is about 2500 counts. */
-static int scale(hidrep_t *h, int d, int *rem)
+/* The pad's ranges, and its size in µm: the descriptor's, else 10 cm wide, its units square. */
+static void pad_size(const hidrep_t *h, int *rx, int *ry, int *w, int *hh)
 {
-    int v = d * 2500 * 16 / (h->txmax > 0 ? h->txmax : 4000) + *rem;
-    *rem = v % 16;
-    return v / 16;
+    *rx = h->txmax - h->txmin > 0 ? h->txmax - h->txmin : 4000;
+    *ry = h->tymax - h->tymin > 0 ? h->tymax - h->tymin : *rx * 2 / 3;
+    *w = h->tw ? h->tw : 100000;
+    *hh = h->th ? h->th : (int)((int64_t)*w * *ry / *rx);
+}
+int hid_pad_size(const hidrep_t *h, int *w, int *hh)
+{
+    int rx, ry;
+    pad_size(h, &rx, &ry, w, hh);
+    return h->tw && h->th;
+}
+
+/* A finger's move (pad units) -> mouse counts (a count is about a pixel at
+ * the desktop's normal speed). Pointer acceleration as libinput's touchpad
+ * profile, flat then linear: 8 counts per mm up to 25 mm/s (slow moves stay
+ * precise), rising with the finger's speed to 32 at 175 mm/s and over. A
+ * slow 5 cm stroke moves ~400 pixels, a quick one ~1600: a Surface's 2736
+ * pixels are one quick stroke across its 10 cm pad. */
+static void accel(hidrep_t *h, int dx, int dy, int64_t dt, int16_t *ox, int16_t *oy)
+{
+    int rx, ry, w, hh;
+    pad_size(h, &rx, &ry, &w, &hh);
+    int64_t mx = (int64_t)dx * w / rx, my = (int64_t)dy * hh / ry;          /* µm */
+    int64_t ax = mx < 0 ? -mx : mx, ay = my < 0 ? -my : my, d = ax > ay ? ax + ay / 2 : ay + ax / 2;   /* (about the distance) */
+    int64_t us = dt < 4000000 ? 4000 : dt > 50000000 ? 50000 : dt / 1000;   /* (a report interval, sensibly) */
+    int64_t v = d * 1000 / us, g = v <= 25 ? 128 : 128 + 128 * (v - 25) / 50;   /* mm/s; the gain, 1/16 counts per mm */
+    if (g > 512) g = 512;
+    int64_t cx = mx * g / 1000 + h->rx, cy = my * g / 1000 + h->ry;
+    h->rx = (int)(cx % 16); h->ry = (int)(cy % 16);
+    *ox = (int16_t)(cx / 16); *oy = (int16_t)(cy / 16);
 }
 
 static void touchpad(hidrep_t *h, const uint8_t *r, int len)
@@ -201,16 +246,16 @@ static void touchpad(hidrep_t *h, const uint8_t *r, int len)
     for (int i = 0; i < h->nf; i++)
         if (bits(r, len, h->ftip[i], 1, 0) && (!h->fok[i] || bits(r, len, h->fok[i] - 1, 1, 0)) && !n++)
             x = bits(r, len, h->fx[i], h->fsz, 0), y = bits(r, len, h->fy[i], h->fsz, 0);
-    if (n && !h->n) { h->t0 = now; h->moved = h->maxn = h->click = 0; }      /* a touch begins */
+    if (n && !h->n) { h->t0 = h->tlast = now; h->moved = h->maxn = h->click = 0; }   /* a touch begins */
     if (n > h->maxn) h->maxn = n;
     if (n && n == h->n) {                                    /* the same fingers moved */
         int dx = x - h->lx, dy = y - h->ly;
         h->moved += (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
-        if (n == 1) { v[0].dx = (int16_t)scale(h, dx, &h->rx); v[0].dy = (int16_t)scale(h, dy, &h->ry); }
+        if (n == 1) accel(h, dx, dy, now - h->tlast, &v[0].dx, &v[0].dy);
         else for (h->sacc += dy; h->sacc / (h->txmax / 40 + 1); h->sacc -= (h->sacc > 0 ? 1 : -1) * (h->txmax / 40 + 1))
             v[0].wheel = (int8_t)(v[0].wheel + (h->sacc > 0 ? 1 : -1));     /* fingers up: the page goes down */
     } else h->rx = h->ry = h->sacc = 0;
-    h->lx = x; h->ly = y;
+    h->lx = x; h->ly = y; h->tlast = now;
     h->click |= b;
     v[0].buttons = b ? (h->maxn > 1 ? MB_RIGHT : MB_LEFT) : 0;
     int k = 1;

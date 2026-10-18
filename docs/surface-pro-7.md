@@ -78,6 +78,23 @@ keyboard base, from hid-tools' tests; the Pro 7 cover's own descriptor
 was not available): the report protocol chosen, both `SET_REPORT`s, keys,
 volume keys, the mouse report, finger moves, a tap, the pad's click.
 
+After the first boot on the machine (2026-10-18): the pointer was "very
+sluggish". Two causes, both fixed:
+
+- **No interrupt.** The firmware leaves the xHCI's interrupt line unset
+  (`usb: no interrupt line known: reading the controller's events by
+  polling`), so every report waited for the next 8 ms look. The kernel now
+  has MSI (`SYS_IRQ_MSI`: one of 16 vectors, the address and data for the
+  device, x2APIC ids up to 255); the USB server uses the controller's MSI
+  (else MSI-X, else its line): `usb: xHCI 8086:34ed at 00:14.0, 18 ports,
+  interrupts: MSI`.
+- **A fixed scale.** The pad's movement was a fixed 2500 counts per pad
+  width. It is now by millimetres (the descriptor's physical size, logged:
+  `usb: 045e:09c0 touchpad: X 0-..., Y 0-..., NN x NN mm`) with
+  acceleration (libinput's flat-then-linear: 8 counts per mm up to 25
+  mm/s, up to 32 at 175 mm/s): slow moves precise, the 2736-pixel screen
+  in one quick stroke. The desktop's mouse speed still multiplies it.
+
 Not done: the cover's keyboard backlight (a feature report linux-surface
 sets off for suspend), the folded-back switch (Microsoft's report 0x22:
 0x22 normal, 0x33 folded; would tell the desktop it is a tablet).
@@ -315,11 +332,15 @@ Boot from the USB key (the Pro 7 boots USB with volume-down held while
 pressing power), then read the log (the log viewer, or the screen
 console):
 
-1. **Type Cover** (`usb:` lines): `usb: port N: 045e:09c0 Surface Type
+1. **Type Cover** (`usb:` lines): `usb: xHCI 8086:34ed at 00:14.0, 18
+   ports, interrupts: MSI` (`polled` there: no MSI, the old sluggishness),
+   `usb: port N: 045e:09c0 Surface Type
    Cover, ... speed: keyboard/mouse` (another product id is fine: the
    covers of the Pro 4 to 7 fit) and before it `usb: 045e:09c0
    interface 0: keyboard, touchpad (fingers), mouse, volume keys, its
-   reports`. Type; move a finger (the pointer moves), two fingers
+   reports` and `usb: 045e:09c0 touchpad: X 0-..., Y 0-..., NN x NN mm`
+   (about 100 x 55 mm; `size not given: assumed` means 10 cm was taken).
+   Type; move a finger (the pointer moves; quick strokes go further), two fingers
    (scroll), tap (click), press the pad (click). `touchpad (as a mouse)`
    instead of `(fingers)`: the input mode was refused (the pointer still
    moves, no tap or scroll). The volume keys of the top row: the volume

@@ -89,6 +89,8 @@ int hid_attach(usbdev_t *d, const uint8_t *f, int len)
     log_line("usb: %04x:%04x interface %d: %s%s%s%s%s\n", d->vendor, d->product, f[2], h->kbd ? "boot keyboard" : r->kn ? "keyboard, " : "",
              r->trid ? "touchpad (fingers), " : r->mrid ? "touchpad (as a mouse), " : "", r->screen ? "touch screen, " : r->xsz ? (r->absolute ? "tablet, " : "mouse, ") : "",
              r->csz ? "volume keys, " : "", h->kbd ? "" : "its reports");
+    int w, hh, ok = hid_pad_size(r, &w, &hh);
+    if (r->trid) log_line("usb: %04x:%04x touchpad: " HID_PAD_FMT "\n", d->vendor, d->product, HID_PAD_ARGS(r, w, hh, ok));
     d->hid[slot] = h;
     d->async[h->dci] = hid_async;
     if (!nhid++) hid_send(0, 0);                                 /* con: a keyboard or pointer is here */

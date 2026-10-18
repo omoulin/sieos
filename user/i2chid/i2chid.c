@@ -226,6 +226,8 @@ static int hid_start(void)
     free(rd);
     log_line("%s: report %d, %d buttons, %s; touchpad: report %d, %d fingers, mode report %d\n", rep->screen ? "touch screen" : "mouse",
              rep->rid, rep->bn, rep->absolute ? "absolute" : "relative", rep->trid, rep->nf, rep->mrid);
+    int pw, ph, ok = hid_pad_size(rep, &pw, &ph);
+    if (rep->trid) log_line("touchpad: " HID_PAD_FMT "\n", HID_PAD_ARGS(rep, pw, ph, ok));
     /* the device's own mode: SET_REPORT (feature) "input mode": 3 a touchpad's fingers, 2 a touch screen's; length, id, value */
     int mode = rep->trid ? 3 : rep->screen ? 2 : 0;
     uint8_t m[8] = { (uint8_t)(3 + (rep->msz + 7) / 8), 0, (uint8_t)rep->mrid, (uint8_t)mode };
