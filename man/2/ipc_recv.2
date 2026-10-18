@@ -1,0 +1,80 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH IPC_RECV 2
+.SH NAME
+ipc_recv \- wait for a message on a port (SYS_RECV)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long ipc_recv(long port, msg_t *m);
+.fi
+.SH DESCRIPTION
+.B ipc_recv
+takes the next message sent to
+.IR port ,
+which must belong to the calling process, sleeping until one comes.
+Several threads of a server may wait on one port: each message goes to
+one of them.
+.PP
+It fills
+.IR m\->w[] ,
+copies the data into
+.I m\->rbuf
+(at most
+.I m\->rlen
+bytes; the rest is cut) and sets
+.I m\->rlen
+to the size received. The kernel stamps
+.IR m\->pid ,
+.I m\->uid
+and
+.I m\->gid
+with the sender's identity: a server can trust them to decide what the
+caller may do (its other groups:
+.BR sys_ident (2)).
+.PP
+Interrupts bound to the port
+.RB ( irq_bind (2))
+and kernel events arrive as a message from "token 0": the return value is
+0,
+.I w[0]
+has one bit per interrupt that occurred
+.RB ( IRQ_BIT ),
+.I w[1]
+the other events:
+.B NOTE_CHILD
+(a child ended,
+.BR sys_child_port (2))
+and
+.B NOTE_WANT
+(an on-demand server is wanted,
+.BR sys_want (2)).
+So a driver needs no extra thread: it waits for clients and hardware in
+the same loop.
+.SH RETURN VALUE
+The sender's token, to answer with
+.BR ipc_reply (2);
+0 for interrupts and kernel events; or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+No such port, or it is not the caller's.
+.TP
+.B EINTR
+A signal the process catches came while it waited.
+.TP
+.B EPIPE
+The process is ending.
+.TP
+.B EFAULT
+.I m
+or its
+.I rbuf
+is not the caller's memory.
+.SH SEE ALSO
+.BR ipc_reply_recv (2),
+.BR ipc_call (2),
+.BR ipc_reply (2),
+.BR irq_bind (2),
+.BR ipc (7)

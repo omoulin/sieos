@@ -1,0 +1,94 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/ipc.c include/mk/abi.h user/lib/mk.h user/lib/lib.c
+.TH IPC 7
+.SH NAME
+ipc \- messages, ports and replies: how SIEOS's programs talk
+.SH DESCRIPTION
+Programs talk with
+.BR messages .
+A server creates a named
+.B port
+and waits on it.
+A client sends a message and sleeps until the reply.
+The kernel copies the message directly from one program's memory into the
+other's (one copy, no buffering in the kernel) and stamps it with the
+sender's identity, which servers can trust.
+.SS A message
+.nf
+typedef struct {
+    uint64_t w[4];               /* w[0] = operation, or result */
+    const void *sbuf; uint64_t slen;
+    void *rbuf;       uint64_t rlen;
+    int32_t pid, uid, gid, _pad; /* the sender, filled in by the kernel */
+} msg_t;
+.fi
+Small values travel in w[]; larger data is copied from the sender's sbuf
+into the receiver's rbuf (its size comes back in rlen).
+.SS The calls
+.TP
+.BR port_create (2)
+a port, named or not; a name is unique while its port lives.
+.TP
+.BR port_lookup (2)
+a port by name; it waits until the port exists
+.RB ( port_find :
+\-ENOENT at once instead).
+.TP
+.BR ipc_call (2)
+send w[] and sbuf, sleep until the reply, whose w[] and data come back into
+the same msg_t.
+.TP
+.BR ipc_recv (2)
+wait for a message on a port: it fills w[], copies the data into rbuf and
+returns the sender's
+.BR token ,
+by which the server answers.
+.TP
+.BR ipc_reply (2)
+answer the message received from a token: w[] and sbuf go back to the
+caller.
+.TP
+.BR ipc_reply_recv (2)
+reply, then receive the next message, in one call: the server's fast path.
+.PP
+A server may keep a token and answer later: a call that must wait (data, a
+connection, a key) costs no CPU time meanwhile.
+By convention a reply's w[0] is the result, >= 0, or \-errno.
+.SS Interrupts and events
+A driver binds its device's interrupt to its port
+.RB ( irq_bind (2),
+.BR irq_msi (2)):
+it arrives as a message with token 0, w[0] holding one bit per interrupt
+that occurred, so one loop serves hardware and clients.
+The driver answers with
+.BR irq_ack (2).
+The kernel also sends token 0 messages for other events (w[1]):
+.B NOTE_CHILD
+(a child ended, on the port given to
+.BR sys_child_port (2))
+and
+.B NOTE_WANT
+(someone waits for an on-demand server; the supervisor only).
+.SS When a server restarts
+A server that crashes is started again by
+.BR init (8).
+A call to it fails with \-EPIPE (it died during the call) or \-ENOENT (the
+port number is stale).
+The library's
+.B call_named
+then finds the port again by name (waiting until the new server is up) and
+sends the call again: always after \-ENOENT, which never reached the old
+server, and after \-EPIPE only for requests safe to do twice (reads, writes
+at an offset, console text, most file operations; not a login, nor closing
+a file).
+Open files are reopened.
+.SH EXAMPLES
+Printing "hi" from the shell:
+.nf
+sh:   ipc_call(console, CON_WRITE "hi")  \-> kernel copies "hi" \-> con
+con:  ipc_recv returns; prints it; ipc_reply_recv(token, 2) \-> sh goes on
+.fi
+.SH SEE ALSO
+.BR intro (2),
+.BR intro (4),
+.BR security (7)

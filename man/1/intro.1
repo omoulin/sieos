@@ -1,0 +1,117 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.TH INTRO 1
+.SH NAME
+intro \- the commands of SIEOS
+.SH DESCRIPTION
+Section 1 of the manual tells the commands a user types at the shell's
+prompt. Some are built into the shell,
+.BR sh (1);
+the others are programs in
+.BR /bin .
+.B help
+lists the built-in ones;
+.B man \-k
+.I word
+finds a page by its summary.
+.SS Files and directories (built into the shell)
+.BR ls ,
+.BR cd ,
+.BR pwd ,
+.BR cat ,
+.BR echo ,
+.BR cp ,
+.BR mv ,
+.BR ln ,
+.BR rm ,
+.BR mkdir ,
+.BR rmdir ,
+.BR touch ,
+.BR chmod ,
+.BR chown ,
+.BR stat ,
+.BR df ,
+.BR sync ;
+attributes:
+.BR tag ,
+.BR tags ,
+.BR untag ,
+.BR find ;
+snapshots:
+.BR snap .
+.SS The system and you (built into the shell)
+.BR ps ,
+.BR kill ,
+.BR mem ,
+.BR uptime ,
+.BR battery ,
+.BR sleep ,
+.BR clear ,
+.BR whoami ,
+.BR id ,
+.BR groups ,
+.BR logout ,
+.BR exit ,
+.BR help ;
+.BR poweroff ,
+.BR reboot ,
+.B suspend
+(root:
+.BR poweroff (8)).
+.SS Programs
+.TP
+accounts
+.BR passwd (1),
+.BR su (1)
+.TP
+the network
+.BR fetch (1)
+.RB ( curl ,
+.BR wget ),
+.BR ping (1),
+.BR host (1)
+.RB ( nslookup ),
+.BR ifconfig (1),
+.BR netstat (1),
+.BR traceroute (1),
+.BR nc (1),
+.BR ssh (1),
+.BR ssh\-keygen (1),
+.BR mail (1),
+.BR git (1)
+.TP
+devices
+.BR wifi (1),
+.BR bt (1),
+.BR play (1)
+.RB ( rec ,
+.BR vol ),
+.BR kblight (1),
+.BR gpio (1),
+.BR gfxhat (1),
+.BR dmesg (1)
+.TP
+programming
+.BR cc (1),
+.BR make (1),
+.BR python (1)
+.TP
+applications
+.BR sia (1),
+.BR scriptures (1),
+.BR man (1),
+.BR pkg (1)
+.TP
+tests
+.BR hello (1),
+.BR bench (1),
+.BR fsloop (1),
+.BR crash (1),
+.BR racey (1),
+.BR ktest (1)
+.SH EXIT STATUS
+A command ends with 0 when it did what was asked, another number when not;
+the shell says which when it is not 0.
+.SH SEE ALSO
+.BR sh (1),
+.BR man (1),
+.BR intro (7)

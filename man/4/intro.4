@@ -1,0 +1,87 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/init/init.c include/mk/proto.h user/lib/lib.c
+.TH INTRO 4
+.SH NAME
+intro \- servers and devices: the ports programs talk to
+.SH DESCRIPTION
+The kernel offers very little: processes and threads, memory, time,
+message passing and, for drivers, access to devices.
+Everything else (the terminal, the disk, files, users, the network) is done
+by ordinary programs, the
+.IR servers ,
+that other programs talk to with messages.
+This section describes each server: its port, how it starts, and the
+messages it understands.
+.PP
+A server creates a named
+.B port
+.RB ( port_create (2))
+and waits on it.
+A client finds the port by name
+.RB ( port_lookup (2))
+and sends a message
+.RB ( ipc_call (2)):
+w[0] is the operation, w[1]..w[3] small values, and larger data travels in
+sbuf (to the server) or rbuf (back to the client).
+The reply's w[0] is the result: >= 0, or a negative error number.
+The kernel stamps each message with the sender's pid, uid and gid, which a
+server can trust to decide what the caller may do.
+The message formats are in
+.BR <mk/proto.h> .
+.PP
+.B Restarts.
+A server that crashes is started again by the supervisor,
+.BR init (8),
+about 1 ms later.
+The library's
+.B call_named
+finds the port again by name and sends the call again when the old one
+failed with \-ENOENT (a stale port) or, for requests safe to repeat, \-EPIPE
+(the server died during the call); open files are reopened.
+.PP
+.B On demand.
+Some servers are not started at boot: init declares their port to the
+kernel, the first program that looks it up waits, and init starts the server.
+After its idle time without use, init asks it
+.B SVC_MAYSTOP
+("may you stop?"); a server that holds no client state says yes and ends.
+Every server answers an operation it does not know with \-ENOSYS at once,
+which is how init's
+.B SVC_PING
+("are you there?") works: a core server that does not answer for 30 s is
+stuck, and is ended and started again.
+.SH SERVERS
+.nf
+port       program  started               page
+console    con      boot module, driver   con(4)
+usb        usb      boot module, driver   usb(4)
+disk       vblk     boot module, driver   vblk(4)
+fs         fs       boot module           fs(4)
+init       init     the kernel            init(8)
+auth       auth     on demand (5 min)     auth(8)
+acpi       acpid    at boot, x86-64       acpid(4)
+atlas      atlas    at boot, driver       atlas(4)
+nic0       vnet     on demand (10 min)    vnet(4)
+net        netd     on demand (10 min)    netd(4)
+wifi       wifid    at boot, driver       wifid(4)
+bt         btd      at boot, driver       btd(4)
+audio      audiod   on demand, kept       audiod(4)
+gpio       gpiod    on demand, kept       gpiod(4)
+unix       unixd    on demand (10 min)    unixd(4)
+sia        siad     on demand (15 min)    siad(4)
+\-          i2chid   at boot, x86-64       i2chid(4)
+\-          ipts     at boot, x86-64       ipts(4)
+.fi
+.PP
+A server with no hardware to drive (no ACPI tables, no Wi-Fi chip, no
+display card) ends with status 0 at start, and init does not start it again.
+.SH FILES
+.TP
+.B /bin
+the servers that are not boot modules
+.SH SEE ALSO
+.BR ipc (7),
+.BR boot (7),
+.BR svc (8),
+.BR init (8),
+.BR intro (2)

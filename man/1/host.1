@@ -1,0 +1,32 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fetch/fetch.c
+.TH HOST 1
+.SH NAME
+host, nslookup \- the address of a name (DNS)
+.SH SYNOPSIS
+.B host
+.I name
+.br
+.B nslookup
+.I name
+.SH DESCRIPTION
+.B host
+asks the network server's DNS resolver for the IPv4 address of
+.I name
+and prints it
+.RI ( name " has address " a.b.c.d ).
+.B nslookup
+does the same. Both are other names of
+.BR fetch (1).
+The DNS server is the one DHCP gave
+.RB ( ifconfig (1)
+shows it).
+.SH EXIT STATUS
+0, or 1 if the name could not be resolved.
+.SH SEE ALSO
+.BR ping (1),
+.BR ifconfig (1),
+.BR fetch (1),
+.BR netd (4)
+.SH BUGS
+IPv4 addresses only.

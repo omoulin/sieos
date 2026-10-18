@@ -1,0 +1,64 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH SNAP 1
+.SH NAME
+snap \- snapshots of a volume
+.SH SYNOPSIS
+.B snap
+.RB [ list
+.RI [ path ]]
+.br
+.B snap take
+|
+.B delete
+|
+.B restore
+.I name
+.RI [ path ]
+.SH DESCRIPTION
+.B snap
+is a command built into the shell,
+.BR sh (1).
+A snapshot is a read-only picture of a whole volume at one commit: nothing
+is copied, so taking one costs a few blocks, at any size. A user's home is
+a volume of its own. Each
+.I path
+(the current directory when there is none) names the volume it is in.
+.TP
+.B list
+The volume's snapshots: the time each was taken (UTC) and its name.
+.TP
+.BI take " name"
+Take one now, named
+.IR name .
+.TP
+.BI delete " name"
+Let one go: the blocks only it used become free.
+.TP
+.BI restore " name"
+Make the volume what the snapshot shows (newer snapshots are deleted
+first).
+.PP
+Each volume's root has a hidden
+.B .snapshots
+directory listing them by name, so
+.B ~/.snapshots/before-upgrade/notes.txt
+is that file as it was; writing there is refused ("read only"). The file
+server also takes one of every volume each hour
+.RB ( auto\- date-hour),
+keeps them a day, and lets the oldest go first when the disk is full.
+.PP
+Anyone who may read the volume may list; only its owner (a home's user)
+or root may take, delete or restore.
+.SH EXIT STATUS
+0, or 1 on failure or a wrong command.
+.SH EXAMPLES
+.nf
+snap take before-upgrade
+snap list
+snap restore before-upgrade
+.fi
+.SH SEE ALSO
+.BR df (1),
+.BR fs (4),
+.BR siefs (5)

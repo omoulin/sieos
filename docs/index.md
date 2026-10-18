@@ -6,6 +6,7 @@ Start with the [README](../README.md) (what SIEOS is, how to run it), then:
 
 | Page | What it covers |
 |---|---|
+| [man/](../man) | the manual pages, classic Unix style: sections 1 (commands), 2 (system calls), 4 (servers), 5 (files), 7 (overviews), 8 (administration); `man` on SIEOS, `make man-html` (build/man-html/), `make man-check`; the format: man(7) |
 | [status.md](status.md) | what works on each architecture, what is next, history |
 | [kernel.md](kernel.md) | the guided tour: boot, messages, every server, crashes, on-demand servers, CPUs and time |
 | [arch.md](arch.md) | the portable core and its architectures: the interface, x86-64, AArch64 (QEMU `virt`) |

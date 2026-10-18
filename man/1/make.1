@@ -1,0 +1,145 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/make/make.c
+.TH MAKE 1
+.SH NAME
+make \- remake files from the rules of a makefile
+.SH SYNOPSIS
+.B make
+.RB [ \-f
+.IR file ]
+.RB [ \-C
+.IR dir ]
+.RB [ \-nksBir ]
+.RB [ \-j1 ]
+.RI [ var = value ...]
+.RI [ target ...]
+.SH DESCRIPTION
+.B make
+is POSIX make with GNU make's common additions, with
+.BR cc (1)
+as its compiler. The makefile
+.RB ( \-f 's,
+else
+.BR makefile ,
+else
+.BR Makefile )
+is read whole: variables, explicit, pattern and suffix rules, includes.
+Each goal (the command line's, else
+.BR .DEFAULT_GOAL ,
+else the first target that does not start with
+.BR . )
+is made depth first: its prerequisites, then its recipe if it is
+missing, older than one of them, a prerequisite was remade, it is phony,
+or
+.BR \-B .
+.PP
+Each recipe line runs alone as
+.BI "sh \-c " line
+in make's folder, after it is shown (unless
+.BR @ ,
+.B \-s
+or
+.BR .SILENT ).
+A status other than 0 stops make with
+.B make: *** [target] Error N
+and status 2.
+.PP
+Built in:
+.BR "CC = cc" ,
+the rules
+.BR "%.o: %.c" ,
+.BR "%.o: %.S" ,
+.BR "%.o: %.s" ,
+.BR "%: %.c" ,
+.BR "%: %.o" .
+Functions:
+.BR subst ,
+.BR patsubst ,
+.BR strip ,
+.BR findstring ,
+.BR filter ,
+.BR filter-out ,
+.BR sort ,
+.BR word ,
+.BR words ,
+.BR firstword ,
+.BR lastword ,
+.BR dir ,
+.BR notdir ,
+.BR suffix ,
+.BR basename ,
+.BR addsuffix ,
+.BR addprefix ,
+.BR wildcard ,
+.BR foreach ,
+.BR if ,
+.BR call ,
+.BR info ,
+.BR warning ,
+.BR error .
+.SH OPTIONS
+.TP
+.BI \-f " file"
+Read this makefile (several may be given).
+.TP
+.BI \-C " dir"
+Go to
+.I dir
+first.
+.TP
+.B \-n
+Show the recipes, run none (lines with
+.B $(MAKE)
+still run).
+.TP
+.B \-k
+Keep going: make the targets that do not depend on a failed one.
+.TP
+.B \-s
+Silent: do not show the recipes.
+.TP
+.B \-B
+Remake everything.
+.TP
+.B \-i
+Ignore errors.
+.TP
+.B \-r
+No built-in rules.
+.TP
+.BI \-j n
+Accepted; one job runs at a time.
+.TP
+.IB var = value
+Wins over the makefile's assignment.
+.SH EXIT STATUS
+0 when every goal was made; 2 on an error.
+.SH FILES
+.TP
+.B /src/hello-make
+a small project to try;
+.B /src/sieos
+SIEOS's own hello, sh and make, which build on SIEOS.
+.SH SEE ALSO
+.BR cc (1),
+.BR sh (1)
+.SH BUGS
+No conditionals
+.RB ( ifeq ,
+.BR ifdef ),
+.BR define ,
+.BR override ,
+.BR vpath ,
+target-specific variables,
+.B $(shell)
+or
+.BR != ;
+no
+.BR \-q ,
+.B \-t
+or long options. A recipe line is one shell command: the shell has no
+.BR ; ,
+.BR && ,
+.B |
+or lasting
+.BR cd .

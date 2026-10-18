@@ -1,0 +1,62 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/play/play.c
+.TH PLAY 1
+.SH NAME
+play, rec, vol \- play and record sound, the volume and the output
+.SH SYNOPSIS
+.B play
+.IR file.wav ...
+.br
+.B rec
+.I file.wav
+.RI [ seconds ]
+.br
+.B vol
+.RB [ 0\-100 | mute ]
+.br
+.B vol out
+.RI [ n ]
+.SH DESCRIPTION
+One program under three names, through the audio server,
+.BR audiod (4)
+(started when first needed). Ctrl-C stops
+.B play
+and
+.BR rec .
+.TP
+.B play
+Plays WAV files one after the other: 48 kHz, 16-bit, stereo PCM; others
+are refused. A headset's or keyboard's media keys pause it, skip to the
+next or previous file, or stop it.
+.TP
+.B rec
+Records that long (5 s if not said, less than an hour) from the
+microphone or line in into a WAV file of the same format.
+.TP
+.B vol
+Shows the volume, or sets it (0-100; a number also unmutes;
+.B mute
+mutes).
+.TP
+.B vol out
+Lists the outputs (0 the speakers, then each monitor with sound, then
+connected Bluetooth headphones, by name;
+.B *
+the one playing), or plays to output
+.IR n .
+The choice lasts until audiod ends.
+.SH EXIT STATUS
+0; 1 on an error (not a WAV file, no sound card) or a usage error.
+.SH EXAMPLES
+.nf
+rec hello.wav 3
+play hello.wav
+vol 60
+vol out 1
+.fi
+.SH SEE ALSO
+.BR audiod (4),
+.BR bt (1)
+.SH BUGS
+Only 48 kHz, 16-bit stereo PCM (no conversion, no surround). No
+microphone choice (the first one wired) and no record level.

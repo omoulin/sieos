@@ -1,0 +1,31 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/acct/acct.c
+.TH PASSWD 1
+.SH NAME
+passwd \- change a password
+.SH SYNOPSIS
+.B passwd
+.RI [ name ]
+.SH DESCRIPTION
+.B passwd
+changes your own password: it asks for the current one, then the new one
+twice (hidden). Root may set anyone's, without the current one. A
+password has at least 8 characters, and is not the account's name.
+.PP
+It only asks the accounts server,
+.BR auth (8),
+which decides from the caller's identity. The home's key is wrapped by
+the new password; when root sets the password of someone whose home is
+locked (they have not logged in since the machine started), the home
+keeps the old password.
+.SH EXIT STATUS
+0 when the password changed; 1 otherwise.
+.SH FILES
+.B /etc/secrets
+(through
+.BR auth (8)).
+.SH SEE ALSO
+.BR su (1),
+.BR useradd (8),
+.BR users (5),
+.BR auth (8)

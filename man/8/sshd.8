@@ -1,0 +1,69 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sshd/sshd.c
+.TH SSHD 8
+.SH NAME
+sshd \- the SSH server
+.SH SYNOPSIS
+.B /bin/sshd
+(started by
+.BR init (8))
+.SH DESCRIPTION
+.B sshd
+listens on TCP port 22. It is in init's table, started at boot if
+.B /etc/ssh/sshd_config
+exists; otherwise it ends at once and is not started again. It is off by
+default; to turn it on, as root:
+.PP
+.nf
+mkdir /etc/ssh
+echo on > /etc/ssh/sshd_config
+svc restart sshd
+.fi
+.PP
+On its first start it makes its host key and logs its fingerprint:
+.BR "sshd: listening on port 22, host key SHA256:..." .
+.PP
+Passwords are checked by the accounts server,
+.BR auth (8)
+.RB ( AUTH_CHECK ),
+which then starts the user's shell
+.RB ( AUTH_LOGIN ,
+with the password again, which opens an encrypted home). Keys are read
+from
+.B ~/.ssh/authorized_keys
+(OpenSSH's format,
+.B ssh-ed25519
+lines); a locked encrypted home's keys cannot be read. Root may log in
+only with a key; 6 tries per connection; 2 minutes to log in.
+.PP
+sshd is to the remote shell what the console server is to the local
+one: each connection slot (8) has a port,
+.B sshd0
+to
+.BR sshd7 ;
+the shell's terminal is
+.BI sshd N # session\fR,
+with the same line editing as the console.
+.SH FILES
+.TP
+.B /etc/ssh/sshd_config
+its switch (nothing in it is read yet).
+.TP
+.BR /etc/ssh/ssh_host_ed25519_key ", " .pub
+the host key (mode 0600).
+.TP
+.B ~/.ssh/authorized_keys
+the keys that may log in.
+.SH SEE ALSO
+.BR ssh (1),
+.BR auth (8),
+.BR svc (8),
+.BR netd (4)
+.SH BUGS
+One channel per connection: no port forwarding, agent, X11, scp or sftp.
+Ed25519 keys only; no
+.B authorized_keys
+options and no
+.B sshd_config
+settings. The remote terminal is 80 x 24 whatever the window. A session
+ended by a signal reports status 255.

@@ -1,0 +1,22 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH SLEEP 1
+.SH NAME
+sleep \- wait
+.SH SYNOPSIS
+.B sleep
+.I seconds
+.SH DESCRIPTION
+.B sleep
+is a command built into the shell,
+.BR sh (1).
+It waits at least
+.I seconds
+seconds, which may have decimals
+.RB ( "sleep 0.25" ).
+Ctrl-C ends it early.
+.SH EXIT STATUS
+0; 130 if Ctrl-C ended it; 1 without a number.
+.SH SEE ALSO
+.BR sys_sleep (2),
+.BR sh (1)

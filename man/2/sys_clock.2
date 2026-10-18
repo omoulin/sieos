@@ -1,0 +1,23 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH SYS_CLOCK 2
+.SH NAME
+sys_clock \- nanoseconds since boot (SYS_CLOCK)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_clock(void);
+.fi
+.SH DESCRIPTION
+.B sys_clock
+returns the time since the kernel started, in nanoseconds: a clock that
+only goes forward, for measuring durations and timeouts. It does not
+change when the wall clock is set; the date and time of day come from
+.BR sys_time (2).
+.SH RETURN VALUE
+Nanoseconds since boot. It cannot fail.
+.SH SEE ALSO
+.BR sys_time (2),
+.BR sys_sleep (2),
+.BR sys_info (2)

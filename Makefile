@@ -52,6 +52,7 @@ BINS    += $(if $(filter x86_64,$(ARCH)),i2chid acpid ipts install)   # install:
 ULIBOBJ += $(if $(filter x86_64,$(ARCH)),aml)       # the AML interpreter they share
 BINS    += python                       # MicroPython (user/python/python.mk)
 BINS    += btd bt                       # Bluetooth: the server and the command
+BINS    += man                          # the manual (man/, installed in /usr/share/man: tools/man.py)
 BINS    := $(filter-out $(KARCH_NOBINS),$(BINS))
 
 all: $(B)/kernel.bin $(PROGS:%=$(B)/%.elf) $(KARCH_EXTRA) $(B)/disk.img
@@ -269,12 +270,14 @@ ROOTFS  := $(shell find rootfs -type f)
 # SIEOS's own programs that SIEOS builds itself (make + cc): their sources
 # in /src/sieos, next to its Makefile (rootfs/src/sieos, docs/make.md)
 SELF_SRC := $(foreach p,hello sh make,user/$(p)/$(p).c)
-$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB) $(ROOTFS_FONTS) $(WEB_ROOTFS_DEPS)
+MANPAGES := $(wildcard man/*/*.[0-9])
+$(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(MANPAGES) tools/man.py $(BINS:%=$(B)/%.elf) $(if $(filter atlas,$(KARCH_NOBINS)),$(B)/noscreen.elf) $(SICC_LIB) $(ROOTFS_FONTS) $(WEB_ROOTFS_DEPS)
 	rm -rf $(B)/rootfs && mkdir -p $(B)/rootfs && cp -R rootfs/. $(B)/rootfs/ && cp $(SELF_SRC) $(B)/rootfs/src/sieos/
 	mkdir -p $(B)/rootfs/bin $(B)/rootfs/home $(B)/rootfs/tmp
 	mkdir -p $(B)/rootfs/lib/sicc/include/mk && cp cc/include/*.h user/lib/mk.h user/lib/gpio.h siefs/siefs.h $(B)/rootfs/lib/sicc/include/ && \
 	    cp include/mk/*.h $(B)/rootfs/lib/sicc/include/mk/ && cp $(SICC_LIB) $(B)/rootfs/lib/sicc/
 	for p in $(BINS); do cp $(B)/$$p.elf $(B)/rootfs/bin/$$p; done
+	python3 tools/man.py install man $(B)/rootfs/usr/share/man
 	mkdir -p $(B)/rootfs/lib/fonts && cp $(ROOTFS_FONTS) $(B)/rootfs/lib/fonts/
 	$(if $(filter atlas,$(KARCH_NOBINS)),cp $(B)/noscreen.elf $(B)/rootfs/bin/atlas)
 	for l in $(LINKS); do ln -s $${l%/*} $(B)/rootfs/bin/$${l#*/}; done
@@ -355,10 +358,17 @@ run-nox: all model
 	$(QEMU) -display none -vga none $(SERIAL)
 # The test starts from a fresh disk (no accounts: it runs the first-start
 # setup), never from yours.
-test: all $(B)/host/fsck.siefs
+test: all $(B)/host/fsck.siefs man-check
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null
 	python3 tools/boottest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
 	python3 tools/crashtest.py $(SMP) $(B)/host $(B)/test.img $(subst $(B)/disk.img,$(B)/test.img,$(QEMU)) -display none -vga none -serial stdio
+# man-check: every program and system call has a page, every option a page shows is in its
+# program's source; man-html: the manual as web pages (build/man-html/index.html)
+man-check:
+	@python3 tools/man.py check man include/mk/abi.h $(BINS) $(PROGS) $(notdir $(LINKS))
+man-html:
+	python3 tools/man.py html man build/man-html
+.PHONY: man-check man-html
 # gui-test: the desktop, through QEMU's control socket (screenshots in build/screens)
 gui-test: all $(B)/host/fsck.siefs
 	rm -f $(B)/test.img && $(B)/host/mkfs.siefs -s $(TESTDISK) -L SIEOS -d $(B)/rootfs $(B)/test.img >/dev/null

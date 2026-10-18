@@ -1,0 +1,17 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH UPTIME 1
+.SH NAME
+uptime \- time since start
+.SH SYNOPSIS
+.B uptime
+.SH DESCRIPTION
+.B uptime
+is a command built into the shell,
+.BR sh (1).
+It prints the time since the machine started, as
+.IB hours : minutes : seconds . milliseconds\fR,
+and the number of CPUs.
+.SH SEE ALSO
+.BR mem (1),
+.BR sys_clock (2)

@@ -1,0 +1,31 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/crash/crash.c
+.TH CRASH 1
+.SH NAME
+crash \- a service that fails or hangs (a test)
+.SH SYNOPSIS
+.B crash
+.br
+.B crash hang
+.I port
+.SH DESCRIPTION
+Without arguments,
+.B crash
+ends at once with status 3: it tests that
+.BR init (8)
+backs off and gives up on a service that cannot start
+.RB ( "svc add crasher /bin/crash" ).
+.PP
+.B crash hang
+.I port
+is a stuck server: it creates
+.I port
+and never answers, so that init's watcher must end it
+.RB ( "svc add \-w" " " \fIport\fR " ...).
+.SH EXIT STATUS
+3; 4 if
+.I port
+cannot be created.
+.SH SEE ALSO
+.BR svc (8),
+.BR init (8)

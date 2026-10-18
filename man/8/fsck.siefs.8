@@ -1,0 +1,28 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: tools/siefs/fsck.siefs.c
+.TH FSCK.SIEFS 8
+.SH NAME
+fsck.siefs \- check a SieFS image
+.SH SYNOPSIS
+.B build/host/fsck.siefs
+.RB [ \-d ]
+.I image
+.SH DESCRIPTION
+.B fsck.siefs
+runs on the build machine (Linux). It checks every checksum, the trees,
+the free space, the link counts and the attribute index, and prints each
+problem, then how many. The tests run it on their disks after SIEOS
+powers off.
+.PP
+Repairing is not needed after a crash: a commit is all or nothing, and a
+damaged image falls back to the previous commit when mounted.
+.SH OPTIONS
+.TP
+.B \-d
+Also read and check every data block.
+.SH EXIT STATUS
+0 clean; 1 problems found; 2 the image cannot be mounted.
+.SH SEE ALSO
+.BR siefs (8),
+.BR mkfs.siefs (8),
+.BR siefs (5)

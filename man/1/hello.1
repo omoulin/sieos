@@ -1,0 +1,24 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/hello/hello.c
+.TH HELLO 1
+.SH NAME
+hello \- show its arguments and who it runs as
+.SH SYNOPSIS
+.B hello
+.RI [ word ...]
+.SH DESCRIPTION
+.B hello
+was the first program loaded from the disk. It prints its process
+number, its user number and its arguments:
+.PP
+.nf
+Hello from the disk! I am pid 21, uid 1000, with 2 arguments: a b
+.fi
+.PP
+Its source is also on every disk, in
+.BR /src/sieos ,
+to be built on SIEOS with
+.BR make (1).
+.SH SEE ALSO
+.BR cc (1),
+.BR make (1)

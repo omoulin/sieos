@@ -1,0 +1,38 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH CHMOD 1
+.SH NAME
+chmod \- change a file's permissions
+.SH SYNOPSIS
+.B chmod
+.I mode path
+.SH DESCRIPTION
+.B chmod
+is a command built into the shell,
+.BR sh (1).
+It sets the permissions of
+.I path
+to
+.IR mode ,
+an octal number: read 4, write 2, execute (or enter, for a directory) 1,
+for the owner, the group and the others, as in
+.B 644
+or
+.BR 755 ;
+.B 1000
+is the sticky bit (in a directory, only a file's owner may remove it).
+Only the owner or root may change them.
+.SH EXIT STATUS
+0, or 1 on failure.
+.SH EXAMPLES
+.nf
+chmod 640 /tmp/grp.txt
+.fi
+.SH SEE ALSO
+.BR chown (1),
+.BR ls (1),
+.BR sh (1)
+.SH BUGS
+Octal modes only (no
+.BR u+x ),
+one path at a time.

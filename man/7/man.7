@@ -1,0 +1,115 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/man/man.c tools/man.py
+.TH MAN 7
+.SH NAME
+man \- how a manual page is written
+.SH SYNOPSIS
+.nf
+\&.\e" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+\&.\e" source: user/NAME/NAME.c
+\&.TH NAME SECTION
+\&.SH NAME
+name[, other] \e\- what it does, in one line
+\&.SH SYNOPSIS
+\&...
+.fi
+.SH DESCRIPTION
+The pages are kept in
+.BI man/ section / name . section
+of SIEOS's sources, in a small part of the classic
+.B man
+macros: a line that starts with a dot is a macro, any other line is text,
+filled into lines as wide as the screen. The same file is read by
+.BR man (1)
+on SIEOS, by
+.B tools/man.py
+on the build machine (the web pages and the checks), and by groff
+.RB ( "groff \-man \-Tutf8" ).
+.SS Macros
+.TP
+.BI .TH " name section"
+the page's title (first)
+.TP
+.BI .SH " heading"
+a section: NAME, SYNOPSIS, DESCRIPTION, OPTIONS, EXIT STATUS, FILES,
+EXAMPLES, SEE ALSO, BUGS, in that order (and what a page needs: COMMANDS,
+MESSAGES, RETURN VALUE, ERRORS)
+.TP
+.BI .SS " heading"
+a part of a section
+.TP
+.BR .PP ", " .LP ", " .P
+a new paragraph
+.TP
+.B .TP
+a tagged paragraph: the next line is the tag (an option), the text after
+it is indented
+.TP
+.BI .IP " tag"
+the same, its tag on the macro's line
+.TP
+.BR .RS ", " .RE
+indent further, and back
+.TP
+.BR .nf ", " .fi
+lines as they are (examples, code), and filled again
+.TP
+.BR .br ", " .sp
+a new line, an empty line
+.TP
+.BI .B " words" "\fR, \fP" .I " words"
+in bold (what is typed as it is), underlined (what stands for something);
+alone, the next line
+.TP
+.BR .BR ", " .RB ", " .BI ", " .IB ", " .IR ", " .RI
+words alternately in the two fonts, without spaces between them:
+.B ".BR sh (1),"
+.TP
+.B .\e"
+a comment; the first lines tell the license and, after
+.BR source: ,
+the files whose code reads the options the page shows
+.SS Escapes
+.B \efB
+bold,
+.B \efI
+underlined,
+.B \efR
+plain,
+.B \efP
+the font before;
+.B \e\-
+a minus sign (options are written
+.BR \e\-l );
+.B \ee
+a backslash;
+.B \e&
+nothing (before a dot that starts a line of text);
+.BR \e(bu ,
+.BR \e(em ,
+.BR \e(mu ,
+.BR \e(lq ,
+.B \e(rq
+a bullet, a dash, a times sign, quotes.
+.SH FILES
+.TP
+.B man/
+the pages, in SIEOS's sources
+.TP
+.B /usr/share/man/
+the pages on the disk, without their comment lines, and
+.B whatis
+.TP
+.B build/man-html/
+.B make man-html
+puts the web pages there, with an index
+.SH SEE ALSO
+.BR man (1),
+.BR intro (7)
+.PP
+.B make man-check
+(part of
+.BR "make test" )
+fails unless every program in /bin and every system call has a page, every
+option a page of section 1 or 8 shows is found in its program's source,
+and every page SEE ALSO names exists.

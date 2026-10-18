@@ -1,0 +1,70 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/unixd/unixd.c include/mk/proto.h
+.TH UNIXD 4
+.SH NAME
+unixd \- pipes and unix socket pairs for libposix (port "unix")
+.SH SYNOPSIS
+Port
+.BR unix .
+.B /bin/unixd
+is started on demand by
+.BR init (8),
+and stopped after 10 minutes when no end is held.
+.SH DESCRIPTION
+What Linux's kernel does for programs built on libposix (the POSIX layer
+of the web browser), a server does here:
+.TP
+.B ends
+each pipe or socket pair is two ends; a process holds an end (the creator,
+one it was passed to, a child it was handed to); an end closes when nobody
+holds it any more.
+.TP
+.B channels
+bytes (or messages: UNIX_SEQPACKET) flowing one way: a pipe has one, a
+socket pair two. A reader waits while there is nothing and a writer remains;
+a writer while 256 KiB wait unread.
+.TP
+.B passing
+a message may carry descriptors: other ends, or shared memory objects.
+unixd holds them on the way and gives them to the reader.
+.TP
+.B stashes
+what a program hands to one it starts (posix_spawn): ends, shared memory
+and a block of bytes, claimed by the child with a random cookie.
+.PP
+One thread, one message at a time; calls that must wait are answered later.
+Every 2 s it looks for holders that ended without saying so.
+.SH MESSAGES
+.TP
+.B UNIX_PAIR
+w[1] = UNIX_STREAM, UNIX_SEQPACKET or UNIX_PIPE \-> 0; reply w[1], w[2] = the
+two ends (a pipe: w[1] reads, w[2] writes).
+.TP
+.B UNIX_SEND
+w[1] = end, w[2] = n descriptors, w[3] = flags (UNIX_NONBLOCK); sbuf = n
+unix_desc_t, then the data \-> bytes taken.
+.TP
+.B UNIX_RECV
+w[1] = end, w[2] = most bytes, w[3] = flags (UNIX_NONBLOCK, UNIX_PEEK); rbuf
+<\- descriptors, then data \-> bytes; reply w[1] = n descriptors (0 and 0:
+the end).
+.TP
+.BR UNIX_CLOSE ", " UNIX_SHUTDOWN
+hold an end once less; stop reading (0), writing (1) or both (2).
+.TP
+.B UNIX_POLL
+sbuf = end numbers, each with what is waited for in its top byte; rbuf <\- a
+byte each (NET_IN, NET_OUT, NET_ERR) \-> how many are ready; none: the
+caller is noted
+.RB ( sys_note (2))
+later.
+.TP
+.BR UNIX_STASH ", " UNIX_CLAIM ", " UNIX_UNSTASH
+hand descriptors and bytes to a program being started (reply w[1]: a
+cookie); claim them with the cookie; give them back.
+.TP
+.B UNIX_BYE
+the caller ends: every end it holds is closed.
+.SH SEE ALSO
+.BR netd (4),
+docs/webkit-plan.md

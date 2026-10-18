@@ -1,0 +1,47 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/vnet/vnet.c user/vnet/nic.h include/mk/proto.h
+.TH VNET 4
+.SH NAME
+vnet \- the network card server (port "nic0")
+.SH SYNOPSIS
+Port
+.BR nic0 .
+.B /bin/vnet
+is started on demand by
+.BR init (8)
+when
+.BR netd (4)
+looks the port up, with device rights; it stops after netd.
+.SH DESCRIPTION
+.B vnet
+serves the first network card one of its backends finds:
+virtio-net (PCI, legacy or modern, or arm64's MMIO);
+on x86-64 Intel's e1000 and e1000e (QEMU's default cards) and Realtek's
+RTL8168h;
+on arm64 the Raspberry Pi 4's GENET and the Raspberry Pi 5's RP1 Ethernet.
+.PP
+Receiving: a thread waits for frames and sends them to the network server in
+batches (port "net",
+.BR NET_FRAMES ):
+one message per batch, not per frame.
+Sending: frames arrive by IPC straight into the card's DMA memory.
+For cards with a cable, a thread checks the link once a second and tells
+the network server when it comes up or goes down
+.RB ( NET_LINK ),
+so it asks DHCP again.
+.PP
+It is also, for now, the clock-chip reader: x86-64's CMOS clock, arm64's
+PL031 (the Raspberry Pis have none).
+.SH MESSAGES
+.TP
+.B NIC_INFO
+rbuf <\- nic_info_t: the MAC address, the MTU, the clock chip's time at boot
+(seconds since 1970, and when it was read), the link (1 up, 0 down, \-1:
+none to watch). \-> 0.
+.TP
+.B NIC_SEND
+sbuf = frames, each a 16-bit length then the frame. \-> 0.
+.SH SEE ALSO
+.BR netd (4),
+.BR wifid (4),
+.BR ifconfig (1)

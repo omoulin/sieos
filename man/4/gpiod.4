@@ -1,0 +1,67 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/gpiod/gpiod.c user/lib/gpio.h include/mk/proto.h
+.TH GPIOD 4
+.SH NAME
+gpiod \- the GPIO server: a Raspberry Pi's pins (port "gpio")
+.SH SYNOPSIS
+Port
+.BR gpio .
+.B /bin/gpiod
+is started on demand by
+.BR init (8),
+with device rights, by the first program that looks up "gpio", then kept (a
+pattern may be playing).
+.SH DESCRIPTION
+.B gpiod
+offers the pins to every program, and plays patterns on them with steady
+timing.
+Pins are numbered as the chip does: a Raspberry Pi's BCM numbers, 0 to 27 on
+the 40-pin header.
+On a Raspberry Pi the pins are real: the Pi 2 to 4's GPIO block, or the Pi
+5's, in its RP1 chip behind PCIe.
+Elsewhere (x86-64, QEMU) they are simulated, so programs and tests run the
+same everywhere: an output reads back its level, an input reads its pull.
+.PP
+A pin is an input (with a pull-up, a pull-down or none) or an output (0 or
+1).
+A pin a device uses (the serial console's 14 and 15, I2C, SPI) is shown as
+busy and refused.
+A pattern is a list of steps, each the levels of the pins it drives, one
+step every step_us microseconds, once or looping, played by the server's own
+thread (deadlines from the start, so the timing does not drift); it records
+every pin's level at each step.
+Programs use the C library
+.BR <gpio.h> .
+.SH MESSAGES
+.TP
+.B GPIO_INFO
+\-> the number of pins; reply w[1] = 1: real pins, 0: simulated; rbuf <\- the
+board's name.
+.TP
+.B GPIO_MODE
+w[1] = pin, w[2] = GPIO_IN or GPIO_OUT, w[3] = GPIO_PULL_NONE, _DOWN or _UP
+\-> 0.
+.TP
+.BR GPIO_WRITE ", " GPIO_READ
+w[1] = pin, w[2] = 0 or 1 (an output) \-> 0; \-> the level.
+.TP
+.B GPIO_STATE
+rbuf <\- gpio_pin_t[28] (mode, pull, level) \-> the levels, a bit per pin.
+.TP
+.B GPIO_PLAY
+sbuf = gpio_pattern_t (mask, steps, step_us, loop) then the steps (a 32-bit
+word of levels each, at most 4096) \-> 0.
+.TP
+.BR GPIO_STOP ", " GPIO_PLAYING
+stop the pattern (the pins stay as they are); \-> the step being played (\-1:
+none), reply w[1] = rounds done.
+.TP
+.B GPIO_RECORD
+rbuf <\- every pin's level at each step of the pattern as it played \-> steps.
+.TP
+.B GPIO_SELFTEST
+check every free pin, nothing wired to it, then put each back as it was;
+rbuf <\- a byte per pin (GPIO_CHK_...) \-> the pins that failed. \-EBUSY while
+a pattern plays.
+.SH SEE ALSO
+.BR gpio (1)

@@ -1,0 +1,63 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: tools/siefs/mkfs.siefs.c
+.TH MKFS.SIEFS 8
+.SH NAME
+mkfs.siefs \- make a SieFS file system in an image file
+.SH SYNOPSIS
+.B build/host/mkfs.siefs
+.RB [ \-s
+.IR size ]
+.RB [ \-L
+.IR label ]
+.RB [ \-d
+.IR dir ]
+.RB [ \-o
+.IR uid : gid ]
+.I image
+.SH DESCRIPTION
+.B mkfs.siefs
+runs on the build machine (Linux). It writes a new, empty SieFS file
+system into
+.IR image ,
+optionally filled with a copy of a directory, and prints its size,
+objects and free blocks.
+.B make
+uses it for
+.B build/disk.img
+(from
+.BR build/rootfs )
+and the tests' fresh disks.
+.SH OPTIONS
+.TP
+.BI \-s " size"
+Create
+.I image
+with this size
+.RB ( 64M ,
+.BR 3G ...;
+sparse); without
+.B \-s
+an existing image keeps its size.
+.TP
+.BI \-L " label"
+The volume's label (default
+.BR SIEOS ).
+.TP
+.BI \-d " dir"
+Copy
+.IR dir 's
+contents (files, directories, symbolic links, with their modes) into the
+new file system.
+.TP
+.BI \-o " uid" : gid
+The copied files' owner (default 0:0, root).
+.SH EXIT STATUS
+0; 1 if something could not be made or copied; 2 for a usage error.
+.SH EXAMPLES
+.nf
+build/host/mkfs.siefs \-s 64M \-L SIEOS \-d build/rootfs test.img
+.fi
+.SH SEE ALSO
+.BR siefs (8),
+.BR fsck.siefs (8),
+.BR siefs (5)

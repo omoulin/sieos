@@ -1,0 +1,93 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/main.c kernel/arch/x86_64/boot.S kernel/arch/arm64/boot.S boot/uefi/loader.c user/init/init.c user/login/login.c user/auth/auth.c
+.TH BOOT 7
+.SH NAME
+boot \- how SIEOS starts, from the firmware to the login prompt
+.SH DESCRIPTION
+.SS 1. Loading
+.TP
+.B x86-64, QEMU
+QEMU (or GRUB) finds the kernel's multiboot header and loads it at 1 MiB,
+with the boot modules (init, con, usb, vblk, fs) as separate files
+.RB ( "\-initrd" ).
+.TP
+.B x86-64, a PC (UEFI)
+the firmware starts SIEOS's own loader, EFI/BOOT/BOOTX64.EFI, from a USB
+key's EFI partition (or \eEFI\eSIEOS\e on a drive SIEOS was installed on).
+It reads
+.BR boot.cfg (5),
+loads KERNEL.BIN and the modules, sets the screen mode, finds the ACPI
+tables, leaves the firmware and jumps to the kernel's 64-bit entry.
+.TP
+.B arm64 (QEMU virt, Raspberry Pi 4 and 5)
+QEMU or the Pi's firmware (config.txt) loads the kernel image (kernel8.img
+on a Pi's card) and passes a device tree; the boot modules are one archive,
+modules.img (sieos.mod on a card, loaded at 32 MiB), passed as the initrd.
+.SS 2. The kernel
+The entry
+.RB ( boot.S )
+builds the first page tables and switches to 64-bit mode (x86-64), or drops
+from EL2 to EL1 and turns the MMU on (arm64).
+The platform code turns the loader's information or the device tree into
+one description of memory, CPUs, devices and modules.
+.B kernel_main
+sets up memory and the first CPU, starts the first boot module,
+.BR init ,
+starts the other CPUs, and from then on only runs processes.
+Boot options:
+.BI cpus= N
+(start at most N CPUs),
+.BI pcores= N
+(pretend CPUs 0..N\-1 are P-cores),
+.BI root= GUID
+(SIEOS's partition).
+.SS 3. The supervisor
+.BR init (8)
+is the only program the kernel starts.
+It alone may give device rights and start the other boot modules, which
+stay in memory so that a crashed disk driver can come back.
+From its table it starts, in order: the console
+.RB ( con (4)),
+the USB server
+.RB ( usb (4)),
+the disk
+.RB ( vblk (4)),
+the files
+.RB ( fs (4)),
+then from /bin: login, the boot log
+.RB ( "dmesg \-w" ),
+on x86-64 the ACPI server, the touchpad and touch screen drivers, the
+desktop
+.RB ( atlas (4)),
+Wi-Fi, Bluetooth, and
+.BR sshd (8)
+if it is turned on.
+The accounts, the network, sound, the pins, pipes and the assistant start on
+demand, when a program first looks their port up.
+A server without its hardware ends with status 0 and is not started again.
+.SS 4. Logging in
+.BR login (8)
+asks the accounts server
+.RB ( auth (8))
+whether accounts exist.
+On a new disk there are none: the desktop's welcome screen creates them, or,
+with no screen, the terminal does.
+Then login reads a name and a password and asks auth, which checks the
+password, opens the user's encrypted home, and starts the user's shell
+.RB ( "sh \-l" )
+as a child of login, on its terminal.
+login waits for the shell to end, then shows the prompt again.
+On the desktop, the login screen does the same, and each terminal window
+runs a shell as the user.
+.SH FILES
+.TP
+.B /etc/boot.log
+the log since boot, saved 20 s, 1, 2 and 5 minutes after starting (up to the
+console's first login prompt; root only)
+.SH SEE ALSO
+.BR boot.cfg (5),
+.BR init (8),
+.BR svc (8),
+.BR intro (4),
+.BR security (7),
+.BR dmesg (1)

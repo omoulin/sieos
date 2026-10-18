@@ -1,0 +1,70 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/atlas/atlas.c rootfs/etc/apps
+.TH APP 5
+.SH NAME
+app \- the desktop's app launchers (.app files)
+.SH SYNOPSIS
+.B /etc/apps/*.app
+.br
+.B ~/*.app
+.SH DESCRIPTION
+An app is a small text file ending in
+.BR .app ,
+of
+.IB key = value
+lines;
+.B #
+starts a comment.
+Everyone's apps are in
+.BR /etc/apps ;
+a user's own are any
+.B .app
+file in their home folder.
+The desktop,
+.BR atlas (4),
+lists them in the Deskbar's menu and the sia strip, and Files starts one
+when it is opened.
+.TP
+.B name
+what the strip and the menus show (none: the file's name)
+.TP
+.B run
+the program, an absolute path
+.TP
+.B args
+its arguments, one line
+.TP
+.B kind
+.B terminal
+(the default): runs in a new terminal;
+.BR editor :
+opens the editor on an empty, untitled file;
+.BR settings :
+opens Settings;
+.BR git :
+the Git window;
+.BR mail :
+opens Mail;
+.BR camera :
+the Camera window;
+.BR install :
+the Install window;
+.BR window :
+a program that opens its own window (its terminal waits minimized).
+.PP
+Starting an app opens a terminal as the user logged in, never root; its
+shell runs the app's command when it first asks for a line.
+When the app ends, the shell stays
+.RB ( exit
+closes it).
+.SH EXAMPLES
+.nf
+# A SIEOS app launcher (docs/desktop.md): key=value lines.
+name=Hello
+run=/bin/hello
+args=from an app
+kind=terminal
+.fi
+.SH SEE ALSO
+.BR atlas (4),
+.BR hier (7)

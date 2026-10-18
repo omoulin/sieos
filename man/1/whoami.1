@@ -1,0 +1,42 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH WHOAMI 1
+.SH NAME
+whoami, id, groups \- who you are
+.SH SYNOPSIS
+.B whoami
+.br
+.B id
+.br
+.B groups
+.SH DESCRIPTION
+These are commands built into the shell,
+.BR sh (1).
+Every process runs as a user number (uid), a group number (gid) and up to
+16 more groups; it never changes, and the kernel stamps it on every message
+.RB ( ident (2)).
+The names are in
+.B /etc/users
+and
+.BR /etc/groups .
+.TP
+.B whoami
+your user name
+.TP
+.B id
+your user and group numbers with their names:
+.B uid=1000(alice) gid=100(users) groups=...
+.TP
+.B groups
+the names of your groups, the main one first
+.SH FILES
+.TP
+.B /etc/users
+user names, numbers, homes
+.TP
+.B /etc/groups
+group names and members
+.SH SEE ALSO
+.BR users (5),
+.BR su (1),
+.BR useradd (8)

@@ -1,0 +1,68 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/gpio/gpio.c
+.TH GPIO 1
+.SH NAME
+gpio \- the Raspberry Pi's pins from the shell
+.SH SYNOPSIS
+.B gpio
+.br
+.B gpio in
+.I pin
+.RB [ up | down ]
+.br
+.B gpio out
+.I pin
+.RB [ 0 | 1 ]
+.br
+.B gpio get
+.I pin
+.br
+.B gpio blink
+.I pin ms
+.br
+.B gpio stop
+.br
+.B gpio selftest
+.SH DESCRIPTION
+.B gpio
+drives the pins through the GPIO server,
+.BR gpiod (4)
+(port
+.BR gpio ).
+Pins are BCM numbers (BCM 17 is header pin 11). On a machine without
+GPIO (x86-64, QEMU) the server simulates 28 pins.
+.PP
+Without arguments, it lists every pin: its mode, level and pull.
+.TP
+.B in
+An input, with a pull-up or pull-down if given.
+.TP
+.B out
+An output, and its level.
+.TP
+.B get
+Its level: 0 or 1.
+.TP
+.B blink
+On and off every
+.I ms
+milliseconds, played by the server.
+.TP
+.B stop
+The pattern stops.
+.TP
+.B selftest
+With nothing wired: every free pin checked (out 1, out 0, pull-up,
+pull-down), then put back as it was; a table, PASS or FAIL per pin.
+.SH EXAMPLES
+.nf
+gpio out 17 1
+gpio in 27 up
+gpio blink 17 250
+.fi
+.SH SEE ALSO
+.BR gpiod (4),
+.BR gfxhat (1)
+.SH BUGS
+A pin a device uses is refused ("used by a device"), as is writing an
+input.

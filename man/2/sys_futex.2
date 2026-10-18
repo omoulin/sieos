@@ -1,0 +1,70 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/vm.c
+.TH SYS_FUTEX 2
+.SH NAME
+sys_futex \- sleep on a memory word, wake its sleepers (SYS_FUTEX)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_futex(int op, volatile void *addr, long val, uint64_t ns);
+.fi
+.SH DESCRIPTION
+The base of locks and condition variables that cost nothing while
+uncontended.
+.TP
+.B FUTEX_WAIT
+If the 32-bit word at
+.I addr
+still holds
+.IR val ,
+sleep until woken, at most
+.I ns
+nanoseconds (0: no limit). If it does not, return
+.B EAGAIN
+at once: the check and the sleep are one step, so a wake-up between them
+is never lost.
+.TP
+.B FUTEX_WAKE
+Wake up to
+.I val
+threads sleeping on the word at
+.IR addr .
+.PP
+Futexes are keyed by the word's memory, not its address, so they also
+work between processes that share it
+.RB ( sys_shm_create (2)).
+.I addr
+must be 4-byte aligned.
+.SH RETURN VALUE
+.BR FUTEX_WAIT :
+0 when woken.
+.BR FUTEX_WAKE :
+how many threads were woken. Otherwise a negative error.
+.SH ERRORS
+.TP
+.B EAGAIN
+The word does not hold
+.IR val .
+.TP
+.B ETIMEDOUT
+The time limit passed.
+.TP
+.B EINTR
+A signal the process catches came.
+.TP
+.B EPIPE
+The process is ending.
+.TP
+.B EFAULT
+.I addr
+is not aligned, or not the caller's memory.
+.TP
+.B EINVAL
+An unknown
+.IR op .
+.SH SEE ALSO
+.BR sys_thread_self (2),
+.BR sys_note (2),
+.BR sys_mmap (2),
+.BR sys_sleep (2)

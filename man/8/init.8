@@ -1,0 +1,85 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/init/init.c
+.TH INIT 8
+.SH NAME
+init \- the supervisor
+.SH SYNOPSIS
+.B init
+(started by the kernel)
+.SH DESCRIPTION
+.B init
+is the only program the kernel starts: the first boot module, the
+"supervisor". It starts the servers of its table, starts each again when
+it fails, and starts some only when they are needed. It alone may give
+device rights
+.RB ( SPAWN_DRIVER )
+and start the other boot modules, and it adopts every process whose
+parent ended.
+.PP
+At boot:
+.B con
+(the console),
+.B usb
+(USB keys, keyboards, mice),
+.B vblk
+(the disk),
+.B fs
+(the files),
+.B login
+(the console's prompt),
+.B atlas
+(the desktop),
+.B bootlog
+.RB ( "dmesg \-w" ),
+.BR wifi ,
+.BR bt ,
+.BR sshd ,
+.B gfxhat
+and on x86-64
+.BR acpi ,
+.BR i2chid ,
+.BR ipts .
+A service with nothing to drive ends with 0 and is not started again.
+.PP
+On demand: a service with a port is not started at boot. init declares
+the port's name to the kernel
+.RB ( SYS_WANT );
+the first program that looks it up waits, and init starts the server:
+.B auth
+(port
+.BR auth ),
+.B vnet
+.RB ( nic0 ),
+.B netd
+.RB ( net ),
+.B unixd
+.RB ( unix ),
+.B gpio
+.RB ( gpio ),
+.B audio
+.RB ( audio ),
+.B sia
+.RB ( sia ).
+After its idle time unused, init asks the server "may you stop?"
+.RB ( SVC_MAYSTOP );
+one that holds no client state says yes, ends, and is marked
+.BR idle .
+.PP
+Failures: the kernel tells init when a child ends
+.RB ( NOTE_CHILD ).
+It starts it again at once, unless it failed within a second of
+starting: then it waits 10 ms, 20 ms, 40 ms ... up to 1 s, and gives up
+after 5 such failures in a row. A watcher pings the core servers every
+10 s
+.RB ( SVC_PING );
+one that has not answered after 30 s is ended, and so started again.
+.PP
+The boot modules' images stay in the kernel
+.RB ( SPAWN_MODULE ):
+a crashed disk driver comes back even though the disk is unreachable
+without it.
+.SH SEE ALSO
+.BR svc (8),
+.BR boot (7),
+.BR login (8),
+.BR auth (8)

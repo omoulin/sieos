@@ -1,0 +1,37 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/gfxhat/gfxhat.c
+.TH GFXHAT 1
+.SH NAME
+gfxhat \- the console's log on a Pimoroni GFX HAT
+.SH SYNOPSIS
+.B gfxhat
+.SH DESCRIPTION
+.B gfxhat
+shows what a serial wire would show on a Raspberry Pi 4's GFX HAT: its
+128 x 64 screen holds 8 lines of 21 characters; long lines wrap. It
+follows the log as it grows; the touch buttons go back in it:
+.TP
+.BR up ", " down
+a line;
+.TP
+.BR minus ", " plus
+a page;
+.TP
+.B back
+the newest;
+.TP
+.B select
+the contrast on the last row (minus and plus change it; back, or 4 s
+untouched, keeps it); select again: the backlight off or on.
+.PP
+Scrolled back, a bar on the right says where. It is started by
+.BR init (8)
+as background work; with no Raspberry Pi GPIO or no HAT it ends with 0
+at once and is not started again.
+.SH FILES
+.TP
+.B /etc/gfxhat.conf
+the contrast chosen.
+.SH SEE ALSO
+.BR dmesg (1),
+.BR gpio (1)

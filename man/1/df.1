@@ -1,0 +1,18 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH DF 1
+.SH NAME
+df \- disk space
+.SH SYNOPSIS
+.B df
+.SH DESCRIPTION
+.B df
+is a command built into the shell,
+.BR sh (1).
+It prints the disk's label, its size and free space in KiB, the space that
+becomes free after the next commits (blocks a commit still keeps for
+safety), and the number of objects (files, directories, links).
+.SH SEE ALSO
+.BR stat (1),
+.BR snap (1),
+.BR siefs (5)

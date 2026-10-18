@@ -1,0 +1,103 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: include/mk/abi.h user/lib/mk.h kernel/syscall.c
+.TH INTRO 2
+.SH NAME
+intro \- the system calls of the SIEOS kernel
+.SH SYNOPSIS
+.nf
+#include "mk.h"      /* mk/abi.h: numbers, types, errors */
+.fi
+.SH DESCRIPTION
+The kernel offers very little: processes and threads, memory, time,
+message passing (IPC) and, for drivers, access to devices. Everything
+else (the terminal, the disk, files, users) is done by ordinary programs,
+"servers", that other programs talk to with messages
+.RB ( ipc (7)).
+These pages describe the calls; the servers' messages are in section 4.
+.PP
+A call is one instruction. On x86-64,
+.B SYSCALL
+with the number (SYS_...) in rax and the arguments in rdi, rsi, rdx,
+r10, r8, r9; the result comes back in rax (the instruction itself
+overwrites rcx and r11). On arm64,
+.B svc #0
+with the number in x8 and the arguments in x0 to x5; the result comes
+back in x0, every other register kept. mk.h wraps them:
+.BR syscall6 ,
+.BR syscall4 ,
+and one inline function per call. Any pointer from a program is checked
+by the kernel: a bad one gives
+.BR EFAULT ,
+never a crash.
+.SH RETURN VALUE
+A result >= 0 is success; a failure is a negative error number, -E...
+(the POSIX numbers): there is no
+.IR errno .
+.SH ERRORS
+.nf
+EPERM    1  not allowed        EFAULT  14  bad address
+ENOENT   2  no such entry      EBUSY   16  busy
+ESRCH    3  no such process    EEXIST  17  already exists
+EINTR    4  interrupted        EXDEV   18  not across volumes
+EIO      5  input/output       ENOTDIR 20  not a directory
+EBADF    9  bad handle         EISDIR  21  is a directory
+ECHILD  10  no child           EINVAL  22  invalid argument
+EAGAIN  11  try again          EMFILE  24  too many open
+ENOMEM  12  out of memory      ENOSPC  28  no space left
+EACCES  13  permission denied  EROFS   30  read only
+EPIPE   32  the other end ended
+ENAMETOOLONG 36  name too long
+ENOSYS  38  not on this machine
+ENOTEMPTY 39  directory not empty
+ELOOP   40  too many symbolic links
+ETIMEDOUT 110  timed out
+.fi
+.SH MESSAGES
+.nf
+typedef struct {
+    uint64_t w[4];               /* w[0]: operation, or result */
+    const void *sbuf; uint64_t slen;
+    void *rbuf;       uint64_t rlen;
+    int32_t pid, uid, gid, _pad; /* the sender, set by the kernel */
+} msg_t;
+.fi
+.PP
+Small values travel in
+.IR w[] ;
+larger data is copied by the kernel straight from the sender's
+.I sbuf
+into the receiver's
+.I rbuf
+(one copy, no buffering in the kernel).
+.SH THE CALLS
+.nf
+Messages:  port_create  port_lookup  ipc_call  ipc_recv  ipc_reply
+           ipc_reply_recv
+Processes: sys_spawn  sys_exit  sys_wait  sys_ident  sys_tasks
+           sys_info  sys_child_port  sys_modules  sys_want  sys_wanted
+Threads:   thread_start (SYS_THREAD_CREATE, SYS_THREAD_EXIT)
+           sys_thread_self  set_fs  sys_yield  sys_place
+Signals:   kill  tkill  signal (SYS_SIGNAL, SYS_SIGRETURN)  sigwait
+Memory:    sys_brk  sys_mmap  sys_munmap  sys_mprotect  sys_shm_create
+           sys_shm_map  sys_shm_hold  sys_shm_close
+Waiting:   sys_futex  sys_note_word  sys_note  sys_sleep  sys_wake
+Time:      sys_clock  sys_time
+Machine:   sys_power  sys_random  sys_debug  sys_log  sys_screen
+Drivers:   irq_bind  irq_ack  irq_msi  map_phys  dma_alloc  dma_free
+           pci_read (SYS_PCI)  sys_fdt  sys_acpi
+.fi
+.PP
+Who may call what: anyone, unless the page says root (uid 0), the
+supervisor
+.RB ( init (8),
+the first boot module), or drivers (processes the supervisor started
+with
+.BR SPAWN_DRIVER ).
+An unknown number gives
+.BR ENOSYS .
+.SH SEE ALSO
+.BR ipc (7),
+.BR security (7),
+.BR intro (4),
+.BR sys_spawn (2),
+.BR ipc_call (2)

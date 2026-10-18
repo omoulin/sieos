@@ -1,0 +1,41 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH LS 1
+.SH NAME
+ls \- list a directory
+.SH SYNOPSIS
+.B ls
+.RB [ \-l ]
+.RI [ path ...]
+.SH DESCRIPTION
+.B ls
+is a command built into the shell,
+.BR sh (1).
+For each
+.I path
+(the current directory when there is none) that is a directory, it prints
+the names of what the directory holds, one per line, without
+.B .
+and
+.BR .. ;
+a path that is not a directory is printed as it is.
+.SH OPTIONS
+.TP
+.B \-l
+The long form: the type and permissions
+.RB ( drwxr-xr-x ;
+.B t
+for the sticky bit), the number of links, the owner's and group's numbers,
+the size in bytes, the time of the last change (UTC), the name, and for a
+symbolic link where it points.
+.SH EXIT STATUS
+0, or 1 if a path could not be read.
+.SH EXAMPLES
+.nf
+ls \-l /home
+.fi
+.SH SEE ALSO
+.BR cd (1),
+.BR stat (1),
+.BR tag (1),
+.BR sh (1)

@@ -1,0 +1,76 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/bt/bt.c
+.TH BT 1
+.SH NAME
+bt \- Bluetooth: devices, pairing, connecting, sending files
+.SH SYNOPSIS
+.B bt
+.RB [ scan " | " list " | " on " | " off " | " accept " | " decline ]
+.br
+.B bt
+.BR pair " | " forget " | " connect " | " disconnect
+.I addr
+.br
+.B bt send
+.I addr file
+.SH DESCRIPTION
+.B bt
+talks to the Bluetooth server,
+.BR btd (4),
+on its port
+.BR bt ;
+the desktop's Settings do the same. An
+.I addr
+is written
+.BR AA:BB:CC:DD:EE:FF .
+.SH COMMANDS
+.TP
+.B bt
+The state: the controller, on, off, starting or failed (and the last
+failure), its address.
+.TP
+.B scan
+10 s of inquiry and LE scanning, then the list.
+.TP
+.B list
+The devices found and bonded: address, classic or LE, signal, name, kind
+(keyboard, mouse, audio, phone, computer), bonded, connected or in use.
+.TP
+.BI pair " addr"
+(root) Pair with a device: shows the code to compare
+("Does the device show 123456? [y/n]") or to type on it
+("Type 123456 on the device, then Enter."), and waits until it is done.
+.TP
+.BI forget " addr"
+(root) Forget a bonded device.
+.TP
+.BI connect " addr\fR, " disconnect " addr"
+Connect a bonded device (headphones: the sound goes there), or disconnect
+it.
+.TP
+.BI send " addr file"
+Send a file to a bonded phone or computer (OBEX Object Push).
+.TP
+.BR accept ", " decline
+(root) Take or refuse the file a device offers (the desktop asks too);
+an accepted file goes to the desktop user's
+.IR ~/Downloads .
+.TP
+.BR on ", " off
+(root) Turn Bluetooth on or off (kept).
+.SH EXIT STATUS
+0 on success; 1 on a failure, a usage error, or with no Bluetooth.
+.SH EXAMPLES
+.nf
+bt scan
+bt pair 00:1A:7D:DA:71:13
+bt send 00:1A:7D:DA:71:13 notes.txt
+.fi
+.SH SEE ALSO
+.BR btd (4),
+.BR audiod (4),
+.BR play (1)
+.SH BUGS
+OBEX: one transfer at a time, Object Push only. A2DP: SBC at 48 kHz only,
+one sink at a time. No LE privacy: bonded LE devices that use resolvable
+private addresses must be paired again. One adapter.

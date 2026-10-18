@@ -1,0 +1,40 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH SIGWAIT 2
+.SH NAME
+sigwait \- wait for a signal (SYS_SIGWAIT)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+syscall4(SYS_SIGWAIT, 0, 0, 0, 0);
+.fi
+.SH DESCRIPTION
+.B SYS_SIGWAIT
+puts the calling thread to sleep until a signal comes.
+.PP
+Outside a signal's function, a caught signal runs its function first, and
+the call then returns
+.BR EINTR
+(pause).
+.PP
+Inside a signal's function, where further signals wait, the first one
+waiting for this thread is taken and its number returned, without
+running its function (sigsuspend in a handler). That is how one thread
+suspends another, then resumes it: it sends a signal with
+.BR tkill (2);
+the target's function waits here for the second signal that resumes it,
+as WebKit's garbage collector does.
+.SH RETURN VALUE
+In a signal's function, the signal taken. Otherwise a negative error.
+.SH ERRORS
+.TP
+.B EINTR
+A caught signal came and its function has run.
+.TP
+.B EPIPE
+The process is ending.
+.SH SEE ALSO
+.BR signal (2),
+.BR tkill (2),
+.BR kill (2)

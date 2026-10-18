@@ -1,0 +1,98 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/usb/usb.c user/usb/msc.c user/usb/uvc.c user/usb/kbl.c user/usb/btusb.c include/mk/proto.h
+.TH USB 4
+.SH NAME
+usb \- the USB server: the xHCI controller, disks, keyboards, mice, cameras (port "usb")
+.SH SYNOPSIS
+Ports
+.BR usb ,
+.BR usbdisk0 ,
+.BR usbdisk1 ...,
+.BR camera ,
+.BR kblight ,
+.BR bthci .
+A boot module, started by
+.BR init (8)
+before the disk server, with device rights; with no USB controller it ends
+with status 0 and is not started again.
+.SH DESCRIPTION
+.B usb
+drives the xHCI controller (found on PCI) and what is plugged in it, hubs
+included: each new device is reset, given a slot and an address, its
+descriptors read, and each interface handed to its class driver.
+.TP
+.B disks
+USB keys and disks (mass storage, SCSI commands): each is served whole on a
+port of its own,
+.BR usbdisk N,
+with the disk protocol of
+.BR vblk (4);
+the disk server finds the SieFS partition in it, so a key can be SIEOS's
+whole disk.
+An unplugged disk's port answers \-EIO.
+.TP
+.B keyboards and mice
+HID devices: their keys, moves and buttons go to the console
+.RB ( CON_INJECT ,
+.BR con (4)).
+.TP
+.B cameras
+UVC cameras, on the port
+.B camera
+while one is plugged in: one client at a time; frames come converted to
+0x00RRGGBB pixels.
+.TP
+.B keyboard light
+the Legion laptops' ITE 8258 (048d:c195), on the port
+.BR kblight .
+.TP
+.B Bluetooth
+an adapter's HCI pipe, port
+.BR bthci ,
+whose only client is
+.BR btd (4).
+.SH MESSAGES
+On the port
+.BR usb :
+.TP
+.B USB_DISKS
+\-> the number of USB disks, once the devices present at start are ready (a
+slow key is not waited for more than a few seconds).
+.TP
+.B USB_DISK
+w[1] = index; rbuf <\- usb_disk_t (its port, sector size, present, size in
+4 KiB blocks, vendor, product, name). \-> 0.
+.PP
+On the port
+.BR camera :
+.B CAM_OPEN
+\-> 0, reply w[1], w[2] = width, height (\-EBUSY: another client's);
+.B CAM_FRAME
+rbuf <\- the next frame (waits up to 1 s) \-> bytes;
+.B CAM_CLOSE
+stops the camera (it also stops by itself after 3 s without a request).
+.PP
+On the port
+.BR kblight :
+.B KBL_SET
+w[1] = KBL_OFF, KBL_LOW or KBL_HIGH, w[2] = a colour 0xRRGGBB \-> 0;
+.B KBL_GET
+\-> the level, reply w[1] = the colour.
+.PP
+On the port
+.BR bthci :
+.B BTH_SEND
+(w[1] = 0: an HCI command, 1: bulk data; sbuf = the packet),
+.B BTH_RECV
+(rbuf <\- records {endpoint, 16-bit length, bytes}),
+.B BTH_INFO
+(\-> vendor << 16 | product).
+.SH FILES
+.TP
+.B /etc/kblight
+the keyboard light's level and colour, given to the keyboard at each start
+.SH SEE ALSO
+.BR vblk (4),
+.BR con (4),
+.BR btd (4),
+.BR kblight (1)

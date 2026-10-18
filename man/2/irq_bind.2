@@ -1,0 +1,77 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH IRQ_BIND 2
+.SH NAME
+irq_bind, irq_ack \- interrupts as messages, for drivers (SYS_IRQ_BIND, SYS_IRQ_ACK)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long irq_bind(int irq, long port);
+long irq_ack(int irq);
+.fi
+.SH DESCRIPTION
+.B irq_bind
+delivers interrupt
+.I irq
+to
+.IR port ,
+one of the caller's ports: when it fires, the kernel masks the line and a
+thread waiting in
+.BR ipc_recv (2)
+gets a "token 0" message whose
+.I w[0]
+has bit
+.B IRQ_BIT(irq)
+set. Interrupts that come while no thread waits are kept and delivered
+together.
+.PP
+Interrupt numbers: on x86-64, ISA IRQs 0-15 or I/O APIC lines (GSIs) 16
+and up; on arm64, the GIC's shared lines ("SPI"
+.IR n ,
+what a device tree's "interrupts = <0 n flags>" says).
+.I irq
+may be or-ed with
+.B IRQ_LEVEL
+(a level-triggered, active-high line: a PCI device's interrupt as the
+chipset routes it) and
+.B IRQ_LOW
+(with
+.BR IRQ_LEVEL :
+active low). Each bound line goes to a processor of its own, in turn.
+.PP
+A line may be shared by up to 4 drivers (PCI lines are). Each bound
+driver gets every interrupt of the line, checks its own device, and must
+answer
+.B irq_ack
+at once, even when the interrupt was not its device's and even while
+idle: the kernel unmasks the line only when all of them have. Binding a
+line to the same port again does nothing. A process's lines are released
+when its port closes.
+.PP
+Only drivers (processes started with
+.BR SPAWN_DRIVER )
+may bind.
+.SH RETURN VALUE
+0 on success, or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+.RB ( irq_bind )
+The caller is not a driver.
+.RB ( irq_ack )
+The line is not bound to one of the caller's ports.
+.TP
+.B EINVAL
+The number is out of range or reserved by the kernel (MSI lines come from
+.BR irq_msi (2)),
+the port is not the caller's, or the line cannot be routed.
+.TP
+.B EBUSY
+Four drivers share the line already.
+.SH SEE ALSO
+.BR irq_msi (2),
+.BR ipc_recv (2),
+.BR map_phys (2),
+.BR dma_alloc (2),
+.BR sys_spawn (2)

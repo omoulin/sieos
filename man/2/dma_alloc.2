@@ -1,0 +1,73 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH DMA_ALLOC 2
+.SH NAME
+dma_alloc, dma_free \- memory for devices, for drivers (SYS_DMA_ALLOC, SYS_DMA_FREE)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+void *dma_alloc(size_t size, uint64_t *pa);
+long dma_free(void *va, size_t size);
+.fi
+.SH DESCRIPTION
+.B dma_alloc
+gives the calling driver
+.I size
+bytes of physically contiguous, zeroed memory, which a device reads or
+writes by itself (DMA), and stores its physical address in
+.IR *pa ,
+to give to the device. It counts in the process's memory quota and goes
+with the process. The zeroes are written to memory first, for devices
+that do not see the caches.
+.PP
+.I size
+may be or-ed with
+.BR DMA_LOW :
+the memory must lie in the first GiB of RAM (the Raspberry Pis' firmware
+and older devices see no more). At most 4096 pages (16 MiB) per call.
+.PP
+.B dma_free
+gives back
+.I size
+bytes at
+.IR va ,
+which a
+.B dma_alloc
+returned. A dead driver's buffers are kept a while before reuse
+(a device may still write to them).
+.PP
+On arm64, a buffer shared with a device that does not see the caches is
+kept in step with
+.B dma_sync
+(mk.h). Drivers only.
+.SH RETURN VALUE
+.BR dma_alloc :
+the address in the caller's memory, or a negative error (cast to a
+pointer).
+.BR dma_free :
+0, or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+The caller is not a driver.
+.TP
+.B ENOMEM
+.RB ( dma_alloc )
+.I size
+is 0 or above 16 MiB, the quota is reached, or no contiguous memory is
+free.
+.TP
+.B EFAULT
+.RB ( dma_alloc )
+.I pa
+is not writable.
+.TP
+.B EINVAL
+.RB ( dma_free )
+.I va
+is not page-aligned or not in the driver's device area.
+.SH SEE ALSO
+.BR map_phys (2),
+.BR irq_bind (2),
+.BR sys_spawn (2)

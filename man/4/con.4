@@ -1,0 +1,84 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/con/con.c user/lib/tty.c include/mk/proto.h
+.TH CON 4
+.SH NAME
+con \- the console server: the text terminal, keyboard and mouse (port "console")
+.SH SYNOPSIS
+Port
+.BR console .
+A boot module, started first by
+.BR init (8)
+with device rights; restarted if it ends.
+.SH DESCRIPTION
+.B con
+is the text terminal of SIEOS and the owner of the keyboard and the mouse.
+On x86-64 it drives the VGA text screen (80 by 25), the PS/2 keyboard and
+mouse (QEMU's absolute pointer when there is one) and the first serial port,
+COM1.
+On arm64 it drives the serial port the device tree names as the console (a
+PL011) and virtio keyboards and tablets.
+USB and Bluetooth keyboards and mice reach it through
+.BR CON_INJECT .
+.PP
+What a program prints goes to the screen and, through the kernel's log
+.RB ( sys_debug (2)),
+to the serial line, whole, so its lines never mix with the kernel's.
+Typed lines are edited by the line discipline shared with the desktop's
+terminals and
+.BR sshd (8)
+(user/lib/tty.c): Backspace edits, Enter completes the line, Ctrl-C drops it
+and sends SIGINT to the foreground job, Ctrl-D sends what is there (nothing:
+end of input).
+On the VGA screen it understands the escape sequences ESC [ H (home),
+ESC [ J (clear the screen), ESC [ K (clear to the end of the line) and
+ESC [ 1 m, ESC [ 4 m, ESC [ 0 m (bright, cyan, plain again: what
+.BR man (1)
+shows in bold and underlined); others are ignored.
+.PP
+A program's console is the one in its identity
+.RB ( sys_ident (2)):
+"port" or "port#channel", the channel sent in w[3]; empty means "console".
+A terminal window of the desktop or an SSH session is such a console.
+.SH MESSAGES
+.TP
+.B CON_WRITE
+sbuf: the text to print. \-> bytes written.
+.TP
+.B CON_READ
+w[1] = the most bytes wanted; a typed line comes in rbuf. \-> bytes (0: end
+of input). One reader at a time (\-EBUSY otherwise).
+.TP
+.B CON_ECHO
+w[1] = 1: show typed characters; 0: hide them (passwords);
+.BR CON_RAW :
+each key as it comes, unedited and unshown (Enter is CR, Backspace DEL, the
+arrows ESC [ A..D).
+.TP
+.B CON_FG
+w[1] = the process group of the job the shell runs now (0: none), the target
+of Ctrl-C. Only the group's user, or root. \-> 0.
+.TP
+.B CON_INPUT
+(root: the desktop) become the owner of the keyboard and mouse: their events
+go to the caller, as con_event_t[] in rbuf \-> how many. The serial port
+stays a text console. If the owner ends, the keyboard comes back.
+.TP
+.B CON_HASINPUT
+\-> 1 if there is a keyboard or pointer, 0 if not.
+.TP
+.B CON_INJECT
+(root: the USB server, btd, i2chid, ipts) sbuf = con_inject_t[]: keys as
+set-1 scancodes, relative mouse moves, absolute tablet positions, buttons and
+wheel. None: "a keyboard or pointer is here". \-> 0.
+.TP
+.B CON_MOUSE
+(root: the desktop) w[1] = the pointer's speed in % (25..400), w[2], w[3] =
+the screen's width and height. \-> 0.
+.SH SEE ALSO
+.BR sh (1),
+.BR atlas (4),
+.BR usb (4),
+.BR sshd (8),
+.BR intro (4)
+.SH BUGS
+Programs cannot ask the terminal's size.

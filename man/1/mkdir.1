@@ -1,0 +1,31 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH MKDIR 1
+.SH NAME
+mkdir, rmdir \- make or remove directories
+.SH SYNOPSIS
+.B mkdir
+.IR dir ...
+.br
+.B rmdir
+.IR dir ...
+.SH DESCRIPTION
+.B mkdir
+and
+.B rmdir
+are commands built into the shell,
+.BR sh (1).
+.B mkdir
+makes each
+.I dir
+(mode 0755); its parent must exist.
+.B rmdir
+removes each
+.IR dir ,
+which must be empty. Both stop at the first one that fails.
+.SH EXIT STATUS
+0, or 1 on the first failure (or without a name).
+.SH SEE ALSO
+.BR rm (1),
+.BR chmod (1),
+.BR sh (1)

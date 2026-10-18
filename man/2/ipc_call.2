@@ -1,0 +1,83 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH IPC_CALL 2
+.SH NAME
+ipc_call \- send a message and wait for the reply (SYS_CALL)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long ipc_call(long port, msg_t *m);
+.fi
+.SH DESCRIPTION
+.B ipc_call
+sends the message
+.I m
+to
+.I port
+and sleeps until the server answers with
+.BR ipc_reply (2).
+It is synchronous, "rendezvous" style, as in QNX or L4: the kernel never
+stores messages, it copies them directly from one process to the other the
+moment both sides are ready. If a server thread is waiting, the message is
+copied at once and that thread gets this processor; otherwise the caller
+waits in the port's queue, in order.
+.PP
+Sent: the four words
+.IR m\->w[] ,
+and
+.I m\->slen
+bytes from
+.IR m\->sbuf .
+The reply comes back into the same
+.BR msg_t :
+its words into
+.IR m\->w[] ,
+its data into
+.I m\->rbuf
+(as much as
+.I m\->rlen
+holds; the rest is cut), and
+.I m\->rlen
+is set to the size received. By convention
+.I w[0]
+holds the operation going and the result coming back. The server learns
+the caller's pid, uid and gid from the kernel, never from the message.
+.SH RETURN VALUE
+0 when the reply came (the server's result is in
+.IR m\->w[0] ),
+or a negative error.
+.SH ERRORS
+.TP
+.B ENOENT
+No such port, or its server ended before taking the message: it never
+reached the server, so sending it again is always safe.
+.TP
+.B EPIPE
+The server ended after taking the message, or the caller's process is
+ending.
+.TP
+.B EINTR
+A signal the process catches came while it waited. The server may still
+answer later; that reply goes nowhere.
+.TP
+.B EFAULT
+.IR m ,
+its
+.I sbuf
+or
+.I rbuf
+is not the caller's memory.
+.SH NOTES
+.B call_named
+in the library wraps this call for named servers: it finds the port again
+after an
+.B ENOENT
+(the server was restarted) and repeats requests that are safe to do twice
+after an
+.BR EPIPE .
+.SH SEE ALSO
+.BR ipc_recv (2),
+.BR ipc_reply (2),
+.BR port_lookup (2),
+.BR ipc (7)

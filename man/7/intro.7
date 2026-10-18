@@ -1,0 +1,68 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: README.md docs/index.md docs/kernel.md
+.TH INTRO 7
+.SH NAME
+intro \- SIEOS, and how this manual is laid out
+.SH DESCRIPTION
+SIEOS is a small, fast microkernel operating system written from scratch in
+C, for x86-64 and AArch64 (QEMU, the Raspberry Pi 4 and 5, PCs from a USB
+key).
+It has its own file system (SieFS), its own C compiler (sicc), a desktop
+laid out as BeOS's was, its own network stack with TLS 1.3 and 1.2, and an
+assistant (sia) that runs a language model on the machine or talks to an
+online service.
+.PP
+The kernel does only what nothing else can do: memory, processes and
+threads, scheduling, time, signals, message passing, and interrupts
+delivered as messages.
+Everything else is done by ordinary programs, the servers, which talk with
+messages: the console, the disk, the files, the network, users, the desktop.
+A bug in a server kills only that server, and the supervisor starts it
+again.
+.SH SECTIONS
+.TP
+.B 1
+Commands: the shell, its built-in commands and the programs in /bin.
+.TP
+.B 2
+System calls: each service of the kernel
+.RB ( <mk/abi.h> ).
+.TP
+.B 4
+Servers and devices: their ports and messages
+.RB ( <mk/proto.h> ).
+.TP
+.B 5
+File formats: account files, configuration files, SieFS.
+.TP
+.B 7
+Overviews: this page, the boot, the security model, IPC, the file tree.
+.TP
+.B 8
+Administration: the supervisor, services, the installer, users, the host
+tools.
+.SH GETTING STARTED
+Log in, type
+.B help
+for the shell's commands, and
+.B man
+.I name
+for any page here;
+.B man \-k
+.I word
+finds pages by their NAME line.
+Start with
+.BR sh (1),
+.BR boot (7),
+.BR ipc (7)
+and
+.BR hier (7).
+The source tree's docs/ explains each subsystem at length (docs/index.md).
+.SH SEE ALSO
+.BR man (1),
+.BR intro (2),
+.BR intro (4),
+.BR boot (7),
+.BR security (7),
+.BR ipc (7),
+.BR hier (7)

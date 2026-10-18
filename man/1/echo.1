@@ -1,0 +1,40 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH ECHO 1
+.SH NAME
+echo \- print words, or write them to a file
+.SH SYNOPSIS
+.B echo
+.RI [ word ...]
+.RB [ >
+.I file
+|
+.B >>
+.IR file ]
+.SH DESCRIPTION
+.B echo
+is a command built into the shell,
+.BR sh (1).
+It prints its words separated by single spaces, and a newline. After
+.BI > " file"
+the line replaces what
+.I file
+held (it is created, mode 0644, if it does not exist); after
+.BI >> " file"
+it is added at its end. The file name may also touch the
+.B >
+.RB ( >file ).
+Words after the file name are ignored.
+.SH EXIT STATUS
+0, or 1 if the file could not be written.
+.SH EXAMPLES
+.nf
+echo first line > notes.txt
+echo second line >> notes.txt
+.fi
+.SH SEE ALSO
+.BR cat (1),
+.BR sh (1)
+.SH BUGS
+The only redirection in the shell: other commands always print to the
+terminal.

@@ -1,0 +1,64 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: boot/uefi/loader.c tools/mkusb.py user/install/install.c kernel/main.c
+.TH BOOT.CFG 5
+.SH NAME
+boot.cfg \- the UEFI loader's configuration
+.SH SYNOPSIS
+.B \eSIEOS\eBOOT.CFG
+(a USB key's EFI partition)
+.br
+.B \eEFI\eSIEOS\eBOOT.CFG
+(a drive SIEOS was installed on)
+.br
+.B /boot/boot.cfg
+(the copy the installer starts from)
+.SH DESCRIPTION
+SIEOS's UEFI loader (EFI/BOOT/BOOTX64.EFI) reads
+.B BOOT.CFG
+from its own partition before it loads the kernel (KERNEL.BIN) and the boot
+modules.
+It is made by
+.B make usb
+(tools/mkusb.py) and by the installer.
+Lines are
+.IB key = value ;
+other lines (a
+.B #
+comment) are ignored.
+At most 2047 bytes.
+.TP
+.BI module= FILE
+a boot module, in the same directory; one line each, in order,
+.B init.elf
+first (then con, usb, vblk, fs).
+At least one is needed.
+.TP
+.BI screen= W x H
+the screen size to set if the firmware offers it (default 1920x1080); else
+the mode it uses.
+.TP
+.BI root= GUID
+SIEOS's partition, by its unique GUID, passed to the kernel as a boot
+option: the disk server takes that partition on whichever drive it is.
+.TP
+.BI options= OPTIONS
+more kernel options, for example
+.B cpus=1
+(start at most that many CPUs) or
+.B pcores=4
+(pretend CPUs 0..3 are P-cores, the others E-cores).
+.SH EXAMPLES
+.nf
+# SIEOS's UEFI loader (boot/uefi): the boot modules, init first; the screen size
+module=init.elf
+module=con.elf
+module=usb.elf
+module=vblk.elf
+module=fs.elf
+screen=1920x1080
+root=3f6c2a1e-8d4b-4b2a-9c1e-2f5d7a8b9c0d
+.fi
+.SH SEE ALSO
+.BR boot (7),
+.BR vblk (4),
+.BR install (8)

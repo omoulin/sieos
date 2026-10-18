@@ -1,0 +1,92 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/netd/netd.c include/mk/proto.h
+.TH NETD 4
+.SH NAME
+netd \- the network server: TCP/IP, DHCP, DNS (port "net")
+.SH SYNOPSIS
+Port
+.BR net .
+.B /bin/netd
+is started on demand by
+.BR init (8)
+(the first lookup of "net"), stopped after 10 minutes unused with no
+connection open.
+.SH DESCRIPTION
+.B netd
+does IPv4, ARP, ICMP (ping), UDP and TCP, and the DHCP and DNS clients.
+It uses one interface at a time: the cable
+.RB ( vnet (4),
+port "nic0") when its link is up, else Wi-Fi
+.RB ( wifid (4),
+port "wifi") when it is associated, else the cable anyway (virtio has no
+link to watch).
+A change of interface is a new network: ARP forgotten, DHCP again.
+.PP
+One thread does everything, one message at a time: a client's request, a
+batch of frames received, or a tick of the timer thread.
+Calls that must wait keep the client's reply token and are answered later.
+TCP measures the round trip, does slow start, congestion avoidance, fast
+retransmit and window scaling, and keeps out-of-order segments.
+.PP
+A handle belongs to the process that opened it.
+Addresses are numbers: a.b.c.d = a << 24 | b << 16 | c << 8 | d.
+Calls that wait take a timeout in milliseconds (0: 30 s; NET_RECV: 0 =
+forever).
+.SH MESSAGES
+.TP
+.B NET_SOCKET
+w[1] = NET_TCP or NET_UDP \-> handle.
+.TP
+.B NET_CONNECT
+(TCP) w[1] = handle, w[2] = address, w[3] = port | timeout << 16 \-> 0.
+.TP
+.B NET_LISTEN
+(TCP) w[1] = handle, w[2] = port (below 1024: root), w[3] = backlog \-> 0.
+.TP
+.B NET_ACCEPT
+(TCP) w[1] = handle, w[3] = timeout \-> a new handle; reply w[1], w[2] = the
+peer's address and port.
+.TP
+.BR NET_SEND ", " NET_RECV
+w[1] = handle; sbuf = data (waits for room) \-> bytes; or w[2] = most bytes,
+w[3] = timeout, rbuf <\- data \-> bytes, 0: the other side closed.
+.TP
+.BR NET_BIND ", " NET_SENDTO ", " NET_RECVFROM
+(UDP) a local port (0: any); a datagram to w[2] = address, w[3] = port; one
+datagram in rbuf, reply w[1], w[2] = the sender.
+.TP
+.B NET_CLOSE
+w[1] = handle \-> 0.
+.TP
+.B NET_RESOLVE
+sbuf = a host name, w[3] = timeout \-> 0; reply w[1] = the address.
+.TP
+.B NET_PING
+w[1] = address, w[2] = time to live (0: 64), w[3] = timeout \-> the round
+trip in microseconds; reply w[1] = who answered (with a small TTL, a router
+on the way).
+.TP
+.BR NET_INFO ", " NET_SOCKETS
+rbuf <\- net_info_t (address, mask, gateway, DNS from DHCP; MAC, MTU, the
+time, counters, the interface and its link); net_sock_t[], every socket.
+.TP
+.B NET_POLL
+w[1] = handle, w[2] = NET_IN | NET_OUT (0: either) \-> what it is ready for
+now; if nothing it waits for, the caller is noted
+.RB ( sys_note (2))
+once it is.
+.TP
+.BR NET_FRAMES ", " NET_LINK
+(from a network driver) frames received, each a 16-bit length then the
+frame; the link came up or went down.
+.SH ERRORS
+\-ENETUNREACH, \-ECONNREFUSED, \-ECONNRESET, \-ETIMEDOUT, \-EHOSTUNREACH,
+\-EADDRINUSE, \-ENOTCONN.
+.SH SEE ALSO
+.BR fetch (1),
+.BR ping (1),
+.BR vnet (4),
+.BR wifid (4)
+.SH BUGS
+No IPv6, no fragments, no selective acknowledgements, no keepalives; routing
+is "the local network or the gateway".

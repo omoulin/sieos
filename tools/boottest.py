@@ -124,6 +124,26 @@ check("echo hello alice > note.txt")
 check("cat /home/alice/note.txt", "hello alice")
 check("echo mine > /tmp/alice.txt")
 check("hello", "uid 1000")                         # programs run as the user
+# the manual (man/, user/man): a page in bold through the pager, a search in it, apropos, another name
+def key(s):                                        # keys as they are (the pager reads raw keys)
+    qemu.stdin.write(s.encode()); qemu.stdin.flush(); time.sleep(0.05)
+send("man ls")
+expect("LS(1)"); expect("\x1b[0;1mNAME\x1b[0m"); expect("list a directory"); expect("(space b / n q)")
+key(" "); expect("(end)")                          # the next screen: the end of this page
+key("q"); expect(prompt)
+print("ok: man ls (bold, the pager)")
+send("man 2 ipc_call")
+expect("IPC_CALL(2)"); expect("(space b / n q)")
+key("/errors\r"); expect("/errors\x1b[H\x1b[J"); expect("\x1b[0;1mERRORS\x1b[0m")   # the search: a screen with the heading
+key("q"); expect(prompt)
+print("ok: man 2 ipc_call, /errors")
+check("man -k snapshot", "snap (1) - ")
+check("man -k nosuchword", "nothing appropriate")
+send("man pwd"); expect("CD(1)"); expect("cd, pwd")    # pwd: another name on cd's page
+got = expect(prompt)
+if b"(space b / n q)" in got: key("q"); expect(prompt)
+check("man nosuchpage", "no manual entry")
+print("ok: man -k, man pwd")
 check("poweroff", "not allowed")
 send("passwd")
 expect("Current password: "); send("alicepass1")

@@ -1,0 +1,54 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH PORT_CREATE 2
+.SH NAME
+port_create \- create a port to receive messages (SYS_PORT_CREATE)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long port_create(const char *name);
+.fi
+.SH DESCRIPTION
+.B port_create
+creates a port owned by the calling process: only its threads may receive
+on it with
+.BR ipc_recv (2).
+A server creates a named port and waits on it; clients find it by name
+with
+.BR port_lookup (2)
+and send it messages with
+.BR ipc_call (2).
+.PP
+.I name
+is at most 15 characters; 0 or an empty string makes an anonymous port,
+known only by its number (given to others in a message). Creating a named
+port wakes every thread waiting for that name in
+.BR port_lookup (2).
+.PP
+Ports are numbered in order and a number is never used again: a stale
+number gives
+.BR ENOENT ,
+never someone else's port. A process's ports close when it ends.
+.SH RETURN VALUE
+The port's number (> 0), or a negative error.
+.SH ERRORS
+.TP
+.B EEXIST
+A port with this name exists already.
+.TP
+.B EINVAL
+.I name
+is longer than 15 characters.
+.TP
+.B EFAULT
+.I name
+is not readable.
+.TP
+.B ENOMEM
+No kernel memory left.
+.SH SEE ALSO
+.BR port_lookup (2),
+.BR ipc_recv (2),
+.BR ipc_call (2),
+.BR ipc (7)

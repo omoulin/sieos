@@ -1,0 +1,46 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/kblight/kblight.c
+.TH KBLIGHT 1
+.SH NAME
+kblight \- the keyboard's light
+.SH SYNOPSIS
+.B kblight
+.RB [ off | low | high ]
+.RI [ colour ]
+.SH DESCRIPTION
+.B kblight
+shows or sets the keyboard's light, through the USB server's port
+.B kblight
+(the Lenovo Legion's ITE 8258 keyboard); Settings does the same. Without
+arguments it shows the level and the colour. With a level, it sets it;
+with a colour only, the light takes that colour at the level it has (off:
+high).
+.I colour
+is
+.BR white ,
+.BR red ,
+.BR orange ,
+.BR green ,
+.BR cyan ,
+.BR blue ,
+.BR purple ,
+or
+.I RRGGBB
+in hex.
+.PP
+The setting is kept and given to the keyboard again at each start.
+.SH EXIT STATUS
+0; 1 if there is no keyboard light, it did not take the setting, or for a
+usage error.
+.SH FILES
+.TP
+.I /etc/kblight
+The setting.
+.SH EXAMPLES
+.nf
+kblight low cyan
+kblight ff8000
+kblight off
+.fi
+.SH SEE ALSO
+.BR usb (4)

@@ -1,0 +1,131 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH SH 1
+.SH NAME
+sh \- the SIEOS shell
+.SH SYNOPSIS
+.B sh
+.RB [ \-l ]
+.br
+.B sh \-c
+.I line
+.SH DESCRIPTION
+.B sh
+reads lines from its terminal and runs them, one at a time. A line is split
+into words at spaces and tabs; a part between double quotes keeps its
+spaces, and the quotes go. A word that starts with
+.B #
+starts a comment: it and the rest of the line are ignored. At most 31 words
+are kept.
+.PP
+If the first word names a built-in command (below), the shell runs it
+itself. Any other word is a program:
+.BI /bin/ name\fR,
+or the file itself when the word holds a
+.BR / .
+The program is started with the words as its arguments (at most 255
+characters in all) and the shell waits for it to end. A last word
+.B &
+starts it without waiting: the shell prints its process number in
+brackets, and before a later prompt says how it ended
+.RB ( "[pid] done, status" " N, or what signal ended it)."
+.SS Jobs and Ctrl-C
+At the prompt each program starts in a process group of its own, which
+its children join, and the terminal is told that group runs in the
+foreground. Ctrl-C then sends
+.B SIGINT
+to that group. When no program runs, Ctrl-C ends a built-in command (such
+as
+.BR sleep )
+or drops the typed line, and the shell carries on.
+.SS The prompt
+.IB user @ host : directory
+followed by
+.B $
+(or
+.B #
+for root). The host name is the first line of
+.BR /etc/hostname ,
+.B sieos
+without one. When the terminal goes away (a closed window), the shell ends.
+.SS Built-in commands
+.BR cat (1),
+.BR cd (1),
+.BR chmod (1),
+.BR chown (1),
+.BR clear (1),
+.BR cp (1),
+.BR df (1),
+.BR echo (1),
+.BR find (1),
+.BR help (1),
+.BR kill (1),
+.BR ln (1),
+.BR logout (1),
+.BR ls (1),
+.BR mem (1),
+.BR mkdir (1),
+.BR mv (1),
+.BR ps (1),
+.BR rm (1),
+.BR sleep (1),
+.BR snap (1),
+.BR stat (1),
+.BR sync (1),
+.BR tag (1),
+.BR touch (1),
+.BR uptime (1),
+.BR battery (1),
+.BR whoami (1),
+and
+.BR poweroff (8)
+(with
+.B pwd rmdir tags untag id groups exit reboot suspend
+on the same pages).
+.SH OPTIONS
+.TP
+.B \-l
+A login shell: print
+.BR /etc/motd ,
+then start in the user's home directory (or
+.B /
+if it cannot be entered).
+.TP
+.BI \-c " line"
+Run the words after
+.B \-c
+as one line, then end with its exit status. No exit status message is
+printed and programs stay in the shell's own process group (Ctrl-C reaches
+them through the job the shell belongs to).
+.BR make (1)
+runs its recipes so.
+.SH EXIT STATUS
+A command's status: 0 for success. 127: the program was not found
+.RB ( "unknown command" );
+126: it could not be started; 128 plus the signal's number when a signal
+ended it (130 for Ctrl-C). At the prompt a non-zero status is printed as
+.BI "name: exit status " n\fR.
+.SH FILES
+.TP
+.B /etc/motd
+shown by a login shell
+.TP
+.B /etc/hostname
+the host name of the prompt
+.TP
+.B /etc/users
+the user's name and home
+.SH EXAMPLES
+.nf
+echo "two  spaces" > note.txt   # the quotes keep both
+sh \-c "ls /bin"
+fetch \-o page.html http://example.com &
+.fi
+.SH SEE ALSO
+.BR help (1),
+.BR login (8),
+.BR make (1)
+.SH BUGS
+No pipes, no redirection other than that of
+.BR echo (1),
+no variables and no scripts: one line at a time.

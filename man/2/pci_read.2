@@ -1,0 +1,48 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c
+.TH PCI_READ 2
+.SH NAME
+pci_read, pci_write \- PCI configuration space, for drivers (SYS_PCI)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+uint32_t pci_read(uint32_t a);
+void pci_write(uint32_t a, uint32_t v);
+
+syscall4(SYS_PCI, address, value, write, 0);
+.fi
+.SH DESCRIPTION
+.B SYS_PCI
+reads or (with
+.I write
+not 0) writes one 32-bit word of a PCI device's configuration space,
+through ports 0xCF8 and 0xCFC (x86-64).
+.I address
+is bus << 16 | device << 11 | function << 8 | register (the register a
+multiple of 4). The kernel does the two port accesses together, under a
+lock, so drivers scanning the bus at the same time never mix their index
+and data.
+.PP
+Drivers only. user/lib/pci.c builds on it: finding devices, their BARs,
+MSI and MSI-X
+.RB ( irq_msi (2)).
+.SH RETURN VALUE
+The word read (0 for a write), or a negative error.
+.B pci_read
+returns it as a
+.BR uint32_t ,
+so an error looks like a value: only drivers on x86-64 should call it.
+.SH ERRORS
+.TP
+.B EPERM
+The caller is not a driver.
+.TP
+.B ENOSYS
+Not x86-64 (on arm64, PCI configuration space is memory, found in the
+device tree and mapped with
+.BR map_phys (2)).
+.SH SEE ALSO
+.BR irq_msi (2),
+.BR map_phys (2),
+.BR sys_acpi (2)

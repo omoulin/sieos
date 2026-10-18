@@ -1,0 +1,26 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH CAT 1
+.SH NAME
+cat \- show files
+.SH SYNOPSIS
+.B cat
+.IR file ...
+.SH DESCRIPTION
+.B cat
+is a command built into the shell,
+.BR sh (1).
+It writes each
+.I file
+to the terminal, one after the other, as it is. A file that cannot be read
+is named with the reason, and
+.B cat
+goes on with the next.
+.SH EXIT STATUS
+0, or 1 if a file could not be read.
+.SH SEE ALSO
+.BR echo (1),
+.BR ls (1),
+.BR man (1)
+.SH BUGS
+It reads only files: there is no standard input to copy.

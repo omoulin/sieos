@@ -1,0 +1,52 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH TAG 1
+.SH NAME
+tag, tags, untag \- a file's attributes
+.SH SYNOPSIS
+.B tag
+.I file key\fB=\fPvalue
+.br
+.B tags
+.I file
+.br
+.B untag
+.I file key
+.SH DESCRIPTION
+These are commands built into the shell,
+.BR sh (1).
+Any object on SieFS can carry attributes, for example
+.BR "project = SIEOS" .
+.B tag
+sets the attribute
+.I key
+of
+.I file
+to
+.IR value ;
+.B tags
+lists all of them as
+.IB key = value
+lines;
+.B untag
+removes one.
+.PP
+An attribute whose value is at most 255 bytes is also indexed, so
+.BR find (1)
+finds every file with it without reading the others. The desktop's
+projects are built on them.
+.SH EXIT STATUS
+0, or 1 on failure ("no such attribute" for an unknown key).
+.SH EXAMPLES
+.nf
+tag notes.txt project=SIEOS
+tags notes.txt
+find project=SIEOS
+.fi
+.SH SEE ALSO
+.BR find (1),
+.BR siefs (5)
+.SH BUGS
+Values up to 1024 bytes;
+.B tags
+shows at most 4096 bytes of names.

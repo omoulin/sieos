@@ -1,0 +1,36 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/racey/racey.c
+.TH RACEY 1
+.SH NAME
+racey \- a test of servers started on demand
+.SH SYNOPSIS
+.B racey serve
+.I name linger_ms
+.br
+.B racey call
+.I name n max_ms
+.SH DESCRIPTION
+.B racey
+tests servers started on demand
+.RB ( "make demand-test" ).
+.TP
+.B serve
+An on-demand server for port
+.IR name :
+it answers each call with its pid. When
+.BR init (8)
+asks "may you stop?" and it is unused, it says yes, then lingers
+.I linger_ms
+before ending, so calls arrive while it stops.
+.TP
+.B call
+.I n
+calls to
+.IR name ,
+with a random pause of up to
+.I max_ms
+between them. Every call must be answered; it prints how many failed,
+how many servers answered and how many calls waited for a new one.
+.SH SEE ALSO
+.BR svc (8),
+.BR init (8)

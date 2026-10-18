@@ -1,0 +1,45 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/kprintf.c
+.TH SYS_DEBUG 2
+.SH NAME
+sys_debug \- print to the kernel log (SYS_DEBUG)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_debug(const char *s, size_t n);
+.fi
+.SH DESCRIPTION
+.B sys_debug
+prints the
+.I n
+bytes at
+.I s
+through the kernel's own output: the serial port, and the console's log
+that
+.BR sys_log (2)
+and
+.BR dmesg (1)
+read. At most 199 bytes are taken per call; the rest is not printed. The
+kernel writes each piece whole, under its lock, so lines of different
+programs never mix.
+.PP
+Anyone may call it. The console server
+.BR con (4)
+sends its own output this way, so the serial wire shows what the screen
+shows. Ordinary programs print with
+.B printf
+and
+.BR con_write ,
+which go to their terminal instead.
+.SH RETURN VALUE
+The number of bytes printed (at most 199), or a negative error.
+.SH ERRORS
+.TP
+.B EFAULT
+.I s
+is not readable memory of the caller.
+.SH SEE ALSO
+.BR sys_log (2),
+.BR dmesg (1),
+.BR con (4)

@@ -1,0 +1,80 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/btd/btd.c include/mk/proto.h
+.TH BTD 4
+.SH NAME
+btd \- the Bluetooth server (port "bt")
+.SH SYNOPSIS
+Ports
+.B bt
+and
+.B btaudio
+(for audiod only).
+.B /bin/btd
+is started at boot by
+.BR init (8),
+with device rights, so bonded keyboards and mice come back; with no adapter
+it ends with status 0.
+.SH DESCRIPTION
+.B btd
+brings the controller up and runs the Bluetooth stack (HCI, L2CAP, SMP,
+SDP, HID, A2DP, AVRCP, RFCOMM, OBEX).
+On a PC the controller is Intel's, a USB device whose packets the USB server
+passes (port "bthci",
+.BR usb (4));
+btd first loads its firmware.
+On the Raspberry Pis it is the CYW43455's Bluetooth on a UART, with
+Broadcom's patch.
+Every step is logged ("bt: ...").
+.PP
+Bonded keyboards and mice (classic HID, HID over GATT) type into the
+console like USB ones
+.RB ( CON_INJECT ).
+Headphones become an output of the audio server
+.RB ( audiod (4)),
+whose writes come on the port
+.BR btaudio .
+Files offered by a device (OBEX Object Push) are taken only if the user says
+so, into the desktop user's ~/Downloads.
+Addresses are 6 bytes, least significant first.
+.SH MESSAGES
+.TP
+.B BT_STATUS
+rbuf <\- bt_status_t: the state (off, starting, on, failed), scanning, the
+pairing's step and its 6-digit code, the controller and its firmware, the
+last failure. \-> 0.
+.TP
+.BR BT_SCAN ", " BT_LIST
+look for devices, classic and LE, about 10 s; rbuf <\- bt_dev_t[]: those found
+by the last scan, and the bonded ones \-> how many.
+.TP
+.B BT_PAIR
+(root) sbuf = bt_dev_t: connect, pair, bond; BT_STATUS follows it.
+.TP
+.B BT_CONFIRM
+(root) w[1] = 1: the code shown matches the device's, 0: it does not.
+.TP
+.B BT_FORGET
+(root) sbuf = bt_dev_t: disconnect, delete its keys.
+.TP
+.B BT_POWER
+(root) w[1] = 1 on, 0 off.
+.TP
+.B BT_CONNECT
+sbuf = a bonded classic device: w[1] = 1 connect (headphones: then audiod's
+Bluetooth output), 0 disconnect.
+.TP
+.BR BT_SEND ", " BT_DATA
+send a file (bt_send_t: address, size, name), then its bytes, at most
+BT_CHUNK each; \-EAGAIN: not ready yet.
+.TP
+.BR BT_USER ", " BT_ACCEPT
+(root: the desktop) whose ~/Downloads takes received files; take (1) or
+decline (0) the file a device offers.
+.SH FILES
+.TP
+.B /etc/bluetooth.keys
+the bonds, and whether Bluetooth is on (root only)
+.SH SEE ALSO
+.BR bt (1),
+.BR audiod (4),
+.BR usb (4)

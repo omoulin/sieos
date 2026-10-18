@@ -1,0 +1,107 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fs/fs.c user/lib/fs.c include/mk/proto.h siefs/siefs.h
+.TH FS 4
+.SH NAME
+fs \- the file server (port "fs")
+.SH SYNOPSIS
+Port
+.BR fs .
+A boot module, started by
+.BR init (8);
+restarted if it ends.
+.SH DESCRIPTION
+.B fs
+offers SieFS
+.RB ( siefs (5))
+on the disk served by
+.BR vblk (4)
+to every program.
+The SieFS library does the file system; the server adds what a shared
+service needs:
+.TP
+.B paths
+absolute ("/a/b"), walked component by component, following symbolic links,
+checking at each step that the caller may go there;
+.TP
+.B permissions
+from the uid and gid the kernel stamps on every message (and the caller's
+other groups, asked only when they matter), so no program can lie about who
+it is; root, uid 0, may do anything;
+.TP
+.B open files
+a table of handles, each valid only for the process that opened it;
+.TP
+.B commits
+changes reach the disk 1 s after the first one, or at
+.BR FS_SYNC ,
+all together: a crash loses at most that last second and never leaves a
+half-done change;
+.TP
+.B volumes and snapshots
+a user's home is a volume of its own, encrypted; a helper thread takes a
+snapshot of every volume each hour ("auto-YYYY-MM-DD-HH00"), kept a day.
+When the disk is full, a write first lets the oldest hourly snapshot go.
+.PP
+Programs use it through the library (user/lib/fs.c:
+.BR fs_open ,
+.BR fs_read ,
+\&...), which also reopens their files when the server was restarted.
+.SH MESSAGES
+Paths travel in sbuf; two paths ("from\e0to") or a path and a name are
+separated by a 0. A read or write moves at most FS_MAX (128 KiB).
+.TP
+.B FS_OPEN
+path; w[1] = flags (FS_RDONLY, FS_WRONLY, FS_RDWR, FS_CREAT, FS_EXCL,
+FS_TRUNC, FS_APPEND, FS_DIRECTORY), w[2] = the mode of a new file \-> handle.
+.TP
+.BR FS_CLOSE ", " FS_FSTAT ", " FS_TRUNCATE
+w[1] = handle (FS_TRUNCATE: w[2] = size; FS_FSTAT: a siefs_stat_t in rbuf).
+.TP
+.BR FS_READ ", " FS_WRITE
+w[1] = handle, w[2] = offset (ignored with FS_APPEND), w[3] = size; data in
+rbuf or sbuf \-> bytes.
+.TP
+.B FS_READDIR
+w[1] = handle, w[2] = cursor; rbuf <\- records {u64 object, u8 type, u8 name
+length, name} \-> bytes, reply w[1] = the next cursor.
+.TP
+.BR FS_STAT ", " FS_READLINK ", " FS_MKDIR ", " FS_UNLINK ", " FS_RMDIR ", " FS_CHMOD ", " FS_CHOWN ", " FS_UTIMES
+path, and w[1], w[2] as the operation needs (a mode; uid and gid, root only;
+times in ns).
+.TP
+.BR FS_RENAME ", " FS_LINK ", " FS_SYMLINK
+"from\e0to" ("existing\e0new", "target\e0path").
+.TP
+.BR FS_GETXATTR ", " FS_SETXATTR ", " FS_LISTXATTR ", " FS_RMXATTR
+attributes (tags): "path\e0name[\e0value]".
+.TP
+.B FS_FIND
+"name\e0value", w[1] = cursor; rbuf <\- the paths of the files with that
+attribute \-> bytes, reply w[1] = the next cursor (0: done).
+.TP
+.BR FS_STATFS ", " FS_SYNC
+the volume's size and free space (siefs_statfs_t); commit now.
+.TP
+.B FS_SNAP
+"path\e0name", w[1] = SNAP_TAKE, SNAP_DELETE, SNAP_RESTORE or SNAP_LIST (w[2] =
+cursor): root, or the owner of the volume's root.
+.TP
+.BR FS_MKVOL ", " FS_RMVOL
+(root) a new volume mounted at path, with w[1] = mode, w[2] = uid, w[3] =
+gid, encrypted when an fs_key_t follows the path; remove an empty one.
+.TP
+.BR FS_UNLOCK ", " FS_REKEY ", " FS_KDF
+(root:
+.BR auth (8))
+open an encrypted volume with its key-encryption key; wrap its key anew; how
+that key is derived. The file server never sees a password.
+.SH ERRORS
+\-EACCES, \-EPERM (not allowed), \-ENOENT, \-EEXIST, \-ENOTDIR, \-EISDIR,
+\-ENOTEMPTY, \-ENOSPC, \-EROFS (a snapshot), \-EXDEV (across volumes),
+\-EBUSY (a mounted volume), \-EBADF (not your handle).
+.SH SEE ALSO
+.BR siefs (5),
+.BR vblk (4),
+.BR snap (1),
+.BR tag (1),
+.BR security (7)

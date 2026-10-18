@@ -1,0 +1,79 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/install/install.c
+.TH INSTALL 8
+.SH NAME
+install \- put SIEOS on a PC's NVMe drive
+.SH SYNOPSIS
+.B install list
+.br
+.B install
+.RB [ \-n ]
+.B free
+.I drive n
+.br
+.B install
+.RB [ \-n ]
+.B whole
+.I drive
+.SH DESCRIPTION
+.B install
+(x86-64, root only) puts SIEOS, started from the USB key, on the PC's own
+NVMe drive, beside the systems already there. The desktop's Install
+window runs it and shows what it prints; it also works on a terminal.
+.TP
+.B list
+The drives: model, size, partitions and free extents.
+.TP
+.B free
+Into free extent
+.I n
+of
+.I drive
+(at least 4 GiB): one entry added to the drive's GPT, nothing else moved
+or resized. The drive must have an EFI System Partition (FAT32).
+.TP
+.B whole
+Erase
+.IR drive :
+a new GPT, an EFI partition (FAT32, 300 MiB) and SIEOS's partition (the
+rest).
+.PP
+Before writing it prints the plan (exactly what changes) and asks:
+.B yes
+for free space; for a whole drive, its model name typed exactly. Then:
+the new SieFS partition, with a fresh system (the key's snapshot
+.BR factory :
+no accounts, the first start makes them), checked block by block;
+.B \eEFI\eSIEOS\e
+in the EFI partition (the loader, the kernel, the modules,
+.B BOOT.CFG
+with
+.BI root= GUID\fR);
+the GPT last (backup, then primary), read back and compared. Start the
+PC from the USB key once more: its loader adds "SIEOS" to the firmware's
+boot menu.
+.PP
+Refused: the drive SIEOS runs from, a GPT not valid in every way, an
+MBR-only or hybrid-MBR drive (for free space), a GPT with no free entry,
+free space under 4 GiB. Every write is checked against the ranges the
+plan declared.
+.SH OPTIONS
+.TP
+.B \-n
+Print the plan only: nothing is written.
+.SH EXIT STATUS
+0 when installed; 1 on an error; 2 for a usage error.
+.SH FILES
+.TP
+.B /.snapshots/factory
+the system copied.
+.SH EXAMPLES
+.nf
+install list
+install \-n free 0 2
+install whole 1
+.fi
+.SH SEE ALSO
+.BR boot.cfg (5),
+.BR siefs (5),
+.BR boot (7)

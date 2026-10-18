@@ -1,0 +1,131 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH SYS_SPAWN 2
+.SH NAME
+sys_spawn \- start a program (SYS_SPAWN)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_spawn(const void *elf, size_t len, const char *args,
+               int uid, int gid, const mk_spawn_t *o);
+long spawn_file(const char *path, const char *args, int uid, int gid,
+                const mk_spawn_t *o);
+long run(const char *path, const char *args);
+
+typedef struct {
+    int32_t flags, parent;    /* parent: with SPAWN_PARENT */
+    mk_groups_t groups;       /* with SPAWN_GROUPS */
+    char console[16];         /* with SPAWN_CONSOLE */
+    uint64_t quota;           /* with SPAWN_QUOTA, bytes */
+} mk_spawn_t;
+.fi
+.SH DESCRIPTION
+.B sys_spawn
+starts a new process from the 64-bit ELF executable of
+.I len
+bytes (at most 256 MiB) at
+.I elf
+in the caller's memory: its segments are copied into a new address
+space, with a 32 KiB stack. It gets
+.I args
+("name arg1 arg2", at most 255 characters) as its first argument; its
+name is the first word. It is the caller's child, on the caller's
+terminal.
+.PP
+Its identity is the caller's; only root may choose another
+.I uid
+and
+.I gid
+(-1, -1: the caller's), which is how accounts start a user's shell. Root
+starting another user gives it no groups unless
+.B SPAWN_GROUPS
+says.
+.I o
+(or 0) adds options in
+.IR o\->flags :
+.TP
+.B SPAWN_GROUPS
+(root) The child's groups.
+.TP
+.B SPAWN_PARENT
+(root) The child's parent is
+.IR o\->parent ,
+which gets its end, not the caller.
+.TP
+.B SPAWN_DRIVER
+(supervisor) Device rights: I/O ports, interrupts, device memory, DMA.
+.TP
+.B SPAWN_MODULE
+(supervisor)
+.I elf
+is 0,
+.I len
+a boot module's number
+.RB ( sys_modules (2)).
+.TP
+.B SPAWN_CONSOLE
+The child's terminal,
+.I o\->console
+("port" or "port#channel"); else its parent's.
+.TP
+.B SPAWN_QUOTA
+The most memory it may use, in bytes (pages it uses, DMA included).
+Without it a child gets its parent's limit; nobody may give a child more
+than its own.
+.TP
+.B SPAWN_BACKGROUND
+Background work: its threads prefer E-cores. A child of a background
+process is one too.
+.TP
+.B SPAWN_PGROUP
+The child leads a new process group (its pid), which its own children
+join: a shell's job, for
+.B kill
+of -pid (Ctrl-C). Without it, a child is in its parent's group.
+.TP
+.B SPAWN_SHARE
+.I elf
+lies, page-aligned, in a shared memory object the caller has mapped
+.RB ( sys_shm_create (2)):
+its read-only segments are mapped from the object's pages, not copied,
+so processes started from one image share its code.
+.PP
+The library's
+.B spawn_file
+reads the program from the disk first (and passes the current folder);
+.B run
+starts it and waits for its status.
+.SH RETURN VALUE
+The child's pid, or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+An option the caller may not give.
+.TP
+.B EINVAL
+Not an executable for this processor,
+.I args
+too long,
+.I len
+above 256 MiB, a bad group count, or a quota of 0.
+.TP
+.B ENOENT
+.RB ( SPAWN_MODULE )
+No such boot module.
+.TP
+.B ESRCH
+.RB ( SPAWN_PARENT )
+No such parent, or it is ending.
+.TP
+.B ENOMEM
+No memory, or the quota is too small for the program.
+.TP
+.B EFAULT
+A pointer or the image is not readable.
+.SH SEE ALSO
+.BR sys_wait (2),
+.BR sys_exit (2),
+.BR kill (2),
+.BR sys_ident (2),
+.BR sh (1)

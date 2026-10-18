@@ -1,0 +1,79 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: tools/siefs/siefs.c
+.TH SIEFS 8
+.SH NAME
+siefs \- look inside and change a SieFS image from the host
+.SH SYNOPSIS
+.B build/host/siefs
+.I image command
+.RI [ argument ...]
+.SH DESCRIPTION
+.B siefs
+runs on the build machine (Linux). It mounts
+.IR image ,
+does one command, and commits. Paths are inside the image; files it
+creates are root's.
+.B make
+uses it to copy changed files into
+.BR build/disk.img .
+An encrypted home cannot be read without its password.
+.SH COMMANDS
+.TP
+.BR ls " [" \fIpath\fR "], " tree " [" \fIpath\fR ]
+A directory: mode, links, owner, group, size, name; or the whole tree
+.RB ( / :
+directory,
+.BR @ :
+symbolic link).
+.TP
+.BI cat " path\fR, " "" stat " path"
+A file's contents; its object number, mode, links, owner, size, parent.
+.TP
+.BI put " hostfile path\fR, " "" get " path hostfile"
+Copy a file in (replacing it) or out.
+.TP
+.BI mkdir " path\fR, " "" rm " path\fR, " "" rmdir " path"
+Make a directory, remove a file or an empty directory.
+.TP
+.BI mv " from to\fR, " "" ln " from to\fR, " "" symlink " target path"
+Rename, hard link, symbolic link.
+.TP
+.BI chmod " mode path\fR, " "" chown " uid" : "gid path"
+Permissions (octal) and owner.
+.TP
+.BI truncate " size path"
+A file's new size.
+.TP
+.BR attr " \fIpath\fR [\fIname\fR [\fIvalue\fR]]"
+List a file's attributes, show one, or set one.
+.TP
+.BI rmattr " path name\fR, " "" find " name value"
+Remove an attribute; the objects with this attribute.
+.TP
+.B df
+Blocks, free, freed (usable after the next commits), objects, commit.
+.TP
+.BR grow " [" \fIsize\fR ]
+Take the whole image file (made
+.I size
+bytes first).
+.TP
+.BI snap " name"
+A snapshot of
+.B /
+(the USB image's
+.BR factory ,
+the installer's source).
+.SH EXIT STATUS
+0; 1 on an error; 2 for an unknown command.
+.SH EXAMPLES
+.nf
+build/host/siefs build/disk.img ls /
+build/host/siefs build/disk.img put notes.txt /tmp/notes.txt
+build/host/siefs build/disk.img attr /tmp/notes.txt project SIEOS
+.fi
+.SH SEE ALSO
+.BR mkfs.siefs (8),
+.BR fsck.siefs (8),
+.BR siefs-dump (8),
+.BR siefs (5)

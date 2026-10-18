@@ -1,0 +1,79 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sia/siad.c user/sia/local.c user/sia/remote.c
+.TH SIA.CONF 5
+.SH NAME
+sia.conf, sia.key \- the assistant's settings
+.SH SYNOPSIS
+.B /etc/sia.conf
+.br
+.B /etc/sia.key
+.SH DESCRIPTION
+The assistant server,
+.BR siad (4),
+reads its settings from
+.BR /etc/sia.conf ,
+.IB key = value
+lines, when it starts.
+Root changes them with
+.BI "sia config " KEY = VALUE
+or the desktop's Settings (Assistant); siad then ends and
+.BR init (8)
+starts it again with them.
+The API key of an online service is kept apart, in
+.B /etc/sia.key
+(mode 0600, root only), and added as one more
+.B api_key=
+line when read.
+.TP
+.B backend
+.B local
+(the default: the model on this computer) or
+.B remote
+(a service with an OpenAI-compatible API)
+.TP
+.B model
+local: the model file (GGUF); none:
+/models/smollm2-1.7b-instruct-q4_k_m.gguf, or the first
+.B .gguf
+file in /models
+.TP
+.BR threads ", " ctx
+local: how many threads compute; the context length in tokens (at least
+256)
+.TP
+.BR url ", " api_model ", " api_key
+remote: the server
+.RB ( https://host/v1 ),
+the model's name, the key
+.TP
+.B memory
+.B on
+(the default) or
+.BR off :
+nothing is saved, conversations live in memory only
+.TP
+.B compact_at
+compact a conversation beyond this % of the model's context (default 60)
+.TP
+.B keep_turns
+turns kept word for word after compaction (default 4)
+.TP
+.BR max_convs ", " max_log_kb
+conversations kept per user (32); a log beyond this many KiB is compacted
+(256)
+.TP
+.B remote_ctx
+the context size assumed for a remote model (8192)
+.TP
+.B keep_loaded
+1: the local model stays loaded when siad is idle (the default on machines
+with 6 GiB or more)
+.SH EXAMPLES
+.nf
+backend=remote
+url=https://api.example.com/v1
+api_model=some-model
+.fi
+.SH SEE ALSO
+.BR sia (1),
+.BR siad (4)

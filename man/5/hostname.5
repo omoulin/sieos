@@ -1,0 +1,33 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c user/login/login.c user/ssh/ssh.c user/git/git.c
+.TH HOSTNAME 5
+.SH NAME
+hostname, motd \- the machine's name and the welcome message
+.SH SYNOPSIS
+.B /etc/hostname
+.br
+.B /etc/motd
+.SH DESCRIPTION
+.TP
+.B /etc/hostname
+the machine's name, on the first line (at most 31 characters; "sieos" when
+the file is missing).
+The login prompt and the shell's prompt
+.RB ( user@host:dir$ )
+show it;
+.BR ssh-keygen (1)
+puts it in a new key's comment (user@host), and
+.BR git (1)
+in the default author's address.
+.TP
+.B /etc/motd
+the message of the day: shown by a login shell
+.RB ( "sh \-l" )
+when a session starts, before the first prompt.
+.SH EXAMPLES
+.nf
+echo laptop > /etc/hostname
+.fi
+.SH SEE ALSO
+.BR sh (1),
+.BR login (8)

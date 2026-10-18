@@ -1,0 +1,26 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH HELP 1
+.SH NAME
+help \- the shell's commands
+.SH SYNOPSIS
+.B help
+.SH DESCRIPTION
+.B help
+is a command built into the shell,
+.BR sh (1).
+It lists the built-in commands, each with its arguments and a few words,
+and a few common programs
+.RB ( fetch ,
+.BR ping ).
+Any other word runs a program,
+.BI /bin/ name\fR,
+or a path with a
+.BR / .
+Each command has a page here:
+.B man
+.IR name .
+.SH SEE ALSO
+.BR man (1),
+.BR sh (1),
+.BR intro (1)

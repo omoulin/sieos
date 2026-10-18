@@ -1,0 +1,61 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/wifi/wifi.c
+.TH WIFI 1
+.SH NAME
+wifi \- Wi-Fi: the state, the networks in range, joining one
+.SH SYNOPSIS
+.B wifi
+.br
+.B wifi scan
+.br
+.B wifi join
+.I ssid
+.RI [ passphrase ]
+.br
+.B wifi forget
+.SH DESCRIPTION
+.B wifi
+talks to the Wi-Fi server,
+.BR wifid (4)
+(the Raspberry Pis' CYW43455, or a PC's Intel AX210 or AX201), only if it
+is already running; on a machine without Wi-Fi it says so. The desktop's
+Settings do the same. Once joined, the network server uses Wi-Fi as its
+interface: DHCP and the rest are the same as on the cable.
+.SH COMMANDS
+.TP
+.B wifi
+The state: the chip (its firmware), off, idle, scanning, joining,
+connected or failed (and why), the network and its security; once
+connected, the signal (dBm), the channel and the MAC address.
+.TP
+.B scan
+The networks in range: name, signal, security (open, WPA2, other).
+.TP
+.BI join " ssid " \fR[\fIpassphrase\fR]
+(root) Join a network (no passphrase: an open one). The network and its
+passphrase are kept in
+.I /etc/wifi.conf
+and joined again at every start.
+.TP
+.B forget
+(root) Leave the network and forget it.
+.SH EXIT STATUS
+0; 1 if joining or forgetting failed, or for a usage error.
+.SH FILES
+.TP
+.I /etc/wifi.conf
+The chosen network (root only).
+.SH EXAMPLES
+.nf
+wifi scan
+wifi join Home "correct horse"      (as root)
+.fi
+.SH SEE ALSO
+.BR wifi.conf (5),
+.BR wifid (4),
+.BR ifconfig (1),
+.BR netd (4)
+.SH BUGS
+Open and WPA2-PSK only (no WPA3, enterprise or WEP); one network at a
+time; station mode only, no access point. A scan blocks the caller (and the
+desktop) for a few seconds.

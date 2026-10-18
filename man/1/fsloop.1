@@ -1,0 +1,29 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fsloop/fsloop.c
+.TH FSLOOP 1
+.SH NAME
+fsloop \- use files while servers crash (a test)
+.SH SYNOPSIS
+.B fsloop
+.I dir rounds
+.SH DESCRIPTION
+.B fsloop
+is a test of crash recovery: it keeps using files while the test kills
+and restarts servers
+.RB ( "make crash-test" ).
+Each round writes a file in
+.IR dir ,
+commits it
+.RB ( sync ),
+reads it back and checks it, renames it and commits again. A round that
+sees an error is done again: a sync says so when the file server
+restarted since the last one. At the end every file is checked once
+more, and it prints
+.B "fsloop: N rounds, R redone, T ms, OK"
+or what was wrong.
+.SH EXIT STATUS
+0 when every file was right; 1 otherwise, or after too many errors.
+.SH SEE ALSO
+.BR crash (1),
+.BR init (8),
+.BR fs (4)

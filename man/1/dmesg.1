@@ -1,0 +1,40 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/dmesg/dmesg.c
+.TH DMESG 1
+.SH NAME
+dmesg \- the log since boot
+.SH SYNOPSIS
+.B dmesg
+.RB [ \-s
+.I file
+|
+.BR \-w ]
+.SH DESCRIPTION
+.B dmesg
+prints the console's log, what a serial wire shows: the kernel's messages
+and every server's, since boot (the last 32 KiB:
+.BR sys_log (2)).
+.SH OPTIONS
+.TP
+.BI \-s " file"
+Save the log into
+.I file
+instead.
+.TP
+.B \-w
+(init starts it at boot) Save the log to
+.I /etc/boot.log
+20 s, 1, 2 and 5 minutes after starting, then end: on a new machine, the
+disk read on another computer tells what was found. Only up to the
+console's first login prompt (what a session on the console prints after
+it is the user's); the file is root's only (mode 0600).
+.SH EXIT STATUS
+0; 1 if the file cannot be written; 2 for a usage error.
+.SH FILES
+.TP
+.I /etc/boot.log
+The log of the last boot, up to the first login prompt.
+.SH SEE ALSO
+.BR sys_log (2),
+.BR con (4),
+.BR init (8)

@@ -1,0 +1,44 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH SYS_CHILD_PORT 2
+.SH NAME
+sys_child_port \- learn of ended children in a message loop (SYS_CHILD_PORT)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_child_port(long port);
+.fi
+.SH DESCRIPTION
+.B sys_child_port
+names one of the caller's ports where the kernel tells it that a child
+has ended: a "token 0" message (as for interrupts) whose
+.I w[1]
+has
+.B NOTE_CHILD
+set. A server so learns of it in its own
+.BR ipc_recv (2)
+loop, then collects the children with
+.BR sys_wait (2)
+and
+.BR WAIT_NOHANG .
+Several ends may arrive as one message. 0 stops the messages.
+.PP
+The supervisor,
+.BR init (8),
+uses it for the servers it restarts, for the processes it adopts, and for
+.B NOTE_WANT
+(an on-demand server is wanted,
+.BR sys_want (2)).
+.SH RETURN VALUE
+0, or a negative error.
+.SH ERRORS
+.TP
+.B EINVAL
+.I port
+is not one of the caller's.
+.SH SEE ALSO
+.BR sys_wait (2),
+.BR ipc_recv (2),
+.BR sys_want (2),
+.BR init (8)

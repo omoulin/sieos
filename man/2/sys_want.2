@@ -1,0 +1,72 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/ipc.c
+.TH SYS_WANT 2
+.SH NAME
+sys_want, sys_wanted \- servers started on demand, for the supervisor (SYS_WANT, SYS_WANTED)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_want(const char *name, long error);
+long sys_wanted(char *buf, size_t size);
+.fi
+.SH DESCRIPTION
+The supervisor,
+.BR init (8),
+starts some servers only when needed: the network, the assistant...
+.PP
+.B sys_want
+with
+.I error
+0 declares
+.I name
+(a port name, at most 15 characters) as such a server's: from then on, a
+.BR port_lookup (2)
+that finds no such port tells the supervisor (a "token 0" message with
+.B NOTE_WANT
+on its child port,
+.BR sys_child_port (2))
+instead of waiting for nobody. Up to 16 names. With a negative
+.IR error ,
+the threads waiting for
+.I name
+stop waiting and get that error: the server cannot start.
+.PP
+.B sys_wanted
+copies into
+.I buf
+the declared names that some thread waits for right now and that have no
+port yet, each ended by a 0 byte ("net\e0sia\e0"); the supervisor starts
+their servers, and the waiters wake when the port appears, as with any
+server that starts late. No polling anywhere. What does not fit in
+.I size
+is left out.
+.PP
+Only the supervisor may call them.
+.SH RETURN VALUE
+.BR sys_want :
+0, or a negative error.
+.BR sys_wanted :
+the number of bytes copied, or a negative error.
+.SH ERRORS
+.TP
+.B EPERM
+The caller is not the supervisor.
+.TP
+.B EINVAL
+.RB ( sys_want )
+An empty or too long name, or an
+.I error
+above 0 or below -4095.
+.TP
+.B ENOMEM
+.RB ( sys_want )
+16 names are declared already.
+.TP
+.B EFAULT
+A pointer is not the caller's memory.
+.SH SEE ALSO
+.BR port_lookup (2),
+.BR sys_child_port (2),
+.BR init (8),
+.BR svc (8)

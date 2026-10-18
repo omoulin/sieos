@@ -1,0 +1,32 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/acct/acct.c
+.TH SU 1
+.SH NAME
+su \- a shell as another user
+.SH SYNOPSIS
+.B su
+.RI [ name ]
+.SH DESCRIPTION
+.B su
+starts a shell as
+.I name
+(default root), with
+.IR name 's
+password; root needs none. Type
+.B exit
+to come back.
+.PP
+It only asks the accounts server,
+.BR auth (8),
+which checks the password and starts the shell as
+.BR su 's
+child;
+.B su
+waits for it. A login without a password (root) does not open an
+encrypted home: only the user's password does.
+.SH EXIT STATUS
+The shell's, or 1 if refused.
+.SH SEE ALSO
+.BR passwd (1),
+.BR sh (1),
+.BR auth (8)

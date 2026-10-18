@@ -1,0 +1,53 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/vm.c
+.TH SYS_NOTE 2
+.SH NAME
+sys_note_word, sys_note \- tell a process that something may be ready (SYS_NOTE_WORD, SYS_NOTE)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+long sys_note_word(volatile void *w);
+long sys_note(int pid);
+.fi
+.SH DESCRIPTION
+.B sys_note_word
+registers the calling process's note word: a 32-bit word in its memory
+(4-byte aligned).
+.PP
+.B sys_note
+adds one to process
+.IR pid 's
+note word and wakes every thread sleeping on it with
+.BR sys_futex (2):
+"something you wait for may be ready". The process then looks again. A
+server tells a client so, without the client having to wait in a call;
+it is the base of
+.B poll
+in the POSIX layer. The kernel does it too when one of the process's
+children ends.
+.PP
+Only root, or a process of the same user, may note a process.
+.SH RETURN VALUE
+0, or a negative error.
+.SH ERRORS
+.TP
+.B EINVAL
+.RB ( sys_note_word )
+The word is not aligned, or not a user address.
+.TP
+.B ESRCH
+.RB ( sys_note )
+No such process, or it has no note word.
+.TP
+.B EPERM
+.RB ( sys_note )
+It belongs to another user, and the caller is not root.
+.TP
+.B EFAULT
+.RB ( sys_note )
+Its note word is not writable memory.
+.SH SEE ALSO
+.BR sys_futex (2),
+.BR sys_wait (2),
+.BR unixd (4)

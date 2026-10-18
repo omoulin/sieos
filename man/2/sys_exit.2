@@ -1,0 +1,43 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH SYS_EXIT 2
+.SH NAME
+sys_exit \- end the calling process (SYS_EXIT)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+void sys_exit(int code);
+.fi
+.SH DESCRIPTION
+.B sys_exit
+ends the calling process, all its threads, with exit status
+.IR code .
+The other threads are woken from whatever they wait in and end on their
+way out of the kernel. When the last one is gone, the kernel closes the
+process's ports (clients waiting on them get
+.BR EPIPE ,
+calls still queued
+.BR ENOENT ),
+frees its memory, and keeps it as a "zombie" until its parent collects
+the status with
+.BR sys_wait (2).
+Its children are adopted by the supervisor,
+.BR init (8).
+.PP
+A status other than 0 (and other than the end by SIGINT or SIGHUP) is
+logged by the kernel: "mk: NAME (pid N) exited with CODE".
+Returning from
+.B main
+calls
+.B sys_exit
+with its value.
+.SH RETURN VALUE
+It does not return.
+.SH NOTES
+If the supervisor itself ends, the kernel stops the system (a panic).
+.SH SEE ALSO
+.BR sys_wait (2),
+.BR thread_start (2),
+.BR kill (2),
+.BR sys_spawn (2)

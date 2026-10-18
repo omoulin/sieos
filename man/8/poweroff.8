@@ -1,0 +1,43 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/sh/sh.c
+.TH POWEROFF 8
+.SH NAME
+poweroff, reboot, suspend \- turn the machine off, restart it, or sleep
+.SH SYNOPSIS
+.B poweroff
+.br
+.B reboot
+.br
+.B suspend
+.RI [ n ]
+.SH DESCRIPTION
+These are commands built into the shell,
+.BR sh (1),
+for root. Each first commits the files, so nothing written is lost, then
+goes through the ACPI server,
+.BR acpid (4),
+which tells the firmware (or the kernel alone where there is no acpid).
+.TP
+.B poweroff
+Turn the machine off. The power button does the same.
+.TP
+.B reboot
+Restart it.
+.TP
+.B suspend
+Sleep (suspend to RAM, ACPI S3) until the power button or the lid wakes
+the machine, or after
+.I n
+seconds (less than 3600: the clock's alarm). The device drivers start
+again on waking; the desktop keeps its windows.
+.SH EXIT STATUS
+0, or 1 with a message: "not allowed" for a user, "not supported" on a
+laptop without S3 (Modern Standby only).
+.SH SEE ALSO
+.BR battery (1),
+.BR acpid (4),
+.BR intro (2),
+.BR sh (1)
+.SH BUGS
+A sleep asked within 1 s of waking is not done ("just woke: not again").
+No s2idle: laptops with only Modern Standby cannot sleep.

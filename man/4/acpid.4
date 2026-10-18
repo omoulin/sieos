@@ -1,0 +1,80 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/acpid/acpid.c user/acpid/ssam.c user/lib/aml.c include/mk/proto.h
+.TH ACPID 4
+.SH NAME
+acpid \- the ACPI server: power, battery, AC, lid, buttons (port "acpi")
+.SH SYNOPSIS
+Port
+.BR acpi .
+x86-64 only.
+.B /bin/acpid
+is started at boot by
+.BR init (8),
+with device rights; with no ACPI tables it ends with status 0.
+.SH DESCRIPTION
+.B acpid
+reads the firmware's ACPI tables
+.RB ( sys_acpi (2))
+with the AML interpreter (user/lib/aml.c) and handles the machine's ACPI
+events.
+.TP
+.B sleep types
+\e_S5 and \e_S3 go to the kernel
+.RB ( sys_power (2),
+POWER_SET), which powers off or suspends to RAM by writing them to the PM1
+control registers. Before either, the firmware is told (_PTS); after waking,
+_WAK.
+.BR poweroff ,
+.BR reboot ,
+.B suspend
+and the desktop come here, through the library's
+.BR power ()
+(files committed first).
+.TP
+.B events
+the SCI interrupt: the fixed power button, general-purpose events (their
+_Lxx and _Exx methods), the embedded controller's queries (_Qxx). Notify()
+says what changed: the battery, the charger, the lid, a button.
+.TP
+.B battery and AC
+_STA, _BIX or _BIF, _BST; _PSR; the lid's _LID. Read at start, after each
+Notify and every 30 s. On a Surface, the battery and charger come from the
+Surface Aggregator over a UART.
+.TP
+.B the power button
+powers off, as
+.B poweroff
+does. The lid only reports: the desktop decides (screen off, or sleep).
+.TP
+.B waking from S3
+the power button, the GPEs of the lid, power button and controller that can
+wake (their _PRW), and for
+.BI suspend " N"
+the CMOS clock's alarm.
+.PP
+Every step is logged, so a laptop's log says what was found and what
+happened.
+.SH MESSAGES
+.TP
+.B ACPI_POWER
+(root) w[1] = POWER_OFF, POWER_RESTART or POWER_SLEEP (| N << 8: the clock
+wakes the machine after N s too, N < 3600) \-> 0 once awake again.
+.TP
+.B ACPI_STATUS
+rbuf <\- acpi_status_t: a change counter, flags (ACPI_AC, ACPI_BAT,
+ACPI_CHARGING, ACPI_LID, ACPI_LID_CLOSED, ACPI_MWH, ACPI_S3), the charge in
+%, minutes to empty or full (\-1: unknown), the rate, the capacities now,
+full and design, the voltage, the times woken. \-> 0.
+.TP
+.B ACPI_WAIT
+w[1] = the counter last seen: the reply waits until the status changes.
+.SH SEE ALSO
+.BR battery (1),
+.BR poweroff (8),
+.BR sys_power (2),
+.BR i2chid (4)
+.SH BUGS
+Machines without \e_S3 ("Modern Standby" only) would sleep in s2idle, which
+SIEOS does not do yet:
+.B suspend
+then says so at once.

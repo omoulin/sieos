@@ -123,6 +123,7 @@ static void keyboard(uint8_t sc)
  * character and its colour (0x07: light grey on black). */
 static volatile uint16_t *vga;
 static int row, col, esc;    /* esc: inside an "ESC [ ... letter" sequence */
+static int par, attr = 0x07; /* its last number; the colour of what is written (ESC [ 1 m: bright, 4 m: cyan) */
 
 static void vga_clear(int from)
 {
@@ -132,10 +133,13 @@ static void vga_clear(int from)
 static void vga_putc(char c)
 {
     if (!vga) return;
-    if (esc == 1) { esc = c == '[' ? 2 : 0; return; }
+    if (esc == 1) { esc = c == '[' ? 2 : 0; par = 0; return; }
     if (esc == 2) {                          /* the few ANSI sequences we need */
-        if (c < '@' || c > '~') return;      /* parameters: ignored */
+        if (c >= '0' && c <= '9') par = par * 10 + c - '0';
+        if (c == ';') par = 0;
+        if (c < '@' || c > '~') return;
         esc = 0;
+        if (c == 'm') attr = par == 1 ? 0x0F : par == 4 ? 0x0B : 0x07;   /* (man: bold, underlined) */
         if (c == 'H') row = col = 0;         /* cursor home */
         if (c == 'J') vga_clear(0);          /* clear the screen */
         if (c == 'K') for (int i = col; i < 80; i++) vga[row * 80 + i] = 0x0700 | ' ';  /* clear to end of line */
@@ -147,7 +151,7 @@ static void vga_putc(char c)
     case '\r': col = 0; break;
     case '\b': if (col) col--; break;
     case '\t': col = (col + 8) & ~7; break;
-    default:   vga[row * 80 + col++] = 0x0700 | (uint8_t)c;
+    default:   vga[row * 80 + col++] = attr << 8 | (uint8_t)c;
     }
     if (col >= 80) { col = 0; row++; }
     if (row >= 25) {                         /* scroll up one line */

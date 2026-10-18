@@ -1,0 +1,46 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: kernel/syscall.c kernel/task.c
+.TH TKILL 2
+.SH NAME
+tkill \- send a signal to a thread of this process (SYS_TKILL)
+.SH SYNOPSIS
+.nf
+#include "mk.h"
+
+syscall4(SYS_TKILL, tid, sig, 0, 0);
+.fi
+.SH DESCRIPTION
+.B SYS_TKILL
+sends signal
+.I sig
+to the calling process as
+.BR kill (2)
+does, but a caught signal goes to thread
+.I tid
+of it, which runs the function, instead of the thread that set it. A
+signal the process neither catches nor ignores ends it, as usual.
+.PP
+With
+.BR sigwait (2)
+in a signal's function, this is how one thread suspends another and
+resumes it later (as WebKit's garbage collector does). The POSIX layer
+uses it for
+.BR pthread_kill .
+.SH RETURN VALUE
+0, or a negative error.
+.SH ERRORS
+.TP
+.B EINVAL
+.I sig
+is 0 or out of range, or
+.I tid
+is not positive.
+.TP
+.B ESRCH
+No thread
+.I tid
+in this process.
+.SH SEE ALSO
+.BR kill (2),
+.BR signal (2),
+.BR sigwait (2)

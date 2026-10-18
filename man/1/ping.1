@@ -1,0 +1,39 @@
+.\" Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
+.\" source: user/fetch/fetch.c
+.TH PING 1
+.SH NAME
+ping \- send ICMP echo requests to a host
+.SH SYNOPSIS
+.B ping
+.I host
+.RB [ \-c
+.IR count ]
+.SH DESCRIPTION
+.B ping
+finds the address of
+.I host
+(a name is resolved through DNS), sends an ICMP echo request one a second
+(4 by default) and prints the time each reply took, or the error; then how
+many were sent and how many came back. A reply that does not come within
+2 seconds counts as lost.
+.PP
+.B ping
+is another name of
+.BR fetch (1).
+.SH OPTIONS
+.TP
+.BI \-c " count"
+Send
+.I count
+requests.
+.SH EXIT STATUS
+0 if at least one reply came back, 1 otherwise.
+.SH EXAMPLES
+.nf
+ping \-c 2 10.0.2.2
+.fi
+.SH SEE ALSO
+.BR traceroute (1),
+.BR host (1),
+.BR fetch (1),
+.BR netd (4)
