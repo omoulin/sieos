@@ -55,6 +55,8 @@ void dl_image(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h);
                                        one after the other) stretched into the box; not copied: they must stay */
 void dl_client(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h, int raw);   /* the same; raw: another
                                        program's pixels, shown as they are (a shadow darkens them, nothing tints them) */
+void dl_pic(int x0, int y0, int x1, int y1, const uint8_t *px, const uint32_t *pal, int w, int h);   /* w x h pixels,
+                                       each an index into pal (0xAARRGGBB: A its opacity), smoothly scaled into the box */
 void dl_pointer(int x, int y);      /* where the mouse pointer is drawn (on top of everything) */
 void present(int x0, int y0, int x1, int y1);   /* draw this region of the picture on the screen (picture coordinates) */
 void present_pointer(int ox, int oy, int x, int y);   /* the pointer moved from (ox, oy): both places */

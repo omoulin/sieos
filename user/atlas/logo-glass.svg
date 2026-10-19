@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>SIEOS - Facet, Glass</title>
+  <!-- The logo in Atlas's Glass look: the desk's blues, blurred, seen through three frosted faces;
+       white seams and rim, and the node, the assistant, in the accent yellow. -->
+  <defs>
+    <clipPath id="hex"><path d="M256 26 456 141v230L256 486 56 371V141Z"/></clipPath>
+    <filter id="frost" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="38"/>
+    </filter>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#hex)">
+    <rect width="512" height="512" fill="#1c2647"/>
+    <g filter="url(#frost)">
+      <circle cx="140" cy="150" r="150" fill="#4f74f0"/>
+      <circle cx="400" cy="170" r="120" fill="#7e8ff5"/>
+      <circle cx="340" cy="440" r="150" fill="#3b5bd9"/>
+      <circle cx="100" cy="430" r="120" fill="#6c7cc8"/>
+      <circle cx="256" cy="270" r="90" fill="#a9b6ff"/>
+    </g>
+    <path d="M256 26 456 141 256 256 56 141Z" fill="#fff" fill-opacity=".42"/>
+    <path d="M56 141 256 256v230L56 371Z" fill="#fff" fill-opacity=".24"/>
+    <path d="M456 141 256 256v230l200-115Z" fill="#fff" fill-opacity=".1"/>
+    <path d="M256 26 456 141 256 256 56 141Z" fill="url(#sheen)"/>
+    <path d="M56 141 256 256 456 141M256 256v230" fill="none" stroke="#fff" stroke-opacity=".9" stroke-width="12"/>
+    <path d="M256 26 456 141v230L256 486 56 371V141Z" fill="none" stroke="#fff" stroke-opacity=".75" stroke-width="16"/>
+  </g>
+  <circle cx="256" cy="256" r="50" fill="#ffc93c" stroke="#fff" stroke-opacity=".9" stroke-width="12"/>
+  <ellipse cx="244" cy="238" rx="22" ry="12" fill="#fff" fill-opacity=".55"/>
+</svg>

@@ -1,21 +1,20 @@
 /*
  * icons.c - The desktop's icons: small pixel maps, drawn at any whole
- * scale (12 x 12 at 2: 24 pixels on the Deskbar and in menus). The SIEOS
- * cube is the older desktop's (16 x 16); the folder keeps BeOS's yellow.
+ * scale (12 x 12 at 2: 24 pixels on the Deskbar and in menus); the folder
+ * keeps BeOS's yellow. The SIEOS logo is a picture (logo.c, made from
+ * logo-glass.svg by tools/mklogo.py), smoothly scaled.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "atlas.h"
 
-static const char *const logo_map[16] = {
-    "................", ".......tt.......", ".....tttttt.....", "...tttttttttt...",
-    "..tttttttttttt..", "..kkttttttttkk..", "..llkktkktkkrr..", "..llllkaakrrrr..",
-    "..llllkaakrrrr..", "..lllllkkrrrrr..", "..lllllkkrrrrr..", "..lllllkkrrrrr..",
-    "...llllkkrrrr...", ".....llkkrr.....", ".......kk.......", "................",
-};
-static const uint32_t logo_cols[] = { 0x8fb8e6, 0x6a95d2, 0x4a78bc, 0x1c1c1c, 0xd9a35f };
-
-void logo(int x, int y, int scale) { dl_pixmap(x, y, logo_map, 16, 16, "tlrka", logo_cols, scale); }
+extern const uint32_t logo_pal[2][64];                  /* logo.c (tools/mklogo.py) */
+extern const uint8_t logo32[32 * 32], logo64[64 * 64];
+void logo(int x, int y, int scale)                       /* (16 x scale wide: the picture nearest that on the screen) */
+{
+    int n = 16 * scale, big = (int)(((int64_t)n * draw_zoom_get()) >> 16) > 40;
+    dl_pic(x, y, x + n, y + n, big ? logo64 : logo32, logo_pal[big], big ? 64 : 32, big ? 64 : 32);
+}
 
 static const char *const maps[I_N][12] = {
     [I_TERM] = {

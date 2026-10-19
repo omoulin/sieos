@@ -56,7 +56,7 @@ static const struct { int scale, w, h; const uint8_t *px; } natives[] = {
 #define MAXP  4096                  /* display list entries (more are dropped) */
 #define ARENA (32 << 10)            /* the display list's text */
 
-enum { P_DESK, P_RECT, P_FRAME, P_TEXT, P_PIXMAP, P_SHADE, P_IMAGE };
+enum { P_DESK, P_RECT, P_FRAME, P_TEXT, P_PIXMAP, P_SHADE, P_IMAGE, P_PIC };
 typedef struct {
     uint8_t type;
     uint16_t r, t, len;
@@ -275,6 +275,13 @@ void dl_client(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h,
     box(&x0, &y0, &x1, &y1);
     prim_t *p = add(P_IMAGE, x0, y0, x1, y1, raw ? RAW : 0);
     if (p) { p->cols = px; p->r = w; p->scale = (int)(((int64_t)w << 16) / (x1 - x0)); p->c2 = (uint32_t)(((int64_t)h << 16) / (y1 - y0)); }
+}
+
+void dl_pic(int x0, int y0, int x1, int y1, const uint8_t *px, const uint32_t *pal, int w, int h)
+{
+    box(&x0, &y0, &x1, &y1);
+    prim_t *p = add(P_PIC, x0, y0, x1, y1, 0);
+    if (p) { p->keys = (const char *)px; p->cols = pal; p->r = w; p->t = h; }
 }
 
 /* How far row y of a box [y0, y1) with corner radius r starts inside. */
@@ -549,6 +556,32 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
             uint64_t u = (uint64_t)(a - p->x0) * p->scale;
             if (p->scale == 65536) for (int x = a; x < b; x++, u += 65536) d[x] = (s[u >> 16] & 0xffffff) | mark;   /* (1:1, the usual case) */
             else for (int x = a; x < b; x++, u += p->scale) d[x] = (s[u >> 16] & 0xffffff) | mark;
+        }
+        break;
+    }
+    case P_PIC: {                    /* each screen pixel: between the four nearest picture pixels, laid over by their opacity */
+        const uint8_t *ix = (const uint8_t *)p->keys;
+        int a = p->x0 > lo ? p->x0 : lo, b = p->x1 < hi ? p->x1 : hi, w = p->r, h = p->t;
+        int64_t ku = ((int64_t)w << 16) / (p->x1 - p->x0), kv = ((int64_t)h << 16) / (p->y1 - p->y0);   /* (picture pixels a screen pixel, 16.16) */
+        for (int y = ya; y < yb; y++) {
+            int64_t v = (y - p->y0) * kv + kv / 2 - 32768;
+            int j = v < 0 ? 0 : (int)(v >> 16), fy = v < 0 ? 0 : (int)(v >> 12 & 15), j2 = j + 1 < h ? j + 1 : h - 1;
+            if (j >= h) j = h - 1;
+            const uint8_t *r0 = ix + j * w, *r1 = ix + j2 * w;
+            uint32_t *d = strip + (y - org) * PW;
+            for (int x = a; x < b; x++) {
+                int64_t u = (x - p->x0) * ku + ku / 2 - 32768;
+                int i = u < 0 ? 0 : (int)(u >> 16), fx = u < 0 ? 0 : (int)(u >> 12 & 15), i2 = i + 1 < w ? i + 1 : w - 1;
+                if (i >= w) i = w - 1;
+                uint32_t c[4] = { p->cols[r0[i]], p->cols[r0[i2]], p->cols[r1[i]], p->cols[r1[i2]] };
+                int wt[4] = { (16 - fx) * (16 - fy), fx * (16 - fy), (16 - fx) * fy, fx * fy }, A = 0, R = 0, G = 0, B = 0;
+                for (int k = 0; k < 4; k++) {           /* (weighed by their opacity too) */
+                    int o = wt[k] * (int)(c[k] >> 24);
+                    A += o; R += o * (int)(c[k] >> 16 & 255); G += o * (int)(c[k] >> 8 & 255); B += o * (int)(c[k] & 255);
+                }
+                if (!A) continue;
+                d[x] = mix(d[x], (uint32_t)(R / A) << 16 | (uint32_t)(G / A) << 8 | (uint32_t)(B / A), (A >> 8) * 32 / 255);
+            }
         }
         break;
     }

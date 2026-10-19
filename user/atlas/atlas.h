@@ -40,8 +40,7 @@
 #define C_FIELD  pal[PAL_FIELD]       /* where you type */
 #define C_GAP    pal[PAL_GAP]         /* the thin gap around a window */
 #define C_ACCT   pal[PAL_ACCT]        /* the accent as text (titles, your words): readable on panels */
-#define C_CARD   C_GLASS              /* (the names setup.c and panel.c use) */
-#define C_ISLB   C_LINE
+#define C_ISLB   C_LINE               /* (the name setup.c and panel.c use) */
 
 #define K 2                           /* text scale of the desktop: 12 x 22 pixels a character */
 #define KW (CW * K)

@@ -545,16 +545,14 @@ static void draw_greeter(void)
     int t = 44 + tw(sizeof wt - 1, 2) + 24;
     dl_rect(x0, y0 - TAB_H, x0 + t, y0 + 12, 10, C_ACC);
     bold(x0 + 22, y0 - TAB_H + 6, wt, C_INK, SW);
-    dl_rect(x0, y0, x1, y1, 16, C_GLASS);
-    dl_frame(x0, y0, x1, y1, 16, 2, C_ACC);
-    dl_rect(x0 + 2, y0, x0 + t - 2, y0 + 2, 0, C_ACC);
+    dl_rect(x0, y0, x1, y1, 16, C_CLEAR);               /* (clear glass, as a window's frame) */
     logo(x0 + 50, y0 + 40, 5);
-    label(x0 + 150, y0 + 46, "SIEOS", 6, C_ACCT);
-    label(x0 + 152, y0 + 120, "your windows, your files, sia", 2, C_DIM);
+    label(x0 + 150, y0 + 46, "SIEOS", 6, C_GTXT);
+    label(x0 + 152, y0 + 120, "your windows, your files, sia", 2, C_GDIM);
     const char *names[2] = { "Name", "Password" };
     for (int f = 0; f < 2; f++) {
         int fy = y0 + 190 + f * 90;
-        label(x0 + 60, fy + 12, names[f], 2, C_DIM);
+        label(x0 + 60, fy + 12, names[f], 2, C_GTXT);
         dl_rect(x0 + 230, fy, x1 - 60, fy + 50, 10, C_FIELD);
         dl_frame(x0 + 230, fy, x1 - 60, fy + 50, 10, gfield == f ? 2 : 1, gfield == f ? C_ACC : C_LINE);
         char st[64];
@@ -565,8 +563,8 @@ static void draw_greeter(void)
         if (gfield == f) dl_rect(x0 + 252 + cw, fy + 12, x0 + 264 + cw, fy + 38, 0, C_ACC);
         hitbox(x0 + 230, fy, x1 - 60, fy + 50, H_FIELD, f);
     }
-    if (gmsg[0]) label(x0 + 60, y0 + 380, gmsg, 2, C_ERR);
-    else if (no_input) label(x0 + 60, y0 + 380, "No keyboard or mouse yet: plug one in", 2, C_DIM);
+    if (gmsg[0]) label(x0 + 60, y0 + 380, gmsg, 2, C_ACC);   /* (on clear glass: amber reads, red does not) */
+    else if (no_input) label(x0 + 60, y0 + 380, "No keyboard or mouse yet: plug one in", 2, C_GDIM);
     pill(x1 - 60 - tw(6, 2) - 28, y1 - 80, "Log in", 1, H_LOGIN, 0);
 }
 

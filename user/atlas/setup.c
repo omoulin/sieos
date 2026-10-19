@@ -151,20 +151,19 @@ void setup_draw(void)
     int x0 = SW / 2 - 420, y0 = SH / 2 - 330, x1 = SW / 2 + 420, y1 = SH / 2 + 330;
     static const char *titles[3] = { "Step 1 of 3 - the administrator", "Step 2 of 3 - your account",
                                      "Step 3 of 3 - ready" };
-    dl_rect(x0, y0, x1, y1, 24, C_CARD);
-    dl_frame(x0, y0, x1, y1, 24, 2, C_ISLB);
-    label(x0 + 60, y0 + 46, "Welcome to SIEOS", 5, C_ACCT);
-    label(x0 + 60, y0 + 126, step == 1 && cur > 0 ? "Step 2 of 3 - another account" : titles[step], 2, C_TXT);
+    dl_rect(x0, y0, x1, y1, 24, C_CLEAR);               /* (clear glass, white text on it) */
+    label(x0 + 60, y0 + 46, "Welcome to SIEOS", 5, C_GTXT);
+    label(x0 + 60, y0 + 126, step == 1 && cur > 0 ? "Step 2 of 3 - another account" : titles[step], 2, C_GTXT);
     for (int i = 0; i < 3; i++)                           /* where we are: three dots */
-        dl_rect(x1 - 150 + i * 34, y0 + 132, x1 - 130 + i * 34, y0 + 152, 10, i <= step ? C_ACC : C_ISLB);
-    if (step == 0) label(x0 + 60, y0 + 170, "root can change the whole system: choose its password.", 2, C_DIM);
-    if (step == 1) label(x0 + 60, y0 + 170, "The account you will use every day.", 2, C_DIM);
+        dl_rect(x1 - 150 + i * 34, y0 + 132, x1 - 130 + i * 34, y0 + 152, 10, i <= step ? C_ACC : C_CELL);
+    if (step == 0) label(x0 + 60, y0 + 170, "root can change the whole system: choose its password.", 2, C_GDIM);
+    if (step == 1) label(x0 + 60, y0 + 170, "The account you will use every day.", 2, C_GDIM);
 
     field_t f[4];
     int n = fields(f);
     for (int i = 0; i < n; i++) {
         int fy = y0 + 220 + i * 76;
-        label(x0 + 60, fy + 12, f[i].label, 2, C_DIM);
+        label(x0 + 60, fy + 12, f[i].label, 2, C_GTXT);
         dl_rect(x0 + 270, fy, x1 - 60, fy + 50, 10, C_FIELD);
         dl_frame(x0 + 270, fy, x1 - 60, fy + 50, 10, fld == i ? 2 : 1, fld == i ? C_ACC : C_ISLB);
         char dots[64];
@@ -176,18 +175,18 @@ void setup_draw(void)
         hitbox(x0 + 270, fy, x1 - 60, fy + 50, H_FIELD, i);
     }
     if (step == 2) {                                      /* the list */
-        label(x0 + 60, y0 + 190, "These accounts will be created:", 2, C_DIM);
-        label(x0 + 90, y0 + 240, "root - the administrator", 2, C_TXT);
+        label(x0 + 60, y0 + 190, "These accounts will be created:", 2, C_GDIM);
+        label(x0 + 90, y0 + 240, "root - the administrator", 2, C_GTXT);
         for (int i = 0; i < nu; i++) {
             char line[110];
             strlcpy(line, u[i].name, sizeof line);
             if (u[i].full[0]) { strlcpy(line + strlen(line), " - ", sizeof line - strlen(line));
                                 strlcpy(line + strlen(line), u[i].full, sizeof line - strlen(line)); }
-            label(x0 + 90, y0 + 290 + i * 50, line, 2, C_TXT);
+            label(x0 + 90, y0 + 290 + i * 50, line, 2, C_GTXT);
         }
-        label(x0 + 60, y0 + 520, "You will be logged in as the first one.", 2, C_DIM);
+        label(x0 + 60, y0 + 520, "You will be logged in as the first one.", 2, C_GDIM);
     }
-    if (msg[0]) label(x0 + 60, y1 - 130, msg, 2, C_ERR);
+    if (msg[0]) label(x0 + 60, y1 - 130, msg, 2, C_ACC);    /* (on clear glass: amber reads, red does not) */
 
     int bx = x1 - 60, by = y1 - 80;                       /* buttons, right to left */
     const char *main_s = step == 2 ? "Create accounts" : "Next";
