@@ -182,6 +182,22 @@ commits only happen between operations. They happen on `siefs_sync`, past
 `dirty_limit` changed nodes (256, i.e. 1 MiB), or `commit_ns` after the
 first change (5 s).
 
+**One writer at a time.** A mounted SieFS keeps its state in memory and
+trusts its bitmap: a second program writing the same disk meanwhile (a
+host tool on the image a QEMU has mounted) would have each reuse blocks
+the other's trees still need, and both superblocks would end up
+describing damaged trees. This happened once (a `make` updated
+`build/disk.img` while `make run` had it; hours later the virtual
+machine's hourly snapshot committed over it). Two guards since:
+- Before a transaction writes anything (its first operation, then its
+  commit) both superblocks are read again. If either is not what this
+  mount last read or wrote there, someone else has committed: nothing more
+  is written (`-EBUSY`, then `-EIO`; `siefs_shared` says so, and the file
+  server prints it), and the other writer's commits stay whole. Two block
+  reads a transaction.
+- The host tools lock the image as QEMU locks its disks (see Host tools),
+  so neither starts on an image the other has open.
+
 ## Free space
 
 The bitmap in memory has three versions of each bit:
@@ -365,9 +381,9 @@ nothing but `memcpy` & co. and `vformat` is needed).
 ## Host tools
 
 Programs for the development machine, built with `make siefs-tools` into
-`build/host/`. They are written in ISO C (`tools/siefs/`). The one part
-that cannot be, walking a host directory for `mkfs.siefs -d`, is isolated
-in `tools/hostdir.c`. The same tool sources are meant to build as SIEOS
+`build/host/`. They are written in ISO C (`tools/siefs/`). The parts
+that cannot be, walking a host directory for `mkfs.siefs -d` and locking
+the image, are isolated in `tools/hostdir.c`. The same tool sources are meant to build as SIEOS
 programs later, so that SIEOS can create and check its own disks
 (self-hosting).
 
@@ -381,6 +397,13 @@ siefs disk.img attr /home/notes.txt project SIEOS
 siefs disk.img find project SIEOS                   every object with that attribute
 siefs disk.img grow 8G                              make the image 8 GiB and the volume with it
 ```
+
+Each tool locks the image while it has it open (an "open file
+description" lock on the whole file, `tools/hostdir.c`). A running QEMU
+holds such locks on its disk images, so a tool on an image a QEMU is using
+stops at once ("in use by another program"), and a QEMU will not start
+on an image a tool has open. `make` then leaves `build/disk.img` as it is
+and says to stop the QEMU first.
 
 ## Tests
 
@@ -407,6 +430,10 @@ siefs disk.img grow 8G                              make the image 8 GiB and the
   remounted state must be exactly the old or the new one (with snapshots,
   which commit by themselves: the state after one of the operations), and
   check clean.
+- **A two-writers test:** a second mount commits while the first is
+  mounted; the first must stop before writing a single block (also when
+  its change was already waiting for its commit), and the second's state
+  must check clean.
 - **Damage tests:** broken superblock, flipped bits in data, nodes and
   bitmap.
 - **The measurements above.**

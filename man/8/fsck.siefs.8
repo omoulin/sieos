@@ -16,12 +16,15 @@ powers off.
 .PP
 Repairing is not needed after a crash: a commit is all or nothing, and a
 damaged image falls back to the previous commit when mounted.
+.PP
+An image a running QEMU is using is not checked ("in use by another
+program"): what it holds then is changing.
 .SH OPTIONS
 .TP
 .B \-d
 Also read and check every data block.
 .SH EXIT STATUS
-0 clean; 1 problems found; 2 the image cannot be mounted.
+0 clean; 1 problems found; 2 the image cannot be mounted, or is in use.
 .SH SEE ALSO
 .BR siefs (8),
 .BR mkfs.siefs (8),

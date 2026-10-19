@@ -209,6 +209,12 @@ struct siefs {
     int changed, broken, opmod;
     uint32_t nsalt, dsalt;              /* encryption: this commit's node salt; the next data salt */
     uint8_t *ctmp;                      /* a block and its tag: sealing and opening */
+    /* Another writer (space.c, "Alone on the disk"): both superblocks as
+     * this mount last read or wrote them, checked before it writes. */
+    struct { uint64_t seq; uint32_t csum; } slot[2];
+    int guard, shared;                  /* mounted (not being formatted): check them; another writer seen */
+    uint64_t guarded;                   /* the transaction already checked */
+    uint8_t *sbchk;                     /* a block to read them into */
 };
 
 /* crc.c */

@@ -75,7 +75,8 @@ int main(int argc, char **argv)
     siefs_env_t env;
     siefs_t *fs;
     int e;
-    if (image_open(&im, img, size, &env)) { fprintf(stderr, "%s: cannot open or create\n", img); return 1; }
+    int o = image_open(&im, img, size, &env);
+    if (o) { fprintf(stderr, "%s: %s\n", img, o == -2 ? IN_USE : "cannot open or create"); return 1; }
     if ((e = siefs_format(&env, label)) || (e = siefs_mount(&env, &fs))) {
         fprintf(stderr, "%s: %s\n", img, host_err(e));
         return 1;

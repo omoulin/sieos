@@ -17,6 +17,12 @@ creates are root's.
 uses it to copy changed files into
 .BR build/disk.img .
 An encrypted home cannot be read without its password.
+.PP
+The image is locked while
+.B siefs
+has it open, as QEMU locks its disks: it stops at once
+("in use by another program") on an image a running QEMU is using, since
+two programs writing one SieFS would damage it.
 .SH COMMANDS
 .TP
 .BR ls " [" \fIpath\fR "], " tree " [" \fIpath\fR ]

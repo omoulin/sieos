@@ -1,6 +1,7 @@
 /*
  * host.c - A SieFS disk image in an ordinary file, for the host tools.
- * Block n lives at byte n * 4096 of the file. ISO C only.
+ * Block n lives at byte n * 4096 of the file, locked while it is open
+ * (hostdir.c). ISO C otherwise.
  *
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
@@ -33,8 +34,11 @@ static int64_t now(void)
 
 int image_open(image_t *im, const char *path, uint64_t create_bytes, siefs_env_t *env)
 {
-    im->f = fopen(path, create_bytes ? "wb+" : "rb+");
+    im->f = fopen(path, "rb+");                 /* (not "wb+": it would empty an image in use) */
+    if (!im->f && create_bytes) im->f = fopen(path, "wb+");
     if (!im->f) return -1;
+    int e = hostfile_lock(im->f, create_bytes != 0);
+    if (e) { fclose(im->f); im->f = 0; return e == -1 ? -2 : -1; }
     if (create_bytes) {                     /* write the last byte: the file gets its size */
         if (fseek(im->f, (long)(create_bytes - 1), SEEK_SET) || fputc(0, im->f) == EOF) { fclose(im->f); return -1; }
     }
@@ -67,6 +71,7 @@ const char *host_err(long e)
     case SIEFS_ENOTEMPTY: return "directory not empty";
     case SIEFS_ENODATA: return "no such attribute";
     case SIEFS_EPERM: return "operation not permitted";
+    case SIEFS_EBUSY: return "busy (in use; or another program wrote the image meanwhile: nothing more written)";
     }
     return "error";
 }
@@ -76,7 +81,8 @@ siefs_t *host_mount(const char *path, image_t *im)
     siefs_env_t env;
     siefs_t *fs;
     int e;
-    if (image_open(im, path, 0, &env)) { fprintf(stderr, "%s: cannot open\n", path); return 0; }
+    int o = image_open(im, path, 0, &env);
+    if (o) { fprintf(stderr, "%s: %s\n", path, o == -2 ? IN_USE : "cannot open"); return 0; }
     if ((e = siefs_mount(&env, &fs))) {
         fprintf(stderr, "%s: cannot mount: %s\n", path, host_err(e));
         image_close(im);

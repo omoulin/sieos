@@ -13,11 +13,13 @@
 
 typedef struct { FILE *f; uint64_t nblocks; } image_t;
 
-/* Open an image (create != 0: create it, or cut it to, create_bytes). */
+/* Open an image (create != 0: create it, or cut it to, create_bytes).
+ * -1: cannot; -2: in use by another program (a QEMU running on it). */
 int  image_open(image_t *im, const char *path, uint64_t create_bytes, siefs_env_t *env);
 void image_close(image_t *im);
 /* Open and mount; prints the error and returns 0 on failure. */
 siefs_t *host_mount(const char *path, image_t *im);
+#define IN_USE "in use by another program (a QEMU running on it? stop it first)"
 const char *host_err(long e);
 uint64_t parse_size(const char *s);              /* "64M", "2G", "4096" */
 
@@ -25,3 +27,4 @@ uint64_t parse_size(const char *s);              /* "64M", "2G", "4096" */
 typedef struct { const char *name; int type; unsigned mode; } hostent_t;   /* type: 'f', 'd', 'l', '?' */
 int  hostdir_list(const char *path, int (*fn)(void *ctx, const hostent_t *e), void *ctx);
 long hostdir_readlink(const char *path, char *buf, size_t size);
+int  hostfile_lock(FILE *f, int cut);           /* the image ours alone (-1: in use, a QEMU?); cut: then empty it */

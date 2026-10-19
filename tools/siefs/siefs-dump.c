@@ -75,7 +75,8 @@ int main(int argc, char **argv)
     siefs_env_t env;
     siefs_t *fs;
     if (argc != 2) { fprintf(stderr, "usage: siefs-dump IMAGE\n"); return 2; }
-    if (image_open(&im, argv[1], 0, &env)) { fprintf(stderr, "%s: cannot open\n", argv[1]); return 1; }
+    int o = image_open(&im, argv[1], 0, &env);
+    if (o) { fprintf(stderr, "%s: %s\n", argv[1], o == -2 ? IN_USE : "cannot open"); return 1; }
     for (int s = 0; s < 2; s++) {
         sb_t sb;
         env.read(env.ctx, 1 + s, 1, &sb);

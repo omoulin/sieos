@@ -19,6 +19,16 @@
  * commit t + 1, so the two superblocks on disk always describe two intact
  * states (the newest, and the one before as a fallback).
  *
+ * Alone on the disk: a mounted file system keeps its state in memory and
+ * believes the blocks its bitmap calls free are free. A second writer on
+ * the same disk (a host tool on an image a virtual machine has mounted)
+ * would have each overwrite the other's blocks, and both superblocks end
+ * up describing damaged trees. So before a transaction writes anything
+ * (space_reserve, the commit) both superblocks are read again: if either
+ * is not what this mount last read or wrote there, another writer has
+ * committed meanwhile. Nothing more is written (-EBUSY, then the mount is
+ * broken: -EIO): the other writer's commit stays whole.
+ *
  * Snapshots share blocks with their volume. Every block knows the commit
  * that wrote it (its pointer's gen, an extent's gen), so when a volume
  * lets go of a block, blk_release can tell: written after the volume's
@@ -170,11 +180,27 @@ uint64_t commit_block(siefs_t *fs)
     return got ? b : 0;
 }
 
+/* Both superblocks still the ones this mount knows (see the top)? The
+ * check is made once per transaction, and again by its commit. */
+static int alone(siefs_t *fs)
+{
+    if (!fs->guard) return 0;
+    for (int i = 0; i < 2; i++) {
+        sb_t *b = (sb_t *)fs->sbchk;
+        if (dev_read(fs, 1 + i, 1, b)) return E(EIO);
+        if (b->seq != fs->slot[i].seq || b->csum != fs->slot[i].csum) { fs->broken = fs->shared = 1; return E(EBUSY); }
+    }
+    fs->guarded = fs->txn;
+    return 0;
+}
+
 /* Make sure an operation will have room before it changes anything:
  * need blocks for its data, plus room for the commit's nodes. If space is
  * short but blocks are waiting to be freed, two commits release them. */
 int space_reserve(siefs_t *fs, uint64_t need)
 {
+    int e;
+    if (fs->guarded != fs->txn && (e = alone(fs))) return e;
     need += fs->ndirty + 64;
     if (fs->nfree >= need) return 0;
     if (fs->npend) { commit(fs, 1); commit(fs, 1); fs->opmod = 0; }   /* whole commits: this operation changed nothing yet */
@@ -226,6 +252,7 @@ int commit(siefs_t *fs, int force)
     int e, s = fs->txn & 1;
     if (fs->broken) return E(EIO);
     if (!force && !fs->changed) return 0;
+    if ((e = alone(fs))) return e;
     fs->pre = blk_alloc(fs, fs->ndirty + 8, &got);
     fs->pren = got;
     fs->nsalt = crypt_salt(fs) | NSALT_NODE;            /* (a new one each time: a commit redone after a crash too) */
@@ -260,6 +287,7 @@ int commit(siefs_t *fs, int force)
     nsb->csum = sb_sum(nsb);
     if ((e = dev_write(fs, 1 + s, 1, nsb)) || (e = dev_flush(fs))) goto fail;
     fs->sb = *nsb;
+    fs->slot[s].seq = nsb->seq; fs->slot[s].csum = nsb->csum;
 
     /* Committed. Blocks freed by the previous transaction can now be
      * reused; this one's wait for the next commit. */
@@ -287,7 +315,7 @@ static void fs_close(siefs_t *fs)
     void (*fr)(void *) = fs->env.free;
     if (fs->dirty) nodes_free(fs);
     void *p[] = { fs->map, fs->busy, fs->fresh, fs->bmdirty[0], fs->bmdirty[1], fs->bmsum[0], fs->bmsum[1],
-                  fs->pend[0].r, fs->pend[1].r, fs->fruns.r, fs->dirty, fs->hash, fs->io, fs->dead, fs->ctmp };
+                  fs->pend[0].r, fs->pend[1].r, fs->fruns.r, fs->dirty, fs->hash, fs->io, fs->dead, fs->ctmp, fs->sbchk };
     for (size_t i = 0; i < sizeof p / sizeof *p; i++) if (p[i]) fr(p[i]);
     while (fs->nvols) vol_drop(fs, fs->vols[0]);
     if (fs->vols) fr(fs->vols);
@@ -320,12 +348,13 @@ static int fs_open(const siefs_env_t *env, const sb_t *sb, siefs_t **out)
     fs->bmsum[0] = zalloc(fs, sb->nbm * 4); fs->bmsum[1] = zalloc(fs, sb->nbm * 4);
     fs->hash = zalloc(fs, sizeof(node_t *) << fs->hbits);
     fs->io = zalloc(fs, EXT_MAX * BS);
+    fs->sbchk = fs->env.alloc(BS);
     fs->hint = sb->data_start;
     fs->rt.id = 0;
     fs->next_vid = 2;
     fs->dsalt = crypt_salt(fs) & ~NSALT_NODE;
     if (!fs->map || !fs->busy || !fs->fresh || !fs->bmdirty[0] || !fs->bmdirty[1] || !fs->bmsum[0] ||
-        !fs->bmsum[1] || !fs->hash || !fs->io) { fs_close(fs); return E(ENOMEM); }
+        !fs->bmsum[1] || !fs->hash || !fs->io || !fs->sbchk) { fs_close(fs); return E(ENOMEM); }
     *out = fs;
     return 0;
 }
@@ -443,6 +472,7 @@ int siefs_mount(const siefs_env_t *env, siefs_t **out)
     sb_t *sb = env->alloc(2 * sizeof *sb);
     int e = E(EINVAL), ok[2];
     if (!sb) return E(ENOMEM);
+    memset(sb, 0, 2 * sizeof *sb);
     for (int i = 0; i < 2; i++)
         ok[i] = !env->read(env->ctx, 1 + i, 1, &sb[i]) && sb_valid(env, &sb[i]);
     int first = ok[0] && (!ok[1] || sb[0].seq > sb[1].seq) ? 0 : 1;
@@ -451,7 +481,11 @@ int siefs_mount(const siefs_env_t *env, siefs_t **out)
         siefs_t *fs;
         if (!ok[i]) continue;
         if ((e = fs_open(env, &sb[i], &fs))) break;
-        if (!(e = load(fs))) { env->free(sb); *out = fs; return 0; }
+        if (!(e = load(fs))) {
+            for (int j = 0; j < 2; j++) { fs->slot[j].seq = sb[j].seq; fs->slot[j].csum = sb[j].csum; }
+            fs->guard = 1;
+            env->free(sb); *out = fs; return 0;
+        }
         fs_close(fs);
     }
     env->free(sb);
@@ -466,6 +500,7 @@ int siefs_unmount(siefs_t *fs)
 }
 
 int siefs_sync(siefs_t *fs) { return commit(fs, 0); }
+int siefs_shared(siefs_t *fs) { return fs->shared; }
 
 /* ---- Growing: the device became bigger (a small image written to a big
  * USB key or SD card, its partition then extended). The bitmap copies are

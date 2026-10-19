@@ -891,6 +891,58 @@ static void grow(void)
 }
 
 /* ================================================================ 4. damage */
+/* Two writers on one disk (a host tool on the image a virtual machine has
+ * mounted): the one that did not commit last must notice before writing
+ * anything, and the other's commit must stay whole. */
+static void two_writers(void)
+{
+    mem_t m;
+    siefs_env_t env;
+    siefs_t *a, *b;
+    uint64_t f, g;
+    mem_init(&m, 4096);
+    env = env_of(&m);
+    clk = 0;
+    CHECK(siefs_format(&env, "two") == 0 && siefs_mount(&env, &a) == 0);
+    CHECK(siefs_create(a, SIEFS_ROOT, "a", SIEFS_IFREG | 0644, 0, 0, &f) == 0 && siefs_write(a, f, 0, "A", 1) == 1);
+    CHECK(siefs_sync(a) == 0);
+    CHECK(siefs_mount(&env, &b) == 0);                  /* the second writer: commits twice */
+    CHECK(siefs_create(b, SIEFS_ROOT, "b", SIEFS_IFREG | 0644, 0, 0, &g) == 0 && siefs_write(b, g, 0, "BB", 2) == 2);
+    CHECK(siefs_sync(b) == 0 && siefs_write(b, g, 2, "B", 1) == 1 && siefs_sync(b) == 0);
+    uint32_t sb_ = sig(b);
+    CHECK(!siefs_shared(a));
+    uint8_t *img = malloc(m.nb * BS);
+    memcpy(img, m.cur, m.nb * BS);
+    long w0 = m.writes;
+    CHECK(siefs_write(a, f, 1, "AAAA", 4) == E(EBUSY));    /* the first: stops before writing */
+    CHECK(siefs_shared(a) && m.writes == w0 && !memcmp(img, m.cur, m.nb * BS));
+    CHECK(siefs_write(a, f, 1, "A", 1) == E(EIO) && siefs_sync(a) != 0);
+    siefs_unmount(a);
+    CHECK(m.writes == w0 && !memcmp(img, m.cur, m.nb * BS));
+    siefs_unmount(b);
+    CHECK(siefs_mount(&env, &b) == 0);                  /* what the second wrote is all there */
+    CHECK(sig(b) == sb_ && siefs_check(b, 1, quiet, 0) == 0);
+    siefs_unmount(b);
+
+    /* The other commits while a change waits for its commit (checked when
+     * the change began): the commit checks again. */
+    CHECK(siefs_mount(&env, &a) == 0 && siefs_mount(&env, &b) == 0);
+    siefs_stat_t st = { .mode = 0600 };
+    CHECK(siefs_setattr(a, g, &st, SIEFS_SET_MODE) == 0);
+    CHECK(siefs_write(b, g, 0, "C", 1) == 1 && siefs_sync(b) == 0);
+    memcpy(img, m.cur, m.nb * BS);
+    w0 = m.writes;
+    CHECK(siefs_sync(a) == E(EBUSY) && siefs_shared(a) && m.writes == w0 && !memcmp(img, m.cur, m.nb * BS));
+    siefs_unmount(a);
+    siefs_unmount(b);
+    CHECK(siefs_mount(&env, &b) == 0 && siefs_check(b, 1, quiet, 0) == 0 && siefs_sync(b) == 0);
+    CHECK(siefs_write(b, g, 0, "D", 1) == 1 && siefs_sync(b) == 0 && !siefs_shared(b));   /* alone again: writes */
+    siefs_unmount(b);
+    free(img);
+    mem_free(&m);
+    printf("two writers: the late one stopped before writing, the other's commits whole\n");
+}
+
 static void damage(void)
 {
     mem_t m;
@@ -1054,6 +1106,7 @@ int main(int argc, char **argv)
     encryption();
     crash(quick ? 3 : 30);
     grow();
+    two_writers();
     damage();
     if (!fails) measure();
     printf(fails ? "SieFS tests: %ld FAILURES\n" : "SieFS tests: all passed\n", fails);

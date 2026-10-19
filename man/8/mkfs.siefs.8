@@ -26,7 +26,8 @@ uses it for
 .B build/disk.img
 (from
 .BR build/rootfs )
-and the tests' fresh disks.
+and the tests' fresh disks. An existing image is emptied only once it is
+locked: never one a running QEMU is using ("in use by another program").
 .SH OPTIONS
 .TP
 .BI \-s " size"

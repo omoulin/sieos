@@ -306,15 +306,19 @@ $(B)/rootfs.stamp: $(ROOTFS) $(SELF_SRC) $(MANPAGES) tools/man.py $(BINS:%=$(B)/
 	for l in $(LINKS); do ln -s $${l%/*} $(B)/rootfs/bin/$${l#*/}; done
 	chmod -R u=rwX,go=rX $(B)/rootfs && chmod 755 $(B)/rootfs/bin/* && chmod 1777 $(B)/rootfs/tmp
 	touch $@
+# The disk is changed by the host tools: never while a QEMU has it (they
+# lock it as QEMU does: both writing would damage it, tools/hostdir.c).
+DISK_ALONE = $(B)/host/siefs $(B)/disk.img df >/dev/null || { echo "make: $(B)/disk.img left as it is: stop the QEMU running on it, then make again"; exit 1; }
 $(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs $(PKGFILES)
 	@if [ ! -f $@ ]; then \
 	    echo "mkfs.siefs: new disk $@ ($(DISK))"; \
 	    $(B)/host/mkfs.siefs -s $(DISK) -L SIEOS -d $(B)/rootfs $@ $(if $(PKGS),&& $(PKG) install $(B)/host/siefs $@ $(PKGFILES)); \
 	else \
+	    $(DISK_ALONE); \
 	    echo "updating $@ with the changed files of $(B)/rootfs"; \
 	    cd $(B)/rootfs && for d in $$(find . -mindepth 1 -type d); do ../host/siefs ../disk.img mkdir /$${d#./} 2>/dev/null; done; \
 	    for f in $$(find . -type f -newer ../disk.img); do \
-	        ../host/siefs ../disk.img put $$f /$${f#./} && \
+	        ../host/siefs ../disk.img put $$f /$${f#./} || exit 1; \
 	        case $$f in ./bin/*) ../host/siefs ../disk.img chmod 755 /$${f#./};; esac; done; \
 	    for l in $(LINKS); do ../host/siefs ../disk.img symlink $${l%/*} /bin/$${l#*/} 2>/dev/null; done; \
 	    cd ../.. && touch $@; \
@@ -324,7 +328,7 @@ $(B)/disk.img: $(B)/rootfs.stamp $(B)/host/mkfs.siefs $(B)/host/siefs $(PKGFILES
 MODEL   ?= smollm2-1.7b-instruct-q4_k_m.gguf
 model: $(B)/disk.img
 	@if [ ! -f models/$(MODEL) ]; then echo "model: models/$(MODEL) is missing (docs/llm.md says where to get it)"; \
-	elif ! $(B)/host/siefs $(B)/disk.img stat /models/$(MODEL) >/dev/null 2>&1; then \
+	elif ! { $(DISK_ALONE); $(B)/host/siefs $(B)/disk.img stat /models/$(MODEL) >/dev/null 2>&1; }; then \
 	    free=$$($(B)/host/siefs $(B)/disk.img df 2>&1 | sed -n 's/.*KiB, \([0-9]*\) free,.*/\1/p'); \
 	    if [ $$(( $${free:-0} * 4096 )) -lt $$(( $$(wc -c < models/$(MODEL)) + 16777216 )) ]; then \
 	        echo "model: $(B)/disk.img is too small for models/$(MODEL) (it was made with an older, smaller DISK size)."; \

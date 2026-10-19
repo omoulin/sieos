@@ -710,6 +710,12 @@ int main(int argc, char **argv)
             buf[m.rlen < sizeof buf ? m.rlen : sizeof buf - 1] = 0;
             r = serve(&m, from, &out, &outlen, &w1);
         }
+        static int told;
+        if (!told && siefs_shared(fs)) {
+            told = 1;
+            printf("fs: another program wrote the disk while it was mounted here: nothing more is written to it "
+                   "(its own last commit stays whole); restart to mount it again\n");
+        }
         int noreply = from <= 0 || (m.w[0] == FS_TICK && r == -EBUSY && tick_from == from);
         m = (msg_t){ .w = { r, w1 }, .sbuf = out, .slen = outlen, .rbuf = buf, .rlen = FS_MAX + PATH_MAX };
         from = noreply ? ipc_recv(port, &m) : ipc_reply_recv(from, port, &m);

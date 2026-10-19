@@ -78,6 +78,7 @@ typedef struct {
     int console;                        /* uses the console: never two at once (login) */
     int quick;                          /* quick failures in a row */
     int fails;                          /* failures within a minute of starting, in a row */
+    int renew;                          /* ended by us after a sleep (INIT_RESUME): not a failure */
     int64_t when;                       /* SVC_WAITING: when to start it (ns since boot) */
     int64_t died;                       /* when it ended, to measure the restart */
     uint64_t quota;                     /* its memory limit in bytes (0: none; SPAWN_QUOTA) */
@@ -177,6 +178,7 @@ static void start(svc_t *s)
         pid = sys_spawn(0, s->module, s->args, 0, 0, &o);
     } else pid = spawn_file(s->src, s->args, 0, 0, &o);
     s->i.started_ns = sys_clock();
+    s->renew = 0;
     s->asking = s->stopping = 0;
     s->check_at = s->i.started_ns + s->i.idle_ns;
     if (pid < 0) {                      /* counts as a quick failure */
@@ -240,6 +242,15 @@ static void ended(svc_t *s, int st)
         return;
     }
     s->died = now;
+    if (s->renew) {                     /* started anew after a sleep: at once, and no failure (a pause
+                                           here could leave the disk without its driver while init
+                                           itself waits for the disk, loading a program) */
+        s->renew = 0;
+        s->i.restarts++;
+        s->i.state = SVC_WAITING;
+        s->when = now;
+        return;
+    }
     if (s->i.policy == SVC_NEVER || (s->i.policy == SVC_ON_FAILURE && st == 0)) { s->i.state = SVC_STOPPED; return; }
     s->quick = now - (int64_t)s->i.started_ns < QUICK_NS ? s->quick + 1 : 0;
     s->fails = now - (int64_t)s->i.started_ns < SHORT_NS ? s->fails + 1 : 0;
@@ -449,6 +460,7 @@ static long serve(msg_t *m, msg_t *a, long from, char *req)
         for (int i = 0; i < nsvc; i++)
             if ((s = &svc[i])->i.driver && s->i.state == SVC_RUNNING && s->i.pid != m->pid && strcmp(s->i.name, "atlas")) {
                 say("init: %s started anew after the sleep\n", s->i.name);
+                s->renew = 1;
                 sys_kill(s->i.pid);     /* (its end comes as NOTE_CHILD: started again) */
             }
         return 0;
