@@ -64,13 +64,13 @@ void icon(int kind, int x, int y, int scale)
     dl_pixmap(x, y, maps[kind], 12, 12, keys, cols, scale);
 }
 
-/* The outline and the marks only (no fills), in the ink on the accent:
- * an icon on a window's tab. */
+/* The outline and the marks only (no fills), in one ink: the ink on the
+ * accent (an icon on a window's tab), or white (on clear glass). */
 static const char ink_keys[] = "kgabywsK-";
-static uint32_t ink_cols[9];                             /* (C_INK: the look's; set when drawn) */
-void icon_ink(int kind, int x, int y, int scale)
+static uint32_t ink_cols[2][9];                          /* (C_INK, C_GTXT: the look's; set when drawn) */
+void icon_ink(int kind, int x, int y, int scale, int white)
 {
     if (kind < 0 || kind >= I_N) return;
-    for (int i = 0; i < 9; i++) ink_cols[i] = C_INK;
-    dl_pixmap(x, y, maps[kind], 12, 12, ink_keys, ink_cols, scale);
+    for (int i = 0; i < 9; i++) ink_cols[white != 0][i] = white ? C_GTXT : C_INK;
+    dl_pixmap(x, y, maps[kind], 12, 12, ink_keys, ink_cols[white != 0], scale);
 }

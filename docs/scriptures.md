@@ -7,7 +7,7 @@ offline: footnotes, full-text search, highlights, notes and tags, several
 chapters open at once in tabs, and notes synced with a Church Account
 (Gospel Library). It is the **Scriptures** app (`/etc/apps/scriptures.app`,
 in the sia strip and the Deskbar's menu), a window of the desktop's own
-kind, drawn in the desktop's looks (Phosphor by default). With its fonts it
+kind, drawn in the desktop's colours (glass's, as a window shows them). With its fonts it
 is 941 KiB, so it is an add-on package ([packages.md](packages.md)):
 `make pkg-scriptures`, then `pkg install scriptures.pkg`, or
 `make usb PKGS=scriptures`.
@@ -148,7 +148,7 @@ first start, then Scriptures from the sia strip; its library from a
 stand-in for the content API on the host (`tests/scriptures/server.py`:
 HTTPS with a test CA added to the test disk's roots; Genesis 1-2 and
 John 1 from the King James Version and made-up pages for the other
-volumes). The empty library drawn in Phosphor's green -> Settings,
+volumes). The empty library drawn in the desktop's colours -> Settings,
 Library: the five standard works downloaded -> a book, a chapter -> a
 footnote and its link -> a search (Ctrl+F, "light": 5 verses) and a result
 -> a highlight (a double-clicked word, a colour) -> a note (its title and
@@ -166,5 +166,4 @@ test clicks there.
 Untested: the real churchofjesuschrist.org (its content API and its
 certificate chain from SIEOS), the Church Account's sync (the notes
 service is not a public API; the upload is experimental upstream too),
-real hardware, the other looks (Amber, Glass, BeOS: drawn by the same
-core code as on Linux).
+real hardware.

@@ -658,7 +658,7 @@ static void list_draw(int x0, int y0, int x1, int y1)
     for (int r = 0; r < n && lscroll + r < nmsg; r++) {
         int i = lscroll + r, y = ly + 2 + r * ROW, b = !msg[i].seen;
         if (i == sel) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_SEL);
-        else if (r & 1) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_GLASS);
+        else if (r & 1) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_PANEL);
         if (b) dl_rect(x0 + 14, y + 12, x0 + 22, y + 20, 4, C_ACC);   /* unread: a dot, and bold */
         for (int k = 0; k <= b; k++) {
             dl_text(fx + k, y + 6, msg[i].from, strlen(msg[i].from), S(2), C_TXT, x0, y, sx - 16, y + ROW);

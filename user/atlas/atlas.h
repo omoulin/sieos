@@ -12,10 +12,20 @@
 #include "mk.h"
 #include "draw.h"
 
-/* Colours: the look's palette (draw.c): deep navy, "glass" panels a little
- * lighter, one accent; BeOS: its blue desk, grey panels, the yellow tab. */
-#define C_BG     pal[PAL_BG]          /* the desk */
-#define C_GLASS  pal[PAL_GLASS]       /* a panel, a window, a card */
+/* Colours: the look's palette (draw.c): glass over a navy desk lit by
+ * blue glows: clear glass with white text (the bars, a window's frame),
+ * milky glass with dark text (menus, cards), light panels, one amber
+ * accent (the tab). */
+#define C_BG     pal[PAL_BG]          /* the desk's middle (dl_desk draws the desk) */
+#define C_GLASS  pal[PAL_GLASS]       /* a menu, a card: milky glass (fills only), dark text on it */
+#define C_CLEAR  pal[PAL_CLEAR]       /* the bars, a window's frame: clear glass, white text on it */
+#define C_GTXT   pal[PAL_GTXT]        /* text on clear glass, */
+#define C_GDIM   pal[PAL_GDIM]        /* and less of it */
+#define C_GLINE  pal[PAL_GLINE]       /* a line on clear glass (see-through) */
+#define C_WASH   pal[PAL_WASH]        /* the chosen row on clear glass (see-through) */
+#define C_CELL   pal[PAL_CELL]        /* a cell on clear glass (see-through) */
+#define C_SMOKE  pal[PAL_SMOKE]       /* a terminal: dark smoked glass, */
+#define C_SMOKEFG pal[PAL_SMOKEFG]    /* its text */
 #define C_LINE   pal[PAL_LINE]        /* their edge */
 #define C_ACC    pal[PAL_ACC]         /* focus, the current workspace, buttons that matter */
 #define C_TXT    pal[PAL_TXT]
@@ -25,7 +35,6 @@
 #define C_TERMFG pal[PAL_TERMFG]
 #define C_ERR    pal[PAL_ERR]
 #define C_SEL    pal[PAL_SEL]         /* selected text's background */
-#define C_GRID   pal[PAL_GRID]        /* the desk's grid lines */
 #define C_INK    pal[PAL_INK]         /* text on the accent (a tab, a chosen button) */
 #define C_PANEL  pal[PAL_PANEL]       /* the ground of Settings, the editor's tree and tabs */
 #define C_FIELD  pal[PAL_FIELD]       /* where you type */
@@ -58,7 +67,7 @@ void client_focus(int w, int in);
 int  client_pointer(int w, int x, int y, int buttons, int wheel);  /* 1: it was over (or held from) its insides */
 void client_closed(int w);                            /* the user closed it */
 void client_logout(void);
-void client_theme(void);                              /* the look or the zoom changed: ATW_THEME to each */
+void client_theme(void);                              /* the zoom changed: ATW_THEME to each */
 void atlas_client_show(int w);                        /* (atlas.c) a new window in front; -1: redraw */
 void atlas_client_gone(int w);                        /* (atlas.c) its program ended or closed it */
 int  atlas_client_visible(int w);
@@ -170,9 +179,7 @@ int  atlas_screen(int *w, int *h);                    /* the screen's size -> 1 
 int  atlas_set_size(int w, int h);                    /* 0, or -error (the size stays) */
 void atlas_mouse(int speed, int swap, int reverse);   /* the user's mouse: applied and kept (~/.mouse) */
 void atlas_mouse_get(int *speed, int *swap, int *reverse);
-void atlas_look(int look);                            /* the user's look (draw.h LOOK_...): applied and kept (~/.look) */
-int  atlas_look_get(void);
-void atlas_zoom(int pct);                             /* the size of everything: 50..400 (%), kept with the look */
+void atlas_zoom(int pct);                             /* the size of everything: 50..400 (%), the user's own (~/.look) */
 int  atlas_zoom_get(void);
 int  atlas_uid(void);                                 /* the logged-in user */
 
@@ -228,7 +235,7 @@ void files_wheel(int w);
 /* ---- Icons (icons.c): 12 x 12 pixel maps; the SIEOS cube, 16 x 16. */
 enum { I_TERM, I_SIA, I_FOLDER, I_FILE, I_SETTINGS, I_APP, I_WINDOW, I_PINS, I_GIT, I_MAIL, I_CAM, I_N };
 void icon(int kind, int x, int y, int scale);
-void icon_ink(int kind, int x, int y, int scale);     /* its outline only, in C_BG (on the accent: a tab) */
+void icon_ink(int kind, int x, int y, int scale, int white);   /* its outline only, in C_INK (on the accent: a tab) or white (on clear glass) */
 void logo(int x, int y, int scale);
 
 /* ---- The windows (wm.c): a title tab as wide as the title (close, zoom),
@@ -251,7 +258,7 @@ void logo(int x, int y, int scale);
 #define WM_BODY_DY (WM_STRIP - 48)                    /* wm_body's y0 from the window's top (insides: TBAR + 8 below it) */
 #define ATLAS_ANIM 103                                /* message: the tabs' animation thread -> atlas */
 void wm_init(long atlas_port);                        /* starts the animation's thread */
-int  wm_tick(void);                                   /* ATLAS_ANIM: the next frame -> 1 if a window has just opened (draw all) */
+void wm_tick(void);                                   /* ATLAS_ANIM: the next frame of the tabs that move */
 void wm_reset(void);                                  /* logout: no windows */
 void wm_area(int x0, int y0, int x1, int y1);         /* where windows may go */
 void wm_show(int w);                                  /* on the screen, in front (a new one is placed) */

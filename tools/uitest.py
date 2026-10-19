@@ -4,10 +4,10 @@ ui-test), through QEMU's control socket (QMP): screenshots, keys and the
 mouse, checked against atlas's log lines and against the pixels.
 
   first start (accounts) -> alice's terminal -> uipatch (tests/ui/uipatch.c):
-  a window of exact colour patches; in each look (Phosphor, Amber 1984,
-  Glass, BeOS) every patch pixel is checked to be exactly the program's
-  colour while the window's frame and tab have the look's colours; atlas's
-  full-frame times are collected in each look.
+  a window of exact colour patches: every patch pixel is checked to be
+  exactly the program's colour while the window's frame and tab have the
+  look's accent; atlas's full-frame times are collected. Then uidemo: every
+  widget, its canvas exact before and after the theme changes (the zoom).
 
 Usage: uitest.py <cpus> <screenshots dir> <disk image> <qemu command line...>
 (UI_MEASURE=1: only the frame times, nothing checked.) The test works in a
@@ -17,7 +17,7 @@ Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 """
 import os, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qdesk import Desk, find, count, pixel, look
+from qdesk import Desk, find, count, pixel
 
 cpus, shots, image, cmdline = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
 MEASURE = os.environ.get("UI_MEASURE") == "1"
@@ -27,8 +27,7 @@ d.login(cpus)
 print(f"ok: alice logged in on the desktop ({time.time() - start:.1f} s)")
 
 PATCH = ["ff0000", "00ff00", "0000ff", "ffffff", "000000", "808080", "123456", "fedcba", "4be3c1", "0a0f1c"]
-LOOKS = ["Phosphor", "Amber 1984", "Glass", "BeOS"]
-ACCENT = [look("4be3c1", 0), look("4be3c1", 1), "4be3c1", "ffcb00"]   # each look's accent (a focused frame, its tab)
+ACCENT = "ffc93c"                                 # the look's accent (glass: a focused window's tab)
 
 
 def patches(img, box):
@@ -69,39 +68,26 @@ def frame_times(n):
     return got
 
 
-# ---- another program's window: exact colours in every look
+# ---- another program's window: exact colours
 d.type_text("uipatch\n")
 d.wait("atlas: window 17 opened by pid", 30)
 d.wait("atlas: window 17 shown")
 time.sleep(1.5)
 d.type_text(" ")                                  # (a key to it: atlas logs places as it settles)
 time.sleep(0.6)
-for k in range(4):
-    if k:                                         # the look, from Settings (then closed: the window in front again)
-        d.click_pic(*d.latest("dbapp", "Settings"))
-        d.wait("atlas: settings open", 10)
-        time.sleep(0.4)
-        d.click_pic(*d.latest("set", 100 + k))
-        d.wait(f"atlas: look {k}", 10)
-        d.keys("ctrl", "w")
-        d.wait("atlas: settings closed", 10)
-        time.sleep(0.6)
-    x0, y0, x1, y1 = d.window(17)
-    d.mouse_to(1900, 1060)                        # (the pointer is atlas's: in the look's colours, away from the patches)
-    time.sleep(0.3)
-    img = d.shot(f"0{k}-patches-{LOOKS[k].split()[0].lower()}")
-    frames[LOOKS[k]] = frame_times(8)
-    if MEASURE:
-        continue
+x0, y0, x1, y1 = d.window(17)
+d.mouse_to(1900, 1060)                            # (the pointer is atlas's: away from the patches)
+time.sleep(0.3)
+img = d.shot("00-patches")
+frames["Glass"] = frame_times(8)
+if not MEASURE:
     at, why = patches(img, (x0, y0, x1, y1))
     if not at:
-        d.fail(f"{LOOKS[k]}: uipatch's pixels are not as it drew them: {why}")
+        d.fail(f"uipatch's pixels are not as it drew them: {why}")
     tab = (x0 - 6, y0 - 40, x1 + 6, at[1] - 1)      # its tab, the strip above its insides, the frame's top
-    if count(img, ACCENT[k], tab, 1) < 20:
-        d.fail(f"{LOOKS[k]}: the window's frame or tab does not have the look ({ACCENT[k]})")
-    if k < 2 and count(img, "4be3c1", tab, 1):
-        d.fail(f"{LOOKS[k]}: the frame shows atlas's own colours untinted")
-    print(f"ok: {LOOKS[k]}: uipatch's 10 patches exact (64000 pixels), its frame in the look's colours ({ACCENT[k]})")
+    if count(img, ACCENT, tab, 1) < 20:
+        d.fail(f"the window's tab does not have the look's accent ({ACCENT})")
+    print(f"ok: uipatch's 10 patches exact (64000 pixels), its tab in the look's accent ({ACCENT})")
 
 for name, t in frames.items():
     t = sorted(t)
@@ -113,7 +99,7 @@ if MEASURE:
     print(f"PASS ({time.time() - start:.0f} s)")
     sys.exit(0)
 
-# ---- the toolkit: uidemo, every widget (looks: BeOS now, then Phosphor)
+# ---- the toolkit: uidemo, every widget
 d.type_text("uidemo -v\n")
 d.wait("atlas: window 17 opened by pid", 30)
 d.wait("uidemo: ready", 10)
@@ -133,13 +119,13 @@ def at(name):
     return ox + x, oy + y
 
 
-img = d.shot("10-uidemo-beos")
+img = d.shot("10-uidemo")
 box = d.window(17)
-for rgb, what in (("ffcb00", "BeOS's accent (the focused frame, a check box)"), ("dedede", "BeOS's grey (buttons, the ground)"),
-                  ("000000", "BeOS's black text")):
+for rgb, what in ((ACCENT, "the accent (the focused tab, a check box)"), ("d9e0f2", "the buttons' face"),
+                  ("fbfcff", "the ground"), ("1a2238", "the text")):
     if count(img, rgb, box) < 30:
-        d.fail(f"uidemo in BeOS: no {what} ({rgb})")
-print("ok: uidemo drawn in BeOS's colours (its accent, grey, black text)")
+        d.fail(f"uidemo: no {what} ({rgb})")
+print("ok: uidemo drawn in the desktop's colours (its accent, buttons, ground, text)")
 
 # a click on a button
 d.click(*at("button"))
@@ -201,7 +187,7 @@ d.wait("uidemo: menu Open", 10)
 d.keys("esc")
 d.wait("uidemo: no file", 10)
 
-# the canvas (View, The canvas: Ctrl+G): the program's pixels exact, in BeOS, then in Phosphor (changed live)
+# the canvas (View, The canvas: Ctrl+G): the program's pixels exact, before and after the theme changed live (the zoom)
 def canvas_exact(name):
     img = d.shot(name)
     x0, y0, x1, y1 = d.window(17)
@@ -223,23 +209,27 @@ d.wait("uidemo: menu Canvas", 10)
 time.sleep(0.6)
 d.mouse_to(1900, 1060)
 time.sleep(0.3)
-canvas_exact("14-uidemo-canvas-beos")
-d.click_pic(*d.latest("dbapp", "Settings"))      # Phosphor, from Settings
+canvas_exact("14-uidemo-canvas")
+d.click_pic(*d.latest("dbapp", "Settings"))      # everything at 200%, then 100% again, from Settings
 d.wait("atlas: settings open", 10)
 time.sleep(0.4)
-d.click_pic(*d.latest("set", 100))
-d.wait("atlas: look 0", 10)
+d.click_pic(*d.latest("set", 115))
+d.wait("atlas: zoom 200%", 10)
+d.wait("uidemo: theme 0", 10)
+time.sleep(1.0)
+d.click(*(v * 1.5 for v in d.latest("set", 112)))  # (the picture at 200%: 1.5 screen pixels each)
+d.wait("atlas: zoom 100%", 10)
 d.wait("uidemo: theme 0", 10)
 d.keys("ctrl", "w")
 d.wait("atlas: settings closed", 10)
 time.sleep(0.8)
 d.mouse_to(1900, 1060)
 time.sleep(0.3)
-img = canvas_exact("15-uidemo-canvas-phosphor")
+img = canvas_exact("15-uidemo-canvas-again")
 box = d.window(17)
-if count(img, look("4be3c1", 0), box) < 30 or count(img, "dedede", box) > 10:
-    d.fail("uidemo did not follow the look to Phosphor (its accent in phosphor green, no BeOS grey left)")
-print("ok: uidemo: the canvas's 6 x 6000 pixels exact in BeOS and in Phosphor; the widgets restyled live to Phosphor")
+if count(img, ACCENT, box) < 30 or count(img, "fbfcff", box) < 30:
+    d.fail("uidemo lost the desktop's colours after the theme changed")
+print("ok: uidemo: the canvas's 6 x 6000 pixels exact, before and after the theme changed live (200% and back)")
 d.keys("ctrl", "q")
 d.wait("uidemo: menu Quit", 10)
 d.wait("atlas: dbg frame", 10)                    # (the desk settled without it: its window is gone)

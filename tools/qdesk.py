@@ -195,14 +195,3 @@ def count(img, rgb, box, step=2):
                 n += 1
     return n
 
-
-def look(rgb, kind=0, scan=False):
-    """A colour atlas draws -> what the screen shows in look `kind` (draw.c)."""
-    if kind in (2, 3):
-        return rgb
-    r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
-    v = min(255, ((r * 77 + g * 150 + b * 29) >> 8) * 5 // 4)
-    if scan:
-        v = v * (140 + 116 * v // 255) // 256 if kind == 0 else v * (180 + 76 * v // 255) // 256
-    t = (0x46, 0xff, 0x7a) if kind == 0 else (0xff, 0xb0, 0x38)
-    return "".join(f"{c * v // 255:02x}" for c in t)

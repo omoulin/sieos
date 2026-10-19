@@ -206,7 +206,7 @@ These screens differ from one to the next: set wrong, the text reads only
 when looked at from the side. Set it once with select, minus and plus.
 
 Scrolled back, a bar on the right says where, and new lines do not move
-what is shown. The backlight is phosphor green, like the desktop; a
+what is shown. The backlight is amber, like the desktop's accent; a
 touched button lights. The last 32 KiB of the log are kept (about 1000
 screen lines), from the very start of the boot.
 

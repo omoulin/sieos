@@ -67,7 +67,7 @@ static int inset(int y, int y0, int y1, int r)   /* how far row y of a box with 
 }
 static int radius(ui_app *a, int r, int x0, int y0, int x1, int y1)
 {
-    if (a->th.radius < 12 && r > a->th.radius) r = a->th.radius;   /* (Amber: square; BeOS: almost, as atlas draws) */
+    if (r > a->th.radius) r = a->th.radius;
     if (r > (x1 - x0) / 2) r = (x1 - x0) / 2;
     if (r > (y1 - y0) / 2) r = (y1 - y0) / 2;
     return r;
@@ -172,20 +172,20 @@ void ui_icon(ui_app *a, int icon, int cx, int cy, uint32_t c)
             if (icons[icon][r] & 0x100 >> b) ui_fill(a, x0 + b * s, y0 + r * s, x0 + b * s + s, y0 + r * s + s, c);
 }
 
-/* ---- The theme: atlas's, or the dark one when there is no desktop to ask. */
+/* ---- The theme: atlas's, or its colours when there is no desktop to ask. */
 static void theme_load(ui_app *a)
 {
     atlas_theme_t t;
-    static const uint32_t dark[ATT_N] = { 0x0a0f1c, 0x141a28, 0x2a3245, 0x4be3c1, 0xe6ecf5, 0x8fa0b8, 0x262e40, 0x070b14, 0x9fe8c8,
-                                          0xff9b8a, 0x1d5a52, 0x111829, 0x0a0f1c, 0x0a0f1c, 0x0a0f1c, 0x0a0f1c, 0x4be3c1 };
+    static const uint32_t frost[ATT_N] = { 0x34478f, 0xbfc6de, 0xb9c1d6, 0xffc93c, 0x1a2238, 0x4a5470, 0xd9e0f2, 0xfbfcff, 0x1a2238,
+                                           0xc8322a, 0xbcd0f7, 0x3a4a8c, 0x2a1d00, 0xf3f5fa, 0xffffff, 0x2a3350, 0x8a5200 };   /* (draw.c's, as shown) */
     memset(&t, 0, sizeof t);
     if (ui_sys_call(ATLAS_WIN_THEME, (uint64_t)a->win, 0, 0, 0, 0, &t, sizeof t) < 0 || t.size < sizeof t) {
-        t.look = UI_LOOK_GLASS; t.zoom = (uint16_t)(a->zoom ? a->zoom : 100); t.radius = 12; t.text = 98304 * t.zoom / 100;
-        memcpy(t.pal, dark, sizeof dark);
+        t.look = UI_LOOK_FROST; t.zoom = (uint16_t)(a->zoom ? a->zoom : 100); t.radius = 12; t.text = 98304 * t.zoom / 100;
+        memcpy(t.pal, frost, sizeof frost);
     }
     ui_theme *h = &a->th;
     h->look = t.look; h->zoom = t.zoom; h->radius = t.radius;
-    h->bg = t.pal[ATT_GLASS]; h->panel = t.pal[ATT_PANEL]; h->face = t.pal[ATT_GLASS]; h->line = t.pal[ATT_LINE];
+    h->bg = t.pal[ATT_TERM]; h->panel = t.pal[ATT_PANEL]; h->face = t.pal[ATT_BAR]; h->line = t.pal[ATT_LINE];
     h->accent = t.pal[ATT_ACC]; h->ink = t.pal[ATT_INK]; h->text = t.pal[ATT_TXT]; h->dim = t.pal[ATT_DIM];
     h->field = t.pal[ATT_FIELD]; h->sel = t.pal[ATT_SEL]; h->err = t.pal[ATT_ERR]; h->acctext = t.pal[ATT_ACCT];
     h->list = t.pal[ATT_TERM]; h->chosen = t.pal[ATT_BAR];

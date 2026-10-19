@@ -123,12 +123,6 @@ def count(img, rgb, box):
                 n += 1
     return n
 
-def look(rgb):
-    """What Phosphor (the default look) makes of one of atlas's colours, on a row that is not a scanline (draw.c)."""
-    r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
-    v = min(255, ((r * 77 + g * 150 + b * 29) >> 8) * 5 // 4)
-    return "".join(f"{c * v // 255:02x}" for c in (0x46, 0xff, 0x7a))
-
 def window(w):
     """The last place logged for window w (picture) -> its box in screen pixels."""
     pump(0.3)
@@ -219,8 +213,8 @@ print("ok: web: an address typed in the toolbar (Ctrl-L: the toolkit's text fiel
 x0, y0, x1, y1 = window(17)
 img = shot("21b-web-toolbar")
 bar = (x0 + 4, y0 + 34 * ZOOM, x1 - 4, y0 + 34 * ZOOM + 38)    # the toolbar (the UI toolkit's): in the look's colours
-if count(img, look("2a3245"), bar) < 40 or count(img, "2a3245", bar):
-    fail("the toolbar is not in Phosphor's colours (its edges)")
+if count(img, "b9c1d6", bar) < 40:
+    fail("the toolbar is not in the desktop's colours (its edges)")
 click((x0 + 2 * ZOOM + 20) / ZOOM, (y0 + 34 * ZOOM + 20) / ZOOM)   # the toolbar's back button (its insides: 2 and 34 in; the button 5..35)
 until("the basic page again", lambda img: page_shown(img, ("ff0000", "00ff00", "0000ff")))
 print("ok: web: back (the toolkit's toolbar), the toolbar in the look's colours, the page in its own")

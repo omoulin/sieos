@@ -193,7 +193,7 @@ void files_draw(int x0, int y0, int x1, int y1, int focused)
         int i = scroll + r, y = ly + 4 + r * ROW;
         fent_t *e = &ent[i];
         if (i == sel) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_SEL);
-        else if (r & 1) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_GLASS);
+        else if (r & 1) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_PANEL);
         size_t l = strlen(e->name);
         int app = !e->dir && l > 4 && !strcmp(e->name + l - 4, ".app");
         icon(e->dir ? I_FOLDER : app ? I_APP : I_FILE, x0 + 16, y + 4, 2);

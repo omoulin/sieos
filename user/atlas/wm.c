@@ -6,7 +6,7 @@
  *   │ ▣ Terminal 2   □  x │  the tab: as wide as its title, on the window's
  *   ├─────────────────────┴──────┐  top left: the app's icon, the title; □ zooms
  *   │ (title when sunk)   80 x 25 │  (the whole desk, again: back), x closes; drag it to move,
- *   │   the window (dark glass)  │  double-click it to minimize, right-click
+ *   │  the window (glass)         │  double-click it to minimize, right-click
  *   │                        ⟋⟋⟋ │  for the window's menu. The grip (or an
  *   └────────────────────────────┘  edge) resizes.
  *
@@ -14,9 +14,7 @@
  * overshoot), in the accent colour; the others' sink back into it (170 ms),
  * leaving their title in the strip at the window's top. The tab is drawn
  * before the window's glass, so only what rose above the frame shows. A
- * thread ticks every 16 ms only while a tab moves, or while a new window
- * opens: a bright line at its middle that widens, then opens to its full
- * height (160 ms, a CRT powering on; not under Glass, nor at 300% and up).
+ * thread ticks every 16 ms only while a tab moves.
  *
  * A window may go past the screen's bottom and sides; its tab never leaves
  * the screen (past the left side, the tab slides to stay on it). Each
@@ -29,11 +27,12 @@
 #include "atlas.h"
 
 #define MINW 360                         /* the smallest window */
-#define OPEN_MS 160                      /* a new window's opening */
 #define MINH 200
 #define BOX 20                           /* the tab's close and zoom boxes */
 #define TAB_L 44                         /* the tab: its icon, before the title */
 #define TAB_R (16 + BOX + 8 + BOX + 12)  /* ... zoom and close, after it */
+#define RIM 10                           /* the glass around a window's sides and bottom */
+#define MARGIN 32                        /* what its rim and shadow reach beyond it */
 
 typedef struct {
     int known, ws, min, max;             /* placed once; its workspace; minimized; zoomed */
@@ -42,7 +41,6 @@ typedef struct {
     int r_from, r_to;                    /* the tab: rising (to TAB_H) or sinking (to 0) ... */
     uint64_t r_t0;                       /* ... since then (0: at rest) */
     int was;                             /* moved at the last tick: one more redraw */
-    uint64_t o_t0;                       /* opening since then (0: open) */
 } wwin_t;
 static wwin_t ww[WM_MAX];
 static int z[WM_MAX], nz;                /* the stacking order, back to front */
@@ -137,7 +135,7 @@ void wm_area(int x0, int y0, int x1, int y1)
 }
 static void damage(const wwin_t *v)                   /* redraw what a window covers (its tab too) */
 {
-    redraw_box((v->x0 < 0 ? 0 : v->x0) - 12, v->y0 - TAB_H - 12, v->x1 + 12, v->y1 + 12);
+    redraw_box((v->x0 < 0 ? 0 : v->x0) - MARGIN, v->y0 - TAB_H - 12, v->x1 + MARGIN, v->y1 + MARGIN);
 }
 
 /* ---- The stacking order. */
@@ -165,7 +163,6 @@ static void place(int w)
     v->known = 1; v->min = v->max = 0; v->ws = cws;
     v->r_from = v->r_to = 0; v->r_t0 = 0;
     clamp(w);
-    if (draw_look_get() != LOOK_GLASS && draw_zoom_get() < 147456) { v->o_t0 = sys_clock(); kick(); }   /* (it opens) */
 }
 
 /* ---- What atlas asks for. */
@@ -280,7 +277,7 @@ void wm_motion(int x, int y)
     clamp(dg.w);
     int a = old.x0 < v->x0 ? old.x0 : v->x0, b = old.y0 < v->y0 ? old.y0 : v->y0;
     int c = old.x1 > v->x1 ? old.x1 : v->x1, d = old.y1 > v->y1 ? old.y1 : v->y1;
-    redraw_box((a < 0 ? 0 : a) - 12, b - TAB_H - 12, c + 12, d + 12);   /* where it was and where it is */
+    redraw_box((a < 0 ? 0 : a) - MARGIN, b - TAB_H - 12, c + MARGIN, d + MARGIN);   /* where it was and where it is */
 }
 void wm_drop(void)
 {
@@ -307,17 +304,16 @@ static void draw_one(int w, int f, int keys)
 {
     wwin_t *v = &ww[w];
     int x0 = v->x0, y0 = v->y0, x1 = v->x1, y1 = v->y1, t = tab_w(w), tx = tab_x(w), r = rise(v);
-    int op = v->o_t0 ? prog(v->o_t0, OPEN_MS) : 1024;
     char title[64];
     wm_title(w, title, sizeof title);
     int n = strlen(title), up = r >= TAB_H / 2;          /* (half out: it is the tab; else the strip) */
     /* the tab, before the glass: only what rose above the frame shows */
-    if (r > 0 && op >= 1024) {
+    if (r > 0) {
         int ty = y0 - r;
         dl_rect(tx, ty, tx + t, y0 + 12, 10, C_ACC);
         if (up) hitbox(tx, ty, tx + t, y0, H_WTAB, w);    /* (before its boxes: they win) */
         int cx = tx + t - 12 - BOX, zx = cx - 8 - BOX;   /* (close at the end, zoom before it) */
-        icon_ink(wm_icon(w), tx + 14, ty + 5, 2);
+        icon_ink(wm_icon(w), tx + 14, ty + 5, 2, 0);
         dl_text(tx + TAB_L, ty + 6, title, n, S(2), C_INK, tx + TAB_L - 2, ty, zx - 12, y0);
         dl_text(tx + TAB_L + 1, ty + 6, title, n, S(2), C_INK, tx + TAB_L - 2, ty, zx - 12, y0);   /* (bold) */
         box(cx, ty + 7, 0, C_INK, H_WMBTN, w * 4 + 2, up);
@@ -328,37 +324,32 @@ static void draw_one(int w, int f, int keys)
         say("atlas: dbg wclose %d at %d %d\n", w, tx + t - 12 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
         say("atlas: dbg wzoom %d at %d %d\n", w, tx + t - 12 - BOX - 8 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
     }
-    if (op < 1024) {                                     /* opening: a line that widens, then opens to full height */
-        int cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, a = op < 360 ? op * 1024 / 360 : 1024, b = op < 360 ? 0 : (op - 360) * 1024 / 664;
-        a = 1024 - ((1024 - a) * (1024 - a) >> 10); b = 1024 - ((1024 - b) * (1024 - b) >> 10);   /* (eased out) */
-        int hw = (x1 - x0) / 2 * a / 1024 + 2, hh = (y1 - y0) / 2 * b / 1024 + 2;
-        if (b) { dl_rect(cx - hw, cy - hh, cx + hw, cy + hh, 6, C_GLASS); dl_frame(cx - hw, cy - hh, cx + hw, cy + hh, 6, 2, C_ACC); }
-        dl_rect(cx - hw, cy - 2, cx + hw, cy + 2, 0, C_TXT);   /* (the beam) */
-        hitbox(x0, y0, x1, y1, H_WIN, w);
-        if (atlas_debug) say("atlas: dbg window %d at %d %d %d %d\n", w, x0, y0, x1, y1);
-        return;
+    /* its shadow, soft: three steps a little wider each, below its glass (within damage()'s MARGIN) */
+    for (int k = 3; k >= 1; k--)
+        dl_shadow(x0 - RIM - 3 * k + 3, y0 + 2 * k + 3, x1 + RIM + 3 * k - 3, y1 + RIM + 4 * k, 18 + 3 * k, 3, x0 - RIM + 6, y0, x1 + RIM - 6, y1 + RIM - 6);
+    /* the window: a slab of clear glass, its strip at the top and a rim at
+       its sides and bottom, curving in under its top corners; its ground
+       under the insides (the glass is not worked out there: they cover it).
+       A terminal: no ground, its insides are glass too (smoked: atlas.c) */
+    if (w < W_CLIENT0 - 9) dl_glass(x0 - RIM, y0, x1 + RIM, y1 + RIM, 18, C_CLEAR, x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2);
+    else {
+        dl_glass(x0 - RIM, y0, x1 + RIM, y1 + RIM, 18, C_CLEAR, x0, y0 + WM_STRIP, x1, y1 - 12);
+        dl_rect(x0, y0 + WM_STRIP, x1, y1 - 12, 0, C_PANEL);
+        dl_rect(x0, y1 - 24, x1, y1, 12, C_PANEL);
     }
-    /* its shadow: two hard steps down and to the right (a printed look, no blur) */
-    dl_shade(x0 + 8, y0 + 8, x1 + 8, y1 + 8, 12, 1);
-    dl_shade(x0 + 4, y0 + 4, x1 + 4, y1 + 4, 12, 1);
-    dl_frame(x0 - 3, y0 - 3, x1 + 3, y1 + 3, 15, 3, C_GAP);   /* (a dark gap around it: overlapping windows stay apart) */
-    /* the window: its glass, its frame, the strip at its top */
-    dl_rect(x0, y0, x1, y1, 12, C_GLASS);
-    dl_frame(x0, y0, x1, y1, 12, f ? 2 : 1, f ? C_ACC : C_LINE);
     if (r > 0) dl_rect(tx + 2, y0, tx + t - 2, y0 + 2, 0, C_ACC);   /* (the tab joins it) */
     hitbox(x0, y0, x1, y1, H_WIN, w);
     if (!up) {                                           /* sunk: the title in the strip, a handle to move it */
-        dl_text(tx + 22, y0 + 6, title, n, S(2), C_DIM, x0 + 2, y0, x1 - 20, y0 + WM_STRIP);
+        dl_text(tx + 22, y0 + 6, title, n, S(2), C_GTXT, x0 + 2, y0, x1 - 20, y0 + WM_STRIP);
         hitbox(x0 + 8, y0 + 3, x1 - 8, y0 + WM_STRIP, H_WTAB, w);
     } else {                                             /* up: the strip says more */
         char info[64];
         wm_info(w, info, sizeof info);
         int k = strlen(info);
-        if (k) dl_text(x1 - 22 - text_w(k, SS), y0 + 8, info, k, SS, C_DIM, x0 + 20, y0, x1 - 20, y0 + WM_STRIP);
+        if (k) dl_text(x1 - 22 - text_w(k, SS), y0 + 8, info, k, SS, C_GTXT, x0 + 20, y0, x1 - 20, y0 + WM_STRIP);
     }
-    dl_rect(x0 + 1, y0 + WM_STRIP - 1, x1 - 1, y0 + WM_STRIP, 0, C_LINE);
     wm_body(w, x0, y0 + WM_BODY_DY, x1, y1, keys);
-    if (!f && w < W_CLIENT0) dl_shade(x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2, 10, 1);   /* (behind: its insides dimmed, the focused one stands
+    if (!f && w < W_CLIENT0) dl_shade(x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2, 10, 3);   /* (behind: its insides dimmed a little, the focused one stands
                                                          out; another program's insides stay as it drew them) */
     /* the grip: three short diagonals in the bottom-right corner */
     for (int i = 0; i < 3; i++)
@@ -405,18 +396,11 @@ void wm_draw(int focus, int keys)
 
 /* ATLAS_ANIM: the next frame of the tabs that move (only around their
  * strip); the ticks stop when all rest. */
-int wm_tick(void)
+void wm_tick(void)
 {
-    int any = 0, opened = 0;
+    int any = 0;
     for (int w = 0; w < WM_MAX; w++) {
         wwin_t *v = &ww[w];
-        if (v->known && v->o_t0) {                       /* opening: the whole window, each frame */
-            int done = prog(v->o_t0, OPEN_MS) >= 1024;
-            if (done) { v->o_t0 = 0; opened = 1; }       /* (open: the caller draws it all, once) */
-            else if (shown(w)) damage(v);
-            any |= !done || v->r_t0;
-            continue;
-        }
         if (!v->known || (!v->r_t0 && !v->was)) continue;
         int moving = v->r_t0 != 0;
         if (shown(w)) redraw_box(tab_x(w) - 4, v->y0 - TAB_H - 12, v->x1 + 4, v->y0 + WM_STRIP + 2);
@@ -425,5 +409,4 @@ int wm_tick(void)
         any |= moving;
     }
     if (!any) ticking = 0;
-    return opened;
 }

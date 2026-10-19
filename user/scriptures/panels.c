@@ -274,15 +274,6 @@ void popover_click(const zone_t *z, int ctrl)
     }
 }
 
-/* A monochrome look shows the colours only as brightness: their initials tell them apart. */
-static void swatch_letter(int x, int y, int s, int i)
-{
-    if (draw_look_get() != LOOK_PHOSPHOR && draw_look_get() != LOOK_AMBER) return;
-    static const char *init[8] = { "Y", "G", "B", "R", "V", "O", "P", "W" };   /* (V: violet, W: white-grey) */
-    int px = s * 55 / 100, w = text_w(init[i], 1, F_BOLD, px);
-    draw_text(x + (s - w) / 2, y + (s - px) / 2 + font_ascent(px) - U(1), init[i], 1, F_BOLD, px, C_TXT);
-}
-
 static void card(int x0, int y0, int x1, int y1)
 {
     draw_shade(x0 + U(4), y0 + U(6), x1 + U(4), y1 + U(8), U(10), 1);
@@ -327,7 +318,6 @@ void draw_popover(void)
             int hov = hovered(x, cy, x + s, cy + s);
             draw_rect(x, cy, x + s, cy + s, s / 2, hl_color(i));
             draw_frame(x, cy, x + s, cy + s, s / 2, hov ? 2 : 1, hov ? C_ACC : C_LINE);
-            swatch_letter(x, cy, s, i);
             zone(x, cy, x + s, cy + s, Z_SWATCH, i, NULL, CUR_HAND);
             x += s + gap;
         }
@@ -473,7 +463,6 @@ static void draw_note_dialog(void)
         int on = A.note_color == i, hov = hovered(x, y, x + s, y + s);
         draw_rect(x, y, x + s, y + s, s / 2, i < 0 ? C_FIELD : hl_color(i));
         draw_frame(x, y, x + s, y + s, s / 2, on ? 3 : 1, on ? C_ACC : hov ? C_TXT : C_LINE);
-        if (i >= 0) swatch_letter(x, y, s, i);
         if (i < 0) draw_text(x + U(8), y + U(20), "∅", 3, F_REG, U(14), C_DIM);
         zone(x, y, x + s, y + s, Z_N_SWATCH, i, NULL, CUR_HAND);
         x += s + U(8);
@@ -547,18 +536,10 @@ static void draw_settings(void)
     draw_clip(x0 + lw + 1, y0 + 1, x1 - 1, y1 - 1);
     switch (A.section) {
     case SEC_LOOK: {
-        label(cx, y, "LOOK");
-        y += U(22);
-        int x = cx;
-        for (int i = 0; i < NLOOK; i++) x = ui_button(x, y, bh, LOOK_NAMES[i], draw_look_get() == i ? BTN_ON : BTN_PLAIN, Z_S_LOOK, i, NULL) + U(8);
-        y += bh + U(8);
-        y += ui_wrap(cx, y, cx1 - cx, draw_look_get() == LOOK_PHOSPHOR ? "A green monitor: scanlines, glowing text, a darker tube towards the corners (Atlas's look)."
-                     : draw_look_get() == LOOK_AMBER ? "The same in amber, with square corners and a grid of dots."
-                     : draw_look_get() == LOOK_GLASS ? "The colours as drawn." : "BeOS R5's colours.", F_REG, ui_small(), C_DIM, 0) + U(18);
         label(cx, y, "SIZE OF EVERYTHING");
         y += U(22);
         static const int sizes[] = { 75, 90, 100, 115, 125, 150, 175, 200 };
-        x = cx;
+        int x = cx;
         int cur = setting_int("size", 100);
         for (int i = 0; i < COUNT(sizes); i++) {
             char s[8];
@@ -664,7 +645,7 @@ static void draw_settings(void)
         ui_text(cx, y, "Scriptures " VERSION, F_BOLD, ui_title(), C_ACCT);
         y += U(34);
         y += ui_wrap(cx, y, cx1 - cx, "Read the scriptures offline, with footnotes, search, highlights and notes synced with your "
-                     "Church Account. In C, drawn as SIEOS Atlas draws (its Phosphor look), for SIEOS later.", F_REG, px, C_TXT, 0) + U(10);
+                     "Church Account. In C, drawn as SIEOS Atlas draws (its look), for SIEOS later.", F_REG, px, C_TXT, 0) + U(10);
         y += ui_wrap(cx, y, cx1 - cx, "Scripture text and study helps © Intellectual Reserve, Inc., downloaded from "
                      "churchofjesuschrist.org for personal study.", F_REG, ui_small(), C_DIM, 0) + U(18);
         label(cx, y, "KEYS");
@@ -745,7 +726,6 @@ void dialog_click(const zone_t *z, int clicks)
         } else if (z->p == &A.cookie && *field_str(&A.cookie)) { connect_with(field_str(&A.cookie), ""); field_set(&A.cookie, ""); }
         break;
     case Z_S_SECTION: A.section = z->a; A.focus = NULL; A.confirm_push = 0; break;
-    case Z_S_LOOK: draw_look(z->a); setting_set_int("look", z->a); break;
     case Z_S_SIZE: {
         int base = UI_S * 100 / MAX(1, setting_int("size", 100));
         A.reader_px = A.reader_px * z->a / MAX(1, setting_int("size", 100));

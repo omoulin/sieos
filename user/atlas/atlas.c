@@ -472,7 +472,7 @@ static int hit_at(int x, int y)                          /* the topmost box at (
 int pill(int x, int y, const char *s, int on, int kind, int arg)
 {
     int w = tw(strlen(s), 2) + 28;
-    dl_rect(x, y, x + w, y + 42, 21, on ? C_ACC : C_GLASS);
+    dl_rect(x, y, x + w, y + 42, 21, on ? C_ACC : C_FIELD);
     dl_frame(x, y, x + w, y + 42, 21, 1, on ? C_ACC : C_LINE);
     dl_text(x + 14, y + 10, s, strlen(s), S(2), on ? C_INK : C_TXT, 0, 0, SW, SH);
     if (kind) hitbox(x, y, x + w, y + 42, kind, arg);
@@ -585,7 +585,7 @@ static void draw_term_body(int ti, int x0, int y0, int x1, int y1, int f)
 {
     term_t *t = &terms[ti];
     term_resize(t, (x1 - x0 - 28) / KW, (y1 - y0 - TBAR - 16) / KH);
-    dl_rect(x0 + 2, y0 + TBAR, x1 - 2, y1 - 2, 0, C_TERM);
+    dl_rect(x0 + 2, y0 + TBAR, x1 - 2, y1 - 2, 0, C_SMOKE);   /* (smoked glass) */
     uint64_t first = t->top - t->back;                   /* the line shown at the top */
     for (int r = 0; r < t->rows; r++) {
         uint64_t l = first + r;
@@ -595,16 +595,16 @@ static void draw_term_body(int ti, int x0, int y0, int x1, int y1, int f)
                 if (!selected(ti, l, c)) continue;
                 int e = c;
                 while (e + 1 < t->cols && selected(ti, l, e + 1)) e++;
-                dl_rect(x0 + 14 + c * KW, ty, x0 + 14 + (e + 1) * KW, ty + KH, 0, C_SEL);
+                dl_rect(x0 + 14 + c * KW, ty, x0 + 14 + (e + 1) * KW, ty + KH, 0, C_WASH);
                 c = e;
             }
         const char *tl = tline(t, l);
         int n = t->cols;
         while (n && tl[n - 1] == ' ') n--;               /* (blank ends cost nothing to draw) */
-        if (n) dl_text(x0 + 14, ty, tl, n, S(K), C_TERMFG, x0, y0, x1 - 4, y1 - 4);
+        if (n) dl_text(x0 + 14, ty, tl, n, S(K), C_SMOKEFG, x0, y0, x1 - 4, y1 - 4);
     }
     if (f && !t->back)                                   /* the cursor */
-        dl_rect(x0 + 14 + t->cx * KW, y0 + TBAR + 8 + t->cy * KH, x0 + 14 + t->cx * KW + KW - 2, y0 + TBAR + 6 + (t->cy + 1) * KH, 0, C_TERMFG);
+        dl_rect(x0 + 14 + t->cx * KW, y0 + TBAR + 8 + t->cy * KH, x0 + 14 + t->cx * KW + KW - 2, y0 + TBAR + 6 + (t->cy + 1) * KH, 0, C_SMOKEFG);
     hitbox(x0, y0 + TBAR, x1, y1, H_WIN, ti);
 }
 
@@ -630,62 +630,58 @@ static void clock_text(char *ck)
 static void draw_deskbar(void)
 {
     int x0 = DBX, y0 = M, x1 = DBX + DBW, y1 = M + db_h();
-    dl_rect(x0, y0, x1, y1, 14, C_GLASS);
-    dl_frame(x0, y0, x1, y1, 14, 1, C_LINE);
+    dl_rect(x0, y0, x1, y1, 16, C_CLEAR);
     hitbox(x0, y0, x1, y1, H_DESK, -1);
     int menu_open = mn.on && mn.win == -2;               /* the menu row: the cube, SIEOS */
-    if (menu_open || (ptr_x >= x0 && ptr_x < x1 && ptr_y >= y0 && ptr_y < y0 + DB_MENU)) dl_rect(x0 + 6, y0 + 6, x1 - 6, y0 + DB_MENU - 4, 10, C_BAR);
+    if (menu_open || (ptr_x >= x0 && ptr_x < x1 && ptr_y >= y0 && ptr_y < y0 + DB_MENU)) dl_rect(x0 + 6, y0 + 6, x1 - 6, y0 + DB_MENU - 4, 10, C_WASH);
     logo(x0 + 16, y0 + 10, 2);
-    bold(x0 + 60, y0 + 15, "SIEOS", C_TXT, x1);
-    label(x1 - 34, y0 + 15, "v", 2, C_DIM);
+    bold(x0 + 60, y0 + 15, "SIEOS", C_GTXT, x1);
+    label(x1 - 34, y0 + 15, "v", 2, C_GDIM);
     hitbox(x0 + 6, y0 + 6, x1 - 6, y0 + DB_MENU - 4, H_DBMENU, 0);
     if (atlas_debug) say("atlas: dbg dbmenu at %d %d\n", x0 + 100, y0 + DB_MENU / 2);
     int ty = y0 + DB_MENU;                               /* the tray */
-    dl_rect(x0 + 10, ty, x1 - 10, ty + 1, 0, C_LINE);
+    dl_rect(x0 + 8, ty + 3, x1 - 8, ty + DB_TRAY - 3, 10, C_CELL);
     char st[48], ck[8];
     panel_status(st, sizeof st);
     clock_text(ck);
     {                                                    /* sia's state: a dot (lit when sia runs), then the words */
         int idle = !strcmp(st, "sia: idle");
-        dl_rect(x0 + 18, ty + 15, x0 + 28, ty + 25, 5, idle ? C_LINE : C_ACC);
-        dl_text(x0 + 38, ty + 9, st, strlen(st), S(2), idle ? C_DIM : C_TXT, 0, 0, atlas_power.flags & ACPI_BAT ? x1 - 66 - text_w(5, ST) : x1 - 100, SH);
+        dl_rect(x0 + 18, ty + 15, x0 + 28, ty + 25, 5, idle ? C_GDIM : C_ACC);
+        dl_text(x0 + 38, ty + 9, st, strlen(st), S(2), C_GTXT, 0, 0, atlas_power.flags & ACPI_BAT ? x1 - 66 - text_w(5, ST) : x1 - 100, SH);
     }
-    dl_text(x1 - 16 - text_w(5, ST), ty + 6, ck, 5, ST, C_TXT, 0, 0, SW, SH);   /* (title size) */
+    dl_text(x1 - 16 - text_w(5, ST), ty + 6, ck, 5, ST, C_GTXT, 0, 0, SW, SH);   /* (title size) */
     if (atlas_power.flags & ACPI_BAT) {                  /* the battery: its outline, filled as charged */
         int bx = x1 - 30 - text_w(5, ST) - 24, by = ty + 14, pc = atlas_power.percent < 0 ? 0 : atlas_power.percent;
-        uint32_t c = atlas_power.flags & ACPI_CHARGING ? C_ACC : pc < 15 ? C_ERR : C_TXT;
+        uint32_t c = atlas_power.flags & ACPI_CHARGING ? C_ACC : pc < 15 ? C_ERR : C_GTXT;
         dl_frame(bx, by, bx + 22, by + 12, 2, 1, c);
         dl_rect(bx + 22, by + 4, bx + 25, by + 8, 0, c);
         dl_rect(bx + 2, by + 2, bx + 2 + 18 * pc / 100, by + 10, 0, c);
     }
     int ry = ty + DB_TRAY;                               /* the apps */
-    dl_rect(x0 + 10, ry, x1 - 10, ry + 1, 0, C_LINE);
     for (int k = 0; k < NDB; k++) {
         int y = ry + 4 + k * DB_ROW, run = db_running(k);
-        if (ptr_x >= x0 && ptr_x < x1 && ptr_y >= y && ptr_y < y + DB_ROW) dl_rect(x0 + 6, y, x1 - 6, y + DB_ROW - 2, 8, C_BAR);
-        icon(dbapps[k].icon, x0 + 14, y + 7, 2);
+        if (ptr_x >= x0 && ptr_x < x1 && ptr_y >= y && ptr_y < y + DB_ROW) dl_rect(x0 + 6, y, x1 - 6, y + DB_ROW - 2, 10, C_WASH);
+        icon_ink(dbapps[k].icon, x0 + 14, y + 7, 2, 1);
         if (run) {                                       /* running: bold, a lit dot (and how many terminals) */
-            bold(x0 + 50, y + 8, dbapps[k].name, C_TXT, x1 - 50);
+            bold(x0 + 50, y + 8, dbapps[k].name, C_GTXT, x1 - 50);
             dl_rect(x1 - 30, y + 14, x1 - 18, y + 26, 6, C_ACC);
             if (dbapps[k].act == A_TERM) {
                 int nt = 0;
                 for (int t = 0; t < MAXTERM; t++) nt += terms[t].used;
                 char c[4];
-                if (nt > 1) { c[num(c, nt)] = 0; dl_text(x1 - 38 - text_w(strlen(c), SS), y + 11, c, strlen(c), SS, C_DIM, 0, 0, SW, SH); }
+                if (nt > 1) { c[num(c, nt)] = 0; dl_text(x1 - 38 - text_w(strlen(c), SS), y + 11, c, strlen(c), SS, C_GDIM, 0, 0, SW, SH); }
             }
-        } else label(x0 + 50, y + 8, dbapps[k].name, 2, C_DIM);
+        } else label(x0 + 50, y + 8, dbapps[k].name, 2, C_GDIM);
         hitbox(x0 + 6, y, x1 - 6, y + DB_ROW - 2, H_DBAPP, k);
         if (atlas_debug) say("atlas: dbg dbapp %s at %d %d\n", dbapps[k].name, x0 + 120, y + DB_ROW / 2);
     }
     int wy = ry + 8 + NDB * DB_ROW, cw = (DBW - 20 - 3 * 8) / WM_NWS;   /* the workspaces */
-    dl_rect(x0 + 10, wy - 2, x1 - 10, wy - 1, 0, C_LINE);
     for (int k = 0; k < WM_NWS; k++) {
         int cx = x0 + 10 + k * (cw + 8), on = k == wm_workspace();
         char d[2] = { (char)('1' + k), 0 };
-        dl_rect(cx, wy + 6, cx + cw, wy + 40, 6, C_PANEL);   /* a cell: its windows, small (the current one outlined) */
+        dl_rect(cx, wy + 6, cx + cw, wy + 40, 8, on ? C_ACC : C_CELL);   /* a cell: its windows, small (the current one amber) */
         wm_minimap(k, cx + 22, wy + 11, cx + cw - 5, wy + 35, on ? C_DIM : C_LINE, C_TXT);
-        dl_frame(cx, wy + 6, cx + cw, wy + 40, 6, on ? 2 : 1, on ? C_ACC : C_LINE);
-        dl_text(cx + 6, wy + 9, d, 1, SS, on ? C_ACCT : C_DIM, 0, 0, SW, SH);
+        dl_text(cx + 6, wy + 9, d, 1, SS, on ? C_INK : C_GTXT, 0, 0, SW, SH);
         hitbox(cx, wy + 6, cx + cw, wy + 40, H_DBWS, k);
         if (atlas_debug) say("atlas: dbg ws %d at %d %d\n", k + 1, cx + cw / 2, wy + 23);
     }
@@ -695,33 +691,37 @@ static void draw_deskbar(void)
 static void draw_strip(void)
 {
     int x0 = M, y0 = M, x1 = STX1, y1 = STY1;
-    dl_rect(x0, y0, x1, y1, 24, C_GLASS);
-    dl_frame(x0, y0, x1, y1, 24, strip_on ? 2 : 1, strip_on ? C_ACC : C_LINE);
+    dl_rect(x0, y0, x1, y1, (y1 - y0) / 2, C_CLEAR);
+    if (strip_on) dl_frame(x0, y0, x1, y1, (y1 - y0) / 2, 2, C_GTXT);
     hitbox(x0, y0, x1, y1, H_STRIP, 0);
     if (atlas_debug) say("atlas: dbg strip at %d %d\n", (x0 + x1) / 2, (y0 + y1) / 2);
-    bold(x0 + 24, y0 + 13, "sia", C_ACCT, x1);
-    int qx = x0 + 24 + tw(3, 2) + 24;
-    dl_rect(qx - 12, y0 + 10, qx - 11, y1 - 10, 0, C_LINE);
+    dl_rect(x0 + 6, y0 + 6, x0 + 42 + tw(3, 2), y1 - 6, (y1 - y0 - 12) / 2, C_ACC);   /* (sia: an amber chip) */
+    bold(x0 + 24, y0 + 13, "sia", C_INK, x1);
+    int qx = x0 + 24 + tw(3, 2) + 32;
     const char *net = port_find("net") > 0 ? "network" : "network: off";
     int nx = x1 - 24 - tw(strlen(net), 2);
-    if (nx > qx + 400) label(nx, y0 + 13, net, 2, C_DIM); else nx = x1 - 20;
-    if (query[0]) dl_text(qx, y0 + 13, query, strlen(query), S(2), C_TXT, x0, y0, nx - 20, y1);
-    else label(qx, y0 + 13, strip_on ? "a file, an app, or a question" : "Ask sia, open a file, run an app...  Ctrl+Space", 2, C_DIM);
+    if (nx > qx + 400) label(nx, y0 + 13, net, 2, C_GTXT); else nx = x1 - 20;
+    if (!query[0] && !strip_on && nx > qx + 700) {        /* the keys, a chip before it */
+        int kx = nx - 20 - text_w(10, SS) - 20;
+        dl_rect(kx, y0 + 9, nx - 20, y1 - 9, 6, C_CELL);
+        dl_text(kx + 10, y0 + 15, "Ctrl+Space", 10, SS, C_GTXT, 0, 0, SW, SH);
+    }
+    if (query[0]) dl_text(qx, y0 + 13, query, strlen(query), S(2), C_GTXT, x0, y0, nx - 20, y1);
+    else label(qx, y0 + 13, strip_on ? "a file, an app, or a question" : "Ask sia, open a file, run an app...", 2, C_GTXT);
     if (strip_on) { int cw = tw(strlen(query), 2); dl_rect(qx + 2 + cw, y0 + 11, qx + 12 + cw, y0 + 35, 0, C_ACC); }
     int tx = bt_ask ? pill(pill(x0 + 24, y1 + 6, "Accept", 1, H_BTASK, 1) + 12, y1 + 6, "Decline", 0, H_BTASK, 0) + 20 : x0 + 24;
-    if (toast[0]) dl_text(tx, y1 + 6 + 10 * bt_ask, toast, strlen(toast), S(2), C_ACCT, 0, 0, x1, SH);
+    if (toast[0]) dl_text(tx, y1 + 6 + 10 * bt_ask, toast, strlen(toast), S(2), C_ACC, 0, 0, x1, SH);   /* (on the desk) */
     if (!strip_on || (!nres && !nfound)) return;
     int rx1 = x0 + 900 < x1 ? x0 + 900 : x1, y = y1 + 6, last = 0, h = 16;
     for (int i = 0; i < nres; i++) h += 46 + (res[i].kind != last ? 32 : 0), last = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
     if (nfound > nres) h += 40;
     dl_rect(x0, y, rx1, y + h, 16, C_GLASS);
-    dl_frame(x0, y, rx1, y + h, 16, 1, C_ACC);
     y += 8; last = 0;
     static const char *grp[5] = { "", "FILES", "APPS", "APPS", "ASK SIA" };
     for (int i = 0; i < nres; i++) {
         int g = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
         if (g != last) { label(x0 + 26, y + 8, grp[g], 2, C_DIM); y += 32; last = g; }
-        dl_rect(x0 + 10, y, rx1 - 10, y + 42, 10, i == 0 ? C_BAR : C_GLASS);
+        if (i == 0) dl_rect(x0 + 10, y, rx1 - 10, y + 42, 10, C_BAR);
         char t[96] = "", w[48] = "";
         int ic = I_FILE;
         if (res[i].kind == R_FILE) strlcpy(t, items[res[i].i].name, sizeof t);
@@ -744,7 +744,6 @@ static void draw_menu(void)
     if (!mn.on) return;
     int h = menu_h(), y = mn.y + 8;
     dl_rect(mn.x, mn.y, mn.x + mn.w, mn.y + h, 12, C_GLASS);
-    dl_frame(mn.x, mn.y, mn.x + mn.w, mn.y + h, 12, 2, C_ACC);
     for (int i = 0; i < mn.n; i++) {
         if (mn.e[i].act == A_SEP) { dl_rect(mn.x + 14, y + MENSEP / 2, mn.x + mn.w - 14, y + MENSEP / 2 + 1, 0, C_LINE); y += MENSEP; continue; }
         if (i == mn.hover) dl_rect(mn.x + 6, y, mn.x + mn.w - 6, y + MENH, 8, C_BAR);
@@ -797,7 +796,7 @@ static void build(void)
 {
     dl_reset();
     nhit = 0;
-    dl_grid(0, 0, 40, C_BG, C_GRID);
+    dl_desk();
     if (mode == GREETER) { draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
     hitbox(0, 0, SW, SH, H_DESK, 0);                     /* (the desk itself: its menu) */
     tidy();
@@ -901,10 +900,9 @@ static int conf_num(const char *text, const char *key, int def)   /* "key=N" in 
     }
     return def;
 }
-/* The look (draw.c) and the zoom: the user's own (~/.look), Phosphor at
- * 100% before a login. 100% is 0.75 screen pixels per picture pixel. */
+/* The zoom: the user's own (~/.look), 100% before a login. 100% is 0.75
+ * screen pixels per picture pixel. */
 static int zoom_pct = 100;
-int atlas_look_get(void) { return draw_look_get(); }
 int atlas_zoom_get(void) { return zoom_pct; }
 static void zoom_apply(int pct)
 {
@@ -918,21 +916,11 @@ static void look_save(void)
 {
     char path[96], line[32], *p = line;
     strlcpy(path + strlcpy(path, home, sizeof path), "/.look", 7);
-    p += strlcpy(p, "look=", 6); p += num(p, draw_look_get());
-    p += strlcpy(p, "\nzoom=", 7); p += num(p, zoom_pct); *p++ = '\n'; *p = 0;
+    p += strlcpy(p, "zoom=", 6); p += num(p, zoom_pct); *p++ = '\n'; *p = 0;
     if (uid >= 0 && atlas_may(home, 1)) {
         long f = fs_open(path, FS_WRONLY | FS_CREAT | FS_TRUNC, 0644);
         if (f >= 0) { fs_write(f, 0, line, strlen(line)); fs_close(f); fs_chown(path, uid, ugid); }
     }
-}
-void atlas_look(int k)
-{
-    if (k < 0 || k >= NLOOK) return;
-    draw_look(k);
-    look_save();
-    say("atlas: look %d\n", k);
-    redraw();
-    client_theme();
 }
 void atlas_zoom(int pct)
 {
@@ -945,19 +933,17 @@ void atlas_zoom(int pct)
 }
 static void look_load(void)
 {
-    int k = LOOK_PHOSPHOR, z = 100;
+    int z = 100;
     if (uid >= 0) {
         char path[96];
         size_t n = 0;
         strlcpy(path + strlcpy(path, home, sizeof path), "/.look", 7);
         char *f = atlas_may(path, 0) ? file_get(path, &n) : 0;
         if (f) {
-            int v = conf_num(f, "look", k); k = v >= 0 && v < NLOOK ? v : k;
-            v = conf_num(f, "zoom", z); z = v >= 50 && v <= 400 ? v : z;
+            int v = conf_num(f, "zoom", z); z = v >= 50 && v <= 400 ? v : z;
             free(f);
         }
     }
-    draw_look(k);
     if (z != zoom_pct) zoom_apply(z);
 }
 
@@ -1846,7 +1832,6 @@ int main(int argc, char **argv)
         return 0;
     }
     draw_init(&scr);
-    draw_look(LOOK_PHOSPHOR);                           /* (the user's own at login) */
     geometry();
     ptr_x = SW / 2; ptr_y = SH / 2;
     say("atlas: screen: %s, %d x %d\n", scr.name, PW, PH);
@@ -1891,7 +1876,7 @@ int main(int argc, char **argv)
             while ((pid = sys_wait(-1, &st, WAIT_NOHANG)) > 0) {
                 for (int t = 0; t < MAXTERM; t++)
                     if (terms[t].used && terms[t].pid == pid) { close_term(&terms[t]); closed = 1; }
-                if (repo_ended(pid, st) && mode == SESSION && repo_on) redraw();
+                if (repo_ended(pid, st) && mode == SESSION && repo_on) settle();   /* (new rows to click: their places logged) */
                 if (inst_ended(pid, st) && mode == SESSION && inst_on) settle();
                 mail_ended(pid);                         /* (or Mail's helper) */
             }
@@ -1944,7 +1929,7 @@ int main(int argc, char **argv)
         }
         if (m.pid == self && m.w[0] == ATLAS_ANIM) {     /* the next frame of the tabs that move */
             reply_val(from, 0);
-            if (mode == SESSION && wm_tick()) settle();   /* (a window has opened: all of it, its places logged) */
+            if (mode == SESSION) wm_tick();
             continue;
         }
         if (m.pid == self && m.w[0] == ATLAS_ACPI && m.rlen == sizeof(acpi_status_t)) {

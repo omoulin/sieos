@@ -1,7 +1,7 @@
 /*
  * uipatch (make ui-test): a window of another program (mk/atlas.h) that
  * draws exact colour patches, to check that atlas shows a program's pixels
- * as it drew them in every look (no tint, no scanlines, no dimming).
+ * as it drew them (no tint, no glass, no dimming).
  * Ten patches of 80 x 80 in two rows, from (20, 20), 100 apart, on a grey
  * 0x404040 ground; their colours are below. It logs "uipatch: drawn W x H"
  * after each frame. 'q' or the window's close ends it.

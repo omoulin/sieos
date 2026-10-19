@@ -375,7 +375,7 @@ static struct { short m, start, len, act; } row[MAXROW];
 static int chip(int x, int y, int ic, const char *s, int kind, int arg)
 {
     int w = 44 + tw(strlen(s), 2) + 16;
-    dl_rect(x, y, x + w, y + 42, 21, C_GLASS);
+    dl_rect(x, y, x + w, y + 42, 21, C_FIELD);
     dl_frame(x, y, x + w, y + 42, 21, 1, C_ACC);
     icon(ic, x + 14, y + 9, 2);
     dl_text(x + 44, y + 10, s, strlen(s), S(2), C_TXT, 0, 0, SW, SH);

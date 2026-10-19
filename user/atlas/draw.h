@@ -33,10 +33,14 @@ long rtc_seconds(void);            /* the time of day in seconds (UTC), or -1: n
 
 void draw_init(const screen_t *s);
 void dl_reset(void);                /* start a new picture */
-void dl_grid(int ox, int oy, int step, uint32_t bg, uint32_t line);
-void dl_rect(int x0, int y0, int x1, int y1, int r, uint32_t c);           /* filled, corner radius r */
+void dl_desk(void);                 /* the desk: its colours, the whole screen */
+void dl_rect(int x0, int y0, int x1, int y1, int r, uint32_t c);           /* filled, corner radius r (c FROST | tint: glass; GLOSS: glossy) */
+void dl_glass(int x0, int y0, int x1, int y1, int r, uint32_t c, int hx0, int hy0, int hx1, int hy1);   /* glass (c FROST),
+                                       not worked out in the hole (what will cover it: a window's insides) */
 void dl_frame(int x0, int y0, int x1, int y1, int r, int t, uint32_t c);   /* outline, t pixels thick */
-void dl_shade(int x0, int y0, int x1, int y1, int r, int k);               /* darken what is under it: k 1 to 3/4, 2 to 1/2 */
+void dl_shade(int x0, int y0, int x1, int y1, int r, int k);               /* darken what is under it: k 1 to 3/4, 2 to 1/2, 3 to 7/8 */
+void dl_shadow(int x0, int y0, int x1, int y1, int r, int k, int hx0, int hy0, int hx1, int hy1);   /* the same, k 3, but not
+                                       in the hole (what will cover it: a window over its own shadow) */
 /* Text. Its size is a 16.16 fixed-point scale (S(2): twice the font's
  * 6 x 11 pixels), any value, so text grows smoothly with the zoom. */
 #define S(n) ((n) << 16)
@@ -50,21 +54,25 @@ void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *
 void dl_image(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h);   /* w x h pixels (0x00RRGGBB, rows
                                        one after the other) stretched into the box; not copied: they must stay */
 void dl_client(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h, int raw);   /* the same; raw: another
-                                       program's pixels, shown as they are in every look (no tint, no scanlines) */
+                                       program's pixels, shown as they are (a shadow darkens them, nothing tints them) */
 void dl_pointer(int x, int y);      /* where the mouse pointer is drawn (on top of everything) */
 void present(int x0, int y0, int x1, int y1);   /* draw this region of the picture on the screen (picture coordinates) */
 void present_pointer(int ox, int oy, int x, int y);   /* the pointer moved from (ox, oy): both places */
-/* The look (draw.c): how the picture's colours reach the screen. */
-enum { LOOK_PHOSPHOR, LOOK_AMBER, LOOK_GLASS, LOOK_BEOS, NLOOK };
-/* The colours the desktop draws in (atlas.h's C_...): BeOS has its own,
- * every other look the desktop's dark ones. */
+/* The colours the desktop draws in (atlas.h's C_...), the look's: glass.
+ * A colour with FROST is glass of that tint (dl_rect, dl_glass): what is
+ * behind it shows through, blurred, the tint laid over it by its ALPHA. A
+ * fill or an outline with an ALPHA (and no FROST) is laid over what is
+ * there, unblurred: see-through. */
+#define FROST 0x02000000u
+#define GLOSS 0x04000000u           /* (a solid fill with glass's light: the accent) */
+#define ALPHA(k) ((uint32_t)(k) << 27)   /* k/32 of the colour (1 to 31) */
+#define ALPHA_M 0xf8000000u
+#define ALPHA_OF(c) ((int)((c) >> 27))
 enum { PAL_BG, PAL_GLASS, PAL_LINE, PAL_ACC, PAL_TXT, PAL_DIM, PAL_BAR, PAL_TERM, PAL_TERMFG, PAL_ERR,
-       PAL_SEL, PAL_GRID, PAL_INK, PAL_PANEL, PAL_FIELD, PAL_GAP, PAL_ACCT, NPAL };
+       PAL_SEL, PAL_GRID, PAL_INK, PAL_PANEL, PAL_FIELD, PAL_GAP, PAL_ACCT,
+       PAL_CLEAR, PAL_GTXT, PAL_GDIM, PAL_GLINE, PAL_WASH, PAL_CELL, PAL_SMOKE, PAL_SMOKEFG, NPAL };
 extern uint32_t pal[NPAL];
-void draw_look(int look);
-int  draw_look_get(void);
-uint32_t draw_shown(uint32_t c);    /* a colour as the look shows it (a row that is not a scanline) */
-int  draw_radius(int r);            /* a corner's radius in the look (Amber: square) */
+uint32_t draw_shown(uint32_t c);    /* a colour as it shows on the screen (glass: over the desk's middle) */
 /* The zoom, 16.16: screen pixels per picture pixel (65536: 1:1). Then
  * redraw everything (SW and SH change). */
 void draw_zoom(int z);

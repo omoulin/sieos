@@ -3,7 +3,7 @@
 Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 
 The desktop (`user/atlas/`, the program `/bin/atlas`) is laid out as
-BeOS's was, in SIEOS's own colours: windows with a **title tab** as wide
+BeOS's was, in glass: windows with a **title tab** as wide
 as their title, the **Deskbar** at the top right, **4 workspaces**, and
 the **sia strip** at the top left to find a file, start an app or ask the
 assistant. (It replaces the older "Stage" desktop of projects, a stage and
@@ -18,7 +18,7 @@ a shelf.)
  │ ▣ Terminal 1   □  x  │  the tab: icon, title, zoom, close   │ sia                  │ bold, with >)
  ├──────────────────────┴─────────┐                            │ Files                │
  │                                │                            │ Text editor          │
- │  a window (dark glass)         │                            │ Settings             │
+ │  a window (glass)              │                            │ Settings             │
  │                            ⟋⟋⟋ │  the grip: resize          │ [1] [2] [3] [4]      │ workspaces
  └────────────────────────────────┘                            └──────────────────────┘
 ```
@@ -39,15 +39,11 @@ a shelf.)
   the small size. Drag the tab to move the
   window; **double-click** it to minimize; right-click it for the window's
   menu: *Minimize*, *Zoom*, *Send to workspace N*, *Close*.
-- **Opening:** a new window powers on like a CRT: a bright line at its
-  middle that widens, then opens to its full height (160 ms, on the tabs'
-  animation thread; not under Glass, nor at 300% and up, where a whole
-  window each frame costs too much on a Pi).
-- **Depth:** each window has a hard shadow down and to the right (two
-  steps, a printed look rather than a blur) and a thin dark gap around its
-  frame, so overlapping windows stay apart; the insides of every window
-  but the focused one are dimmed to three quarters (not another
-  program's: those are shown as the program drew them).
+- **Depth:** each window sits in a **rim of glass** (10 pixels at its
+  sides and bottom, curving in under its top corners) and casts a soft
+  shadow below it (three shades, a little wider each, no blur); the
+  insides of every window but the focused one are dimmed by an eighth
+  (not another program's: those are shown as the program drew them).
 - **Resize** with the grip (bottom right) or any edge; the smallest is
   360 x 200. New windows go down and to the right of the front one, so
   every tab stays in view; sia opens on the right. Each kind opens at a
@@ -203,7 +199,7 @@ one filled), wrapped onto more rows when the window is narrow:
 | Section | What | Kept in |
 |---|---|---|
 | Screen | the size: 1280 x 720, 1366 x 768, 1600 x 900, 1920 x 1080, 2560 x 1440 where the screen can take any (QEMU's VGA and ramfb, the Pi 4, whose firmware scales the picture to the monitor, the laptop's Intel display, which also offers its panel's own size and the panel's **brightness**). It changes at once and **goes back by itself after 15 s** unless you press *Keep*, so a monitor that cannot show it is never a dead end. A firmware's fixed screen (UEFI, the Pi 5) shows its size. | `/etc/display.conf` (the login screen too) |
-| Look | **Phosphor** (the default: a green monitor, with scanlines and glowing text), **Amber 1984** (amber, square corners, a grid of dots), **Glass** (the desktop's own colours) or **BeOS** (BeOS R5's colours: the blue desk, grey windows and panels, the yellow tab, black text, white fields and lists); the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% | `~/.look`, applied at your login (the login screen: Phosphor, 100%) |
+| Look | the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% (the look itself is glass, the only one) | `~/.look`, applied at your login (the login screen: 100%) |
 | Mouse | pointer speed (Slow, Normal, Fast, Faster), right- or left-handed buttons, the wheel normal or reversed | `~/.mouse`, applied at your login |
 | Sound | the volume: Mute, 25%, 50%, 75%, 100%; the output (Speakers or a monitor with sound, shown when there is one) ([audio.md](audio.md)) | the audio server, until a reboot |
 | Keyboard | shown only where the USB server drives a keyboard light (the Legion's, [usb-stack.md](usb-stack.md#the-keyboard-light)): Off, Low, High, and a colour (White, Red, Orange, Green, Cyan, Blue, Purple; a colour picked while off turns it on) | `/etc/kblight`, given to the keyboard at each start |
@@ -221,43 +217,55 @@ so a machine without a Wi-Fi chip shows "No Wi-Fi on this machine." and the
 desktop never waits for a server that will not come. *Scan* and *Join*
 block the desktop for the few seconds the chip takes.
 
-The looks are made where the picture reaches the screen (`draw.c`): the
-desktop draws in its own colours, and each pixel goes out as its
-brightness in the look's colour (a 256-entry table; a darker table for
-the scanline rows, every third row in Phosphor, every fourth in Amber).
-The scanlines **bloom**, as a CRT's beam spot grows with its intensity:
-the brighter a pixel, the less its scanline row darkens it (Phosphor:
-black loses 45%, full brightness almost nothing; Amber: 30% to nothing),
-so lines show on the dark desk and in dim text, while filled buttons and
-the focused tab stay solid and readable.
-Text glows: a dim halo beside each stroke. The desk itself darkens
-towards its corners, as a curved tube does (a vignette on the grid's
-pixels only: windows are untouched). Amber also squares the
-corners and draws the grid as dots. Nothing else in the desktop knows
-about looks, so icons, terminals and new windows follow by themselves.
+**The look is glass** (`draw.c`). The desk is a deep navy lit by five
+wide glows, all blues (no rainbow), worked out once at 1/16 of the
+screen when the screen is set up (8.5 thousand points at 1920 x 1080,
+33 KiB) and smoothed to each pixel as it is drawn. Glass shows what is
+**behind** it, the desk or another window, blurred (about 12 pixels)
+and 1.7 times as vivid, its tint laid over it by an alpha: **clear**
+glass (a fifth white: the sia strip, the Deskbar, a window's frame and
+strip), with white text and white icons on it; **milky** glass (menus,
+the strip's results, cards), with dark text; **smoked** glass (a
+terminal's insides), with light text. Each has a light edge and a bright
+line just inside its top; the accent is solid amber with that line (the
+tab, the chosen buttons, the current workspace, the "sia" chip). The
+chosen row, the workspaces and the tray on clear glass are see-through
+white over it. Only the focused window's **tab** is amber: no frame
+around it. Everything else is in the palette's own colours: light panels
+and lists, dark text.
 
-**Other programs' insides keep their own colours.** A look is atlas's
+How: the screen is still drawn in strips (128 rows) with no second
+full-screen picture. A strip with glass in it is drawn with 40 rows and
+columns more around it (kept in the strip buffer, not shown), so glass
+can see what is under its edges; the blur is worked out at a quarter of
+the screen's size (4 x 4 pixels' mean, a tent 7 wide each way across
+then down with running sums, spread back between the four nearest), so
+its cost does not grow with its width. What will be hidden under
+something opaque drawn later (a window's insides) is not drawn, and a
+window's glass is not worked out under its insides. The strip buffers
+take about 1.9 MiB. The look costs more than the old ones: a full frame
+at 1920 x 1080 under QEMU on x86-64 (`make ui-test`, a terminal and a
+program's window) takes about 26.7 ms, against 13.0 to 14.7 ms for
+the four older looks (Phosphor, Amber 1984, Glass, BeOS) on the same
+machine.
+
+**Other programs' insides keep their own colours.** The look is atlas's
 own: its frames, tabs, strip, Deskbar, pointer and built-in windows
 (terminals, Files, Settings...). The insides of another program's window
 (a web page, a document) go to the screen exactly as the program drew
-them, in every look: no tint, no scanlines, no glow, no dimming
-(`dl_client` in `draw.c` marks those strip pixels with bit 24, which no
-colour uses, and the look's table is skipped for them: one test per
-pixel, no measurable cost per frame). A shadow or a dimmed backdrop
-falling on them darkens them without tinting them. A program that wants
-the look follows it itself (the toolkit's theme, [ui.md](ui.md));
+them: no tint, no glass, no dimming (`dl_client` in `draw.c` marks those
+strip pixels with bit 24, which no colour uses). A shadow falling on
+them darkens them without tinting them. A program that wants the look
+follows it itself (the toolkit's theme, [ui.md](ui.md): atlas's palette,
+its glass as the solid colour it shows over the desk's middle);
 `make ui-test` checks every pixel of exact colour patches
-(`tests/ui/uipatch.c`) in all four looks, and that the frame around them
-has the look's colours.
+(`tests/ui/uipatch.c`), and that the frame around them has the look's
+colours.
 
-BeOS changes the colours themselves rather than how they reach the
-screen: the desktop draws in a **palette** (`pal[]` in `draw.c`; the
-`C_...` names in `atlas.h` are its entries, by role: the desk, a panel,
-an edge, the accent, text, text on the accent, the accent as text, where
-you type...). Phosphor, Amber and Glass share the dark palette; BeOS has
-its own (and corners of at most 3 pixels), shown as drawn, like Glass.
-Phosphor costs about 30% more per full frame than Glass (5.5 ms instead
-of 4.2 ms at 1920 x 1080 under QEMU on x86-64).
+The desktop draws in a **palette** (`pal[]` in `draw.c`; the `C_...`
+names in `atlas.h` are its entries, by role: the desk, a panel, an
+edge, the accent, text, text on the accent, the accent as text, where
+you type...).
 
 The size works the same way, in `draw.c`: the desktop lays out a picture
 of the screen's size divided by the zoom (at 100%, 0.75 screen pixels per
@@ -343,7 +351,7 @@ the screen's own pixels, says what changed (`ATLAS_WIN_DAMAGE`, answered
 once on the screen) and waits for what the window gets: keys, the pointer
 and its wheel, a new size, focus, the close box. Atlas frames it like its
 own windows (tab, workspaces, zoom, minimize) and shows its insides in
-their own colours whatever the look; at most 8 at once; only the
+their own colours; at most 8 at once; only the
 user logged in may open one. The web browser (`/bin/web`,
 [webkit-plan.md](webkit-plan.md)) is the first, Scriptures
 ([scriptures.md](scriptures.md)) the first written in SIEOS's own C;
@@ -356,9 +364,9 @@ clipboard is the program's too: `ATLAS_WIN_CLIP_GET` reads it (a
 terminal's selection, or what a program put there), `ATLAS_WIN_CLIP_SET`
 sets it (up to 16 KiB). A new size (`ATW_SIZE`) says the desktop's zoom
 in its code (100: normal), so a program can size its text the same.
-`ATLAS_WIN_THEME` gives the desktop's theme (its palette as the look shows
-it, the look, the zoom, how round corners are, the text's size) and
-`ATW_THEME` tells every window when the user changes it: the UI toolkit
+`ATLAS_WIN_THEME` gives the desktop's theme (its palette as it shows on
+the screen, the look, the zoom, how round corners are, the text's size)
+and `ATW_THEME` tells every window when the user changes the zoom: the UI toolkit
 ([ui.md](ui.md)) draws its widgets with it, so a program's buttons and
 menus follow the look while its content keeps its own colours.
 
@@ -485,9 +493,8 @@ The window's thread asks the USB server for frames (port `camera`,
 a back buffer, then tells atlas, which swaps the buffers and draws only
 the picture's box before answering, so a frame is never shown half
 written. The picture is a display-list item of its own (`dl_image`: each
-screen pixel takes the nearest image pixel, through the look like
-everything else of atlas's own; another program's window is the same item,
-marked to bypass the look). Closing the window closes the camera, which powers
+screen pixel takes the nearest image pixel; another program's window is
+the same item, marked so that a shadow darkens it without tinting it). Closing the window closes the camera, which powers
 down. atlas: +6.4 KB of code.
 
 ## How it works
@@ -510,7 +517,7 @@ between processes.
 | `files.c`, `edit.c`, `panel.c`, `settings.c`, `mail.c` | the windows' insides: Files, the editor, sia, Settings, Mail |
 | `icons.c` | the icons (12 x 12 pixel maps; their outline alone on a tab) and the SIEOS cube (16 x 16) |
 | `setup.c` | the first start on the screen (the accounts) |
-| `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `screen.c`, `igfx.c` | drawing (and the looks), the fonts, the screen (and the laptop's Intel display) |
+| `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `screen.c`, `igfx.c` | drawing (and the look: the desk, the glass), the fonts, the screen (and the laptop's Intel display) |
 
 - **The screen** (`screen.c`): x86, QEMU's standard VGA card or the UEFI
   firmware's screen (GOP); on the target laptop's Intel display (Raptor
@@ -637,8 +644,8 @@ app, Esc, a question to the stand-in sia; the answer's buttons; Stop);
 Camera ("No camera." under QEMU; a .ppm made in the terminal, opened from
 the strip, its pixels checked on the screen);
 Settings: pointer speed and left-handed buttons (kept in `~/.mouse`), the
-looks (Amber 1984, Glass, Phosphor again: checked on the screen's pixels,
-scanlines included; kept in `~/.look`), everything at 200% and back (a
+look (glass: the desk's colours and the amber accent checked on
+the screen's pixels), everything at 200% and back (kept in `~/.look`; a
 click lands at both), the
 screen at 1600 x 900 (kept), 1366 x 768 then *Go back*, 1920 x 1080
 again, sia online (a wrong root password refused) and local again; atlas

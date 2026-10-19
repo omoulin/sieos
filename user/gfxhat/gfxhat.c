@@ -13,7 +13,7 @@
  * one set wrong reads only from the side); select again: the backlight
  * off / on.
  * Scrolled back, a bar on the right says where; new lines then do not move
- * what is shown. The backlight is phosphor green, like the desktop.
+ * what is shown. The backlight is amber, like the desktop's accent.
  *
  * The HAT: an ST7567 screen on SPI0 (chip select 0; GPIO 6: data or
  * command, GPIO 5: reset), an SN3218 LED driver for the backlight (I2C1,
@@ -237,7 +237,7 @@ static void backlight(int on)
     uint8_t b[19] = { 0x01 };               /* the 18 channels' brightness, from register 1 */
     for (int i = 0; i < 6; i++) {
         uint8_t *c = &b[1 + zone[i] * 3];
-        c[0] = on ? 24 : 0; c[1] = on ? 150 : 0; c[2] = on ? 40 : 0;   /* blue, green, red: phosphor green */
+        c[0] = on ? 12 : 0; c[1] = on ? 100 : 0; c[2] = on ? 170 : 0;   /* blue, green, red: the desktop's amber */
     }
     i2c_go(LED, b, sizeof b, 0);
     reg_w(LED, 0x16, 0xff);                 /* (shows them) */

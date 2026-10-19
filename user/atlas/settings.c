@@ -10,8 +10,7 @@
  *              panel's brightness (the Intel display). Kept in /etc/display.conf.
  *   Power      (laptops: the ACPI server) the battery; the lid closed: the
  *              screen off, or sleep. Kept in /etc/display.conf (lid=).
- *   Look       Phosphor (a green monitor), Amber 1984, Glass or BeOS (draw.c),
- *              and the size of everything, 50% to 400% (draw.c's zoom):
+ *   Look       the size of everything, 50% to 400% (draw.c's zoom):
  *              the user's own (~/.look), applied at login.
  *   Mouse      the pointer's speed, left- or right-handed buttons, the
  *              wheel's direction: the user's own (~/.mouse), applied at login.
@@ -406,7 +405,7 @@ static void row_label(const char *s)
 static void segment(const char *const *s, int a, int b, int on, int base, const int *xs, const int *ws)
 {
     int x0 = xs[a], x1 = xs[b] + ws[b], y = cy;
-    dl_rect(x0, y, x1, y + 42, 21, C_GLASS);
+    dl_rect(x0, y, x1, y + 42, 21, C_FIELD);
     for (int i = a; i <= b; i++) {
         int x = xs[i], w = ws[i];
         if (i == on) {                                   /* the chosen one: filled, round where the control is */
@@ -511,8 +510,6 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
     }
 
     heading("LOOK");
-    static const char *looks[NLOOK] = { "Phosphor", "Amber 1984", "Glass", "BeOS" };
-    choices("Desktop", looks, NLOOK, atlas_look_get(), S_LOOK);
     static const char *zn[NZOOM] = { "50%", "75%", "100%", "125%", "150%", "200%", "300%", "400%" };
     int zk = -1;
     for (int i = 0; i < NZOOM; i++) if (zooms[i] == atlas_zoom_get()) zk = i;
@@ -696,7 +693,6 @@ int settings_click(int kind, int arg)
     else if (arg >= S_SPEED && arg < S_SPEED + 4) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(speeds[arg - S_SPEED], w, r); }
     else if (arg >= S_HAND && arg < S_HAND + 2) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(s, arg - S_HAND, r); }
     else if (arg >= S_WHEEL && arg < S_WHEEL + 2) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(s, w, arg - S_WHEEL); }
-    else if (arg >= S_LOOK && arg < S_LOOK + NLOOK) atlas_look(arg - S_LOOK);
     else if (arg >= S_ZOOM && arg < S_ZOOM + NZOOM) atlas_zoom(zooms[arg - S_ZOOM]);
     else if (arg >= S_VOL && arg < S_VOL + 5) vol = audio_vol(arg > S_VOL ? 25 * (arg - S_VOL) : AUDIO_MUTE | (vol < 0 ? 80 : vol & 0xFF));
     else if (arg >= S_OUT && arg < S_OUT + nouts) audio_call(AUDIO_OUT, arg - S_OUT);

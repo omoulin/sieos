@@ -41,16 +41,16 @@ enum { UI_KEY_UP = 0x101, UI_KEY_DOWN, UI_KEY_LEFT, UI_KEY_RIGHT, UI_KEY_PGUP, U
 #define UI_CTRL(c) ((c) & 31)                  /* Ctrl+letter: UI_CTRL('o') */
 
 /* The theme: the desktop's look (atlas's palette as it shows on the screen,
- * its corners, its zoom), sent by atlas and again when the user changes it. */
+ * its corners, its zoom), sent by atlas and again when the user changes the zoom. */
 typedef struct {
-    int look, zoom;                            /* UI_LOOK_...; the desktop's size in % (100: normal) */
+    int look, zoom;                            /* UI_LOOK_FROST; the desktop's size in % (100: normal) */
     uint32_t bg, panel, face, line, accent, ink, text, dim, field, sel, err, acctext, list, chosen;
                                                /* the window's ground, bars, a button, edges, the accent, text on it,
                                                   text, dim text, where you type, selected text, an error, the accent
                                                   as text, a list's ground, its chosen row */
-    int radius;                                /* how round corners are (0: square, Amber 1984) */
+    int radius;                                /* how round corners are */
 } ui_theme;
-enum { UI_LOOK_PHOSPHOR, UI_LOOK_AMBER, UI_LOOK_GLASS, UI_LOOK_BEOS };
+enum { UI_LOOK_FROST };
 
 typedef void (*ui_fn)(ui_widget *w, void *data);                        /* an action */
 typedef void (*ui_event_fn)(ui_widget *w, const ui_event *e, void *data);   /* a canvas's input */

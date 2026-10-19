@@ -1,7 +1,7 @@
 # ui.mk - SIEOS's UI toolkit (docs/ui.md) and its tests.
 #
-#   make ui-test    QEMU: other programs' windows in their own colours in
-#                   every look (tests/ui/uipatch.c), the toolkit's widgets
+#   make ui-test    QEMU: other programs' windows in their own colours
+#                   (tests/ui/uipatch.c), the toolkit's widgets
 #
 # Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
 

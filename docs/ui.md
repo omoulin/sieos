@@ -8,7 +8,7 @@ and works from C and C++, from programs built with SIEOS's own compiler and
 library (`libui.a`) and from libposix programs (`libui-posix.a`). The web
 browser's toolbar is made with it; `uidemo` shows every widget.
 
-![uidemo in BeOS](screens/uidemo-beos.png)
+![uidemo](screens/uidemo.png)
 
 ## Concepts
 
@@ -33,16 +33,16 @@ browser's toolbar is made with it; `uidemo` shows every widget.
   the tree clipped to each one, only the widgets they touch, then tells
   atlas which rectangles changed (`ATLAS_WIN_DAMAGE`). Overlays (menus,
   dialogs) are drawn over the tree.
-- **The theme** comes from atlas (`ATLAS_WIN_THEME`): its palette as the
-  current look shows it (Phosphor's greens, Amber's ambers, Glass's and
-  BeOS's colours), its corners (square in Amber 1984, almost square in
-  BeOS), its zoom and text size. When the user changes the look or the
-  zoom, atlas sends `ATW_THEME` to every window: the toolkit fetches the
-  theme again, lays out and repaints everything, then calls the program's
-  `ui_on_theme`. The look's scanlines and glow are atlas's own and are not
+- **The theme** comes from atlas (`ATLAS_WIN_THEME`): its palette as it
+  shows on the screen (glass: light grounds, dark text, the amber
+  accent; the glass as the solid colour it shows over the desk's middle),
+  its corners, its zoom and text size. When the user changes the zoom,
+  atlas sends `ATW_THEME` to every window: the toolkit fetches the theme
+  again, lays out and repaints everything, then calls the program's
+  `ui_on_theme`. The desk seen through glass is atlas's own and is not
   drawn by the toolkit: its widgets take the look's colours and corners.
 - **Content keeps its colours.** Atlas shows a program's pixels exactly as
-  drawn, in every look ([desktop.md](desktop.md)): the toolkit's widgets
+  drawn ([desktop.md](desktop.md)): the toolkit's widgets
   are drawn in the theme's colours, and a **canvas** (`ui_canvas`) holds
   pixels of the program's own, a web page or a document, never themed.
 - **Input**: the pointer goes to the widget under it (the one pressed keeps
@@ -211,26 +211,26 @@ second WebKit view that drew it.
   WebKit's view drawn straight into its pixels (`sieos_toplevel_new_hosted`
   in `user/web/platform`), in its real colours.
 - **Scriptures** (`user/scriptures/`) keeps its upstream core, which has
-  its own widgets and draws atlas's looks itself (`draw.c`, `ui.c`). It
+  its own widgets and draws atlas's look itself (`draw.c`, `ui.c`). It
   could adopt the toolkit in two steps without touching that core: its
   platform layer (`plat_sieos.c`) asks for the theme (`ATLAS_WIN_THEME`)
-  and follows `ATW_THEME` to set its look when the desktop's changes; then
+  and follows `ATW_THEME` when the desktop's zoom changes; then
   its dialogs and settings panels could be toolkit widgets around a canvas
   holding the text it lays out.
 
 ![uidemo's menu, opened from the keyboard](screens/uidemo-menu.png)
 ![uidemo's list and its right-click menu](screens/uidemo-list.png)
-![uidemo's canvas in Phosphor: the widgets green, the pixels exact](screens/uidemo-canvas-phosphor.png)
-![The web browser: the toolkit's toolbar in Phosphor, the page in its own colours](screens/web-toolkit.png)
+![uidemo's canvas: the widgets in the desktop's colours, the pixels exact](screens/uidemo-canvas.png)
+![The web browser: the toolkit's toolbar in the desktop's colours, the page in its own (taken in the old Phosphor look)](screens/web-toolkit.png)
 
 ## Tests
 
 `make ui-test` (`tools/uitest.py`, QEMU): exact colour patches
-(`tests/ui/uipatch.c`) in every look; then `uidemo` drawn in BeOS's
-colours, a click on a button, typing in the field (Enter, Ctrl+A), a menu
+(`tests/ui/uipatch.c`), the frame around them in the look's accent; then
+`uidemo` drawn in the desktop's colours, a click on a button, typing in the field (Enter, Ctrl+A), a menu
 opened and used from the keyboard (F10, Right, Down, Enter) and a shortcut,
 the file dialog opened and cancelled, the list (a click, arrows, its
-right-click menu), the canvas's pixels exact in BeOS and in Phosphor while
+right-click menu), the canvas's pixels exact at 100% and at 200% while
 the widgets restyled live, Quit. `make browser-test` checks the browser's
 toolbar (the address with Ctrl+L, back, the menu's zoom and its shortcut)
 in the look's colours and the pages in their own.
@@ -239,5 +239,5 @@ in the look's colours and the pages in their own.
 
 One window per application; text in printable ASCII (the desktop's
 fonts); no timers (a program that animates runs its own loop with
-`ui_wait` from a thread); the looks' scanlines and glow are not drawn on
-widgets.
+`ui_wait` from a thread); widgets are not glass (the desk does not show
+through a program's window).

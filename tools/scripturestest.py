@@ -192,8 +192,8 @@ def count(png, rgb, box):
     want = bytes.fromhex(rgb)
     x0, y0, x1, y1 = (max(0, int(v)) for v in box)
     return sum(px[(y * w + x) * 3:(y * w + x) * 3 + 3] == want for y in range(y0, min(y1, h), 2) for x in range(x0, min(x1, w), 2))
-def green(png):
-    """Phosphor's bright green in the window's insides (screen pixels), every 2nd pixel."""
+def light(png):
+    """The desktop's light grounds (glass's panels) in the window's insides (screen pixels), every 3rd pixel."""
     x0, y0 = origin[0] * ZOOM, origin[1] * ZOOM
     ppm = os.path.join(shots, "poll.ppm")
     q("screendump", filename=ppm)
@@ -203,7 +203,7 @@ def green(png):
     for y in range(int(y0) + 4, min(int(y0) + frame["h"], h), 3):
         for x in range(int(x0) + 4, min(int(x0) + frame["w"], w), 3):
             r, g, b = px[(y * w + x) * 3:(y * w + x) * 3 + 3]
-            n += g > 120 and g > r + 50 and g > b + 30
+            n += r > 200 and g > 200 and b > 220
     return n
 
 # ---- first start: accounts, alice on the screen and on the serial console
@@ -229,7 +229,7 @@ wait("atlas: window 17 opened by pid", timeout=30)
 f = frame_now(30)
 time.sleep(1); place()
 shot("scr-01-empty")
-if green("") < 400: fail("the window shows little of Phosphor's green")
+if light("") < 400: fail("the window shows little of the desktop's light colours")
 say(f"ok: the window opened ({f['w']} x {f['h']}), the empty library drawn")
 
 # ---- Settings, Library: the standard works (tiny) from the test server

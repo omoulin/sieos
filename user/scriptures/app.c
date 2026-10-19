@@ -9,7 +9,7 @@
  *   │ └─────────────┘ └───────────────────────────────────────────────────┘ │
  *   └──────────────────────────────────────────────────────────────────────┘
  *
- * Drawn in Atlas's looks (draw.c); Phosphor by default.
+ * Drawn in Atlas's look (draw.c).
  */
 #include "app.h"
 #include "font.h"
@@ -572,7 +572,7 @@ static void render(void)
     if (!out) return;
     draw_target(pic, A.W, A.H);
     zones_reset();
-    draw_desk(0, 0, A.W, A.H, U(32));
+    draw_desk(0, 0, A.W, A.H);
     A.top_h = U(44);
     int gap = U(8), y0 = A.top_h, y1 = A.H - gap;
     int sw = MIN(U(300), A.W * 2 / 5), overlay = A.W < U(860);
@@ -1069,7 +1069,6 @@ static void run_script(const char *path, const char *outdir)
             }
         } else if (!strcmp(cmd, "clip")) { const char *t = strchr(line, ' '); plat_clip_set(t ? t + 1 : ""); }
         else if (!strcmp(cmd, "toast")) { printf("toast: %s\n", A.toast); fflush(stdout); }
-        else if (!strcmp(cmd, "look")) { draw_look(atoi(a1)); A.dirty = 1; }
         else if (!strcmp(cmd, "size")) { plat_resize(atoi(a1), atoi(a2)); ev_t w; while (plat_wait(&w, 50)) ; }
         else if (!strcmp(cmd, "quit")) break;
     }
@@ -1088,7 +1087,6 @@ int main(int argc, char **argv)
     int screen = plat_scale();
     UI_S = screen * setting_int("size", 100) / 100;
     if (screen > 100) plat_resize(1240 * screen / 100, 860 * screen / 100);
-    draw_look(setting_int("look", LOOK_PHOSPHOR));
     snprintf(A.lang, sizeof A.lang, "%s", setting("lang", "eng"));
     A.reader_px = setting_int("text_size", 18) * UI_S / 100;
     A.sidebar = setting_int("sidebar", 1);

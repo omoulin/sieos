@@ -257,20 +257,15 @@ def term_pid(chan):
     k = full.rfind(f"atlas: terminal {chan} opened (pid ".encode())
     return int(full[k:].split(b"(pid ")[1].split(b")")[0])
 
-def look(rgb, kind=0, scan=False):
-    """A colour atlas draws -> what the screen shows in look `kind` (0 Phosphor,
-    1 Amber 1984, 2 Glass; draw.c's draw_look), on a row or a scanline row."""
-    if kind == 2:
-        return rgb
-    r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
-    v = min(255, ((r * 77 + g * 150 + b * 29) >> 8) * 5 // 4)
-    if scan:
-        v = v * (140 + 116 * v // 255) // 256 if kind == 0 else v * (180 + 76 * v // 255) // 256   # (bloom)
-    t = (0x46, 0xff, 0x7a) if kind == 0 else (0xff, 0xb0, 0x38)
-    return "".join(f"{c * v // 255:02x}" for c in t)
+# The look: glass (draw.c). Atlas's own colours reach the screen as drawn;
+# the desk is a navy lit by soft blue glows, and glass (the Deskbar, the
+# strip, a window's frame, a terminal) shows what is behind it blurred, so
+# both are many colours rather than one.
+ACC, TERMFG = "ffc93c", "c9d1ec"                    # the accent; a terminal's text (on smoked glass)
 
-RAW = dict(NAVY="0a0f1c", ACC="4be3c1", TERM="070b14", TEXT="e6ecf5", TERMFG="9fe8c8", GLASS="141a28", GRID="111829")
-NAVY, ACC, TERM, TEXT, TERMFG, GLASS, GRID = (look(RAW[k]) for k in ("NAVY", "ACC", "TERM", "TEXT", "TERMFG", "GLASS", "GRID"))   # (Phosphor: the default)
+def soft(img, box, n=100):
+    """The desk (or glass over it) in the box: at least n colours, sampled every 4th pixel."""
+    return len(colours(img, box)) >= n
 
 # ---- first start: the accounts are made on the screen
 start = time.time()
@@ -282,7 +277,7 @@ greeter_us = int(got.split()[0])
 print(f"ok: first start on the screen ({time.time() - start:.2f} s after start, full frame {greeter_us} us)")
 
 img = shot("01-setup-root")
-if not (has_colour(img, NAVY, at_least=10000) and has_colour(img, ACC, (500, 200, 1420, 880), 50)):
+if not (soft(img, (0, 0, 400, 1080)) and has_colour(img, ACC, (500, 200, 1420, 880), 50)):
     fail("the welcome screen does not look right")
 type_text("short\nshort\n")                       # too short: refused, says why
 wait("atlas: setup: not yet: The password needs at least 8 characters.")
@@ -317,7 +312,7 @@ w1 = shown()
 expect("login: ")                                  # the serial console's prompt, now that accounts exist
 time.sleep(0.8)
 img = shot("04-logged-in")
-if not has_colour(img, TERM, at_least=20000) or not has_colour(img, TERMFG, at_least=20) or not has_colour(img, ACC, at_least=50):
+if not has_colour(img, TERMFG, at_least=20) or not has_colour(img, ACC, at_least=50):
     fail("no terminal window after the setup")
 print("ok: accounts made on the screen (root, alice, bob; bad ones refused); alice's first terminal window")
 
@@ -341,8 +336,8 @@ wait("atlas: files: ")
 type_text("tag note.txt topic=notes\n")
 time.sleep(0.5)
 img = shot("05-desktop")
-if not has_colour(img, GRID, at_least=2000) or not has_colour(img, GLASS, (1600, 16, 1904, 400), 200):
-    fail("no desk grid or no Deskbar")
+if not soft(img, (0, 0, 1920, 1080), 300) or not soft(img, (1690, 16, 1904, 300), 60):
+    fail("no desk or no Deskbar (glass)")
 print("ok: note.txt made by alice's shell; the desk and the Deskbar are drawn")
 
 # ---- windows: a second terminal, moved, resized, zoomed, minimized, sent away, closed
@@ -679,7 +674,7 @@ type_text("\n")
 wait("atlas: camera window shows pic.ppm (4 x 1)")
 time.sleep(0.5)
 img = shot("34-camera-ppm")
-if not has_colour(img, look("414243"), at_least=500):
+if not has_colour(img, "414243", at_least=500):
     fail("the picture is not drawn")
 keys("ctrl", "w")
 wait("atlas: camera closed")
@@ -765,36 +760,10 @@ send("cat /home/alice/.mouse")
 expect("speed=150"); expect("swap=0")
 print("ok: Settings: pointer speed Fast, left-handed (then back with the other button), kept in ~/.mouse")
 
-click(*latest("set", "101"))                       # the look: Amber 1984 ...
-wait("atlas: look 1")
-time.sleep(0.5)
-img = shot("27-look-amber")
-if not has_colour(img, look(RAW["ACC"], 1), at_least=50) or has_colour(img, ACC, at_least=50):
-    fail("Amber 1984 is not on the screen")
-settle_log()
-click(*latest("set", "102"))                       # ... Glass: atlas's own colours ...
-wait("atlas: look 2")
-time.sleep(0.5)
-img = shot("28-look-glass")
-if not has_colour(img, RAW["ACC"], at_least=50) or not has_colour(img, RAW["GLASS"], at_least=2000):
-    fail("Glass is not on the screen")
-settle_log()
-click(*latest("set", "103"))                       # ... BeOS: its own colours ...
-wait("atlas: look 3")
-time.sleep(0.4)
-img = shot("28b-look-beos")
-if not has_colour(img, "336698", at_least=2000) or not has_colour(img, "ffcb00", at_least=50) or has_colour(img, RAW["GLASS"], at_least=50):
-    fail("BeOS (its blue desk, its yellow tab) is not on the screen")
-settle_log()
-click(*latest("set", "100"))                       # ... and Phosphor again
-wait("atlas: look 0")
-send("cat /home/alice/.look")
-expect("look=0")
-time.sleep(0.4)
-img = shot("29-look-phosphor")
-if not has_colour(img, ACC, at_least=50) or not has_colour(img, look(RAW["NAVY"], 0, True), at_least=2000):
-    fail("Phosphor (and its scanlines) is not on the screen")
-print("ok: Settings: the look: Amber 1984, Glass, BeOS, then Phosphor again, kept in ~/.look")
+img = shot("27-look")                              # the look: glass, the only one
+if not has_colour(img, ACC, at_least=50) or not soft(img, (0, 0, 1920, 1080), 300) or has_colour(img, "4be3c1", at_least=50):
+    fail("glass (the soft desk, the amber accent) is not on the screen")
+print("ok: Settings: the look is glass (no choice of look)")
 
 settle_log()
 click(*latest("set", "115"))                       # everything at 200% ...
