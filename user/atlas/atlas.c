@@ -623,6 +623,14 @@ static int db_running(int k)
     return win_used(dbapps[k].act == A_SIA ? W_SIA : dbapps[k].act == A_FILES ? W_FILES : dbapps[k].act == A_EDITOR ? W_EDIT : dbapps[k].act == A_PINS ? W_PINS : W_SET);
 }
 static int db_h(void) { return DB_MENU + DB_TRAY + NDB * DB_ROW + DB_WS + 10; }
+int atlas_dock(int w, int *x0, int *y0, int *x1, int *y1)   /* (where a window's ghost flies to and from: wm.c) */
+{
+    int act = w < MAXTERM ? A_TERM : w == W_SIA ? A_SIA : w == W_FILES ? A_FILES : w == W_EDIT ? A_EDITOR : w == W_PINS ? A_PINS : w == W_SET ? A_SETTINGS : -1;
+    *x0 = DBX + 6; *x1 = DBX + DBW - 6; *y0 = M + 6; *y1 = M + DB_MENU - 4;   /* (the menu: the cube) */
+    for (int k = 0; k < NDB; k++)
+        if (dbapps[k].act == act) { *y0 = M + DB_MENU + DB_TRAY + 4 + k * DB_ROW; *y1 = *y0 + DB_ROW - 2; }
+    return 1;
+}
 static void clock_text(char *ck)
 {
     long d = now_day();

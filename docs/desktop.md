@@ -32,6 +32,10 @@ a shelf.)
   (220 ms, a slight overshoot); when another window takes the focus, it
   **sinks** back in (170 ms) and the title stays, dim, in the strip at
   the window's top (drag the strip to move a window that has no tab up).
+  A window opened, minimized or brought back shows where it comes from
+  or goes: a **ghost** of it, a pane of light and its outline, flies
+  between its box and its app's row on the Deskbar (the menu's row for
+  the others) in 200 ms, easing out.
   With the tab up, the strip's right side says more (a terminal's size,
   whether a file is saved, the folder in Files). A thread ticks every
   16 ms only while a tab moves; nothing redraws at rest. **x** closes,

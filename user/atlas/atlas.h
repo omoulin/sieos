@@ -70,6 +70,7 @@ void client_theme(void);                              /* the zoom changed: ATW_T
 void atlas_client_show(int w);                        /* (atlas.c) a new window in front; -1: redraw */
 void atlas_client_gone(int w);                        /* (atlas.c) its program ended or closed it */
 int  atlas_client_visible(int w);
+int  atlas_dock(int w, int *x0, int *y0, int *x1, int *y1);   /* window w's row on the Deskbar (its app's, else the menu's) -> 1 */
 
 /* ---- Click boxes: what a click at (x, y) means; searched from the last. */
 enum { H_BTN = 1, H_WIN, H_STRIP, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,

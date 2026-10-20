@@ -14,7 +14,10 @@
  * overshoot), in the accent colour; the others' sink back into it (170 ms),
  * leaving their title in the strip at the window's top. The tab is drawn
  * before the window's glass, so only what rose above the frame shows. A
- * thread ticks every 16 ms only while a tab moves.
+ * window opened, minimized or brought back shows where it comes from or
+ * goes: a ghost of it (a pane of light, its outline) flies between its box
+ * and its app's row on the Deskbar (200 ms, easing out). A thread ticks
+ * every 16 ms only while a tab or a ghost moves.
  *
  * A window may go past the screen's bottom and sides; its tab never leaves
  * the screen (past the left side, the tab slides to stay on it). Each
@@ -50,6 +53,8 @@ static int focused = -1;                 /* whose tab is up */
 static struct { int on, w, mask, px, py, b[4]; } dg;   /* a move (mask 0) or a resize */
 static long port, anim_tid;
 static volatile int ticking;
+static struct { int on, a[4], b[4], dirty[4]; uint64_t t0; } gh;   /* the ghost: from box a to b; every place it was drawn
+                                                       since the last tick (a redraw elsewhere may not have shown it) */
 
 /* ---- The tab's animation: progress 0..1024, eased; a thread that ticks
  * (ATLAS_ANIM) only while a tab moves. */
@@ -83,6 +88,26 @@ static void anim_thread(void *arg)
 }
 static void kick(void) { if (!ticking) { ticking = 1; if (anim_tid > 0) sys_wake(anim_tid); } }
 void wm_init(long atlas_port) { port = atlas_port; anim_tid = thread_start(anim_thread, 0, 4096); }
+
+/* The ghost: from (x0, y0, x1, y1) a to b; to_dock: b is the window's Deskbar row (else a is). */
+#define GHOST_MS 200
+static void ghost(int w, int to_dock)
+{
+    wwin_t *v = &ww[w];
+    int win[4] = { v->x0, v->y0 - TAB_H, v->x1, v->y1 }, dock[4];
+    if (!atlas_dock(w, &dock[0], &dock[1], &dock[2], &dock[3])) return;
+    memcpy(gh.a, to_dock ? win : dock, sizeof gh.a);
+    memcpy(gh.b, to_dock ? dock : win, sizeof gh.b);
+    if (!gh.on) memcpy(gh.dirty, gh.a, sizeof gh.dirty);
+    gh.on = 1; gh.t0 = sys_clock();
+    kick();
+}
+static int ghost_now(int *r)                    /* where it is now -> 0 once it arrived */
+{
+    int p = prog(gh.t0, GHOST_MS), q = 1024 - p, e = 1024 - (int)((int64_t)q * q * q >> 20);   /* (easing out) */
+    for (int i = 0; i < 4; i++) r[i] = gh.a[i] + (int)((int64_t)(gh.b[i] - gh.a[i]) * e >> 10);
+    return p < 1024;
+}
 
 /* ---- Boxes. */
 static int tab_w(int w)                  /* the tab: its icon, its title, the two boxes */
@@ -170,15 +195,18 @@ void wm_show(int w)                      /* on the screen and in front (its work
 {
     if (w < 0 || w >= WM_MAX) return;
     wwin_t *v = &ww[w];
-    if (!v->known) place(w);
+    int fresh = !v->known, back = v->known && v->min;
+    if (fresh) place(w);
     if (v->ws != cws) wm_switch(v->ws);
     v->min = 0;
     lift(w);
+    if (fresh || back) ghost(w, 0);                      /* (from its Deskbar row) */
 }
 void wm_min(int w)
 {
     if (w < 0 || w >= WM_MAX || !ww[w].known || ww[w].min) return;
     ww[w].min = 1;
+    if (ww[w].ws == cws) ghost(w, 1);                     /* (into its Deskbar row) */
     say("atlas: window %d minimized\n", w);
 }
 void wm_toggle_max(int w)                /* zoom: the whole desk, or back */
@@ -393,6 +421,18 @@ void wm_draw(int focus, int keys)
         }
         if (!hidden) draw_one(z[i], z[i] == focus, z[i] == keys);
     }
+    if (gh.on) {                                         /* the ghost, over the windows: light, its outline */
+        int r[4];
+        ghost_now(r);
+        if (r[0] < gh.dirty[0]) gh.dirty[0] = r[0];
+        if (r[1] < gh.dirty[1]) gh.dirty[1] = r[1];
+        if (r[2] > gh.dirty[2]) gh.dirty[2] = r[2];
+        if (r[3] > gh.dirty[3]) gh.dirty[3] = r[3];
+        if (r[2] - r[0] > 4 && r[3] - r[1] > 4) {
+            dl_rect(r[0], r[1], r[2], r[3], 16, 0xffffff | ALPHA(5));
+            dl_frame(r[0], r[1], r[2], r[3], 16, 2, 0xffffff | ALPHA(20));
+        }
+    }
 }
 
 /* ATLAS_ANIM: the next frame of the tabs that move (only around their
@@ -408,6 +448,15 @@ void wm_tick(void)
         if (moving) rise(v);                             /* (ends it when its time is up) */
         v->was = moving;
         any |= moving;
+    }
+    if (gh.on) {                                         /* the ghost: where it was and where it goes now */
+        int r[4], live = ghost_now(r), d[4];
+        d[0] = r[0] < gh.dirty[0] ? r[0] : gh.dirty[0]; d[1] = r[1] < gh.dirty[1] ? r[1] : gh.dirty[1];
+        d[2] = r[2] > gh.dirty[2] ? r[2] : gh.dirty[2]; d[3] = r[3] > gh.dirty[3] ? r[3] : gh.dirty[3];
+        if (!live) gh.on = 0;
+        redraw_box(d[0] - 4, d[1] - 4, d[2] + 4, d[3] + 4);   /* (every place it was, and where it is now) */
+        memcpy(gh.dirty, r, sizeof r);                   /* (what the screen shows now) */
+        any |= live;
     }
     if (!any) ticking = 0;
 }
