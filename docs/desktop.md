@@ -164,10 +164,14 @@ with the Deskbar's clock).
 
 ## The sia strip
 
-Click it or press Ctrl+Space, then type a few letters: the results drop
-down under it, grouped: **Files** (by name, in your home folder), **Apps**
-(your `.app` launchers and those of `/etc/apps`), and **Ask sia**. Enter
-opens the first result, Tab asks sia, Esc closes the results. Text
+Click it or press Ctrl+Space: a glass panel drops down under it, at first
+with the apps of `/etc/apps`. Type a few letters and it shows the results,
+grouped: **Files** (by name, in your home folder, each with its folder at
+the right, your home as `~`), **Apps** (your `.app` launchers and those of
+`/etc/apps`), and **Ask sia**; the letters typed are underlined in the
+accent in each name. The chosen result is lit in amber: Up and Down move
+it, Enter opens it (with nothing typed, only once the arrows chose one),
+Tab asks sia, Esc closes the panel; its last line says so. Text
 starting with `?` only offers the question; a `mailto:` link opens Mail,
 writing to it. Typing when no window has the keys goes to the strip too.
 

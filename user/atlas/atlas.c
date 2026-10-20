@@ -490,6 +490,7 @@ enum { R_FILE = 1, R_APP, R_SYSAPP, R_ASK };
 #define MAXRES 8
 static struct { int kind, i; } res[MAXRES];
 static int nres, nfound;                                 /* nfound: the files of an attribute search */
+static int rsel, rpicked;                                /* the result Enter opens; chosen with the arrows */
 static int has(const char *s, const char *q)
 {
     for (; *s; s++) {
@@ -501,8 +502,11 @@ static int has(const char *s, const char *q)
 }
 static void search(void)
 {
-    nres = 0; nfound = 0;
-    if (!query[0]) return;
+    nres = 0; nfound = 0; rsel = 0; rpicked = 0;
+    if (!query[0]) {                                     /* nothing typed yet: the apps, to pick with the arrows */
+        for (int i = 0; i < napps && nres < 7; i++) res[nres++] = (typeof(res[0])){ R_SYSAPP, i };
+        return;
+    }
     if (query[0] != '?') {
         for (int i = 0; i < nitems && nres < 5; i++) if (!items[i].app && has(items[i].name, query)) res[nres++] = (typeof(res[0])){ R_FILE, i };
         for (int i = 0; i < nitems && nres < 7; i++) if (items[i].app && has(items[i].name, query)) res[nres++] = (typeof(res[0])){ R_APP, i };
@@ -710,35 +714,61 @@ static void draw_strip(void)
         dl_text(kx + 10, y0 + 15, "Ctrl+Space", 10, SS, C_GTXT, 0, 0, SW, SH);
     }
     if (query[0]) dl_text(qx, y0 + 13, query, strlen(query), SF(2), C_GTXT, x0, y0, nx - 20, y1);
-    else label(qx, y0 + 13, strip_on ? "a file, an app, or a question" : "Ask sia, open a file, run an app...", 2, C_GTXT);
+    else label(qx + (strip_on ? 18 : 0), y0 + 13, strip_on ? "a file, an app, or a question" : "Ask sia, open a file, run an app...", 2, C_GDIM);   /* (after the cursor) */
     if (strip_on) { int cw = tws(query, 2); dl_rect(qx + 2 + cw, y0 + 11, qx + 12 + cw, y0 + 35, 0, C_ACC); }
     int tx = bt_ask ? pill(pill(x0 + 24, y1 + 6, "Accept", 1, H_BTASK, 1) + 12, y1 + 6, "Decline", 0, H_BTASK, 0) + 20 : x0 + 24;
     if (toast[0]) dl_text(tx, y1 + 6 + 10 * bt_ask, toast, strlen(toast), SF(2), C_ACC, 0, 0, x1, SH);   /* (on the desk) */
     if (!strip_on || (!nres && !nfound)) return;
-    int rx1 = x0 + 900 < x1 ? x0 + 900 : x1, y = y1 + 6, last = 0, h = 16;
-    for (int i = 0; i < nres; i++) h += 46 + (res[i].kind != last ? 32 : 0), last = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
+    int rx1 = x0 + 900 < x1 ? x0 + 900 : x1, y = y1 + 6, last = 0, h = 16 + 36;   /* (and the keys, at the bottom) */
+    for (int i = 0; i < nres; i++) {
+        int g = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
+        h += 46 + (g != last ? 32 : 0); last = g;
+    }
     if (nfound > nres) h += 40;
+    for (int k = 3; k >= 1; k--) dl_shade(x0 - 3 * k + 6, y + 3 * k + 4, rx1 + 3 * k - 6, y + h + 4 * k, 16 + 3 * k, 3);   /* (it floats over the desk) */
     dl_rect(x0, y, rx1, y + h, 16, C_GLASS);
     y += 8; last = 0;
     static const char *grp[5] = { "", "FILES", "APPS", "APPS", "ASK SIA" };
+    const char *q = query[0] == '?' ? query + 1 : query;
     for (int i = 0; i < nres; i++) {
         int g = res[i].kind == R_SYSAPP ? R_APP : res[i].kind;
-        if (g != last) { label(x0 + 26, y + 8, grp[g], 2, C_DIM); y += 32; last = g; }
-        if (i == 0) dl_rect(x0 + 10, y, rx1 - 10, y + 42, 10, C_BAR);
-        char t[96] = "", w[48] = "";
+        if (g != last) { dl_text(x0 + 26, y + 10, grp[g], strlen(grp[g]), SSS, C_DIM, 0, 0, SW, SH); y += 32; last = g; }
+        if (i == rsel) dl_rect(x0 + 10, y, rx1 - 10, y + 42, 10, (C_ACC & 0xffffff) | ALPHA(8));   /* (the one Enter opens) */
+        char t[96] = "", w[64] = "";
         int ic = I_FILE;
-        if (res[i].kind == R_FILE) strlcpy(t, items[res[i].i].name, sizeof t);
-        else if (res[i].kind == R_APP) { strlcpy(t, items[res[i].i].name, sizeof t); ic = I_APP; }
+        if (res[i].kind == R_FILE || res[i].kind == R_APP) {   /* a file: its folder at the right, the home one as ~ */
+            const char *pth = items[res[i].i].path, *home = atlas_home();
+            size_t hl = strlen(home), dl = base_name(pth) - pth;
+            strlcpy(t, items[res[i].i].name, sizeof t);
+            if (hl && strlen(pth) >= hl && !memcmp(pth, home, hl) && (pth[hl] == '/' || !pth[hl])) { w[0] = '~'; strlcpy(w + 1, pth + hl, dl - hl < sizeof w - 1 ? dl - hl + 1 : sizeof w - 1); }
+            else strlcpy(w, pth, dl + 1 < sizeof w ? dl + 1 : sizeof w);
+            size_t wl = strlen(w);
+            if (wl > 1 && w[wl - 1] == '/') w[wl - 1] = 0;   /* ("~", "~/projects", "/etc") */
+            if (res[i].kind == R_APP) ic = I_APP;
+        }
         else if (res[i].kind == R_SYSAPP) { strlcpy(t, apps[res[i].i].name, sizeof t); strlcpy(w, "app", sizeof w); ic = I_APP; }
-        else { strlcpy(t, query[0] == '?' ? query + 1 : query, sizeof t); strlcpy(w, "Tab", sizeof w); ic = I_SIA; }
+        else { strlcpy(t, q, sizeof t); strlcpy(w, "Tab", sizeof w); ic = I_SIA; }
+        int ww = text_sw(w, strlen(w), SSS);
         icon(ic, x0 + 22, y + 9, 2);
-        dl_text(x0 + 58, y + 10, t, strlen(t), SF(2), C_TXT, x0, y, rx1 - 30 - tws(w, 2), y + 42);
-        label(rx1 - 26 - tws(w, 2), y + 10, w, 2, C_DIM);
+        dl_text(x0 + 58, y + 10, t, strlen(t), SF(2), C_TXT, x0, y, rx1 - 40 - ww, y + 42);
+        if (res[i].kind != R_ASK && q[0])                /* the letters typed: underlined in the accent */
+            for (const char *m = t; *m; m++) {
+                size_t k = 0;
+                while (q[k] && (m[k] | 32) == (q[k] | 32)) k++;
+                if (q[k]) continue;
+                int ux = x0 + 58 + text_sw(t, m - t, SF(2));
+                dl_rect(ux, y + 34, ux + text_sw(m, k, SF(2)), y + 37, 1, C_ACC);
+                break;
+            }
+        dl_text(rx1 - 26 - ww, y + 12, w, strlen(w), SSS, C_DIM, 0, 0, SW, SH);
         hitbox(x0 + 10, y, rx1 - 10, y + 42, H_RES, i);
         if (atlas_debug) say("atlas: dbg res %d %s at %d %d\n", i, t, (x0 + rx1) / 2, y + 21);
         y += 46;
     }
-    if (nfound > nres) { char t[48]; t[num(t, nfound - nres)] = 0; strlcpy(t + strlen(t), " more", 8); label(x0 + 26, y + 8, t, 2, C_DIM); }
+    if (nfound > nres) { char t[48]; t[num(t, nfound - nres)] = 0; strlcpy(t + strlen(t), " more", 8); label(x0 + 26, y + 8, t, 2, C_DIM); y += 40; }
+    static const char keys[] = "Up, Down: choose    Enter: open    Tab: ask sia    Esc: close";
+    dl_rect(x0 + 16, y + 4, rx1 - 16, y + 5, 0, C_LINE);
+    dl_text(x0 + 26, y + 14, keys, sizeof keys - 1, SSS, C_DIM, x0, y, rx1 - 16, y + 40);
 }
 
 static int menu_h(void) { int h = 16; for (int i = 0; i < mn.n; i++) h += mn.e[i].act == A_SEP ? MENSEP : MENH; return h; }
@@ -1630,7 +1660,8 @@ static void key(int c)
         if (c == 27) { query[0] = 0; nres = nfound = 0; strip_on = 0; redraw(); return; }
         strip_on = 1;
         if (c == '\n' && !memcmp(query, "mailto:", 7)) { mail_mailto(query); query[0] = 0; nres = nfound = 0; strip_on = 0; atlas_show(W_MAIL); return; }
-        if (c == '\n') { if (nres) open_result(0); return; }
+        if (c == '\n') { if (nres && (query[0] || rpicked)) open_result(rsel); return; }   /* (empty: only once the arrows chose) */
+        if (c == KEY_UP || c == KEY_DOWN) { if (nres) { rsel = (rsel + (c == KEY_DOWN ? 1 : nres - 1)) % nres; rpicked = 1; } redraw(); return; }
         if (c == '\t') { for (int i = 0; i < nres; i++) if (res[i].kind == R_ASK) { open_result(i); return; } return; }
         if (c == '\b') { if (n) query[n - 1] = 0; }
         else if (c >= 32 && c < 127 && n + 1 < sizeof query) { query[n] = c; query[n + 1] = 0; }
