@@ -52,9 +52,10 @@ int  text_w(int n, int scale);      /* width in pixels of n characters (mono) */
 int  text_sw(const char *s, int n, int scale);   /* width in pixels of s's n characters, either font */
 int  text_fit(const char *s, int n, int scale, int w);   /* how many of s's n characters fit in w pixels */
 /* A pixel image: h rows of w characters, each a colour (cols[i] for keys[i];
- * '.' and ' ' leave what is under it), every pixel scale x scale. The rows
- * are not copied: they must stay (static data). */
-void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *keys, const uint32_t *cols, int scale);
+ * '.' and ' ' leave what is under it), in a box size pixels wide (and as
+ * high): each map pixel whole screen pixels (sharp), as many as fill the
+ * box best, centred in it. The rows are not copied: they must stay (static data). */
+void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *keys, const uint32_t *cols, int size);
 void dl_image(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h);   /* w x h pixels (0x00RRGGBB, rows
                                        one after the other) stretched into the box; not copied: they must stay */
 void dl_client(int x0, int y0, int x1, int y1, const uint32_t *px, int w, int h, int raw);   /* the same; raw: another

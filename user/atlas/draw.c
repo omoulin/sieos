@@ -293,12 +293,13 @@ void dl_text(int x, int y, const char *s, int n, int scale, uint32_t c, int cx0,
     arena_n += n;
 }
 
-void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *keys, const uint32_t *cols, int scale)
+void dl_pixmap(int x, int y, const char *const *rows, int w, int h, const char *keys, const uint32_t *cols, int size)
 {
-    int s = (int)(((int64_t)scale * Z) < 16384 ? 16384 : (int64_t)scale * Z);   /* 16.16: screen pixels per map pixel */
-    x = sc(x); y = sc(y);
-    prim_t *p = add(P_PIXMAP, x, y, x + (int)(((int64_t)w * s + 65535) >> 16), y + (int)(((int64_t)h * s + 65535) >> 16), 0);
-    if (p) { p->rows = rows; p->keys = keys; p->cols = cols; p->scale = s; p->r = w; p->t = h; }
+    int box = sz(size), s = (box + w / 2) / w;         /* whole screen pixels per map pixel, the nearest to fill the box */
+    if (s < 1) s = 1;
+    x = sc(x) + (box - w * s) / 2; y = sc(y) + (box - h * s) / 2;   /* (centred in it) */
+    prim_t *p = add(P_PIXMAP, x, y, x + w * s, y + h * s, 0);
+    if (p) { p->rows = rows; p->keys = keys; p->cols = cols; p->scale = s << 16; p->r = w; p->t = h; }
 }
 
 #define RAW 0x01000000u                /* a strip pixel from another program: shown as it is */

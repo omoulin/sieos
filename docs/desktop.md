@@ -261,6 +261,13 @@ the desk a darker navy with its glows turned down (worked out again).
 Programs follow it through the theme (`ATW_THEME`, the look
 `ATLAS_LOOK_NIGHT`), as with the zoom.
 
+**Icons** (`icons.c`) are one family on a 16 x 16 grid: an ink outline,
+white faces and one amber or blue fill, the pixels kept on purpose (as
+in BeOS, and with the pixel cube). Each map pixel is drawn as whole
+screen pixels, as many as fill the icon's box best, so they stay sharp
+at every zoom. On a tab and on the Deskbar only their shape is drawn, in
+one ink (the faces left out).
+
 How: the screen is still drawn in strips (128 rows) with no second
 full-screen picture. A strip with glass in it is drawn with 40 rows and
 columns more around it (kept in the strip buffer, not shown), so glass
@@ -551,7 +558,7 @@ between processes.
 | `atlas.c` | the session: terminals, the Deskbar, the sia strip, menus, input, login |
 | `wm.c` | the windows: tabs, boxes, moving and resizing, the stacking order, workspaces |
 | `files.c`, `edit.c`, `panel.c`, `settings.c`, `mail.c` | the windows' insides: Files, the editor, sia, Settings, Mail |
-| `icons.c` | the icons (12 x 12 pixel maps; their outline alone on a tab) and the SIEOS cube (16 x 16) |
+| `icons.c` | the icons (16 x 16 pixel maps, one family; their shape alone on a tab) and the SIEOS cube |
 | `setup.c` | the first start on the screen (the accounts) |
 | `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `fontsans.c`, `sans.c`, `screen.c`, `igfx.c` | drawing (and the look: the desk, the glass), the fonts, the screen (and the laptop's Intel display) |
 
