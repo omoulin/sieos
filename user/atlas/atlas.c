@@ -96,6 +96,7 @@ int clip_n;
 static enum { GREETER, SESSION } mode;
 static char user[32], home[64], gname[32], gpw[128], gmsg[80], query[48];
 static int uid = -1, ugid = -1, gfield, first_start;
+static int locked;                      /* the session goes on behind the lock screen */
 static int no_input;                    /* no keyboard or pointer yet: the greeter says so */
 static int m_speed = 100, m_swap, m_rev;   /* the user's mouse (~/.mouse): speed %, left-handed, wheel reversed */
 static screen_t scr;
@@ -121,7 +122,7 @@ static void geometry(void)
 
 /* ---- Menus: one at a time; entries with an icon, separators. */
 enum { A_SEP = 1, A_TERM, A_SIA, A_FILES, A_EDITOR, A_SETTINGS, A_PINS, A_RUNAPP, A_WINDOW, A_LOGOUT,
-       A_MIN, A_ZOOM, A_SENDWS, A_CLOSE, A_SLEEP };
+       A_MIN, A_ZOOM, A_SENDWS, A_CLOSE, A_SLEEP, A_LOCK };
 #define MAXMENT 28
 #define MENH 36
 #define MENSEP 12
@@ -195,6 +196,7 @@ static void acpi_thread(void *arg)
         ipc_call(port, &a);
     }
 }
+static void lock(void);
 static void power_event(const acpi_status_t *n)
 {
     int was = atlas_power.flags & ACPI_LID_CLOSED, shut = n->flags & ACPI_LID_CLOSED, woke = atlas_power.flags && n->wakes != atlas_power.wakes;
@@ -204,10 +206,11 @@ static void power_event(const acpi_status_t *n)
         rtc_read();
         if (screen_wake() && scr.resizable) atlas_set_size(PW, PH);
         if (shut && !atlas_lid_sleep) screen_blank(1);
+        lock();                                          /* (asleep some other way: locked now) */
         redraw();
     }
     if (shut != was) say("atlas: lid %s%s\n", shut ? "closed: " : "open", shut ? (atlas_lid_sleep ? "sleep" : "screen off") : "");
-    if (shut && !was && atlas_lid_sleep && !woke) power(POWER_SLEEP);   /* (back here once awake; woken lid closed: screen off) */
+    if (shut && !was && atlas_lid_sleep && !woke) { lock(); power(POWER_SLEEP); }   /* (back here once awake; woken lid closed: screen off) */
     else if (shut != was) screen_blank(shut);
     if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
 }
@@ -541,35 +544,78 @@ int atlas_find(const char *key, const char *value)
 }
 
 /* ---- The picture. */
+static void clock_text(char *ck);
+static void date_text(char *s)                           /* "Tuesday 20 October" (UTC, as the clock) */
+{
+    static const char *const wd[7] = { "Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday" };
+    static const char *const mo[12] = { "January", "February", "March", "April", "May", "June", "July",
+                                        "August", "September", "October", "November", "December" };
+    int64_t ns = sys_time(0);
+    char d[20];
+    date_str(ns, d);                                     /* "YYYY-MM-DD HH:MM" */
+    int m = (d[5] - '0') * 10 + d[6] - '0', day = (d[8] - '0') * 10 + d[9] - '0';
+    s += strlcpy(s, wd[ns / 1000000000 / 86400 % 7], 12);
+    *s++ = ' ';
+    s += num(s, day);
+    *s++ = ' ';
+    strlcpy(s, mo[m >= 1 && m <= 12 ? m - 1 : 0], 12);
+}
+static void greeter_field(int f, int x0, int y, int x1, const char *hint)   /* the name (0) or the password (1) */
+{
+    char st[64];
+    int n = f ? (strlen(gpw) < sizeof st - 1 ? (int)strlen(gpw) : (int)sizeof st - 1) : (int)strlen(gname);
+    memset(st, '*', sizeof st);
+    const char *s = f ? st : gname;
+    dl_rect(x0, y, x1, y + 50, 10, C_FIELD);
+    dl_frame(x0, y, x1, y + 50, 10, gfield == f ? 2 : 1, gfield == f ? C_ACC : C_LINE);
+    if (n) dl_text(x0 + 20, y + 14, s, n, SF(2), C_TXT, 0, 0, x1 - 10, SH);
+    else dl_text(x0 + 28, y + 14, hint, strlen(hint), SF(2), C_DIM, 0, 0, x1 - 10, SH);
+    int cw = n ? text_sw(s, n, SF(2)) : 0;
+    if (gfield == f) dl_rect(x0 + 21 + cw, y + 12, x0 + 24 + cw, y + 38, 0, C_ACC);   /* (the caret) */
+    hitbox(x0, y, x1, y + 50, H_FIELD, f);
+}
+/* The login screen, and the lock screen (the same, its name fixed): the
+ * time, large, in the middle of the desk, the date under it, then a card:
+ * the initial in a circle, the name, the password and an arrow to go in. */
 static void draw_greeter(void)
 {
-    if (first_start) { setup_draw(); return; }          /* no account yet: the welcome screen */
-    int x0 = SW / 2 - 360, y0 = SH / 2 - 230, x1 = SW / 2 + 360, y1 = SH / 2 + 250;
-    static const char wt[] = "Welcome to SIEOS";     /* the card is a window: its tab first */
-    int t = 44 + tws(wt, 2) + 24;
-    dl_rect(x0, y0 - TAB_H, x0 + t, y0 + 12, 10, C_ACC);
-    bold(x0 + 22, y0 - TAB_H + 6, wt, C_INK, SW);
-    dl_rect(x0, y0, x1, y1, 16, C_CLEAR);               /* (clear glass, as a window's frame) */
-    logo(x0 + 50, y0 + 40, 5);
-    label(x0 + 150, y0 + 46, "SIEOS", 6, C_GTXT);
-    label(x0 + 152, y0 + 120, "your windows, your files, sia", 2, C_GDIM);
-    const char *names[2] = { "Name", "Password" };
-    for (int f = 0; f < 2; f++) {
-        int fy = y0 + 190 + f * 90;
-        label(x0 + 60, fy + 12, names[f], 2, C_GTXT);
-        dl_rect(x0 + 230, fy, x1 - 60, fy + 50, 10, C_FIELD);
-        dl_frame(x0 + 230, fy, x1 - 60, fy + 50, 10, gfield == f ? 2 : 1, gfield == f ? C_ACC : C_LINE);
-        char st[64];
-        int n = strlen(gpw) < sizeof st - 1 ? strlen(gpw) : sizeof st - 1;
-        memset(st, '*', n);
-        dl_text(x0 + 250, fy + 14, f ? st : gname, f ? n : (int)strlen(gname), SF(2), C_TXT, 0, 0, x1 - 70, SH);
-        int cw = text_sw(f ? st : gname, f ? n : (int)strlen(gname), SF(2));
-        if (gfield == f) dl_rect(x0 + 252 + cw, fy + 12, x0 + 264 + cw, fy + 38, 0, C_ACC);
-        hitbox(x0 + 230, fy, x1 - 60, fy + 50, H_FIELD, f);
+    if (first_start && !locked) { setup_draw(); return; }   /* no account yet: the welcome screen */
+    char ck[8], dt[40];
+    clock_text(ck);
+    date_text(dt);
+    int cy = SH / 2 - 330 > 24 ? SH / 2 - 330 : 24;
+    label(SW / 2 - tw(5, 14) / 2, cy, ck, 14, C_GTXT);
+    label(SW / 2 - tws(dt, 3) / 2, cy + CH * 14 + 24, dt, 3, C_GTXT);
+    int x0 = SW / 2 - 260, x1 = SW / 2 + 260, y0 = cy + CH * 14 + 96, y1 = y0 + (locked ? 300 : 320);
+    dl_rect(x0, y0, x1, y1, 24, C_CLEAR);
+    int ax = SW / 2, ay = y0 + 64;                       /* the avatar: the initial, or the cube before a name */
+    if (gname[0]) {
+        char in[2] = { gname[0] >= 'a' && gname[0] <= 'z' ? gname[0] - 32 : gname[0], 0 };
+        dl_rect(ax - 40, ay - 40, ax + 40, ay + 40, 40, C_ACC);
+        label(ax - tws(in, 3) / 2, ay - 17, in, 3, C_INK);
+        label(ax - tws(in, 3) / 2 + 1, ay - 17, in, 3, C_INK);
+    } else {
+        dl_rect(ax - 40, ay - 40, ax + 40, ay + 40, 40, C_CELL);
+        logo(ax - 24, ay - 24, 3);
     }
-    if (gmsg[0]) label(x0 + 60, y0 + 380, gmsg, 2, C_ACC);   /* (on clear glass: amber reads, red does not) */
-    else if (no_input) label(x0 + 60, y0 + 380, "No keyboard or mouse yet: plug one in", 2, C_GDIM);
-    pill(x1 - 60 - tws("Log in", 2) - 28, y1 - 80, "Log in", 1, H_LOGIN, 0);
+    int fx0 = x0 + 50, fx1 = x1 - 50 - 50 - 12, py;      /* (the arrow at the password's right) */
+    if (locked) {
+        bold(SW / 2 - tws(gname, 2) / 2, y0 + 124, gname, C_GTXT, SW);
+        py = y0 + 168;
+    } else {
+        greeter_field(0, fx0, y0 + 124, x1 - 50, "Name");
+        py = y0 + 188;
+    }
+    greeter_field(1, fx0, py, fx1, "Password");
+    dl_rect(x1 - 100, py, x1 - 50, py + 50, 25, C_ACC);   /* the arrow: go in */
+    dl_rect(x1 - 88, py + 23, x1 - 64, py + 27, 0, C_INK);
+    for (int k = 0; k < 9; k++) {
+        dl_rect(x1 - 72 + k, py + 16 + k, x1 - 69 + k, py + 18 + k, 0, C_INK);
+        dl_rect(x1 - 72 + k, py + 32 - k, x1 - 69 + k, py + 34 - k, 0, C_INK);
+    }
+    hitbox(x1 - 100, py, x1 - 50, py + 50, H_LOGIN, 0);
+    const char *hint = gmsg[0] ? gmsg : no_input ? "No keyboard or mouse yet: plug one in" : locked ? "Locked: your password opens it" : "";
+    label(SW / 2 - tws(hint, 2) / 2, y1 - 54, hint, 2, gmsg[0] ? C_ACC : C_GDIM);   /* (on clear glass: amber reads, red does not) */
 }
 
 /* Is character (abs line, column) of terminal t selected? */
@@ -838,7 +884,7 @@ static void build(void)
     dl_reset();
     nhit = 0;
     dl_desk();
-    if (mode == GREETER) { draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
+    if (mode == GREETER || locked) { draw_greeter(); dl_pointer(ptr_x, ptr_y); return; }
     hitbox(0, 0, SW, SH, H_DESK, 0);                     /* (the desk itself: its menu) */
     tidy();
     if (wm_top() < 0) draw_rest();
@@ -869,7 +915,7 @@ void redraw_box(int x0, int y0, int x1, int y1)
 static void settle(void)
 {
     siefs_stat_t st;
-    atlas_debug = mode == SESSION && !fs_stat("/tmp/atlas.debug", &st, 1);
+    atlas_debug = mode == SESSION && !locked && !fs_stat("/tmp/atlas.debug", &st, 1);
     redraw();
     if (atlas_debug) {
         for (int w = 0; w < MAXTERM; w++) {
@@ -1112,7 +1158,7 @@ static void logout(void)
     mail_close();
     client_logout();
     nitems = 0;
-    mode = GREETER;
+    mode = GREETER; locked = 0;
     uid = ugid = -1; ugroups.n = 0; gname[0] = gpw[0] = gmsg[0] = query[0] = toast[0] = home[0] = 0; gfield = bt_ask = 0;
     bt_user();
     nres = nfound = 0; strip_on = 0; mn.on = pr.on = 0; focus = -1; last_term = -1;
@@ -1197,6 +1243,37 @@ static void login(void)
     mouse_load();
     scan_apps();
     show_win(t);
+    settle();
+}
+
+/* The lock screen (Super+L, the menu, before sleeping): the session goes on
+ * behind it, nothing of it shown; the user's password opens it (auth checks
+ * it: AUTH_CHECK). */
+static void lock(void)
+{
+    if (mode != SESSION || locked) return;
+    locked = 1;
+    strlcpy(gname, user, sizeof gname);
+    wipe(gpw, sizeof gpw);
+    gfield = 1; gmsg[0] = 0;
+    mn.on = pr.on = strip_on = 0; sel.on = 0;
+    say("atlas: locked\n");
+    redraw();
+}
+static void unlock(void)
+{
+    char req[200], *p = req;
+    p += strlcpy(p, user, 32) + 1;
+    p += strlcpy(p, gpw, 128) + 1;
+    wipe(gpw, sizeof gpw);
+    msg_t m = { .w = { AUTH_CHECK }, .sbuf = req, .slen = p - req };
+    strlcpy(gmsg, "checking...", sizeof gmsg);
+    redraw();
+    long r = atlas_auth(&m);
+    wipe(req, sizeof req);
+    if (r < 0) { strlcpy(gmsg, "Wrong password.", sizeof gmsg); say("atlas: unlock %s: refused\n", user); return; }
+    locked = 0; gmsg[0] = 0;
+    say("atlas: unlocked\n");
     settle();
 }
 
@@ -1405,6 +1482,7 @@ static void main_menu(void)                              /* the Deskbar's: start
         menu_add(t, A_WINDOW, a, win_icon(w));
     }
     menu_add("", A_SEP, 0, -1);
+    menu_add("Lock", A_LOCK, 0, -1);
     if (atlas_power.flags & ACPI_S3) menu_add("Sleep", A_SLEEP, 0, -1);
     menu_add("Log out", A_LOGOUT, 0, -1);
     menu_show(DBX + DBW - 340, M + DB_MENU + 2);
@@ -1414,6 +1492,7 @@ static void desk_menu(int x, int y)
     menu_new("Desk", -1);
     menu_starters();
     menu_add("", A_SEP, 0, -1);
+    menu_add("Lock", A_LOCK, 0, -1);
     menu_add("Log out", A_LOGOUT, 0, -1);
     menu_show(x, y);
 }
@@ -1486,7 +1565,8 @@ static void menu_do(int k)
     case A_RUNAPP: app_start(arg); return;
     case A_WINDOW: { int v = 0; for (const char *p = arg; *p; p++) v = v * 10 + *p - '0'; show_win(v); settle(); return; }
     case A_LOGOUT: logout(); redraw(); return;
-    case A_SLEEP: redraw(); say("atlas: sleep\n"); power(POWER_SLEEP); return;
+    case A_LOCK: lock(); return;
+    case A_SLEEP: lock(); say("atlas: sleep\n"); power(POWER_SLEEP); return;
     case A_MIN: min_win(w); settle(); return;
     case A_ZOOM: wm_toggle_max(w); settle(); return;
     case A_SENDWS: wm_send(w, arg[0] - '0'); if (focus == w) focus = wm_top(); settle(); return;
@@ -1558,7 +1638,7 @@ void atlas_client_gone(int w)
     if (focus == w) focus = wm_top();
     if (mode == SESSION) settle();
 }
-int atlas_client_visible(int w) { int x0, y0, x1, y1; return mode == SESSION && win_box(w, &x0, &y0, &x1, &y1); }
+int atlas_client_visible(int w) { int x0, y0, x1, y1; return mode == SESSION && !locked && win_box(w, &x0, &y0, &x1, &y1); }
 
 static void focus_win(int w)
 {
@@ -1587,7 +1667,7 @@ static void click(int x, int y)
     case H_FIELD: if (first_start) setup_click(k, a); else gfield = a;
                   redraw(); return;
     case H_SETUP: setup_click(k, a); redraw(); return;
-    case H_LOGIN: login(); redraw(); return;
+    case H_LOGIN: if (locked) unlock(); else login(); redraw(); return;
     case H_STRIP: strip_on = 1; search(); redraw(); return;
     case H_RES:   open_result(a); return;
     case H_MENU:  menu_do(a); return;
@@ -1626,14 +1706,15 @@ static void click(int x, int y)
 
 static void key(int c)
 {
+    if (c == KEY_LOCK) { lock(); return; }
     if ((focus != W_MAIL && focus < W_CLIENT0) || strip_on || mode != SESSION)  /* (Ctrl+Enter, Ctrl+Shift+letter: Mail's and other programs' only) */
         c = c == KEY_CRET ? '\n' : c >= KEY_CSA ? c - KEY_CSA + 1 : c;
-    if (mode == GREETER) {
-        if (first_start) { setup_key(c); redraw(); return; }
+    if (mode == GREETER || locked) {
+        if (first_start && !locked) { setup_key(c); redraw(); return; }
         char *f = gfield ? gpw : gname;
         size_t n = strlen(f), max = gfield ? sizeof gpw : sizeof gname;
-        if (c == '\t') gfield = !gfield;
-        else if (c == '\n') { if (!gfield) gfield = 1; else login(); }
+        if (c == '\t') gfield = !gfield || locked;
+        else if (c == '\n') { if (!gfield) gfield = 1; else if (locked) unlock(); else login(); }
         else if (c == '\b') { if (n) f[n - 1] = 0; }
         else if (c >= 32 && c < 127 && n + 1 < max) { f[n] = c; f[n + 1] = 0; }
         redraw();
@@ -1723,7 +1804,7 @@ static void press(int x, int y)
     press_x = x; press_y = y;
     drag = D_NONE; drag_on = 0;
     int i = hit_at(x, y);
-    if (mode != SESSION || i < 0 || mn.on || pr.on) return;
+    if (mode != SESSION || locked || i < 0 || mn.on || pr.on) return;
     int x0, y0, x1, y1;
     if ((hit[i].kind == H_WTAB || hit[i].kind == H_WEDGE) && wm_grab(hit[i].kind, hit[i].arg, x, y)) drag = D_WIN;
     else if (hit[i].kind == H_WIN && hit[i].arg < MAXTERM && win_box(hit[i].arg, &x0, &y0, &x1, &y1) && y > y0 + WM_STRIP) { drag = D_SEL; drag_arg = hit[i].arg; }
@@ -1748,6 +1829,12 @@ static void mouse(const con_event_t *e)
     if (m_swap) b = (b & ~3) | (b & 1) << 1 | (b & 2) >> 1;   /* left-handed: the buttons swap */
     ptr_x = x; ptr_y = y;
     buttons = b;
+    if (locked) {                                        /* the lock screen: its field and its arrow only */
+        if (!(b & MB_LEFT) && (was & MB_LEFT)) { click(x, y); return; }
+        dl_pointer(x, y);
+        present_pointer(ox, oy, x, y);
+        return;
+    }
     if (mode == SESSION && !drag_on && !mn.on && !pr.on) {   /* another program's window: its own input */
         int i = hit_at(x, y), w = i >= 0 && hit[i].kind == H_CLIENT ? hit[i].arg : focus;
         if (w >= W_CLIENT0) {
@@ -1987,6 +2074,7 @@ int main(int argc, char **argv)
         }
         if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the Deskbar's tray */
             reply_val(from, 0);
+            if ((mode == GREETER && !first_start) || locked) { redraw(); continue; }   /* (the large clock) */
             if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
             if (mode == SESSION && wm_top() < 0) { int x0, y0, x1, y1; rest_box(&x0, &y0, &x1, &y1); redraw_box(x0, y0, x1, y1); }   /* (the resting clock) */
             continue;

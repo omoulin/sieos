@@ -58,7 +58,7 @@ static void event(int type, int code, int buttons, int x, int y)
         mk_ident_t id;
         if (sys_ident(owner, &id) < 0) { owner = 0; nq = 0; }
     }
-    if (!owner) { if (type == EV_KEY) tty_key(&tty, code == KEY_CRET ? '\n' : code >= KEY_CSA ? code - KEY_CSA + 1 : code); return; }
+    if (!owner) { if (type == EV_KEY) tty_key(&tty, code == KEY_CRET ? '\n' : code >= KEY_CSA && code < KEY_LOCK ? code - KEY_CSA + 1 : code); return; }
     con_event_t *l = nq ? &q[nq - 1] : 0;
     if (type == EV_MOUSE && !code && l && l->type == EV_MOUSE && !l->code && l->buttons == buttons) {
         l->x = x; l->y = y;                  /* merge with the previous move */
@@ -88,12 +88,13 @@ static int kx = 34, ky = 61;                 /* a mouse count, in those units: a
 
 static void keyboard(uint8_t sc)
 {
-    static int shift, ctrl, caps, ext;
+    static int shift, ctrl, caps, ext, super;
     if (sc == 0xE0) { ext = 1; return; }
     int up = sc & 0x80, key = sc & 0x7F, e = ext;
     ext = 0;
     if (key == 0x2A || key == 0x36) { shift = !up; return; }   /* Shift */
     if (key == 0x1D) { ctrl = !up; return; }                   /* Ctrl (left or right) */
+    if (e && (key == 0x5B || key == 0x5C)) { super = !up; return; }   /* Super (the Windows key) */
     if (up) return;
     if (e) {                                                   /* arrows and friends */
         static const uint8_t sc_e[] = { 0x48, 0x50, 0x4B, 0x4D, 0x49, 0x51, 0x47, 0x4F, 0x53 };
@@ -101,6 +102,8 @@ static void keyboard(uint8_t sc)
         return;
     }
     if (key == 0x3A) { caps = !caps; return; }                 /* Caps Lock */
+    if (super && key == 0x26) { event(EV_KEY, KEY_LOCK, mb, mx, my); return; }   /* Super+L */
+    if (super) return;                                         /* (Super+other keys: nothing yet) */
     if (key >= 0x3B && key <= 0x44) { event(EV_KEY, KEY_F1 + key - 0x3B, mb, mx, my); return; }
     if (key == 0x57 || key == 0x58) { event(EV_KEY, KEY_F1 + 10 + key - 0x57, mb, mx, my); return; }
     if (key == 0x0F && shift) { event(EV_KEY, KEY_BTAB, mb, mx, my); return; }   /* Shift+Tab */
@@ -400,7 +403,8 @@ static void input_init(long port)
 static void input_event(vev_t e)
 {
     static const uint8_t ext[][2] = { { 97, 0x1D }, { 102, 0x47 }, { 103, 0x48 }, { 104, 0x49 }, { 105, 0x4B },
-                                      { 106, 0x4D }, { 107, 0x4F }, { 108, 0x50 }, { 109, 0x51 }, { 111, 0x53 } };
+                                      { 106, 0x4D }, { 107, 0x4F }, { 108, 0x50 }, { 109, 0x51 }, { 111, 0x53 },
+                                      { 125, 0x5B }, { 126, 0x5C } };
     if (e.type == E_KEY && e.code >= 0x110 && e.code <= 0x112) {        /* left, right, middle button */
         int b = e.code == 0x110 ? MB_LEFT : e.code == 0x111 ? MB_RIGHT : MB_MIDDLE;
         mb = e.value ? mb | b : mb & ~b;

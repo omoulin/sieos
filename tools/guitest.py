@@ -853,6 +853,19 @@ expect("backend=local")
 print("ok: Settings: sia online (URL, model, key; a wrong root password refused), then local again")
 
 
+# ---- the lock screen (Super+L): the session behind it, alice's password opens it
+keys("meta_l", "l")
+wait("atlas: locked")
+time.sleep(0.5)
+img = shot("15-locked")
+if not has_colour(img, ACC, (560, 260, 1360, 820), 50):
+    fail("no lock card")
+type_text("wrong\n")
+wait("atlas: unlock alice: refused", "log", 10)
+type_text("alicepass1\n")
+wait("atlas: unlocked")
+print("ok: Super+L locked the screen; a wrong password refused; alice's opened it again")
+
 # ---- kill the desktop: init restarts it; the login screen
 send("svc")
 expect("UPTIME")

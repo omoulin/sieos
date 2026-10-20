@@ -49,7 +49,8 @@ enum { KEY_UP = 0x101, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_PGUP, KEY_PGDN, KEY_HO
        KEY_CTAB = 0x120,             /* Ctrl+Tab */
        KEY_C1,                       /* Ctrl+1 .. Ctrl+9: KEY_C1 + 0 .. 8 */
        KEY_CRET = KEY_C1 + 9,        /* Ctrl+Enter */
-       KEY_CSA };                    /* Ctrl+Shift+A .. Z: KEY_CSA + 0 .. 25 */
+       KEY_CSA,                      /* Ctrl+Shift+A .. Z: KEY_CSA + 0 .. 25 */
+       KEY_LOCK = KEY_CSA + 26 };    /* Super+L: lock the screen */
 
 /* Disk driver, port "disk" (vblk). Blocks are 4 KiB. One message moves at
  * most DISK_MAX bytes; the data travels in sbuf (write) or rbuf (read).

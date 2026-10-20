@@ -145,7 +145,7 @@ What a window can be:
 
 - **The menu** (the SIEOS cube): Terminal, sia, Files, Text editor,
   Settings; the apps of `/etc/apps`; every open window (minimized ones
-  "(hidden)"); *Log out*.
+  "(hidden)"); *Lock*, *Log out*.
 - **The tray:** sia's state (idle, local, online) after a dot, lit while
   sia runs, and the clock in the title size. On a laptop, the battery left of the
   clock (its outline filled as charged; accent while charging, red under
@@ -161,7 +161,7 @@ What a window can be:
   are on the desk, the front one brighter): the current one outlined in
   the accent colour.
 
-Right-click the desk itself for a menu to start things, and *Log out*.
+Right-click the desk itself for a menu to start things, *Lock* and *Log out*.
 A workspace with no window shows the time, large and dim, at the desk's
 bottom right, and the keys to start with under it (redrawn each minute
 with the Deskbar's clock).
@@ -190,6 +190,7 @@ writing to it. Typing when no window has the keys goes to the strip too.
 | Ctrl+W | close the window in focus (the editor: its tab) |
 | Ctrl+Tab | the next window of this workspace, in front |
 | Ctrl+1 .. Ctrl+4 | a workspace |
+| Super+L (the Windows key) | lock the screen |
 | Ctrl+S | save (editor) |
 | Ctrl+N, Ctrl+R, Ctrl+Shift+R, Ctrl+L, F5, Ctrl+Enter | Mail: new, reply, reply all, forward, check, send |
 | Ctrl+V, middle button | paste (terminal, editor, assistant, strip, Settings) |
@@ -622,10 +623,18 @@ between processes.
   display only, the hot-plug thread: one register read twice a second). Atlas looks at the
   files again when a terminal's shell asks for its next line (a command
   has just run), so a new file shows at once, with no polling.
-- **Login:** the login screen first (the password goes to `auth`, which
-  starts your first shell, in a window); on a new disk, the welcome
-  screen creates the accounts first (`user/atlas/setup.c`,
+- **Login:** the login screen first: the time, large, in the middle of
+  the desk, the date under it, then a card with the name (its initial in
+  a circle), the password and an arrow to go in. The password goes to
+  `auth`, which starts your first shell, in a window; on a new disk, the
+  welcome screen creates the accounts first (`user/atlas/setup.c`,
   [accounts.md](accounts.md)).
+- **Lock:** Super+L, *Lock* in the menus, and going to sleep (the menu's
+  Sleep, the lid, or woken from a sleep started elsewhere) show the same
+  screen with your name fixed: the session goes on behind it (programs
+  run, nothing of them shown, no input reaches them), and your password
+  opens it again (`auth` checks it: `AUTH_CHECK`). The time redraws each
+  minute.
 - **Rights:** atlas runs as root (it owns the screen and starts your
   shells through `auth`), so before it reads a file or a folder, makes a
   file or starts an app, it checks the rights of the user logged in.
