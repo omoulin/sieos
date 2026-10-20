@@ -38,7 +38,7 @@ void dl_rect(int x0, int y0, int x1, int y1, int r, uint32_t c);           /* fi
 void dl_glass(int x0, int y0, int x1, int y1, int r, uint32_t c, int hx0, int hy0, int hx1, int hy1);   /* glass (c FROST),
                                        not worked out in the hole (what will cover it: a window's insides) */
 void dl_frame(int x0, int y0, int x1, int y1, int r, int t, uint32_t c);   /* outline, t pixels thick */
-void dl_shade(int x0, int y0, int x1, int y1, int r, int k);               /* darken what is under it: k 1 to 3/4, 2 to 1/2, 3 to 7/8 */
+void dl_shade(int x0, int y0, int x1, int y1, int r, int k);               /* darken what is under it: k 1 to 3/4, 2 to 1/2, 3 to 7/8, 4 to 13/16 */
 void dl_shadow(int x0, int y0, int x1, int y1, int r, int k, int hx0, int hy0, int hx1, int hy1);   /* the same, k 3, but not
                                        in the hole (what will cover it: a window over its own shadow) */
 /* Text. Its size is a 16.16 fixed-point scale (S(2): twice the font's

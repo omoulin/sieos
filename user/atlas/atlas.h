@@ -120,6 +120,8 @@ void panel_wheel(int w);
 void panel_event(msg_t *m, const char *data);         /* a message from the panel's thread */
 void panel_status(char *out, size_t cap);             /* "sia: local", "sia: idle"... */
 const char *panel_last(int k);                        /* the k-th line from the end of the conversation, or 0 */
+int  panel_unseen(void);                              /* an answer ended while its window did not have the keys */
+void panel_frame(void);                               /* a new picture: its window not drawn yet */
 #define ATLAS_SIA 101                                 /* message: panel thread -> atlas */
 
 /* ---- The editor (edit.c): a window: the tree of files, the open files as tabs. */

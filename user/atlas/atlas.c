@@ -660,7 +660,12 @@ static void draw_deskbar(void)
         int y = ry + 4 + k * DB_ROW, run = db_running(k);
         if (ptr_x >= x0 && ptr_x < x1 && ptr_y >= y && ptr_y < y + DB_ROW) dl_rect(x0 + 6, y, x1 - 6, y + DB_ROW - 2, 10, C_WASH);
         icon_ink(dbapps[k].icon, x0 + 14, y + 7, 2, 1);
-        if (run) {                                       /* running: bold, a lit dot (and how many terminals) */
+        if (dbapps[k].act == A_SIA && panel_unseen()) {   /* an answer not read yet: "new", in the accent */
+            int bw = text_sw("new", 3, SSS) + 16;
+            bold(x0 + 50, y + 8, dbapps[k].name, C_GTXT, x1 - 50);
+            dl_rect(x1 - 16 - bw, y + 9, x1 - 16, y + 31, 11, C_ACC);
+            dl_text(x1 - 8 - bw, y + 12, "new", 3, SSS, C_INK, 0, 0, SW, SH);
+        } else if (run) {                                /* running: bold, a lit dot (and how many terminals) */
             bold(x0 + 50, y + 8, dbapps[k].name, C_GTXT, x1 - 50);
             dl_rect(x1 - 30, y + 14, x1 - 18, y + 26, 6, C_ACC);
             if (dbapps[k].act == A_TERM) {
@@ -799,6 +804,7 @@ static void build(void)
     hitbox(0, 0, SW, SH, H_DESK, 0);                     /* (the desk itself: its menu) */
     tidy();
     if (wm_top() < 0) draw_rest();
+    panel_frame();
     wm_draw(focus, strip_on ? -1 : focus);
     draw_deskbar();
     draw_strip();

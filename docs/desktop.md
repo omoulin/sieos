@@ -41,8 +41,9 @@ a shelf.)
   menu: *Minimize*, *Zoom*, *Send to workspace N*, *Close*.
 - **Depth:** each window sits in a **rim of glass** (10 pixels at its
   sides and bottom, curving in under its top corners) and casts a soft
-  shadow below it (three shades, a little wider each, no blur); the
-  insides of every window but the focused one are dimmed by an eighth
+  shadow below it (three shades, a little wider each, no blur; the
+  focused window five, further down: it stands above the others); the
+  insides of every window but the focused one are dimmed by 3/16
   (not another program's: those are shown as the program drew them).
 - **Resize** with the grip (bottom right) or any edge; the smallest is
   360 x 200. New windows go down and to the right of the front one, so
@@ -149,7 +150,9 @@ What a window can be:
 - **The apps:** Terminal, sia, Files, Text editor, Pins, Settings. A running
   one is in bold with a lit dot (Terminal: and how many, from 2): a click
   brings its window back in front (the terminal used last, for Terminal);
-  otherwise a click starts it. Right-click: *New ...* and its windows.
+  otherwise a click starts it. When sia finishes an answer while its
+  window does not have the keys (hidden, behind, another workspace), its
+  row says **new** in the accent until you look at it. Right-click: *New ...* and its windows.
 - **The workspaces**, 1 to 4, each a small map of its windows (where they
   are on the desk, the front one brighter): the current one outlined in
   the accent colour.

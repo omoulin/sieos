@@ -531,7 +531,7 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
         }
         break;
     }
-    case P_SHADE:                    /* darken what is already there: 3/4 (k 1), 1/2 (k 2) or 7/8 (k 3) */
+    case P_SHADE:                    /* darken what is already there: 3/4 (k 1), 1/2 (k 2), 7/8 (k 3) or 13/16 (k 4) */
         for (int y = ya; y < yb; y++) {
             int i = inset(y, p->y0, p->y1, p->r), a = p->x0 + i > lo ? p->x0 + i : lo, b = p->x1 - i < hi ? p->x1 - i : hi;
             uint32_t *d = strip + (y - org) * PW;
@@ -541,6 +541,7 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
                 for (int x = a; x < ha; x++) d[x] -= d[x] >> 3 & 0x1f1f1f;
                 for (int x = hb; x < b; x++) d[x] -= d[x] >> 3 & 0x1f1f1f;
             }
+            else if (p->t == 4) for (int x = a; x < b; x++) d[x] -= (d[x] >> 3 & 0x1f1f1f) + (d[x] >> 4 & 0x0f0f0f);
             else if (p->t == 2) for (int x = a; x < b; x++) d[x] = (d[x] >> 1 & 0x7f7f7f) | (d[x] & RAW);   /* (a program's pixels stay */
             else for (int x = a; x < b; x++) d[x] -= d[x] >> 2 & 0x3f3f3f;                          /*  its own: darkened, not tinted) */
         }

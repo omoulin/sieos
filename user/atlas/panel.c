@@ -37,6 +37,7 @@ enum { R_ASK = 1, R_NEW, R_REMEMBER };                       /* main loop -> thr
 typedef struct { int who, len, nact, id; char *text; struct { int fly; char arg[96]; } act[NACT]; } pmsg_t;   /* fly: 1 file, 0 island, 2 remember */
 static pmsg_t msgs[PMSG];
 static int nmsg, busy, ready, scroll, pieces, conv_new = 1, answers, logged;
+static int unseen, seen_at;                              /* an answer ended unread (the Deskbar says so); its window was drawn with the keys */
 static int rx0, ry0, rx1, ry1;            /* where the window was last drawn */
 static char input[200];
 static sia_info_t info;
@@ -276,6 +277,7 @@ void panel_event(msg_t *m, const char *data)
         if (last && last->who == WHO_SIA) { actions(last); last->id = ++answers; }
         if (m->w[1] == P_STOPPED) { note(WHO_NOTE, "(stopped)"); say("atlas: sia: stopped after %d pieces\n", pieces); }
         else say("atlas: sia: done %d bytes, %d pieces, %d actions\n", last ? last->len : 0, pieces, last ? last->nact : 0);
+        if (!seen_at) { unseen = 1; rx1 = rx0; }         /* (not looked at: the whole desk, for the Deskbar) */
         break;
     case P_OFFER:                                        /* a "Remember" button on the answer */
         if (last && last->who == WHO_SIA && last->nact < NACT && n > 0) {
@@ -383,8 +385,12 @@ static int chip(int x, int y, int ic, const char *s, int kind, int arg)
     return x + w;
 }
 
+int panel_unseen(void) { return unseen; }
+void panel_frame(void) { seen_at = 0; }
 void panel_draw(int x0, int y0, int x1, int y1, int focused)
 {
+    seen_at = focused;
+    if (focused) unseen = 0;
     rx0 = x0; ry0 = y0; rx1 = x1; ry1 = y1;
     hitbox(x0, y0 + 48, x1, y1, H_PANEL, 0);
     pill(x1 - 24 - tws("New", 2) - 28, y0 + 58, "New", 0, H_PMODE, 0);

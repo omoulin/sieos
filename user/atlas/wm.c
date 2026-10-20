@@ -324,9 +324,10 @@ static void draw_one(int w, int f, int keys)
         say("atlas: dbg wclose %d at %d %d\n", w, tx + t - 12 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
         say("atlas: dbg wzoom %d at %d %d\n", w, tx + t - 12 - BOX - 8 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
     }
-    /* its shadow, soft: three steps a little wider each, below its glass (within damage()'s MARGIN) */
-    for (int k = 3; k >= 1; k--)
-        dl_shadow(x0 - RIM - 3 * k + 3, y0 + 2 * k + 3, x1 + RIM + 3 * k - 3, y1 + RIM + 4 * k, 18 + 3 * k, 3, x0 - RIM + 6, y0, x1 + RIM - 6, y1 + RIM - 6);
+    /* its shadow, soft: steps a little wider each, below its glass (within damage()'s MARGIN); the
+       focused window's deeper (five steps, further down): it stands above the others */
+    for (int k = f ? 5 : 3; k >= 1; k--)
+        dl_shadow(x0 - RIM - 3 * k + 3, y0 + (f ? 3 : 2) * k + 3, x1 + RIM + 3 * k - 3, y1 + RIM + 4 * k, 18 + 3 * k, 3, x0 - RIM + 6, y0, x1 + RIM - 6, y1 + RIM - 6);
     /* the window: a slab of clear glass, its strip at the top and a rim at
        its sides and bottom, curving in under its top corners; its ground
        under the insides (the glass is not worked out there: they cover it).
@@ -349,7 +350,7 @@ static void draw_one(int w, int f, int keys)
         if (k) dl_text(x1 - 22 - text_sw(info, k, SSS), y0 + 8, info, k, SSS, C_GTXT, x0 + 20, y0, x1 - 20, y0 + WM_STRIP);
     }
     wm_body(w, x0, y0 + WM_BODY_DY, x1, y1, keys);
-    if (!f && w < W_CLIENT0) dl_shade(x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2, 10, 3);   /* (behind: its insides dimmed a little, the focused one stands
+    if (!f && w < W_CLIENT0) dl_shade(x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2, 10, 4);   /* (behind: its insides dimmed by 3/16, the focused one stands
                                                          out; another program's insides stay as it drew them) */
     /* the grip: three short diagonals in the bottom-right corner */
     for (int i = 0; i < 3; i++)
