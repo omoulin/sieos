@@ -213,6 +213,8 @@ canvas_exact("14-uidemo-canvas")
 d.click_pic(*d.latest("dbapp", "Settings"))      # everything at 200%, then 100% again, from Settings
 d.wait("atlas: settings open", 10)
 time.sleep(0.4)
+d.click_pic(*d.latest("set", 181))                # (its Look section)
+time.sleep(0.4)
 d.click_pic(*d.latest("set", 115))
 d.wait("atlas: zoom 200%", 10)
 d.wait("uidemo: theme 0", 10)

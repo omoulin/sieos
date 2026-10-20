@@ -34,9 +34,9 @@
 #define TOP 48                           /* the window's title strip */
 #define ROW 54                           /* a row of buttons or a field */
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
-       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_VOL = 120, S_BRIGHT = 130, S_OUT = 140, S_KBL = 150, S_KBLC = 160, S_LID = 170,
-       S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET,
-       S_BPOW = 260, S_BSCAN = 262, S_BPAIR, S_BFORGET, S_BYES, S_BNO, S_BCONN, S_BDEV = 270 };
+       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_BRIGHT = 130, S_OUT = 140, S_KBL = 150, S_KBLC = 160, S_LID = 170,
+       S_PAGE = 180, S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET,
+       S_BPOW = 260, S_BSCAN = 262, S_BPAIR, S_BFORGET, S_BYES, S_BNO, S_BCONN, S_BDEV = 270, S_VOL = 300 };
 enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
 
 static const int sizes[][2] = { { 1280, 720 }, { 1366, 768 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 } };
@@ -382,16 +382,23 @@ static void bt_do(int req, uint64_t arg, int sel, const char *done)
     bt_follow();
 }
 
-/* ---- Drawing: rows from the top (scrolled), only those wholly in view. */
-static int X0, Y0, X1, Y1, cy, lx, cx;
-static int fits(int h) { return cy >= Y0 + TOP + 6 && cy + h <= Y1 - 6; }
-static void heading(const char *s)
+/* ---- Drawing. Wide enough: the sections in a sidebar, the chosen one's
+ * rows on a card beside it; narrow: every section, one after the other.
+ * Rows go from the top (scrolled), only those wholly in view are drawn; a
+ * dry pass (nothing drawn: fits() says no) measures the card first. */
+#define SBW 200                          /* the sidebar */
+static int X0, Y0, X1, Y1, cy, lx, cx, dry, paged, page;
+static int fits(int h) { return !dry && cy >= Y0 + TOP + 6 && cy + h <= Y1 - 6; }
+static void title(int x, const char *s)  /* (bigger, bold) */
 {
+    dl_text(x, cy, s, strlen(s), STS, C_TXT, 0, 0, SW, SH);
+    dl_text(x + 1, cy, s, strlen(s), STS, C_TXT, 0, 0, SW, SH);
+}
+static void heading(const char *s)       /* a section's title (in the sidebar instead, when there is one) */
+{
+    if (paged) return;
     cy += 14;
-    if (fits(34)) {                                       /* (a title: bigger, bold) */
-        dl_text(lx, cy, s, strlen(s), STS, C_ACCT, 0, 0, SW, SH);
-        dl_text(lx + 1, cy, s, strlen(s), STS, C_ACCT, 0, 0, SW, SH);
-    }
+    if (fits(34)) title(lx, s);
     cy += 44;
 }
 static void row_label(const char *s)
@@ -460,16 +467,35 @@ static void text_field(const char *name, int f, int secret, const char *empty)
     cy += ROW;
 }
 
-void settings_draw(int x0, int y0, int x1, int y1, int focused)
+/* A slider: n stops, each a click box over its part of the track; the
+ * chosen one k (-1: none, no knob); its value v written at the right. */
+static void slider(const char *name, int n, int k, int base, const char *v)
 {
-    (void)focused;
-    X0 = x0; Y0 = y0; X1 = x1; Y1 = y1;
-    dl_rect(x0 + 2, y0 + TOP, x1 - 2, y1 - 2, 0, C_PANEL);
-    hitbox(x0, y0 + TOP, x1, y1, H_SET, S_BODY);
-    lx = x0 + 24; cx = x1 - x0 >= 760 ? x0 + 250 : lx;
-    cy = y0 + TOP + 4 - scroll;
+    row_label(name);
+    if (fits(42)) {
+        int x0 = cx + 14, x1 = X1 - 60 - tws("Faster", 2), y = cy + 21, half = (x1 - x0) / (2 * (n - 1));
+        if (x1 > x0 + 560) x1 = x0 + 560;                /* (not too long) */
+        int kx = k < 0 ? x0 : x0 + (x1 - x0) * k / (n - 1);
+        dl_rect(x0 - 3, y - 3, x1 + 3, y + 3, 3, C_BAR);
+        if (k >= 0) dl_rect(x0 - 3, y - 3, kx + 3, y + 3, 3, C_ACC);
+        for (int i = 0; n <= 9 && i < n; i++) {          /* (few stops: each marked under the track) */
+            int sx = x0 + (x1 - x0) * i / (n - 1);
+            dl_rect(sx - 2, y + 14, sx + 2, y + 18, 2, k >= i ? C_ACC : C_LINE);
+        }
+        if (k >= 0) { dl_rect(kx - 12, y - 12, kx + 12, y + 12, 12, C_FIELD); dl_frame(kx - 12, y - 12, kx + 12, y + 12, 12, 2, C_ACC); }
+        label(x1 + 30, cy + 10, v, 2, C_TXT);
+        for (int i = 0; i < n; i++) {
+            int sx = x0 + (x1 - x0) * i / (n - 1);
+            hitbox(sx - half - (i ? 0 : 16), cy, sx + half + 1 + (i < n - 1 ? 0 : 16), cy + 42, H_SET, base + i);
+            if (atlas_debug) say("atlas: dbg set %d at %d %d\n", base + i, sx, cy + 21);
+        }
+    }
+    cy += ROW;
+}
 
-    heading("SCREEN");
+static void sec_screen(void)
+{
+    heading("Screen");
     int w, h, rs = atlas_screen(&w, &h);
     char t[64], *p;
     if (rs) {
@@ -507,63 +533,74 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
         static const char *bn[5] = { "10%", "25%", "50%", "75%", "100%" };
         int bk = -1;
         for (int i = 0; i < 5; i++) if (brights[i] == bl) bk = i;
-        choices("Brightness", bn, 5, bk, S_BRIGHT);
+        slider("Brightness", 5, bk, S_BRIGHT, bk < 0 ? "" : bn[bk]);
     }
-
-    heading("LOOK");
+}
+static void sec_look(void)
+{
+    heading("Look");
     static const char *zn[NZOOM] = { "50%", "75%", "100%", "125%", "150%", "200%", "300%", "400%" };
     int zk = -1;
     for (int i = 0; i < NZOOM; i++) if (zooms[i] == atlas_zoom_get()) zk = i;
-    choices("Size", zn, NZOOM, zk, S_ZOOM);
-
-    heading("MOUSE");
+    slider("Size", NZOOM, zk, S_ZOOM, zk < 0 ? "" : zn[zk]);
+}
+static void sec_mouse(void)
+{
+    heading("Mouse");
     int sp, sw, rv, k = 1;
     atlas_mouse_get(&sp, &sw, &rv);
     for (int i = 0; i < 4; i++) if (speeds[i] == sp) k = i;
-    choices("Pointer speed", speed_names, 4, k, S_SPEED);
+    slider("Pointer speed", 4, k, S_SPEED, speed_names[k]);
     static const char *hands[2] = { "Right-handed", "Left-handed" }, *wheels[2] = { "Normal", "Reversed" };
     choices("Buttons", hands, 2, sw, S_HAND);
     choices("Wheel", wheels, 2, rv, S_WHEEL);
-
-    heading("SOUND");
+}
+static void sec_sound(void)
+{
+    heading("Sound");
     if (vol == -2) {
         row_label("Volume");
         if (fits(42)) label(cx, cy + 10, "No sound card.", 2, C_TXT);
         cy += ROW;
     } else {
-        static const char *vn[5] = { "Mute", "25%", "50%", "75%", "100%" };
-        choices("Volume", vn, 5, vol < 0 ? -1 : vol & AUDIO_MUTE ? 0 : ((vol & 0xFF) + 12) / 25, S_VOL);
+        int vk = vol < 0 ? -1 : vol & AUDIO_MUTE ? 0 : ((vol & 0xFF) + 2) / 5;   /* (stops of 5%; the first: mute) */
+        char v[8] = "Mute";
+        if (vk > 0) { v[num(v, 5 * vk)] = 0; strlcpy(v + strlen(v), "%", 2); }
+        slider("Volume", 21, vk, S_VOL, vk < 0 ? "" : v);
         if (nouts > 1) choices("Output", outs, nouts, osel, S_OUT);   /* (a monitor with sound) */
     }
-
-    if (kbl >= 0) {
-        heading("KEYBOARD");
-        static const char *ln[3] = { "Off", "Low", "High" };
-        const char *cn[KBL_NCOL];
-        int ck = -1;
-        for (int i = 0; i < KBL_NCOL; i++) { cn[i] = kcol[i].name; if (kcol[i].rgb == kbl_rgb) ck = i; }
-        choices("Light", ln, 3, kbl, S_KBL);
-        choices("Colour", cn, KBL_NCOL, ck, S_KBLC);
+}
+static void sec_keyboard(void)
+{
+    heading("Keyboard");
+    static const char *ln[3] = { "Off", "Low", "High" };
+    const char *cn[KBL_NCOL];
+    int ck = -1;
+    for (int i = 0; i < KBL_NCOL; i++) { cn[i] = kcol[i].name; if (kcol[i].rgb == kbl_rgb) ck = i; }
+    choices("Light", ln, 3, kbl, S_KBL);
+    choices("Colour", cn, KBL_NCOL, ck, S_KBLC);
+}
+static void sec_power(void)
+{
+    char t[64], *p;
+    heading("Power");
+    acpi_status_t *b = &atlas_power;
+    p = t;
+    if (!(b->flags & ACPI_BAT)) strlcpy(p, "No battery.", 12);
+    else {
+        p += num(p, b->percent); p += strlcpy(p, b->flags & ACPI_CHARGING ? "%, charging" : b->flags & ACPI_AC ? "%, on AC" : "%", 12);
+        if (b->minutes >= 0) { p += strlcpy(p, " (", 3); p += num(p, b->minutes / 60); *p++ = ':'; *p++ = '0' + b->minutes % 60 / 10;
+                               *p++ = '0' + b->minutes % 10; strlcpy(p, b->flags & ACPI_CHARGING ? " to full)" : " left)", 10); }
     }
-
-    if (atlas_power.flags & (ACPI_BAT | ACPI_LID)) {     /* a laptop (the ACPI server): battery, lid */
-        heading("POWER");
-        acpi_status_t *b = &atlas_power;
-        p = t;
-        if (!(b->flags & ACPI_BAT)) strlcpy(p, "No battery.", 12);
-        else {
-            p += num(p, b->percent); p += strlcpy(p, b->flags & ACPI_CHARGING ? "%, charging" : b->flags & ACPI_AC ? "%, on AC" : "%", 12);
-            if (b->minutes >= 0) { p += strlcpy(p, " (", 3); p += num(p, b->minutes / 60); *p++ = ':'; *p++ = '0' + b->minutes % 60 / 10;
-                                   *p++ = '0' + b->minutes % 10; strlcpy(p, b->flags & ACPI_CHARGING ? " to full)" : " left)", 10); }
-        }
-        row_label("Battery");
-        if (fits(42)) label(cx, cy + 10, t, 2, C_TXT);
-        cy += ROW;
-        static const char *ln[2] = { "Screen off", "Sleep" };
-        if (b->flags & ACPI_LID) choices("Lid closed", ln, (b->flags & ACPI_S3) ? 2 : 1, atlas_lid_sleep, S_LID);
-    }
-
-    heading("NETWORK");
+    row_label("Battery");
+    if (fits(42)) label(cx, cy + 10, t, 2, C_TXT);
+    cy += ROW;
+    static const char *ln[2] = { "Screen off", "Sleep" };
+    if (b->flags & ACPI_LID) choices("Lid closed", ln, (b->flags & ACPI_S3) ? 2 : 1, atlas_lid_sleep, S_LID);
+}
+static void sec_network(void)
+{
+    heading("Network");
     if (!wifi_have) {
         row_label("Wi-Fi");
         if (fits(42)) label(cx, cy + 10, "No Wi-Fi on this machine.", 2, C_TXT);
@@ -595,8 +632,10 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
         }
         cy += ROW;
     }
-
-    heading("BLUETOOTH");
+}
+static void sec_bluetooth(void)
+{
+    heading("Bluetooth");
     if (!bt_have) {
         row_label("Bluetooth");
         if (fits(42)) label(cx, cy + 10, "No Bluetooth on this machine.", 2, C_TXT);
@@ -650,8 +689,11 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
         }
         if (bt_sel >= 0) cy += ROW;
     }
-
-    heading("ASSISTANT");
+}
+static void sec_assistant(void)
+{
+    char t[64];
+    heading("Assistant");
     static const char *where[2] = { "On this computer", "Online (OpenAI API)" };
     choices("Model", where, 2, remote, S_SIA);
     if (remote) {
@@ -669,6 +711,58 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
     panel_status(t, sizeof t);
     if (fits(30)) label(lx, cy, t, 2, C_DIM);
     cy += 40;
+}
+enum { P_SCREEN, P_LOOK, P_MOUSE, P_SOUND, P_KEYBOARD, P_POWER, P_NETWORK, P_BLUETOOTH, P_ASSISTANT, NPAGE };
+static const struct { const char *name; void (*draw)(void); } pages[NPAGE] = {
+    { "Screen", sec_screen }, { "Look", sec_look }, { "Mouse", sec_mouse }, { "Sound", sec_sound },
+    { "Keyboard", sec_keyboard }, { "Power", sec_power }, { "Network", sec_network },
+    { "Bluetooth", sec_bluetooth }, { "Assistant", sec_assistant },
+};
+static int page_shown(int i)             /* (a keyboard light the USB server drives; a laptop) */
+{
+    return i == P_KEYBOARD ? kbl >= 0 : i == P_POWER ? (atlas_power.flags & (ACPI_BAT | ACPI_LID)) != 0 : 1;
+}
+
+void settings_draw(int x0, int y0, int x1, int y1, int focused)
+{
+    (void)focused;
+    X0 = x0; Y0 = y0; X1 = x1; Y1 = y1;
+    dl_rect(x0 + 2, y0 + TOP, x1 - 2, y1 - 2, 0, C_PANEL);
+    hitbox(x0, y0 + TOP, x1, y1, H_SET, S_BODY);
+    paged = x1 - x0 >= 720;
+    if (!paged) {                                        /* narrow: every section, its labels above its rows */
+        lx = cx = x0 + 24;
+        cy = y0 + TOP + 4 - scroll;
+        for (int i = 0; i < NPAGE; i++) if (page_shown(i)) pages[i].draw();
+    } else {
+        int sx1 = x0 + 2 + SBW, y = y0 + TOP + 16;      /* the sidebar: the sections, the chosen one lit */
+        dl_rect(sx1, y0 + TOP, sx1 + 1, y1 - 2, 0, C_LINE);
+        if (!page_shown(page)) page = P_SCREEN;
+        for (int i = 0; i < NPAGE && y + 40 <= y1 - 6; i++) {
+            if (!page_shown(i)) continue;
+            if (i == page) {
+                dl_rect(x0 + 12, y, sx1 - 12, y + 40, 10, C_TERM);
+                dl_rect(x0 + 12, y + 10, x0 + 16, y + 30, 2, C_ACC);
+                for (int b = 0; b < 2; b++) dl_text(x0 + 30 + b, y + 9, pages[i].name, strlen(pages[i].name), SF(2), C_TXT, 0, 0, SW, SH);   /* (bold) */
+            } else label(x0 + 30, y + 9, pages[i].name, 2, C_TXT);
+            hitbox(x0 + 12, y, sx1 - 12, y + 40, H_SET, S_PAGE + i);
+            if (atlas_debug) say("atlas: dbg set %d at %d %d\n", S_PAGE + i, (x0 + sx1) / 2, y + 20);
+            y += 44;
+        }
+        int kx0 = sx1 + 24, kx1 = x1 - 24;              /* the card: the section's rows */
+        lx = kx0 + 22; cx = kx1 - kx0 >= 660 ? lx + 190 : lx;
+        X1 = kx1;
+        cy = y0 + TOP + 20 - scroll;
+        if (fits(30)) title(kx0 + 4, pages[page].name);
+        cy += 54;
+        int c0 = cy;
+        dry = 1; pages[page].draw(); dry = 0;
+        int ky0 = c0 - 20 > y0 + TOP ? c0 - 20 : y0 + TOP, ky1 = cy + 4 < y1 - 2 ? cy + 4 : y1 - 2;
+        if (ky1 > ky0) { dl_rect(kx0, ky0, kx1, ky1, 14, C_TERM); dl_frame(kx0, ky0, kx1, ky1, 14, 1, C_LINE); }
+        cy = c0;
+        pages[page].draw();
+        cy += 24;
+    }
     int bottom = cy + scroll - (y1 - 6);                 /* how far it may scroll */
     if (scroll > 0 && bottom < scroll) scroll = bottom > 0 ? bottom : 0;
 }
@@ -695,7 +789,8 @@ int settings_click(int kind, int arg)
     else if (arg >= S_HAND && arg < S_HAND + 2) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(s, arg - S_HAND, r); }
     else if (arg >= S_WHEEL && arg < S_WHEEL + 2) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(s, w, arg - S_WHEEL); }
     else if (arg >= S_ZOOM && arg < S_ZOOM + NZOOM) atlas_zoom(zooms[arg - S_ZOOM]);
-    else if (arg >= S_VOL && arg < S_VOL + 5) vol = audio_vol(arg > S_VOL ? 25 * (arg - S_VOL) : AUDIO_MUTE | (vol < 0 ? 80 : vol & 0xFF));
+    else if (arg >= S_VOL && arg < S_VOL + 21) vol = audio_vol(arg > S_VOL ? 5 * (arg - S_VOL) : AUDIO_MUTE | (vol < 0 ? 80 : vol & 0xFF));
+    else if (arg >= S_PAGE && arg < S_PAGE + NPAGE) { page = arg - S_PAGE; scroll = 0; field = -1; }
     else if (arg >= S_OUT && arg < S_OUT + nouts) audio_call(AUDIO_OUT, arg - S_OUT);
     else if (arg >= S_KBL && arg < S_KBL + 3) kbl_set(arg - S_KBL, kbl_rgb);
     else if (arg >= S_KBLC && arg < S_KBLC + KBL_NCOL) kbl_set(kbl > 0 ? kbl : KBL_HIGH, kcol[arg - S_KBLC].rgb);

@@ -1575,7 +1575,7 @@ static void click(int x, int y)
     case H_WEDGE: focus_win(a / 16); redraw(); return;
     case H_WIN:   focus_win(a); sel.on = 0; redraw(); return;
     case H_ED:    focus_win(W_EDIT); edit_click(a, x, y); if (!edit_active()) close_win(W_EDIT); else settle(); return;
-    case H_SET:   focus_win(W_SET); settings_click(k, a); redraw(); return;
+    case H_SET:   focus_win(W_SET); settings_click(k, a); settle(); return;   /* (a section shown: its rows move) */
     case H_FILE:  focus_win(W_FILES); files_click(k, a); settle(); return;
     case H_PINS:  focus_win(W_PINS); pins_click(k, a); redraw(); return;
     case H_REPO:  focus_win(W_REPO); repo_click(k, a); redraw(); return;

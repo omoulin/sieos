@@ -750,7 +750,14 @@ if "wifi none" not in rest:
     fail(f"Settings did not report no Wi-Fi (QEMU has none): {rest!r}")
 print("ok: Settings: Network shows 'No Wi-Fi on this machine.' (none in QEMU)")
 time.sleep(0.5)
-click(*latest("set", "32"))                        # pointer speed: Fast
+
+def page(name):
+    """Settings' sidebar: show that section (S_PAGE + its number)."""
+    click(*latest("set", str(180 + ["Screen", "Look", "Mouse", "Sound", "Keyboard", "Power", "Network", "Bluetooth", "Assistant"].index(name))))
+    time.sleep(0.4)
+
+page("Mouse")
+click(*latest("set", "32"))                        # pointer speed: Fast (a stop of the slider)
 wait("atlas: mouse speed 150 swap 0 reverse 0")
 click(*latest("set", "41"))                        # Left-handed: the buttons swap ...
 wait("atlas: mouse speed 150 swap 1 reverse 0")
@@ -765,6 +772,7 @@ if not has_colour(img, ACC, at_least=50) or not soft(img, (0, 0, 1920, 1080), 30
     fail("glass (the soft desk, the amber accent) is not on the screen")
 print("ok: Settings: the look is glass (no choice of look)")
 
+page("Look")
 settle_log()
 click(*latest("set", "115"))                       # everything at 200% ...
 wait("atlas: zoom 200% (1280 x 720)")
@@ -781,6 +789,7 @@ time.sleep(0.4)
 settle_log()
 print("ok: Settings: everything at 200%, then 100% again (clicks land at both), kept in ~/.look")
 
+page("Screen")
 click(*latest("set", "12"))                        # 1600 x 900
 wait("atlas: screen size 1600 x 900 (back to 1920 x 1080 in 15 s unless kept)")
 SCREEN[:] = [1600, 900]
@@ -815,6 +824,7 @@ time.sleep(0.5)
 click(*latest("wzoom", "10"))                      # Settings zoomed: room for the online model's fields
 wait("atlas: window 10 zoomed")
 time.sleep(0.4)
+page("Assistant")
 click(*latest("set", "61"))                        # the assistant: online
 time.sleep(0.3)
 click(*latest("dbapp", "Settings"))                         # (shown again: where the new fields are)

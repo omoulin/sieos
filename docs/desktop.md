@@ -195,16 +195,24 @@ right-clicks and the keys above.
 ## Settings
 
 *Settings* (the Deskbar, its menu, or the strip: "settings") is a window
-of the desktop, on every machine. Its sections have titles in the title
-size; each choice is a segmented control, its options joined (the chosen
-one filled), wrapped onto more rows when the window is narrow:
+of the desktop, on every machine. Its sections are listed in a **sidebar**
+(the chosen one lit, an amber mark at its left); the chosen section's
+rows are on a **card** beside it, under its title. A narrow window (under
+720 picture pixels) shows every section one after the other instead, each
+under its title. An amount (the screen's brightness, the size of
+everything, the pointer's speed, the volume) is a **slider**: a track
+filled up to its knob, its stops marked under it, its value at its right;
+a click anywhere along it picks the nearest stop (the volume's are 5%
+apart, the first one mute). Any other choice is a segmented control, its
+options joined (the chosen one filled), wrapped onto more rows when
+narrow:
 
 | Section | What | Kept in |
 |---|---|---|
 | Screen | the size: 1280 x 720, 1366 x 768, 1600 x 900, 1920 x 1080, 2560 x 1440 where the screen can take any (QEMU's VGA and ramfb, the Pi 4, whose firmware scales the picture to the monitor, the laptop's Intel display, which also offers its panel's own size and the panel's **brightness**). It changes at once and **goes back by itself after 15 s** unless you press *Keep*, so a monitor that cannot show it is never a dead end. A firmware's fixed screen (UEFI, the Pi 5) shows its size. | `/etc/display.conf` (the login screen too) |
 | Look | the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% (the look itself is glass, the only one) | `~/.look`, applied at your login (the login screen: 100%) |
 | Mouse | pointer speed (Slow, Normal, Fast, Faster), right- or left-handed buttons, the wheel normal or reversed | `~/.mouse`, applied at your login |
-| Sound | the volume: Mute, 25%, 50%, 75%, 100%; the output (Speakers or a monitor with sound, shown when there is one) ([audio.md](audio.md)) | the audio server, until a reboot |
+| Sound | the volume, by 5% (the first stop: mute); the output (Speakers or a monitor with sound, shown when there is one) ([audio.md](audio.md)) | the audio server, until a reboot |
 | Keyboard | shown only where the USB server drives a keyboard light (the Legion's, [usb-stack.md](usb-stack.md#the-keyboard-light)): Off, Low, High, and a colour (White, Red, Orange, Green, Cyan, Blue, Purple; a colour picked while off turns it on) | `/etc/kblight`, given to the keyboard at each start |
 | Network | Wi-Fi (the Raspberry Pis' CYW43455): the connection's state, **Scan** for networks in range, pick one, type the passphrase (WPA2) and **Join**, or **Forget**. A system setting: root's password is asked unless root is logged in. Where there is no Wi-Fi chip (every machine but a real Pi, QEMU included) it shows "No Wi-Fi on this machine." | `/etc/wifi.conf` (root only) |
 | Assistant | sia's model: the one on this computer, or **online**, any service with an OpenAI-compatible API (server URL, model name, API key). A system setting: root's password is asked unless root is logged in. | `/etc/sia.conf`, the key in `/etc/sia.key` (root only) |
