@@ -261,6 +261,8 @@ the desk a darker navy with its glows turned down (worked out again).
 Programs follow it through the theme (`ATW_THEME`, the look
 `ATLAS_LOOK_NIGHT`), as with the zoom.
 
+![the night palette: Settings and sia on dark glass](screens/night.png)
+
 **Icons** (`icons.c`) are one family on a 16 x 16 grid: an ink outline,
 white faces and one amber or blue fill, the pixels kept on purpose (as
 in BeOS, and with the pixel cube). Each map pixel is drawn as whole
