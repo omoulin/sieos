@@ -101,7 +101,7 @@ void client_draw(int w, int x0, int y0, int x1, int y1, int focused)
     if (iw < 1 || ih < 1) return;
     if (iw != c->sw || ih != c->sh) { c->sw = iw; c->sh = ih; post(c, ATW_SIZE, atlas_zoom_get(), iw, ih, 0); }
     hitbox(c->cx0, c->cy0, c->cx1, c->cy1, H_CLIENT, w);
-    if (!c->px) { dl_rect(c->cx0, c->cy0, c->cx1, c->cy1, 0, 0xffffff); return; }   /* (white until its first frame) */
+    if (!c->px) { dl_rect(c->cx0, c->cy0, c->cx1, c->cy1, 0, C_TERM); return; }   /* (a plain ground until its first frame) */
     dl_client(c->cx0, c->cy0, c->cx1, c->cy1, c->px, c->bw, c->bh, 1);   /* (its own colours, whatever the look) */
 }
 
@@ -142,7 +142,7 @@ void client_closed(int w)               /* the user closed it */
     memset(c, 0, sizeof *c);
 }
 
-void client_theme(void) { for (int i = 0; i < ATLAS_WIN_MAX; i++) if (cl[i].used) post(&cl[i], ATW_THEME, ATLAS_LOOK_FROST, 0, 0, 0); }
+void client_theme(void) { for (int i = 0; i < ATLAS_WIN_MAX; i++) if (cl[i].used) post(&cl[i], ATW_THEME, draw_night_get() ? ATLAS_LOOK_NIGHT : ATLAS_LOOK_FROST, 0, 0, 0); }
 
 void client_logout(void) { for (int i = 0; i < ATLAS_WIN_MAX; i++) if (cl[i].used) gone(&cl[i]); }
 
@@ -173,7 +173,7 @@ void client_msg(long from, msg_t *m, const char *data, int uid)
     if (m->w[0] == ATLAS_WIN_THEME) {                    /* the look, for programs that match it (sieos/ui.h) */
         atlas_theme_t t;
         memset(&t, 0, sizeof t);
-        t.size = sizeof t; t.look = ATLAS_LOOK_FROST; t.zoom = (uint16_t)atlas_zoom_get();
+        t.size = sizeof t; t.look = draw_night_get() ? ATLAS_LOOK_NIGHT : ATLAS_LOOK_FROST; t.zoom = (uint16_t)atlas_zoom_get();
         t.radius = 12;
         t.text = (int32_t)(((int64_t)S(2) * draw_zoom_get()) >> 16);
         for (int i = 0; i < ATT_N; i++) t.pal[i] = draw_shown(pal[i]);

@@ -21,7 +21,8 @@
  *
  * The look: glass. The desk is a deep navy lit by five wide glows, all
  * blues (wall_init: worked out at 1/16 of the screen once, then smoothed
- * to each pixel as it is drawn). Glass (a FROST colour: dl_rect, dl_glass)
+ * to each pixel as it is drawn); at night (draw_night) a darker navy, the
+ * glows turned down, and the night palette. Glass (a FROST colour: dl_rect, dl_glass)
  * shows what is drawn behind it, the desk or other windows, blurred and
  * more vivid, its tint laid over it as much as its ALPHA says: clear
  * (the bars, a window's frame), milky (menus, cards) or smoked (a
@@ -91,11 +92,20 @@ static uint32_t *wall;              /* the desk at 1/16 of the screen (wall_init
 static int wcols, wrows;
 #define WG 16
 
-uint32_t pal[NPAL] = {             /* (the order of PAL_...) */
+/* The palettes (the order of PAL_...): day's, and night's, the same glass
+ * smoke-tinted, light text on it, the same amber. pal is the one in use. */
+static const uint32_t pal_day[NPAL] = {
     0x34478f, FROST | ALPHA(23) | 0xf6f8fd, 0xb9c1d6, GLOSS | 0xffc93c, 0x1a2238, 0x4a5470, 0xd9e0f2, 0xfbfcff, 0x1a2238, 0xc8322a,
     0xbcd0f7, 0x3a4a8c, 0x2a1d00, 0xf3f5fa, 0xffffff, 0x2a3350, 0x8a5200,
     FROST | ALPHA(7) | 0xffffff, 0xffffff, 0xe2e8f8, ALPHA(7) | 0xffffff, ALPHA(8) | 0xffffff, ALPHA(5) | 0xffffff,
     FROST | ALPHA(21) | 0x0e1426, 0xc9d1ec };
+static const uint32_t pal_night[NPAL] = {
+    0x161d36, FROST | ALPHA(25) | 0x1b2135, 0x3b4460, GLOSS | 0xffc93c, 0xe4e8f4, 0x9aa3bf, 0x2d3552, 0x171c2c, 0xd6dcec, 0xff6b5e,
+    0x34477d, 0x222b4d, 0x2a1d00, 0x1c2236, 0x10141f, 0x0a0e1a, 0xffc93c,
+    FROST | ALPHA(12) | 0x0c1122, 0xf0f2f8, 0xa9b2cc, ALPHA(6) | 0xffffff, ALPHA(6) | 0xffffff, ALPHA(4) | 0xffffff,
+    FROST | ALPHA(24) | 0x090c18, 0xc3cbe4 };
+uint32_t pal[NPAL];
+static int night;
 
 static int isqrt(unsigned v)
 {
@@ -110,9 +120,9 @@ static int isqrt(unsigned v)
  * rainbow), where (in thousandths of the screen's width and height), how
  * far (in thousandths of its width), each fading evenly to nothing, the
  * last on top. */
-static const struct { int x, y, r; uint32_t c; } lights[] = {
-    { 440, 460, 196, 0x7e8ff5 }, { 60, 920, 419, 0x3d52c8 }, { 620, 880, 348, 0x2e6fd6 },
-    { 860, 260, 351, 0x6fa6f5 }, { 160, 200, 391, 0x4f74f0 } };
+static const struct { int x, y, r; uint32_t c, n; } lights[] = {   /* (c by day, n by night) */
+    { 440, 460, 196, 0x7e8ff5, 0x2f3a78 }, { 60, 920, 419, 0x3d52c8, 0x1c2668 }, { 620, 880, 348, 0x2e6fd6, 0x173b7a },
+    { 860, 260, 351, 0x6fa6f5, 0x2a4580 }, { 160, 200, 391, 0x4f74f0, 0x223680 } };
 static void wall_init(void)
 {
     wcols = PW / WG + 2; wrows = PH / WG + 2;
@@ -120,13 +130,14 @@ static void wall_init(void)
     wall = malloc((size_t)wcols * wrows * 4);
     for (int j = 0; j < wrows; j++)
         for (int i = 0; i < wcols; i++) {
-            int c[3] = { 0x1c, 0x26, 0x47 };
+            int c[3] = { night ? 0x0b : 0x1c, night ? 0x0f : 0x26, night ? 0x1e : 0x47 };
             for (int k = 0; k < (int)(sizeof lights / sizeof *lights); k++) {
                 int dx = i * WG - lights[k].x * PW / 1000, dy = j * WG - lights[k].y * PH / 1000, r = lights[k].r * PW / 1000;
                 int d = isqrt((unsigned)(dx * dx + dy * dy));
                 if (d >= r) continue;
                 int a = 256 - d * 256 / r;
-                for (int ch = 0; ch < 3; ch++) c[ch] += (((int)(lights[k].c >> (16 - 8 * ch)) & 255) - c[ch]) * a / 256;
+                uint32_t lc = night ? lights[k].n : lights[k].c;
+                for (int ch = 0; ch < 3; ch++) c[ch] += (((int)(lc >> (16 - 8 * ch)) & 255) - c[ch]) * a / 256;
             }
             wall[j * wcols + i] = (uint32_t)c[0] << 16 | (uint32_t)c[1] << 8 | (uint32_t)c[2];
         }
@@ -157,8 +168,15 @@ static uint32_t mix(uint32_t a, uint32_t b, int k)   /* k/32 of the way from a t
 }
 uint32_t draw_shown(uint32_t c)     /* (glass: over the desk's middle blue) */
 {
-    return c & FROST ? mix(0x34478f, c & 0xffffff, ALPHA_OF(c)) : c & ALPHA_M ? mix(0x34478f, c & 0xffffff, ALPHA_OF(c)) : c & 0xffffff;
+    return c & (FROST | ALPHA_M) ? mix(pal[PAL_BG], c & 0xffffff, ALPHA_OF(c)) : c & 0xffffff;
 }
+void draw_night(int on)
+{
+    night = on;
+    memcpy(pal, on ? pal_night : pal_day, sizeof pal);
+    if (wall) wall_init();
+}
+int draw_night_get(void) { return night; }
 
 static int sc(int v) { return (int)(((int64_t)v * Z) >> 16); }                 /* a position */
 static int sz(int v) { return v <= 0 ? 0 : (int)(((int64_t)v * Z + 32768) >> 16); }   /* a size, rounded */
@@ -180,6 +198,7 @@ void draw_init(const screen_t *s)
     gh = malloc((size_t)qw * qh * 4);
     gv = malloc((size_t)qw * qh * 4);
     gacc = malloc((size_t)qw * 3 * 8);
+    memcpy(pal, night ? pal_night : pal_day, sizeof pal);
     wall_init();
     draw_zoom(Z);                   /* (the picture's size, for this screen) */
 }

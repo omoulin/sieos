@@ -10,8 +10,9 @@
  *              panel's brightness (the Intel display). Kept in /etc/display.conf.
  *   Power      (laptops: the ACPI server) the battery; the lid closed: the
  *              screen off, or sleep. Kept in /etc/display.conf (lid=).
- *   Look       the size of everything, 50% to 400% (draw.c's zoom):
- *              the user's own (~/.look), applied at login.
+ *   Look       the size of everything, 50% to 400% (draw.c's zoom); the
+ *              palette: day, night, or auto by the clock (night from 19:00
+ *              to 7:00): the user's own (~/.look), applied at login.
  *   Mouse      the pointer's speed, left- or right-handed buttons, the
  *              wheel's direction: the user's own (~/.mouse), applied at login.
  *   Sound      the volume, or mute (the audio server's, docs/audio.md).
@@ -34,7 +35,7 @@
 #define TOP 48                           /* the window's title strip */
 #define ROW 54                           /* a row of buttons or a field */
 enum { S_BODY, S_SIZE = 10, S_SPEED = 30, S_HAND = 40, S_WHEEL = 50, S_SIA = 60, S_FIELD = 70,
-       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_BRIGHT = 130, S_OUT = 140, S_KBL = 150, S_KBLC = 160, S_LID = 170,
+       S_APPLY = 80, S_KEEP = 90, S_BACK, S_LOOK = 100, S_ZOOM = 110, S_NIGHT = 120, S_BRIGHT = 130, S_OUT = 140, S_KBL = 150, S_KBLC = 160, S_LID = 170,
        S_PAGE = 180, S_WSCAN = 200, S_WNET = 210, S_WJOIN = 250, S_WFORGET,
        S_BPOW = 260, S_BSCAN = 262, S_BPAIR, S_BFORGET, S_BYES, S_BNO, S_BCONN, S_BDEV = 270, S_VOL = 300 };
 enum { F_URL, F_MODEL, F_KEY, F_ROOTPW, F_WPASS, NF };
@@ -543,6 +544,8 @@ static void sec_look(void)
     int zk = -1;
     for (int i = 0; i < NZOOM; i++) if (zooms[i] == atlas_zoom_get()) zk = i;
     slider("Size", NZOOM, zk, S_ZOOM, zk < 0 ? "" : zn[zk]);
+    static const char *pn[3] = { "Day", "Night", "Auto" };
+    choices("Palette", pn, 3, atlas_look_get(), S_NIGHT);
 }
 static void sec_mouse(void)
 {
@@ -789,6 +792,7 @@ int settings_click(int kind, int arg)
     else if (arg >= S_HAND && arg < S_HAND + 2) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(s, arg - S_HAND, r); }
     else if (arg >= S_WHEEL && arg < S_WHEEL + 2) { int s, w, r; atlas_mouse_get(&s, &w, &r); atlas_mouse(s, w, arg - S_WHEEL); }
     else if (arg >= S_ZOOM && arg < S_ZOOM + NZOOM) atlas_zoom(zooms[arg - S_ZOOM]);
+    else if (arg >= S_NIGHT && arg < S_NIGHT + 3) atlas_look(arg - S_NIGHT);
     else if (arg >= S_VOL && arg < S_VOL + 21) vol = audio_vol(arg > S_VOL ? 5 * (arg - S_VOL) : AUDIO_MUTE | (vol < 0 ? 80 : vol & 0xFF));
     else if (arg >= S_PAGE && arg < S_PAGE + NPAGE) { page = arg - S_PAGE; scroll = 0; field = -1; }
     else if (arg >= S_OUT && arg < S_OUT + nouts) audio_call(AUDIO_OUT, arg - S_OUT);

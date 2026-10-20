@@ -189,6 +189,8 @@ int  atlas_set_size(int w, int h);                    /* 0, or -error (the size 
 void atlas_mouse(int speed, int swap, int reverse);   /* the user's mouse: applied and kept (~/.mouse) */
 void atlas_mouse_get(int *speed, int *swap, int *reverse);
 void atlas_zoom(int pct);                             /* the size of everything: 50..400 (%), the user's own (~/.look) */
+void atlas_look(int m);                               /* the palette: 0 day, 1 night, 2 auto (by the clock), the user's own (~/.look) */
+int  atlas_look_get(void);
 int  atlas_zoom_get(void);
 int  atlas_uid(void);                                 /* the logged-in user */
 

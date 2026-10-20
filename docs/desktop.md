@@ -219,7 +219,7 @@ narrow:
 | Section | What | Kept in |
 |---|---|---|
 | Screen | the size: 1280 x 720, 1366 x 768, 1600 x 900, 1920 x 1080, 2560 x 1440 where the screen can take any (QEMU's VGA and ramfb, the Pi 4, whose firmware scales the picture to the monitor, the laptop's Intel display, which also offers its panel's own size and the panel's **brightness**). It changes at once and **goes back by itself after 15 s** unless you press *Keep*, so a monitor that cannot show it is never a dead end. A firmware's fixed screen (UEFI, the Pi 5) shows its size. | `/etc/display.conf` (the login screen too) |
-| Look | the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400% (the look itself is glass, the only one) | `~/.look`, applied at your login (the login screen: 100%) |
+| Look | the **size** of everything: 50%, 75%, 100%, 125%, 150%, 200%, 300%, 400%; the **palette**: Day, Night, or Auto (night from 19:00 to 7:00, by the clock) | `~/.look`, applied at your login (the login screen: 100%, day) |
 | Mouse | pointer speed (Slow, Normal, Fast, Faster), right- or left-handed buttons, the wheel normal or reversed | `~/.mouse`, applied at your login |
 | Sound | the volume, by 5% (the first stop: mute); the output (Speakers or a monitor with sound, shown when there is one) ([audio.md](audio.md)) | the audio server, until a reboot |
 | Keyboard | shown only where the USB server drives a keyboard light (the Legion's, [usb-stack.md](usb-stack.md#the-keyboard-light)): Off, Low, High, and a colour (White, Red, Orange, Green, Cyan, Blue, Purple; a colour picked while off turns it on) | `/etc/kblight`, given to the keyboard at each start |
@@ -254,6 +254,13 @@ white over it. Only the focused window's **tab** is amber: no frame
 around it. Everything else is in the palette's own colours: light panels
 and lists, dark text.
 
+**By night** (Settings → Look: *Night*, or *Auto* by the clock) the same
+glass takes a second palette (`pal_night` in `draw.c`): smoke-tinted
+frost with light text on it, dark panels and lists, the same amber, and
+the desk a darker navy with its glows turned down (worked out again).
+Programs follow it through the theme (`ATW_THEME`, the look
+`ATLAS_LOOK_NIGHT`), as with the zoom.
+
 How: the screen is still drawn in strips (128 rows) with no second
 full-screen picture. A strip with glass in it is drawn with 40 rows and
 columns more around it (kept in the strip buffer, not shown), so glass
@@ -282,7 +289,7 @@ its glass as the solid colour it shows over the desk's middle);
 (`tests/ui/uipatch.c`), and that the frame around them has the look's
 colours.
 
-The desktop draws in a **palette** (`pal[]` in `draw.c`; the `C_...`
+The desktop draws in a **palette** (`pal[]` in `draw.c`, day's or night's; the `C_...`
 names in `atlas.h` are its entries, by role: the desk, a panel, an
 edge, the accent, text, text on the accent, the accent as text, where
 you type...).
@@ -395,7 +402,7 @@ sets it (up to 16 KiB). A new size (`ATW_SIZE`) says the desktop's zoom
 in its code (100: normal), so a program can size its text the same.
 `ATLAS_WIN_THEME` gives the desktop's theme (its palette as it shows on
 the screen, the look, the zoom, how round corners are, the text's size)
-and `ATW_THEME` tells every window when the user changes the zoom: the UI toolkit
+and `ATW_THEME` tells every window when the user changes the zoom or the palette: the UI toolkit
 ([ui.md](ui.md)) draws its widgets with it, so a program's buttons and
 menus follow the look while its content keeps its own colours.
 
@@ -683,7 +690,7 @@ the strip, its pixels checked on the screen);
 Settings: pointer speed and left-handed buttons (kept in `~/.mouse`), the
 look (glass: the desk's colours and the amber accent checked on
 the screen's pixels), everything at 200% and back (kept in `~/.look`; a
-click lands at both), the
+click lands at both), the night palette and day again (kept there too), the
 screen at 1600 x 900 (kept), 1366 x 768 then *Go back*, 1920 x 1080
 again, sia online (a wrong root password refused) and local again; atlas
 killed and restarted by init; the console server killed. With

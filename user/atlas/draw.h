@@ -79,6 +79,8 @@ enum { PAL_BG, PAL_GLASS, PAL_LINE, PAL_ACC, PAL_TXT, PAL_DIM, PAL_BAR, PAL_TERM
        PAL_CLEAR, PAL_GTXT, PAL_GDIM, PAL_GLINE, PAL_WASH, PAL_CELL, PAL_SMOKE, PAL_SMOKEFG, NPAL };
 extern uint32_t pal[NPAL];
 uint32_t draw_shown(uint32_t c);    /* a colour as it shows on the screen (glass: over the desk's middle) */
+void draw_night(int on);            /* the look: day's palette and desk (0), or night's (1); then redraw everything */
+int  draw_night_get(void);
 /* The zoom, 16.16: screen pixels per picture pixel (65536: 1:1). Then
  * redraw everything (SW and SH change). */
 void draw_zoom(int z);

@@ -767,10 +767,10 @@ send("cat /home/alice/.mouse")
 expect("speed=150"); expect("swap=0")
 print("ok: Settings: pointer speed Fast, left-handed (then back with the other button), kept in ~/.mouse")
 
-img = shot("27-look")                              # the look: glass, the only one
+img = shot("27-look")                              # the look: glass (by day)
 if not has_colour(img, ACC, at_least=50) or not soft(img, (0, 0, 1920, 1080), 300) or has_colour(img, "4be3c1", at_least=50):
     fail("glass (the soft desk, the amber accent) is not on the screen")
-print("ok: Settings: the look is glass (no choice of look)")
+print("ok: Settings: the look is glass")
 
 page("Look")
 settle_log()
@@ -788,6 +788,21 @@ expect("zoom=100")
 time.sleep(0.4)
 settle_log()
 print("ok: Settings: everything at 200%, then 100% again (clicks land at both), kept in ~/.look")
+
+click(*latest("set", "121"))                       # the palette: Night ...
+wait("atlas: look night")
+time.sleep(0.6)
+img = shot("35-night")
+if not has_colour(img, "1c2236", at_least=200) or not has_colour(img, ACC, at_least=50):
+    fail("no night palette (Settings' dark panel, the amber accent)")
+send("cat /home/alice/.look")
+expect("night=1")
+settle_log()
+click(*latest("set", "120"))                       # ... and Day again
+wait("atlas: look day")
+time.sleep(0.4)
+settle_log()
+print("ok: Settings: the night palette (dark glass, the same amber), kept in ~/.look, then day again")
 
 page("Screen")
 click(*latest("set", "12"))                        # 1600 x 900

@@ -1000,11 +1000,24 @@ static void zoom_apply(int pct)
     geometry();
     ptr_x = ptr_x * SW / osw; ptr_y = ptr_y * SH / osh;
 }
+/* The palette: day, night, or auto (night from 19:00 to 7:00, by the
+ * clock; looked at each minute). The user's own (~/.look), day before a login. */
+static int look_mode;                                    /* 0 day, 1 night, 2 auto */
+int atlas_look_get(void) { return look_mode; }
+static int look_apply(void)                              /* -> 1: it changed */
+{
+    long d = now_day();
+    int n = look_mode == 1 || (look_mode == 2 && (d < 7 * 3600 || d >= 19 * 3600));
+    if (n == draw_night_get()) return 0;
+    draw_night(n);
+    return 1;
+}
 static void look_save(void)
 {
     char path[96], line[32], *p = line;
     strlcpy(path + strlcpy(path, home, sizeof path), "/.look", 7);
-    p += strlcpy(p, "zoom=", 6); p += num(p, zoom_pct); *p++ = '\n'; *p = 0;
+    p += strlcpy(p, "zoom=", 6); p += num(p, zoom_pct); *p++ = '\n';
+    p += strlcpy(p, "night=", 7); p += num(p, look_mode); *p++ = '\n'; *p = 0;
     if (uid >= 0 && atlas_may(home, 1)) {
         long f = fs_open(path, FS_WRONLY | FS_CREAT | FS_TRUNC, 0644);
         if (f >= 0) { fs_write(f, 0, line, strlen(line)); fs_close(f); fs_chown(path, uid, ugid); }
@@ -1019,9 +1032,18 @@ void atlas_zoom(int pct)
     settle();
     client_theme();
 }
+void atlas_look(int m)
+{
+    if (m < 0 || m > 2) return;
+    look_mode = m;
+    look_save();
+    say("atlas: look %s\n", m == 0 ? "day" : m == 1 ? "night" : "auto");
+    if (look_apply()) { settle(); client_theme(); }
+}
 static void look_load(void)
 {
     int z = 100;
+    look_mode = 0;
     if (uid >= 0) {
         char path[96];
         size_t n = 0;
@@ -1029,10 +1051,12 @@ static void look_load(void)
         char *f = atlas_may(path, 0) ? file_get(path, &n) : 0;
         if (f) {
             int v = conf_num(f, "zoom", z); z = v >= 50 && v <= 400 ? v : z;
+            v = conf_num(f, "night", 0); look_mode = v >= 0 && v <= 2 ? v : 0;
             free(f);
         }
     }
     if (z != zoom_pct) zoom_apply(z);
+    look_apply();
 }
 
 static void mouse_load(void)                            /* at login: the user's mouse; at logout: the default */
@@ -2074,6 +2098,7 @@ int main(int argc, char **argv)
         }
         if (m.pid == self && m.w[0] == ATLAS_TICK) {     /* a new minute: the Deskbar's tray */
             reply_val(from, 0);
+            if (look_apply()) { redraw(); if (mode == SESSION) client_theme(); continue; }   /* (auto: day or night now) */
             if ((mode == GREETER && !first_start) || locked) { redraw(); continue; }   /* (the large clock) */
             if (mode == SESSION) redraw_box(DBX, M + DB_MENU, DBX + DBW, M + DB_MENU + DB_TRAY);
             if (mode == SESSION && wm_top() < 0) { int x0, y0, x1, y1; rest_box(&x0, &y0, &x1, &y1); redraw_box(x0, y0, x1, y1); }   /* (the resting clock) */

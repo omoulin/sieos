@@ -49,15 +49,16 @@ typedef struct { int32_t x0, y0, x1, y1; } atlas_rect_t;
  * ATW_SIZE: x, y = the insides' new width and height, code = the desktop's
  * zoom in % (its text size: 100 normal, 200 twice as big); ATW_FOCUS: code 1 in,
  * 0 out; ATW_CLOSE: the user closed it (it is gone); ATW_THEME: the zoom
- * changed (ATLAS_WIN_THEME again), code = the look. */
+ * or the palette changed (ATLAS_WIN_THEME again), code = the look. */
 typedef struct { uint16_t type, code; int16_t x, y; uint8_t buttons; int8_t wheel; uint16_t _pad; } atlas_event_t;
 enum { ATW_KEY = 1, ATW_POINTER, ATW_SIZE, ATW_FOCUS, ATW_CLOSE, ATW_THEME };
 /* The theme: atlas's palette as it shows on the screen (a program's pixels
  * are shown as they are, so it draws these to look like the desktop; its
- * glass as solid colour over the desk's middle), the look (one: glass),
+ * glass as solid colour over the desk's middle), the look (glass, by day
+ * or by night: the same glass, dark, light text on it),
  * the zoom in %, the corners' radius at 100%, text's scale (16.16 of a
  * 6 x 11 font, in the window's pixels). */
-enum { ATLAS_LOOK_FROST };
+enum { ATLAS_LOOK_FROST, ATLAS_LOOK_NIGHT };
 enum { ATT_BG, ATT_GLASS, ATT_LINE, ATT_ACC, ATT_TXT, ATT_DIM, ATT_BAR, ATT_TERM, ATT_TERMFG, ATT_ERR,
        ATT_SEL, ATT_GRID, ATT_INK, ATT_PANEL, ATT_FIELD, ATT_GAP, ATT_ACCT, ATT_N };
 typedef struct { uint16_t size, look, zoom, radius; int32_t text; uint32_t pal[ATT_N]; } atlas_theme_t;
