@@ -504,14 +504,14 @@ static void tree_draw(int x0, int y0, int x1, int y1)
     dl_rect(x0, y0, x1, y1, 0, C_PANEL);
     dl_rect(x1, y0, x1 + 1, y1, 0, C_LINE);
     hitbox(x0, y0, x1, y1, H_ED, E_TREEBG);
-    dl_text(x0 + 14, y0 + 12, "EXPLORER", 8, SS, C_DIM, 0, 0, SW, SH);
+    dl_text(x0 + 14, y0 + 12, "EXPLORER", 8, SSS, C_DIM, 0, 0, SW, SH);
     int hy = y0 + TABH;                                  /* the root: ".." and its name */
     const char *rn = root[1] ? base_name(root) : "/";
     char t[64], *p = t + strlcpy(t, ".. ", sizeof t);
     strlcpy(p, rn, sizeof t - 3);
     int here = !sdir[0] || !strcmp(sdir, root);          /* (the folder a new file goes to: bold) */
-    dl_text(x0 + 14, hy + 4, t, strlen(t), S(2), C_TXT, x0, hy, x1 - 6, hy + TROW);
-    if (here) dl_text(x0 + 15, hy + 4, t, strlen(t), S(2), C_TXT, x0, hy, x1 - 6, hy + TROW);
+    dl_text(x0 + 14, hy + 4, t, strlen(t), SF(2), C_TXT, x0, hy, x1 - 6, hy + TROW);
+    if (here) dl_text(x0 + 15, hy + 4, t, strlen(t), SF(2), C_TXT, x0, hy, x1 - 6, hy + TROW);
     hitbox(x0, hy, x1, hy + TROW, H_ED, E_UP);
     if (atlas_debug) say("atlas: dbg etreeup at %d %d\n", x0 + 40, hy + TROW / 2);
     int ry = hy + TROW + 4, n = (y1 - ry - 4) / TROW;
@@ -531,9 +531,9 @@ static void tree_draw(int x0, int y0, int x1, int y1)
             icon(I_FILE, ix + 6, y + 5, 2);
             tx = ix + 36;
         }
-        dl_text(tx, y + 4, node[i].name, strlen(node[i].name), S(2), node[i].dir ? C_TXT : C_DIM, x0, y, x1 - 6, y + TROW);
+        dl_text(tx, y + 4, node[i].name, strlen(node[i].name), SF(2), node[i].dir ? C_TXT : C_DIM, x0, y, x1 - 6, y + TROW);
         if (node[i].dir && !strcmp(node[i].path, sdir))  /* (the folder a new file goes to: bold) */
-            dl_text(tx + 1, y + 4, node[i].name, strlen(node[i].name), S(2), C_TXT, x0, y, x1 - 6, y + TROW);
+            dl_text(tx + 1, y + 4, node[i].name, strlen(node[i].name), SF(2), C_TXT, x0, y, x1 - 6, y + TROW);
         hitbox(x0, y, x1, y + TROW, H_ED, E_TREE + i);
         if (atlas_debug) say("atlas: dbg etree %s at %d %d\n", node[i].name, tx + 20, y + TROW / 2);
     }
@@ -544,7 +544,7 @@ static void tabs_draw(int x0, int y0, int x1)
     dl_rect(x0, y0, x1, y0 + TABH, 0, C_PANEL);
     dl_rect(x0, y0 + TABH - 1, x1, y0 + TABH, 0, C_LINE);
     int w[NTAB], total = 0, first = 0;
-    for (int i = 0; i < ntab; i++) { w[i] = tw(strlen(tabs[i].name), 2) + 64; total += w[i]; }
+    for (int i = 0; i < ntab; i++) { w[i] = tws(tabs[i].name, 2) + 64; total += w[i]; }
     while (total > x1 - x0 && first < act) total -= w[first++];   /* (too many: the shown one stays in view) */
     int x = x0;
     for (int i = first; i < ntab && x < x1; i++) {
@@ -555,8 +555,8 @@ static void tabs_draw(int x0, int y0, int x1)
         }
         dl_rect(xe - 1, y0 + 6, xe, y0 + TABH - 6, 0, C_LINE);
         int n = strlen(tabs[i].name);
-        dl_text(x + 16, y0 + 10, tabs[i].name, n, S(2), on ? C_TXT : C_DIM, x, y0, xe - 34, y0 + TABH);
-        if (on) dl_text(x + 17, y0 + 10, tabs[i].name, n, S(2), C_TXT, x, y0, xe - 34, y0 + TABH);
+        dl_text(x + 16, y0 + 10, tabs[i].name, n, SF(2), on ? C_TXT : C_DIM, x, y0, xe - 34, y0 + TABH);
+        if (on) dl_text(x + 17, y0 + 10, tabs[i].name, n, SF(2), C_TXT, x, y0, xe - 34, y0 + TABH);
         hitbox(x, y0, xe, y0 + TABH, H_ED, E_TAB + i);
         int bx = xe - 30;                                /* the close box: ×, or ■ if changed */
         if (tabs[i].dirty) dl_rect(bx + 6, y0 + 15, bx + 16, y0 + 25, 2, on ? C_ACC : C_DIM);
@@ -594,7 +594,7 @@ void edit_draw(int x0, int y0, int x1, int y1, int focused)
             else *o++ = *p;
         }
         *o = 0;
-        dl_text(RX0 + 16, cy + 6, t, strlen(t), SS, C_DIM, RX0, cy, X1 - 10, cy + CRUMB);
+        dl_text(RX0 + 16, cy + 6, t, strlen(t), SSS, C_DIM, RX0, cy, X1 - 10, cy + CRUMB);
     }
     TY0 = cy + CRUMB; TY1 = sy;
     int gut = 6 * KW, tx = RX0 + gut + 8;
@@ -615,7 +615,7 @@ void edit_draw(int x0, int y0, int x1, int y1, int focused)
         char nb[12];
         int nl = num(nb, ln + 1);
         nb[nl] = 0;
-        label(RX0 + gut - 10 - tw(nl, 2), ty + 1, nb, 2, ln == cl ? C_TXT : C_DIM);
+        dl_text(RX0 + gut - 10 - tw(nl, 2), ty + 1, nb, nl, S(2), ln == cl ? C_TXT : C_DIM, 0, 0, SW, SH);   /* (mono, as the text) */
         colour(e->b, p, end, lang, &com, k, (int)sizeof k);
         int s = p + e->left, n = end - s < cols ? end - s : cols;
         for (int i = 0; i < n; ) {                       /* runs of one colour */
@@ -653,8 +653,8 @@ void edit_draw(int x0, int y0, int x1, int y1, int focused)
     o += strlcpy(o, "   ", 4); o += strlcpy(o, lang == L_HASH ? "Shell / Python" : ln[lang], 20);
     o += strlcpy(o, "   ", 4); o += strlcpy(o, e->ro ? "read only" : !e->path[0] ? "new" : e->dirty ? "changed" : "saved", 12);
     if (msg[0]) { o += strlcpy(o, "   ", 4); strlcpy(o, msg, sizeof t - (size_t)(o - t)); }
-    dl_text(X0 + 8, sy + 5, t, strlen(t), S(2), C_INK, X0, sy, X1 - 10, Y1);
-    const char *keys = "Ctrl+S save  Ctrl+W close  F5/F6 tabs  Ctrl+B tree ";
-    int kl = strlen(keys), kx = X1 - 10 - tw(kl, 2);
-    if (kx > X0 + 8 + tw(strlen(t), 2) + 30) dl_text(kx, sy + 5, keys, kl, S(2), C_INK, X0, sy, X1, Y1);
+    dl_text(X0 + 8, sy + 5, t, strlen(t), SF(2), C_INK, X0, sy, X1 - 10, Y1);
+    const char *keys = "Ctrl+S save   Ctrl+W close   F5/F6 tabs   Ctrl+B tree ";
+    int kl = strlen(keys), kx = X1 - 10 - tws(keys, 2);
+    if (kx > X0 + 8 + tws(t, 2) + 30) dl_text(kx, sy + 5, keys, kl, SF(2), C_INK, X0, sy, X1, Y1);
 }

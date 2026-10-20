@@ -78,7 +78,14 @@ enum { H_BTN = 1, H_WIN, H_STRIP, H_RES, H_MENU, H_PR, H_FIELD, H_LOGIN, H_ED,
 void hitbox(int x0, int y0, int x1, int y1, int kind, int arg);
 int  pill(int x, int y, const char *s, int on, int kind, int arg);   /* -> its right edge */
 void label(int x, int y, const char *s, int k, uint32_t c);
-static inline int tw(int n, int k) { return text_w(n, S(k)); }       /* n characters at scale k */
+static inline int tw(int n, int k) { return text_w(n, S(k)); }       /* n characters at scale k (mono) */
+/* The proportional font (draw.h's SANS): titles, labels, buttons, names;
+ * terminals, code and keys stay mono. label() and pill() use it up to
+ * scale 3 (bigger text keeps the pixel font). */
+#define SF(k) (S(k) | SANS)
+#define STS   (ST | SANS)
+#define SSS   (SS | SANS)
+static inline int tws(const char *s, int k) { return text_sw(s, strlen(s), k > 3 ? S(k) : SF(k)); }   /* s at scale k, as label() draws it */
 void say(const char *fmt, ...);
 int  num(char *p, long v);
 static inline const char *base_name(const char *p)   /* after the last '/' */

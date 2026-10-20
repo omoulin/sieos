@@ -275,12 +275,21 @@ thinner than a pixel), text and icons. So it is drawn sharp, not
 stretched, and the rest of the desktop does not know. Text comes in
 **three sizes** (`atlas.h`): titles (`ST`: Settings' sections, the
 Deskbar's clock), the body (`S(2)`) and small text (`SS`: the strip's
-right side, sizes in Files, the editor's Explorer heading and path). At
-100% each is a **native font** rendered once from DejaVu Sans Mono by
-`tools/mkfont15.py` and drawn pixel for pixel: 11 x 20 (`font18.c`),
-9 x 16 (`font15.c`) and 8 x 15 (`font13.c`); at other sizes the 6 x 11
-pixel font is scaled, each screen pixel taking the share of the font's
-pixels it covers (smooth edges, even strokes). The pointer is never
+right side, sizes in Files, the editor's Explorer heading and path), and
+in **two fonts**. Titles, labels, buttons, names and what you type in a
+field are in **DejaVu Sans**, proportional (`SANS` or-ed into the scale:
+`SF(2)`, `STS`, `SSS`; `label()` and `pill()` use it; `text_sw` measures
+it, `text_fit` says how much fits); terminals, the editor's text, line
+numbers and keys stay in **DejaVu Sans Mono**. At 100% each size of each
+is a **native font** rendered once and drawn pixel for pixel: the mono
+ones by `tools/mkfont15.py`, 11 x 20 (`font18.c`), 9 x 16 (`font15.c`) and
+8 x 15 (`font13.c`); the proportional ones by `tools/mkfontsans.py` at
+the same heights (`fontsans.c`, 4-bit coverage, each glyph only where it
+has ink: 22 KB for the three), drawn by `sans.c`. At other sizes the
+proportional font is the native one at whole multiples (200%: each pixel
+2 x 2, sharp), else the nearest bigger one sampled bilinearly; the mono
+text is the 6 x 11 pixel font scaled, each screen pixel taking the share
+of the font's pixels it covers (smooth edges, even strokes). The pointer is never
 zoomed: when it moves, its old and new places are redrawn at its own
 size on the screen (`present_pointer`), so it leaves no trail.
 The pointer's position comes as a fraction of the screen, so clicks land
@@ -517,7 +526,7 @@ between processes.
 | `files.c`, `edit.c`, `panel.c`, `settings.c`, `mail.c` | the windows' insides: Files, the editor, sia, Settings, Mail |
 | `icons.c` | the icons (12 x 12 pixel maps; their outline alone on a tab) and the SIEOS cube (16 x 16) |
 | `setup.c` | the first start on the screen (the accounts) |
-| `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `screen.c`, `igfx.c` | drawing (and the look: the desk, the glass), the fonts, the screen (and the laptop's Intel display) |
+| `draw.c`, `font.c`, `font13.c`, `font15.c`, `font18.c`, `fontsans.c`, `sans.c`, `screen.c`, `igfx.c` | drawing (and the look: the desk, the glass), the fonts, the screen (and the laptop's Intel display) |
 
 - **The screen** (`screen.c`): x86, QEMU's standard VGA card or the UEFI
   firmware's screen (GOP); on the target laptop's Intel display (Raptor

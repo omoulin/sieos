@@ -29,7 +29,7 @@ static void item_measure(ui_widget *w)
 {
     char k[16];
     key_name(w->a, k);
-    w->mw = ui_tw(A, len(w->text) + (k[0] ? len(k) + 4 : 0)) + ui_sc(A, 40);
+    w->mw = ui_sw(A, w->text, len(w->text)) + (k[0] ? ui_sw(A, k, len(k)) + ui_tw(A, 4) : 0) + ui_sc(A, 40);
     w->mh = w->b ? ui_sc(A, 10) : A->chh + ui_sc(A, 18);
 }
 static void item_draw(ui_widget *w)
@@ -41,7 +41,7 @@ static void item_draw(ui_widget *w)
     uint32_t fg = w->flags & F_OFF ? TH->dim : on ? TH->ink : TH->text;
     ui_ytext(w, w->text, fg, w->x + ui_sc(A, 20), w->x + w->w);
     key_name(w->a, k);
-    if (k[0]) ui_ytext(w, k, on ? TH->ink : TH->dim, w->x + w->w - ui_sc(A, 20) - ui_tw(A, len(k)), w->x + w->w);
+    if (k[0]) ui_ytext(w, k, on ? TH->ink : TH->dim, w->x + w->w - ui_sc(A, 20) - ui_sw(A, k, len(k)), w->x + w->w);
 }
 static void pick(ui_widget *w)                          /* an item chosen: the menus close, then its action */
 {
@@ -116,7 +116,7 @@ ui_widget *ui_menubar(ui_widget *parent)
     if (!w->app->menubar) w->app->menubar = w;
     return w;
 }
-static void title_measure(ui_widget *w) { w->mw = ui_tw(A, len(w->text)) + ui_sc(A, 32); w->mh = A->chh + ui_sc(A, 18); }
+static void title_measure(ui_widget *w) { w->mw = ui_sw(A, w->text, len(w->text)) + ui_sc(A, 32); w->mh = A->chh + ui_sc(A, 18); }
 static void title_draw(ui_widget *w)
 {
     int on = A->bar == w->parent && open_menu(A) == w->saved;

@@ -25,8 +25,10 @@ browser's toolbar is made with it; `uidemo` shows every widget.
   divider between two children; `ui_tabs` shows one page at a time.
 - **Sizes** are the desktop's picture pixels, the unit atlas lays out in (a
   button is 42 high), turned into the window's pixels by the desktop's
-  zoom: at 200% everything is twice as big and the text is the 9 x 16 font
-  drawn twice as large, sharp (HiDPI). Positions the program gets (events,
+  zoom: at 200% everything is twice as big and the text is the desktop's
+  proportional font (DejaVu Sans, `user/atlas/sans.c`) drawn twice as
+  large, sharp (HiDPI); at sizes between, the nearest bigger one sampled
+  smoothly. Positions the program gets (events,
   `ui_bounds`, canvas pixels) are the window's own pixels.
 - **Painting** is by damage: a widget that changes calls `ui_dirty` (the
   setters do), the rectangles are merged (at most 8), and `ui_flush` draws
@@ -182,14 +184,15 @@ Yes, 0 for Cancel.
 
 ## Size
 
-Measured with `size`: the toolkit's code and its font (the desktop's 9 x 16
-font, 13.7 KB, and its 6 x 11 font, 0.9 KB, compiled from `user/atlas/`).
+Measured with `size`: the toolkit's code (with `sans.c`, which draws its
+text) and its font (the desktop's proportional one at three sizes,
+`fontsans.c`, 22 KB, compiled from `user/atlas/`).
 
-| Build | Code | With the fonts |
+| Build | Code | With the font |
 |-------|------|----------------|
-| x86-64, gcc -Os (`libui.a`) | 26.6 KB | 41 KB |
-| arm64, sicc -Os | 40.3 KB | 55 KB |
-| libposix, clang -Os (`libui-posix.a`, before the linker drops what is unused) | 38.6 KB | 53 KB |
+| x86-64, gcc -Os (`libui.a`) | 28.3 KB | 50 KB |
+| arm64, sicc -Os | 42.4 KB | 64 KB |
+| libposix, clang -Os (`libui-posix.a`, before the linker drops what is unused) | 39.7 KB | 62 KB |
 
 `uidemo`, every widget: 61 KB (x86-64), 82 KB (arm64). The browser grew
 by 16 KB on arm64 (94,766,544 -> 94,782,928 bytes; 12 KB on x86-64) and lost its HTML toolbar page and the

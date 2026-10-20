@@ -25,9 +25,15 @@ static int focused(ui_widget *w) { return A->focus == w && A->focused; }
 /* ---- Label: text, one line per '\n'. */
 static void label_measure(ui_widget *w)
 {
-    int n = 1, l = 0, m = 0;
-    for (const char *p = w->text; *p; p++) if (*p == '\n') { n++; l = 0; } else if (++l > m) m = l;
-    w->mw = ui_tw(A, m); w->mh = n * (A->chh + ui_sc(A, 6)) + ui_sc(A, 4);
+    int n = 1, m = 0;
+    for (const char *p = w->text, *q;; p = q + 1) {     /* (the widest line) */
+        q = strchr(p, '\n');
+        int l = ui_sw(A, p, q ? (int)(q - p) : len(p));
+        if (l > m) m = l;
+        if (!q) break;
+        n++;
+    }
+    w->mw = m + 1; w->mh = n * (A->chh + ui_sc(A, 6)) + ui_sc(A, 4);
 }
 static void label_draw(ui_widget *w)
 {
@@ -51,8 +57,8 @@ ui_widget *ui_label(ui_widget *parent, const char *text) { return ui_new(0, pare
 /* ---- Button, toggle (c 1: stays in, value 1), tool (a toolbar's: flat, an icon). */
 static void button_measure(ui_widget *w)
 {
-    if (w->d) { w->mh = ui_sc(A, 40); w->mw = w->b ? ui_sc(A, 40) : ui_tw(A, len(w->text)) + ui_sc(A, 24); return; }   /* (a tool) */
-    w->mw = ui_tw(A, len(w->text)) + ui_sc(A, 28); w->mh = ui_sc(A, 42);
+    if (w->d) { w->mh = ui_sc(A, 40); w->mw = w->b ? ui_sc(A, 40) : ui_sw(A, w->text, len(w->text)) + ui_sc(A, 24); return; }   /* (a tool) */
+    w->mw = ui_sw(A, w->text, len(w->text)) + ui_sc(A, 28); w->mh = ui_sc(A, 42);
 }
 static void button_draw(ui_widget *w)
 {
@@ -63,7 +69,7 @@ static void button_draw(ui_widget *w)
     if (!flat || focused(w)) ui_frame(A, w->x, w->y, w->x + w->w, w->y + w->h, r, focused(w) ? 2 * line_w(A) : 1, focused(w) || on ? TH->accent : TH->line);
     uint32_t fg = off ? TH->dim : on ? TH->ink : TH->text;
     if (w->b) ui_icon(A, w->b, w->x + w->w / 2, w->y + w->h / 2, fg);
-    else ui_ytext(w, w->text, fg, w->x + (w->w - ui_tw(A, len(w->text))) / 2, w->x + w->w);
+    else ui_ytext(w, w->text, fg, w->x + (w->w - ui_sw(A, w->text, len(w->text))) / 2, w->x + w->w);
 }
 static int button_event(ui_widget *w, const ui_event *e)
 {
@@ -93,7 +99,7 @@ ui_widget *ui_toggle(ui_widget *parent, const char *text, int on, ui_fn fn, void
 }
 
 /* ---- Check box: a square, ticked (value 1), and its text. */
-static void check_measure(ui_widget *w) { w->mw = ui_sc(A, 34) + ui_tw(A, len(w->text)); w->mh = ui_sc(A, 42); }
+static void check_measure(ui_widget *w) { w->mw = ui_sc(A, 34) + ui_sw(A, w->text, len(w->text)); w->mh = ui_sc(A, 42); }
 static void check_draw(ui_widget *w)
 {
     int s = ui_sc(A, 24), x = w->x, y = w->y + (w->h - s) / 2;
@@ -119,15 +125,15 @@ ui_widget *ui_check(ui_widget *parent, const char *text, int on, ui_fn fn, void 
 static void field_measure(ui_widget *w) { w->mw = ui_tw(A, 16) + ui_sc(A, 28); w->mh = ui_sc(A, 44); }
 static int field_at(ui_widget *w, int x)                /* the character boundary nearest x */
 {
-    int k = (x - w->x - ui_sc(A, 14) + A->cw / 2) / A->cw + w->c, n = len(w->text);
-    return k < 0 ? 0 : k > n ? n : k;
+    int n = len(w->text), dx = x - w->x - ui_sc(A, 14), k = w->c;
+    while (k < n && ui_sw(A, w->text + w->c, k + 1 - w->c) - ui_sw(A, w->text + k, 1) / 2 <= dx) k++;
+    return k;
 }
 static void field_show(ui_widget *w)                    /* scroll so the cursor shows */
 {
-    int fit = (w->w - ui_sc(A, 28)) / (A->cw ? A->cw : 1);
-    if (fit < 1) fit = 1;
+    int room = w->w - ui_sc(A, 28);
     if (w->a < w->c) w->c = w->a;
-    if (w->a > w->c + fit) w->c = w->a - fit;
+    while (w->c < w->a && ui_sfit(A, w->text + w->c, w->a - w->c, room) < w->a - w->c) w->c++;
     if (w->c < 0) w->c = 0;
 }
 static void field_draw(ui_widget *w)
@@ -140,11 +146,11 @@ static void field_draw(ui_widget *w)
     if (A->cx0 < w->x + ui_sc(A, 8)) A->cx0 = w->x + ui_sc(A, 8);
     if (A->cx1 > w->x + w->w - ui_sc(A, 8)) A->cx1 = w->x + w->w - ui_sc(A, 8);
     if (s1 > s0 && A->focus == w) {
-        int a = px + (s0 - w->c) * A->cw, b = px + (s1 - w->c) * A->cw;
+        int v0 = s0 > w->c ? s0 : w->c, a = px + ui_sw(A, w->text + w->c, v0 - w->c), b = px + ui_sw(A, w->text + w->c, s1 - w->c);
         ui_fill(A, a, ty - ui_sc(A, 2), b, ty + A->chh + ui_sc(A, 2), TH->sel);
     }
     if (n) ui_text_draw(A, px, ty, w->text + w->c, n - w->c, w->flags & F_OFF ? TH->dim : TH->text, w->x + w->w);
-    if (focused(w)) { int x = px + (w->a - w->c) * A->cw; ui_fill(A, x - 1, ty - ui_sc(A, 2), x - 1 + 2 * line_w(A), ty + A->chh + ui_sc(A, 2), TH->accent); }
+    if (focused(w)) { int x = px + ui_sw(A, w->text + w->c, w->a - w->c); ui_fill(A, x - 1, ty - ui_sc(A, 2), x - 1 + 2 * line_w(A), ty + A->chh + ui_sc(A, 2), TH->accent); }
     A->cx0 = cx0; A->cx1 = cx1;
 }
 static void field_replace(ui_widget *w, const char *ins, int k)   /* the selection (or nothing at the cursor) becomes ins */
@@ -521,7 +527,7 @@ static void tabs_measure(ui_widget *w)
     int tw = 0;
     for (ui_widget *c = w->first; c; c = c->next) {
         ui_measure(c);
-        tw += ui_tw(A, len(c->text)) + ui_sc(A, 32);
+        tw += ui_sw(A, c->text, len(c->text)) + ui_sc(A, 32);
         if (c->mw > w->mw) w->mw = c->mw;
         if (c->mh > w->mh) w->mh = c->mh;
     }
@@ -542,7 +548,7 @@ static void tabs_draw(ui_widget *w)
     ui_fill(A, w->x, w->y, w->x + w->w, w->y + h, TH->panel);
     ui_fill(A, w->x, w->y + h - 1, w->x + w->w, w->y + h, TH->line);
     for (ui_widget *c = w->first; c; c = c->next, i++) {
-        int tw = ui_tw(A, len(c->text)) + ui_sc(A, 32), on = i == w->value;
+        int tw = ui_sw(A, c->text, len(c->text)) + ui_sc(A, 32), on = i == w->value;
         if (on) {
             ui_fill(A, x, w->y, x + tw, w->y + h, TH->bg);
             ui_fill(A, x, w->y + h - ui_sc(A, 4), x + tw, w->y + h, TH->accent);
@@ -564,7 +570,7 @@ static int tabs_event(ui_widget *w, const ui_event *e)
     if (e->type == UI_EV_POINTER && pressed(w, e) && e->y < w->y + tabs_h(w)) {
         int x = w->x, i = 0;
         for (ui_widget *c = w->first; c; c = c->next, i++) {
-            int tw = ui_tw(A, len(c->text)) + ui_sc(A, 32);
+            int tw = ui_sw(A, c->text, len(c->text)) + ui_sc(A, 32);
             if (e->x >= x && e->x < x + tw) { tabs_pick(w, i); break; }
             x += tw;
         }

@@ -38,6 +38,7 @@
  */
 #include "mk.h"
 #include "draw.h"
+#include "fontsans.h"
 
 extern const uint8_t font[95][9];   /* font.c (tools/mkfont.py) */
 extern const uint8_t font15[95][16][9];   /* font15.c (tools/mkfont15.py): the native one at 1.5, */
@@ -184,7 +185,20 @@ void draw_init(const screen_t *s)
 }
 void dl_reset(void) { np = 0; arena_n = 0; }
 int  dl_count(void) { return np; }
-int  text_w(int n, int scale) { return (int)((int64_t)n * CW * scale >> 16); }
+int  text_w(int n, int scale) { return (int)((int64_t)n * CW * (scale & ~SANS) >> 16); }
+
+static int text_scale(int scale) { scale = (int)(((int64_t)(scale & ~SANS) * Z) >> 16); return scale < 4096 ? 4096 : scale; }
+int text_sw(const char *s, int n, int scale)
+{
+    if (!(scale & SANS)) return text_w(n, scale);
+    return n <= 0 ? 0 : (int)((sans_w(s, n, text_scale(scale)) + Z - 1) / Z);
+}
+int text_fit(const char *s, int n, int scale, int w)
+{
+    int k = 0;
+    if (!(scale & SANS)) { int cw = text_w(1, scale); k = cw > 0 ? w / cw : n; return k < 0 ? 0 : k < n ? k : n; }
+    return sans_fit(s, n, text_scale(scale), (int64_t)w * Z);    /* (screen pixels, 16.16: as text_sw) */
+}
 void dl_pointer(int x, int y) { ptr_x = sc(x); ptr_y = sc(y); }
 
 static prim_t *add(int type, int x0, int y0, int x1, int y1, uint32_t c)
@@ -244,18 +258,18 @@ void dl_frame(int x0, int y0, int x1, int y1, int r, int t, uint32_t c)
 void dl_text(int x, int y, const char *s, int n, int scale, uint32_t c, int cx0, int cy0, int cx1, int cy1)
 {
     if (n <= 0 || arena_n + n > ARENA) return;
-    x = sc(x); y = sc(y); scale = (int)(((int64_t)scale * Z) >> 16);
+    int sans = !!(scale & SANS);
+    x = sc(x); y = sc(y); scale = text_scale(scale);
     box(&cx0, &cy0, &cx1, &cy1);
-    if (scale < 4096) scale = 4096;
     if (cx0 < x) cx0 = x;
     if (cy0 < y) cy0 = y;
-    int x1 = x + text_w(n, scale), y1 = y + (int)((int64_t)CH * scale >> 16);
+    int x1 = x + (sans ? (int)((sans_w(s, n, scale) + 65535) >> 16) + 2 : text_w(n, scale)), y1 = y + (int)((int64_t)CH * scale >> 16);
     if (cx1 > x1) cx1 = x1;
     if (cy1 > y1) cy1 = y1;
     prim_t *p = add(P_TEXT, cx0, cy0, cx1, cy1, c);
     if (!p) return;
     p->cx0 = x; p->cy0 = y;          /* (for text, cx0/cy0 hold where the text starts) */
-    p->scale = scale; p->len = n; p->text = arena_n;
+    p->scale = scale; p->len = n; p->text = arena_n; p->t = sans;
     memcpy(arena + arena_n, s, n);
     arena_n += n;
 }
@@ -587,6 +601,7 @@ static void raster(const prim_t *p, int sy, int n, int lo, int hi)
     }
     case P_TEXT: {                   /* each screen pixel: how much of it the font's pixels cover */
         int s = p->scale, cl = p->x0 > lo ? p->x0 : lo, cr = p->x1 < hi ? p->x1 : hi;
+        if (p->t) { sans_draw(strip, PW, org, p->cx0, p->cy0, arena + p->text, p->len, s, p->c, cl, ya, cr, yb); break; }
         int nf = 0;
         while (nf < (int)(sizeof natives / sizeof *natives) && natives[nf].scale != s) nf++;
         if (nf < (int)(sizeof natives / sizeof *natives)) {   /* a native font, pixel for pixel (100%) */

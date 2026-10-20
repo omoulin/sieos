@@ -89,7 +89,7 @@ static int tab_w(int w)                  /* the tab: its icon, its title, the tw
 {
     char t[64];
     wm_title(w, t, sizeof t);
-    int n = TAB_L + tw(strlen(t), 2) + TAB_R, room = ww[w].x1 - ww[w].x0;
+    int n = TAB_L + tws(t, 2) + TAB_R, room = ww[w].x1 - ww[w].x0;
     return n < room ? n : room;
 }
 static int tab_x(int w) { return ww[w].x0 < 0 ? 0 : ww[w].x0; }   /* (past the left side: it slides) */
@@ -314,13 +314,13 @@ static void draw_one(int w, int f, int keys)
         if (up) hitbox(tx, ty, tx + t, y0, H_WTAB, w);    /* (before its boxes: they win) */
         int cx = tx + t - 12 - BOX, zx = cx - 8 - BOX;   /* (close at the end, zoom before it) */
         icon_ink(wm_icon(w), tx + 14, ty + 5, 2, 0);
-        dl_text(tx + TAB_L, ty + 6, title, n, S(2), C_INK, tx + TAB_L - 2, ty, zx - 12, y0);
-        dl_text(tx + TAB_L + 1, ty + 6, title, n, S(2), C_INK, tx + TAB_L - 2, ty, zx - 12, y0);   /* (bold) */
+        dl_text(tx + TAB_L, ty + 6, title, n, SF(2), C_INK, tx + TAB_L - 2, ty, zx - 12, y0);
+        dl_text(tx + TAB_L + 1, ty + 6, title, n, SF(2), C_INK, tx + TAB_L - 2, ty, zx - 12, y0);   /* (bold) */
         box(cx, ty + 7, 0, C_INK, H_WMBTN, w * 4 + 2, up);
         if (zx >= tx + TAB_L) box(zx, ty + 7, 1, C_INK, H_WMBTN, w * 4 + 1, up);
     }
     if (atlas_debug) {                                   /* (where they are once risen) */
-        say("atlas: dbg wtab %s at %d %d\n", title, tx + TAB_L + tw(n, 2) / 2, y0 - TAB_H / 2);
+        say("atlas: dbg wtab %s at %d %d\n", title, tx + TAB_L + tws(title, 2) / 2, y0 - TAB_H / 2);
         say("atlas: dbg wclose %d at %d %d\n", w, tx + t - 12 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
         say("atlas: dbg wzoom %d at %d %d\n", w, tx + t - 12 - BOX - 8 - BOX / 2, y0 - TAB_H + 7 + BOX / 2);
     }
@@ -340,13 +340,13 @@ static void draw_one(int w, int f, int keys)
     if (r > 0) dl_rect(tx + 2, y0, tx + t - 2, y0 + 2, 0, C_ACC);   /* (the tab joins it) */
     hitbox(x0, y0, x1, y1, H_WIN, w);
     if (!up) {                                           /* sunk: the title in the strip, a handle to move it */
-        dl_text(tx + 22, y0 + 6, title, n, S(2), C_GTXT, x0 + 2, y0, x1 - 20, y0 + WM_STRIP);
+        dl_text(tx + 22, y0 + 6, title, n, SF(2), C_GTXT, x0 + 2, y0, x1 - 20, y0 + WM_STRIP);
         hitbox(x0 + 8, y0 + 3, x1 - 8, y0 + WM_STRIP, H_WTAB, w);
     } else {                                             /* up: the strip says more */
         char info[64];
         wm_info(w, info, sizeof info);
         int k = strlen(info);
-        if (k) dl_text(x1 - 22 - text_w(k, SS), y0 + 8, info, k, SS, C_GTXT, x0 + 20, y0, x1 - 20, y0 + WM_STRIP);
+        if (k) dl_text(x1 - 22 - text_sw(info, k, SSS), y0 + 8, info, k, SSS, C_GTXT, x0 + 20, y0, x1 - 20, y0 + WM_STRIP);
     }
     wm_body(w, x0, y0 + WM_BODY_DY, x1, y1, keys);
     if (!f && w < W_CLIENT0) dl_shade(x0 + 2, y0 + WM_STRIP, x1 - 2, y1 - 2, 10, 3);   /* (behind: its insides dimmed a little, the focused one stands

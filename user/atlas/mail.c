@@ -578,14 +578,14 @@ static void button(int *x, int y, int b, int lit)
 static void tfield(int x, int y, int xe, int f)
 {
     const char *t = fv(f);
-    int lit = field == f, n = strlen(t), chars = (xe - x - 32) / KW;
+    int lit = field == f, n = strlen(t), fr = 0;
     char st[64];
     if (f == F_PASS) { n = n < 63 ? n : 63; memset(st, '*', n); t = st; }
-    int fr = n > chars ? n - chars : 0;
+    while (fr < n && text_fit(t + fr, n - fr, SF(2), xe - x - 32) < n - fr) fr++;   /* (the end, when long) */
     dl_rect(x, y, xe, y + 44, 10, C_FIELD);
     dl_frame(x, y, xe, y + 44, 10, lit ? 2 : 1, lit ? C_ACC : C_LINE);
-    dl_text(x + 14, y + 11, t + fr, n - fr, S(2), C_TXT, x, y, xe - 10, y + 44);
-    if (lit) { int w = tw(n - fr, 2); dl_rect(x + 16 + w, y + 10, x + 26 + w, y + 34, 0, C_ACC); }
+    dl_text(x + 14, y + 11, t + fr, n - fr, SF(2), C_TXT, x, y, xe - 10, y + 44);
+    if (lit) { int w = text_sw(t + fr, n - fr, SF(2)); dl_rect(x + 16 + w, y + 10, x + 26 + w, y + 34, 0, C_ACC); }
     hitbox(x, y, xe, y + 44, H_MAIL, M_FIELD + f);
     if (atlas_debug) say("atlas: dbg mailfield %d at %d %d\n", f, (x + xe) / 2, y + 22);
 }
@@ -598,7 +598,7 @@ static void option(int *x, int y, const char *s, int lit, int o)
 static void yesno(int *x, int y, const char *l, int o)   /* "Label [Yes] [No]" */
 {
     label(*x, y + 10, l, 2, C_DIM);
-    *x += tw(strlen(l), 2) + 16;
+    *x += tws(l, 2) + 16;
     option(x, y, "Yes", ac[edit].o[o], 2 * o); option(x, y, "No", !ac[edit].o[o], 2 * o + 1);
     *x += 16;
 }
@@ -631,7 +631,7 @@ static void account_draw(int x0, int y0, int x1, int y1)
         if (f == F_IPORT || f == F_OPORT) continue;
         label(lx, y + 10, flabel[f], 2, C_DIM);
         int xe = x1 - 24, has_port = f == F_IHOST || f == F_OHOST;
-        if (has_port) { xe -= tw(6, 2) + 28; tfield(xe + 12, y, x1 - 24, f + 1); }
+        if (has_port) { xe -= tw(6, 2) + 28; tfield(xe + 12, y, x1 - 24, f + 1); }   /* (6 digits: mono's width is room enough) */
         tfield(cx, y, xe, f);
         y += 54;
     }
@@ -644,16 +644,16 @@ static void list_draw(int x0, int y0, int x1, int y1)
     dl_rect(x0, y0, x1, y1, 0, C_TERM);
     hitbox(x0, y0, x1, y1, H_MAIL, M_BODY);
     int dw = text_w(16, SS) + 24, fw = (x1 - x0) * 26 / 100, fx = x0 + 34, sx = fx + fw, dx = x1 - dw;
-    dl_text(fx, y0 + 8, "FROM", 4, SS, C_DIM, 0, 0, SW, SH);
-    dl_text(sx, y0 + 8, "SUBJECT", 7, SS, C_DIM, 0, 0, SW, SH);
-    dl_text(dx, y0 + 8, "DATE", 4, SS, C_DIM, 0, 0, SW, SH);
+    dl_text(fx, y0 + 8, "FROM", 4, SSS, C_DIM, 0, 0, SW, SH);
+    dl_text(sx, y0 + 8, "SUBJECT", 7, SSS, C_DIM, 0, 0, SW, SH);
+    dl_text(dx, y0 + 8, "DATE", 4, SSS, C_DIM, 0, 0, SW, SH);
     int ly = y0 + 30, n = (y1 - ly - 4) / ROW;
     dl_rect(x0 + 10, ly - 1, x1 - 10, ly, 0, C_LINE);
     if (lscroll > nmsg - n) lscroll = nmsg - n;
     if (lscroll < 0) lscroll = 0;
     if (!nmsg) {
         const char *m = busy || nq ? "Checking..." : "No messages";
-        label((x0 + x1) / 2 - tw(strlen(m), 2) / 2, (ly + y1) / 2 - KH / 2, m, 2, C_DIM);
+        label((x0 + x1) / 2 - tws(m, 2) / 2, (ly + y1) / 2 - KH / 2, m, 2, C_DIM);
     }
     for (int r = 0; r < n && lscroll + r < nmsg; r++) {
         int i = lscroll + r, y = ly + 2 + r * ROW, b = !msg[i].seen;
@@ -661,10 +661,10 @@ static void list_draw(int x0, int y0, int x1, int y1)
         else if (r & 1) dl_rect(x0 + 6, y, x1 - 6, y + ROW - 2, 6, C_PANEL);
         if (b) dl_rect(x0 + 14, y + 12, x0 + 22, y + 20, 4, C_ACC);   /* unread: a dot, and bold */
         for (int k = 0; k <= b; k++) {
-            dl_text(fx + k, y + 6, msg[i].from, strlen(msg[i].from), S(2), C_TXT, x0, y, sx - 16, y + ROW);
-            dl_text(sx + k, y + 6, msg[i].subj, strlen(msg[i].subj), S(2), C_TXT, x0, y, dx - 16, y + ROW);
+            dl_text(fx + k, y + 6, msg[i].from, strlen(msg[i].from), SF(2), C_TXT, x0, y, sx - 16, y + ROW);
+            dl_text(sx + k, y + 6, msg[i].subj, strlen(msg[i].subj), SF(2), C_TXT, x0, y, dx - 16, y + ROW);
         }
-        dl_text(dx, y + 8, msg[i].date, strlen(msg[i].date), SS, C_DIM, 0, 0, x1 - 8, SH);
+        dl_text(dx, y + 8, msg[i].date, strlen(msg[i].date), SSS, C_DIM, 0, 0, x1 - 8, SH);
         hitbox(x0 + 6, y, x1 - 6, y + ROW - 2, H_MAIL, M_ROW + i);
         if (atlas_debug) say("atlas: dbg mailrow %s at %d %d %s from=%s subj=%s\n", msg[i].id, sx + 40, y + ROW / 2, b ? "new" : "seen", msg[i].from, msg[i].subj);
     }
@@ -688,7 +688,7 @@ static void read_draw(int x0, int y0, int x1, int y1)
     hitbox(x0, y0, x1, y1, H_MAIL, M_TEXT);
     if (!text) {
         const char *m = nmsg ? "Click a message to read it" : "";
-        label((x0 + x1) / 2 - tw(strlen(m), 2) / 2, (y0 + y1) / 2 - KH / 2, m, 2, C_DIM);
+        label((x0 + x1) / 2 - tws(m, 2) / 2, (y0 + y1) / 2 - KH / 2, m, 2, C_DIM);
         return;
     }
     int y = y0 + 10, lx = x0 + 20, vx = lx + tw(9, 2), na = 0;
@@ -697,7 +697,7 @@ static void read_draw(int x0, int y0, int x1, int y1)
     for (int i = 0; i < 5; i++) {                        /* the headers (the subject in bold) */
         if (!hdr(text, hs[i], v, sizeof v)[0] && i != 4) continue;
         label(lx, y, hs[i], 2, C_DIM);
-        for (int k = 0; k <= (i == 4); k++) dl_text(vx + k, y, v, strlen(v), S(2), C_TXT, x0, y0, x1 - 10, y1);
+        for (int k = 0; k <= (i == 4); k++) dl_text(vx + k, y, v, strlen(v), SF(2), C_TXT, x0, y0, x1 - 10, y1);
         y += 28;
     }
     for (const char *p = text; *p && *p != '\n'; ) {     /* the attachments: a click saves one */
@@ -705,8 +705,8 @@ static void read_draw(int x0, int y0, int x1, int y1)
         if (!memcmp(p, "Attachment: ", 12)) {
             int l = (e ? e : p + strlen(p)) - p - 12;
             icon(I_FILE, lx, y + 2, 2);
-            dl_text(lx + 34, y, p + 12, l, S(2), C_ACCT, x0, y0, x1 - 10, y1);
-            hitbox(lx, y, lx + 34 + tw(l, 2), y + 26, H_MAIL, M_ATT + na);
+            dl_text(lx + 34, y, p + 12, l, SF(2), C_ACCT, x0, y0, x1 - 10, y1);
+            hitbox(lx, y, lx + 34 + text_sw(p + 12, l, SF(2)), y + 26, H_MAIL, M_ATT + na);
             if (atlas_debug) say("atlas: dbg mailatt %d at %d %d\n", na + 1, lx + 40, y + 13);
             na++;
             y += 28;
@@ -740,8 +740,8 @@ static void compose_draw(int x0, int y0, int x1, int y1, int focused)
         icon(I_FILE, lx, y + 2, 2);
         for (int i = 0; i < natt; i++) {
             const char *n = base_name(att[i]);
-            int w = tw(strlen(n), 2);
-            dl_text(x, y, n, strlen(n), S(2), C_ACCT, x0, y0, x1 - 10, y1);
+            int w = tws(n, 2);
+            dl_text(x, y, n, strlen(n), SF(2), C_ACCT, x0, y0, x1 - 10, y1);
             hitbox(x, y, x + w, y + 26, H_MAIL, M_CATT + i);
             if (atlas_debug) say("atlas: dbg mailcatt %s at %d %d\n", n, x + w / 2, y + 13);
             x += w + 24;
@@ -785,10 +785,10 @@ static void folder_row(int i, int x0, int x1, int *y)    /* name, unread, the st
     int c = fo[i].a == cur && !strcmp(fo[i].name, folder), f = is_fav(i), yy = *y;
     char u[8];
     if (c) dl_rect(x0 + 2, yy, x1 - 2, yy + FROW, 0, C_SEL);
-    int un = fo[i].unseen ? num(u, fo[i].unseen) : 0, ux = x1 - 34 - tw(un, 2);
-    for (int k = 0; k <= c; k++) dl_text(x0 + 14 + k, yy + 4, fo[i].name, strlen(fo[i].name), S(2), c ? C_TXT : C_DIM, x0, yy, ux - 6, yy + FROW);
-    for (int k = 0; k < 2 && un; k++) dl_text(ux + k, yy + 4, u, un, S(2), C_TXT, x0, yy, x1, yy + FROW);
-    dl_text(x1 - 26, yy + 4, "*", 1, S(2), f ? C_ACC : C_LINE, x0, yy, x1, yy + FROW);
+    int un = fo[i].unseen ? num(u, fo[i].unseen) : 0, ux = x1 - 34 - text_sw(u, un, SF(2));
+    for (int k = 0; k <= c; k++) dl_text(x0 + 14 + k, yy + 4, fo[i].name, strlen(fo[i].name), SF(2), c ? C_TXT : C_DIM, x0, yy, ux - 6, yy + FROW);
+    for (int k = 0; k < 2 && un; k++) dl_text(ux + k, yy + 4, u, un, SF(2), C_TXT, x0, yy, x1, yy + FROW);
+    dl_text(x1 - 26, yy + 4, "*", 1, SF(2), f ? C_ACC : C_LINE, x0, yy, x1, yy + FROW);
     hitbox(x0, yy, x1, yy + FROW, H_MAIL, M_FOLDER + i);
     hitbox(x1 - 32, yy, x1, yy + FROW, H_MAIL, M_STAR + i);
     if (atlas_debug) say("atlas: dbg mailfolder %d/%s at %d %d unseen=%d%s\natlas: dbg mailstar %d/%s at %d %d\n", fo[i].a, fo[i].name,
@@ -805,7 +805,7 @@ void mail_draw(int x0, int y0, int x1, int y1, int focused)
     dl_rect(X0, Y0 + BAR - 1, X1, Y0 + BAR, 0, C_LINE);
     if (view == V_LIST) {
         for (int b = B_CHECK; b <= B_DELETE; b++) button(&x, ty, b, 0);
-        x = X1 - 12 - tw(7, 2) - 28;
+        x = X1 - 12 - tws(bname[B_ACCOUNT], 2) - 28;
         if (x > X0 + 12) button(&x, ty, B_ACCOUNT, 0);
     } else if (view == V_COMPOSE) { button(&x, ty, B_SEND, 1); button(&x, ty, B_ATTACH, 0); button(&x, ty, B_CANCEL, 0); }
     else { button(&x, ty, B_SAVE, 1); if (edit < nac) button(&x, ty, B_REMOVE, 0); if (nac) button(&x, ty, B_CANCEL, 0); }
@@ -819,7 +819,7 @@ void mail_draw(int x0, int y0, int x1, int y1, int focused)
         for (int i = 0; i < nfo; i++) any |= is_fav(i);
         for (int k = any ? -1 : 0; k < nac && y + 2 * FROW < sy; k++) {   /* the favorites, then each account's */
             const char *h = k < 0 ? "FAVORITES" : ac[k].f[F_ADDR];
-            dl_text(X0 + 14, y + 8, h, strlen(h), SS, k < 0 ? C_DIM : C_ACCT, X0, y, xe - 6, y + FROW);
+            dl_text(X0 + 14, y + 8, h, strlen(h), SSS, k < 0 ? C_DIM : C_ACCT, X0, y, xe - 6, y + FROW);
             if (k >= 0) hitbox(X0, y, xe, y + FROW, H_MAIL, M_HEAD + k);
             y += FROW;
             for (int i = 0; i < nfo && y + FROW < sy; i++) if (k < 0 ? is_fav(i) : fo[i].a == k && !is_fav(i)) folder_row(i, X0, xe, &y);
@@ -844,7 +844,7 @@ void mail_draw(int x0, int y0, int x1, int y1, int focused)
         label(X0 + 16, sy + 10, t, 2, C_TXT);
         label(X0 + 16, sy + 40, "Accept it if its SHA-256 is your server's:", 2, C_DIM);
         dl_text(X0 + 16, sy + 66, pfp, strlen(pfp), SS, C_ACCT, X0, sy, X1, sy + BAND);
-        x = X1 - 24 - tw(14, 2) - 56;
+        x = X1 - 24 - tws(bname[B_ACCEPT], 2) - tws(bname[B_REFUSE], 2) - 64;
         button(&x, sy + 24, B_ACCEPT, 1); button(&x, sy + 24, B_REFUSE, 0);
         sy += BAND;
     }
@@ -852,10 +852,10 @@ void mail_draw(int x0, int y0, int x1, int y1, int focused)
     char t[220];
     t[0] = ' ';
     strlcpy(t + 1, status[0] ? status : view == V_COMPOSE ? "New message" : folder, sizeof t - 1);
-    dl_text(X0 + 8, sy + 5, t, strlen(t), S(2), C_INK, X0, sy, X1 - 10, Y1);
-    const char *k = view == V_LIST ? "F5 check  Ctrl+N new  Ctrl+R reply  Del delete " : view == V_COMPOSE ? "Tab next field  Ctrl+Enter send " : "Tab next field  Enter save ";
-    int kl = strlen(k), kx = X1 - 10 - tw(kl, 2);
-    if (kx > X0 + 8 + tw(strlen(t), 2) + 30) dl_text(kx, sy + 5, k, kl, S(2), C_INK, X0, sy, X1, Y1);
+    dl_text(X0 + 8, sy + 5, t, strlen(t), SF(2), C_INK, X0, sy, X1 - 10, Y1);
+    const char *k = view == V_LIST ? "F5 check   Ctrl+N new   Ctrl+R reply   Del delete " : view == V_COMPOSE ? "Tab next field   Ctrl+Enter send " : "Tab next field   Enter save ";
+    int kl = strlen(k), kx = X1 - 10 - tws(k, 2);
+    if (kx > X0 + 8 + tws(t, 2) + 30) dl_text(kx, sy + 5, k, kl, SF(2), C_INK, X0, sy, X1, Y1);
 }
 
 /* ---- Input. */

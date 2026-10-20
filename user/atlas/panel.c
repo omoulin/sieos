@@ -374,11 +374,11 @@ static struct { short m, start, len, act; } row[MAXROW];
 /* An action of an answer: an outlined chip, its icon, its words. -> its right edge */
 static int chip(int x, int y, int ic, const char *s, int kind, int arg)
 {
-    int w = 44 + tw(strlen(s), 2) + 16;
+    int w = 44 + tws(s, 2) + 16;
     dl_rect(x, y, x + w, y + 42, 21, C_FIELD);
     dl_frame(x, y, x + w, y + 42, 21, 1, C_ACC);
     icon(ic, x + 14, y + 9, 2);
-    dl_text(x + 44, y + 10, s, strlen(s), S(2), C_TXT, 0, 0, SW, SH);
+    dl_text(x + 44, y + 10, s, strlen(s), SF(2), C_TXT, 0, 0, SW, SH);
     hitbox(x, y, x + w, y + 42, kind, arg);
     return x + w;
 }
@@ -387,7 +387,7 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
 {
     rx0 = x0; ry0 = y0; rx1 = x1; ry1 = y1;
     hitbox(x0, y0 + 48, x1, y1, H_PANEL, 0);
-    pill(x1 - 24 - tw(3, 2) - 28, y0 + 58, "New", 0, H_PMODE, 0);
+    pill(x1 - 24 - tws("New", 2) - 28, y0 + 58, "New", 0, H_PMODE, 0);
     char st[96], sp[48] = "";                            /* the model (after a dot: lit when it runs), its speed small */
     if (!ready) strlcpy(st, busy ? "starting sia..." : "sia starts when you ask", sizeof st);
     else if (!info.ready || !info.model[0]) strlcpy(st, "no model loaded yet", sizeof st);
@@ -400,9 +400,9 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
     if (busy) strlcpy(sp + strlen(sp), sp[0] ? " | answering..." : "answering...", sizeof sp - strlen(sp));
     int on = ready && info.ready;
     dl_rect(x0 + 26, y0 + 75, x0 + 36, y0 + 85, 5, on ? C_ACC : C_LINE);
-    dl_text(x0 + 46, y0 + 68, st, strlen(st), S(2), on ? C_TXT : C_DIM, x0, y0, x1 - 120, y1);
-    if (sp[0]) dl_text(x0 + 46 + tw(strlen(st) + 2, 2), y0 + 70, sp, strlen(sp), SS, C_DIM, x0, y0, x1 - 120, y1);
-    int ty0 = y0 + 112, ty1 = y1 - 96, chars = (x1 - x0 - 48) / tw(1, 2);
+    dl_text(x0 + 46, y0 + 68, st, strlen(st), SF(2), on ? C_TXT : C_DIM, x0, y0, x1 - 120, y1);
+    if (sp[0]) dl_text(x0 + 46 + tws(st, 2) + 20, y0 + 70, sp, strlen(sp), SSS, C_DIM, x0, y0, x1 - 120, y1);
+    int ty0 = y0 + 112, ty1 = y1 - 96, room = x1 - x0 - 48;
     if (!nmsg) {                                         /* nothing yet: what to ask */
         label(x0 + 24, ty0 + 6, "Ask about your files.", 2, C_TXT);
         for (int i = 0; i < 3; i++) pill(x0 + 24, ty0 + 50 + i * 54, sugg[i], 0, H_PSUG, i);
@@ -411,12 +411,13 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
     for (int i = 0; i < nmsg && nr < MAXROW - 4; i++) {
         pmsg_t *m = &msgs[i];
         const char *t = m->text;
-        int p = 0, w = m->who == WHO_YOU ? chars - 6 : m->who == WHO_SIA ? chars - 2 : chars;   /* (the band's "you", the gutter) */
+        int p = 0, w = room - (m->who == WHO_YOU ? tw(6, 2) : m->who == WHO_SIA ? tw(2, 2) : 0);   /* (the band's "you", the gutter) */
         if (!m->len && m->who == WHO_SIA) row[nr++] = (typeof(row[0])){ i, 0, 0, 0 };
         while (p < m->len && nr < MAXROW - 4) {
-            int e = p, br = -1;
-            while (e < m->len && t[e] != '\n' && e - p < w) { if (t[e] == ' ') br = e; e++; }
-            if (e < m->len && t[e] != '\n' && e - p == w && br > p) e = br;   /* break at a space */
+            int e = p, br = -1, lim = p + text_fit(t + p, m->len - p, SF(2), w);
+            if (lim == p) lim = p + 1;
+            while (e < m->len && t[e] != '\n' && e < lim) { if (t[e] == ' ') br = e; e++; }
+            if (e < m->len && t[e] != '\n' && t[e] != ' ' && br > p) e = br;   /* break at a space */
             row[nr++] = (typeof(row[0])){ i, p, e - p, 0 };
             p = e < m->len && (t[e] == '\n' || t[e] == ' ') ? e + 1 : e;
         }
@@ -446,26 +447,30 @@ void panel_draw(int x0, int y0, int x1, int y1, int focused)
         int x = x0 + 24;
         if (m->who == WHO_YOU) {                         /* your question: on a band, "you" at its right */
             dl_rect(x0 + 16, y - 4, x1 - 20, y + LH - 4, 0, C_BAR);
-            if (row[r].start == 0) dl_text(x1 - 34 - text_w(3, SS), y + 2, "you", 3, SS, C_DIM, 0, 0, SW, SH);
+            if (row[r].start == 0) dl_text(x1 - 34 - text_sw("you", 3, SSS), y + 2, "you", 3, SSS, C_DIM, 0, 0, SW, SH);
             x += 8;
         } else if (m->who == WHO_SIA) {                  /* sia's answer: a line in the gutter */
             dl_rect(x, y - 4, x + 2, y + LH - 4, 0, C_LINE);
             x += 14;
         }
-        if (row[r].len) dl_text(x, y, m->text + row[r].start, row[r].len, S(2), c, x0, ty0, x1 - 20, ty1);
-        if (busy && row[r].m == nmsg - 1 && r == nr - 1)   /* still coming: a cursor */
-            dl_rect(x + tw(row[r].len, 2) + 4, y + 2, x + tw(row[r].len, 2) + 14, y + 22, 0, C_ACC);
+        if (row[r].len) dl_text(x, y, m->text + row[r].start, row[r].len, SF(2), c, x0, ty0, x1 - 20, ty1);
+        if (busy && row[r].m == nmsg - 1 && r == nr - 1) {   /* still coming: a cursor */
+            int cw = text_sw(m->text + row[r].start, row[r].len, SF(2));
+            dl_rect(x + cw + 4, y + 2, x + cw + 14, y + 22, 0, C_ACC);
+        }
     }
 
     for (int i = 0; i < nmsg; i++) if (msgs[i].nact && msgs[i].id > logged) logged = msgs[i].id;
-    int iy0 = y1 - 72, iy1 = y1 - 22, ix1 = x1 - 24 - (busy ? tw(4, 2) : tw(3, 2)) - 40;
+    int iy0 = y1 - 72, iy1 = y1 - 22, ix1 = x1 - 24 - tws(busy ? "Stop" : "Ask", 2) - 40;
     dl_rect(x0 + 20, iy0, ix1, iy1, 12, C_FIELD);
     dl_frame(x0 + 20, iy0, ix1, iy1, 12, focused ? 2 : 1, focused ? C_ACC : C_ISLB);
     hitbox(x0 + 20, iy0, ix1, iy1, H_PIN, 0);
-    int n = strlen(input), fit = (ix1 - x0 - 60) / tw(1, 2), s = n > fit ? n - fit : 0;
-    if (n) dl_text(x0 + 36, iy0 + 14, input + s, n - s, S(2), C_TXT, x0, iy0, ix1 - 10, iy1);
+    int n = strlen(input), s = 0;
+    while (s < n && text_fit(input + s, n - s, SF(2), ix1 - x0 - 60) < n - s) s++;   /* (the end, when long) */
+    int cw = text_sw(input + s, n - s, SF(2));
+    if (n) dl_text(x0 + 36, iy0 + 14, input + s, n - s, SF(2), C_TXT, x0, iy0, ix1 - 10, iy1);
     else label(x0 + 36, iy0 + 14, busy ? "answering..." : "Ask sia...", 2, C_DIM);
-    if (focused) dl_rect(x0 + 38 + tw(n - s, 2), iy0 + 12, x0 + 48 + tw(n - s, 2), iy1 - 12, 0, C_ACC);
+    if (focused) dl_rect(x0 + 38 + cw, iy0 + 12, x0 + 48 + cw, iy1 - 12, 0, C_ACC);
     if (busy) pill(ix1 + 12, iy0 + 4, "Stop", 1, H_PSTOP, 0);
     else pill(ix1 + 12, iy0 + 4, "Ask", n > 0, H_PSEND, 0);
 }

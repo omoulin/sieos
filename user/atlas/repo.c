@@ -271,10 +271,10 @@ void repo_draw(int x0, int y0, int x1, int y1, int focused)
 {
     int ty = y0 + TOP;
     hitbox(x0, ty, x1, y1, H_REPO, -1);
-    dl_text(x0 + 16, ty + 10, branch[0] ? branch : "-", strlen(branch[0] ? branch : "-"), S(2), C_ACCT, x0, ty, x1 - 400, ty + 42);
-    int bx = x0 + 16 + tw(strlen(branch[0] ? branch : "-"), 2) + 20;
-    dl_text(bx, ty + 13, dir, strlen(dir), SS, C_DIM, x0, ty, x1 - 400, ty + 42);
-    int px = x1 - 16 - (tw(7, 2) + 28) - (tw(4, 2) + 28) - (tw(4, 2) + 28) - 24;
+    dl_text(x0 + 16, ty + 10, branch[0] ? branch : "-", strlen(branch[0] ? branch : "-"), SF(2), C_ACCT, x0, ty, x1 - 400, ty + 42);
+    int bx = x0 + 16 + tws(branch[0] ? branch : "-", 2) + 20;
+    dl_text(bx, ty + 13, dir, strlen(dir), SSS, C_DIM, x0, ty, x1 - 400, ty + 42);
+    int px = x1 - 16 - (tws("Refresh", 2) + 28) - (tws("Pull", 2) + 28) - (tws("Push", 2) + 28) - 24;
     static const char *const bn[3] = { "Refresh", "Pull", "Push" };
     for (int i = 0; i < 3; i++) {
         if (atlas_debug) say("atlas: dbg git %s at %d %d\n", bn[i], px + 40, ty + 21);
@@ -286,13 +286,13 @@ void repo_draw(int x0, int y0, int x1, int y1, int focused)
     if (difft) lines(difft, rx0 + 12, by + 8, x1 - 20, sy - 10, dscroll, 1);
     else label(rx0 + 16, by + 12, nchg ? "Choose a file to see its changes." : "Nothing changed.", 2, C_DIM);
     /* the left: changes, Stage / Unstage, the message and Commit, the history */
-    dl_text(x0 + 16, by, "CHANGES", 7, SS, C_DIM, 0, 0, SW, SH);
+    dl_text(x0 + 16, by, "CHANGES", 7, SSS, C_DIM, 0, 0, SW, SH);
     int cy = by + 26, ch = (sy - by) * 45 / 100, rows = (ch - 26) / ROW;
     for (int i = 0; i < nchg && i < rows; i++, cy += ROW) {
         if (i == sel) dl_rect(x0 + 8, cy, lx1, cy + ROW - 2, 6, C_SEL);
         uint32_t c = chg[i].xy[0] == '?' ? C_DIM : chg[i].xy[0] != ' ' ? C_ACCT : C_TXT;
         dl_text(x0 + 16, cy + 6, chg[i].xy, 2, SS, c, 0, 0, SW, SH);
-        dl_text(x0 + 16 + text_w(3, SS), cy + 4, chg[i].path, strlen(chg[i].path), S(2), C_TXT, x0, cy, lx1 - 4, cy + ROW);
+        dl_text(x0 + 16 + text_w(3, SS), cy + 4, chg[i].path, strlen(chg[i].path), SF(2), C_TXT, x0, cy, lx1 - 4, cy + ROW);
         hitbox(x0 + 8, cy, lx1, cy + ROW - 2, H_REPO, i);
         if (atlas_debug) say("atlas: dbg gitfile %s at %d %d\n", chg[i].path, x0 + 120, cy + ROW / 2);
     }
@@ -303,22 +303,23 @@ void repo_draw(int x0, int y0, int x1, int y1, int focused)
     pill(sx, cy, "Unstage", 0, H_REPO, B_UNSTAGE);
     if (atlas_debug) say("atlas: dbg git Unstage at %d %d\n", sx + 50, cy + 21);
     cy += 54;
-    int cw = tw(6, 2) + 28, fx1 = lx1 - cw - 12;
+    int cw = tws("Commit", 2) + 28, fx1 = lx1 - cw - 12;
     dl_rect(x0 + 16, cy, fx1, cy + 42, 10, C_FIELD);
     dl_frame(x0 + 16, cy, fx1, cy + 42, 10, field && focused ? 2 : 1, field && focused ? C_ACC : C_LINE);
-    int ml = strlen(msg), chars = (fx1 - x0 - 48) / KW, from = ml > chars ? ml - chars : 0;
-    if (ml) dl_text(x0 + 30, cy + 10, msg + from, ml - from, S(2), C_TXT, x0 + 16, cy, fx1 - 8, cy + 42);
-    else dl_text(x0 + 30, cy + 10, "Commit message", 14, S(2), C_DIM, x0 + 16, cy, fx1 - 8, cy + 42);
-    if (field && focused) { int w = tw(ml - from, 2); dl_rect(x0 + 32 + w, cy + 9, x0 + 42 + w, cy + 33, 0, C_ACC); }
+    int ml = strlen(msg), from = 0;
+    while (from < ml && text_fit(msg + from, ml - from, SF(2), fx1 - x0 - 48) < ml - from) from++;   /* (the end, when long) */
+    if (ml) dl_text(x0 + 30, cy + 10, msg + from, ml - from, SF(2), C_TXT, x0 + 16, cy, fx1 - 8, cy + 42);
+    else dl_text(x0 + 30, cy + 10, "Commit message", 14, SF(2), C_DIM, x0 + 16, cy, fx1 - 8, cy + 42);
+    if (field && focused) { int w = text_sw(msg + from, ml - from, SF(2)); dl_rect(x0 + 32 + w, cy + 9, x0 + 42 + w, cy + 33, 0, C_ACC); }
     hitbox(x0 + 16, cy, fx1, cy + 42, H_REPO, B_FIELD);
     if (atlas_debug) say("atlas: dbg git field at %d %d\n", (x0 + fx1) / 2, cy + 21);
     pill(fx1 + 12, cy, "Commit", 1, H_REPO, B_COMMIT);
     if (atlas_debug) say("atlas: dbg git Commit at %d %d\n", fx1 + 12 + cw / 2, cy + 21);
     cy += 58;
-    dl_text(x0 + 16, cy, "HISTORY", 7, SS, C_DIM, 0, 0, SW, SH);
+    dl_text(x0 + 16, cy, "HISTORY", 7, SSS, C_DIM, 0, 0, SW, SH);
     if (logt) lines(logt, x0 + 16, cy + 24, lx1, sy - 6, 0, 0);
     /* what the last action said */
-    if (note[0]) dl_text(x0 + 16, sy + 6, note, strlen(note), SS, nerr ? C_ERR : C_DIM, x0, sy, x1 - 16, y1);
+    if (note[0]) dl_text(x0 + 16, sy + 6, note, strlen(note), SSS, nerr ? C_ERR : C_DIM, x0, sy, x1 - 16, y1);
 }
 
 int repo_click(int kind, int arg)

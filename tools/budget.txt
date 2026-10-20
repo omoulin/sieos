@@ -21,7 +21,7 @@ fs            elf       88K    112K
 # -- the programs in /bin
 acct          elf       18K     21K
 acpid         elf       57K       -
-atlas         elf      304K    336K
+atlas         elf      344K    380K
 audiod        elf       33K     45K
 auth          elf       34K     39K
 bench         elf       15K     18K

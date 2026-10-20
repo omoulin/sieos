@@ -106,7 +106,9 @@ void ui_fill(ui_app *a, int x0, int y0, int x1, int y1, uint32_t c);
 void ui_rrect(ui_app *a, int x0, int y0, int x1, int y1, int r, uint32_t c);
 void ui_frame(ui_app *a, int x0, int y0, int x1, int y1, int r, int t, uint32_t c);
 int  ui_text_draw(ui_app *a, int x, int y, const char *s, int n, uint32_t c, int x1);   /* -> its right end */
-int  ui_tw(ui_app *a, int n);          /* width of n characters */
+int  ui_tw(ui_app *a, int n);          /* room for n characters (an average one's width) */
+int  ui_sw(ui_app *a, const char *s, int n);   /* width of s's n characters, as drawn */
+int  ui_sfit(ui_app *a, const char *s, int n, int w);   /* how many of them fit in w */
 void ui_icon(ui_app *a, int icon, int cx, int cy, uint32_t c);
 void ui_ytext(ui_widget *w, const char *s, uint32_t c, int x, int x1);   /* text centred in w's height */
 uint32_t ui_mix(uint32_t a, uint32_t b, int k);   /* k/256 of b over a */

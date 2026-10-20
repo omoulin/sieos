@@ -389,8 +389,8 @@ static void heading(const char *s)
 {
     cy += 14;
     if (fits(34)) {                                       /* (a title: bigger, bold) */
-        dl_text(lx, cy, s, strlen(s), ST, C_ACCT, 0, 0, SW, SH);
-        dl_text(lx + 1, cy, s, strlen(s), ST, C_ACCT, 0, 0, SW, SH);
+        dl_text(lx, cy, s, strlen(s), STS, C_ACCT, 0, 0, SW, SH);
+        dl_text(lx + 1, cy, s, strlen(s), STS, C_ACCT, 0, 0, SW, SH);
     }
     cy += 44;
 }
@@ -414,7 +414,7 @@ static void segment(const char *const *s, int a, int b, int on, int base, const 
             else if (i == b) { dl_rect(x, y, x + w, y + 42, 21, C_ACC); dl_rect(x, y, x + w - 21, y + 42, 0, C_ACC); }
             else dl_rect(x, y, x + w, y + 42, 0, C_ACC);
         } else if (i > a && i - 1 != on) dl_rect(x, y + 9, x + 1, y + 33, 0, C_LINE);   /* (between two options) */
-        dl_text(x + 14, y + 10, s[i], strlen(s[i]), S(2), i == on ? C_INK : C_TXT, 0, 0, SW, SH);
+        dl_text(x + 14, y + 10, s[i], strlen(s[i]), SF(2), i == on ? C_INK : C_TXT, 0, 0, SW, SH);
         hitbox(x, y, x + w, y + 42, H_SET, base + i);
         if (atlas_debug) say("atlas: dbg set %d at %d %d\n", base + i, x + w / 2, y + 21);
     }
@@ -426,7 +426,7 @@ static void choices(const char *name, const char *const *s, int n, int on, int b
     int xs[MAXCH], ws[MAXCH], rows[MAXCH], x = cx, r = 0;
     if (n > MAXCH) n = MAXCH;
     for (int i = 0; i < n; i++) {                        /* where each option goes */
-        ws[i] = tw(strlen(s[i]), 2) + 28;
+        ws[i] = tws(s[i], 2) + 28;
         if (x > cx && x + ws[i] > X1 - 24) { x = cx; r++; }
         xs[i] = x; rows[i] = r;
         x += ws[i];
@@ -446,13 +446,14 @@ static void text_field(const char *name, int f, int secret, const char *empty)
         dl_rect(cx, cy, X1 - 24, cy + 44, 10, C_FIELD);
         dl_frame(cx, cy, X1 - 24, cy + 44, 10, on ? 2 : 1, on ? C_ACC : C_LINE);
         char st[64];
-        int k = n < (int)sizeof st - 1 ? n : (int)sizeof st - 1, chars = (X1 - 24 - cx - 32) / KW;
+        int k = n < (int)sizeof st - 1 ? n : (int)sizeof st - 1, room = X1 - 24 - cx - 32;
         memset(st, '*', k);
         const char *t = secret ? st : fields[f];
-        int len = secret ? k : n, from = len > chars ? len - chars : 0;   /* (the end, when long) */
-        if (len) dl_text(cx + 14, cy + 11, t + from, len - from, S(2), C_TXT, cx, cy, X1 - 34, cy + 44);
-        else if (empty) dl_text(cx + 14, cy + 11, empty, strlen(empty), S(2), C_DIM, cx, cy, X1 - 34, cy + 44);
-        if (on) { int w = tw(len - from, 2); dl_rect(cx + 16 + w, cy + 10, cx + 26 + w, cy + 34, 0, C_ACC); }
+        int len = secret ? k : n, from = 0;
+        while (from < len && text_sw(t + from, len - from, SF(2)) > room) from++;   /* (the end, when long) */
+        if (len) dl_text(cx + 14, cy + 11, t + from, len - from, SF(2), C_TXT, cx, cy, X1 - 34, cy + 44);
+        else if (empty) dl_text(cx + 14, cy + 11, empty, strlen(empty), SF(2), C_DIM, cx, cy, X1 - 34, cy + 44);
+        if (on) { int w = text_sw(t + from, len - from, SF(2)); dl_rect(cx + 16 + w, cy + 10, cx + 26 + w, cy + 34, 0, C_ACC); }
         hitbox(cx, cy, X1 - 24, cy + 44, H_SET, S_FIELD + f);
         if (atlas_debug) say("atlas: dbg set %d at %d %d\n", S_FIELD + f, (cx + X1) / 2, cy + 22);
     }
@@ -662,7 +663,7 @@ void settings_draw(int x0, int y0, int x1, int y1, int focused)
     if (fits(42)) {
         int ax = pill(cx, cy, "Apply", 1, H_SET, S_APPLY);
         if (atlas_debug) say("atlas: dbg set %d at %d %d\n", S_APPLY, cx + 40, cy + 21);
-        if (msg[0]) dl_text(ax + 20, cy + 10, msg, strlen(msg), S(2), msg_err ? C_ERR : C_ACCT, ax, cy, X1 - 20, cy + 42);
+        if (msg[0]) dl_text(ax + 20, cy + 10, msg, strlen(msg), SF(2), msg_err ? C_ERR : C_ACCT, ax, cy, X1 - 20, cy + 42);
     }
     cy += ROW;
     panel_status(t, sizeof t);

@@ -200,8 +200,8 @@ static void field(int x, int y, int x1, const char *lbl, const char *v, int hidd
     char dots[64];
     int n = strlen(v) < 63 ? strlen(v) : 63;
     memset(dots, '*', n);
-    dl_text(fx + 20, y + 14, hidden ? dots : v, n, S(2), C_TXT, 0, 0, x1 - 10, SH);
-    if (field_on) { int cw = tw(n, 2); dl_rect(fx + 22 + cw, y + 12, fx + 34 + cw, y + 38, 0, C_ACC); }
+    dl_text(fx + 20, y + 14, hidden ? dots : v, n, SF(2), C_TXT, 0, 0, x1 - 10, SH);
+    if (field_on) { int cw = text_sw(hidden ? dots : v, n, SF(2)); dl_rect(fx + 22 + cw, y + 12, fx + 34 + cw, y + 38, 0, C_ACC); }
     hitbox(fx, y, x1, y + 50, H_INST, B_FIELD);
 }
 
@@ -218,20 +218,20 @@ void inst_draw(int x0, int y0, int x1, int y1, int focused)
     if (step == I_AUTH) {
         label(x, y, "Installing changes this computer's drives: root's password is needed.", 2, C_DIM);
         field(x, y + 50, x1 - 24, "Password", pw, 1);
-        button(x1 - 24 - tw(8, 2) - 28, by, "Continue", 1, B_OK);
+        button(x1 - 24 - tws("Continue", 2) - 28, by, "Continue", 1, B_OK);
     } else if (step == I_MODEL) {
         label(x, y, "ERASE the whole drive: everything on it is lost. Type its model:", 2, C_ERR);
         label(x, y + 40, models[sel_d], 2, C_TXT);
         field(x, y + 90, x1 - 24, "Model", model, 0);
         button(x, by, "Back", 0, B_BACK);
-        button(x1 - 24 - tw(4, 2) - 28, by, "Next", 1, B_OK);
+        button(x1 - 24 - tws("Next", 2) - 28, by, "Next", 1, B_OK);
     } else {
         if (step == I_DRIVES && !nl && pid) label(x, y, "Looking at the drives...", 2, C_DIM);
         for (int i = 0; i < nl && y < by - LH; i++) {           /* the program's lines */
             int k = ln[i].kind;
             if (step == I_RUN && k == 'l') continue;
             if (k == 'd') { y += 8; label(x, y, ln[i].text + 1, 2, C_TXT); y += LH + 4; continue; }
-            if (k == 'f') { button(x + 20, y, "Install here", 1, B_FREE + ln[i].d * 16 + ln[i].n); label(x + 40 + tw(12, 2) + 28, y + 10, ln[i].text, 2, C_TXT); y += 50; continue; }
+            if (k == 'f') { button(x + 20, y, "Install here", 1, B_FREE + ln[i].d * 16 + ln[i].n); label(x + 40 + tws("Install here", 2) + 28, y + 10, ln[i].text, 2, C_TXT); y += 50; continue; }
             if (k == 'w') { button(x + 20, y, "Erase whole drive", 0, B_WHOLE + ln[i].d); y += 50; continue; }
             uint32_t c = k == 'e' ? C_ERR : k == 'k' ? C_ACCT : step == I_DRIVES ? C_DIM : C_TXT;
             dl_text(x + (step == I_DRIVES ? 20 : 0), y, ln[i].text, strlen(ln[i].text), SS, c, 0, 0, x1 - 20, SH);
@@ -245,7 +245,7 @@ void inst_draw(int x0, int y0, int x1, int y1, int focused)
         if (step == I_PLAN) {
             button(x, by, "Back", 0, B_BACK);
             const char *s = sel_n ? "Install" : "Erase and install";
-            if (!pid && !err) button(x1 - 24 - tw(strlen(s), 2) - 28, by, s, 1, B_INSTALL);
+            if (!pid && !err) button(x1 - 24 - tws(s, 2) - 28, by, s, 1, B_INSTALL);
         }
         if (step == I_DONE) {
             int r = button(x, by, "Back", 0, B_BACK);

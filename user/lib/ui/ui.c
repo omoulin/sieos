@@ -14,9 +14,8 @@
  * Part of SIEOS. (c) Olivier Moulin. SPDX-License-Identifier: GPL-3.0-only
  */
 #include "ui_int.h"
+#include "../../atlas/fontsans.h"
 
-extern const uint8_t ui_font15[95][16][9];   /* user/atlas/font15.c: 9 x 16, 8-bit coverage */
-extern const uint8_t ui_font[95][9];         /* user/atlas/font.c: 5 x 9 in a 6 x 11 cell */
 
 /* ---- Small helpers (no C library needed beyond memory and strings). */
 char *ui_strdup(const char *s)
@@ -92,60 +91,16 @@ void ui_frame(ui_app *a, int x0, int y0, int x1, int y1, int r, int t, uint32_t 
 }
 
 int ui_tw(ui_app *a, int n) { return n * a->cw; }
+int ui_sw(ui_app *a, const char *s, int n) { return n <= 0 ? 0 : (int)((sans_w(s, n, a->ts) + 65535) >> 16); }
+int ui_sfit(ui_app *a, const char *s, int n, int w) { return sans_fit(s, n, a->ts, (int64_t)w << 16); }
 
-static void blend(ui_app *a, int x, int y, int k, uint32_t c)
-{
-    if (x < a->cx0 || x >= a->cx1 || y < a->cy0 || y >= a->cy1 || k <= 0) return;
-    uint32_t *d = a->px + (size_t)y * a->W + x;
-    *d = k >= 256 ? c : ui_mix(*d, c, k);
-}
-
-/* Text at (x, y) (its cell's top left) up to x1. The 9 x 16 font when the
- * scale is 1.5 times n (100%, 200%...: each of its pixels n x n), else the
- * 6 x 11 one, each screen pixel as much ink as the glyph covers. */
+/* Text at (x, y) (its cell's top left) up to x1, in the desktop's
+ * proportional font (user/atlas/sans.c: sharp at 100%, 200%...). */
 int ui_text_draw(ui_app *a, int x, int y, const char *s, int n, uint32_t c, int x1)
 {
-    int ts = a->ts, k = ts % 98304 ? 0 : ts / 98304, cw = a->cw;
     if (x1 > a->cx1) x1 = a->cx1;
-    for (int i = 0; i < n; i++, x += cw) {
-        unsigned ch = (uint8_t)s[i];
-        int g = ch >= 32 && ch < 127 ? (int)ch - 32 : '?' - 32;
-        if (x >= x1) break;
-        if (ch == ' ' || x + cw <= a->cx0) continue;
-        if (k) {
-            for (int r = 0; r < 16; r++)
-                for (int col = 0; col < 9; col++) {
-                    int v = ui_font15[g][r][col];
-                    if (!v) continue;
-                    v += v >> 7;
-                    for (int dy = 0; dy < k; dy++)
-                        for (int dx = 0; dx < k; dx++)
-                            if (x + col * k + dx < x1) blend(a, x + col * k + dx, y + r * k + dy, v, c);
-                }
-            continue;
-        }
-        int64_t step = ((int64_t)1 << 32) / ts;         /* a screen pixel in font pixels (16.16) */
-        int hh = (int)((int64_t)CH_UI * ts >> 16);
-        for (int py = 0; py < hh; py++) {
-            int64_t v0 = ((int64_t)py << 32) / ts, v1 = v0 + step;
-            int r0 = (int)(v0 >> 16), r1 = (int)((v1 - 1) >> 16);
-            for (int px = 0; px < cw && x + px < x1; px++) {
-                int64_t u0 = ((int64_t)px << 32) / ts, u1 = u0 + step, cov = 0;
-                int c0 = (int)(u0 >> 16), c1 = (int)((u1 - 1) >> 16);
-                for (int j = r0; j <= r1; j++) {
-                    if (j < 1 || j > 9) continue;
-                    int64_t oy = (v1 < ((int64_t)(j + 1) << 16) ? v1 : (int64_t)(j + 1) << 16) - (v0 > ((int64_t)j << 16) ? v0 : (int64_t)j << 16);
-                    for (int b = c0; b <= c1; b++) {
-                        if (b >= 5 || !(ui_font[g][j - 1] & 0x10 >> b)) continue;
-                        int64_t ox = (u1 < ((int64_t)(b + 1) << 16) ? u1 : (int64_t)(b + 1) << 16) - (u0 > ((int64_t)b << 16) ? u0 : (int64_t)b << 16);
-                        cov += ox * oy >> 16;
-                    }
-                }
-                if (cov) blend(a, x + px, y + py, (int)(cov * 256 / ((u1 - u0) * (v1 - v0) >> 16)), c);
-            }
-        }
-    }
-    return x;
+    if (n > 0 && x < x1) sans_draw(a->px, a->W, 0, x, y, s, n, a->ts, c, a->cx0, a->cy0, x1, a->cy1);
+    return x + ui_sw(a, s, n);
 }
 void ui_ytext(ui_widget *w, const char *s, uint32_t c, int x, int x1)
 {

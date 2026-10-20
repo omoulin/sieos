@@ -154,7 +154,7 @@ void cam_draw(int x0, int y0, int x1, int y1, int focused)
     x = pill(x, ty, file[0] ? "Live" : "Snapshot", !file[0] && have, H_CAM, file[0] ? 2 : 1) + 20;
     if (atlas_debug) say("atlas: dbg cam %d at %d %d\n", file[0] ? 2 : 1, x0 + 60, ty + 21);
     const char *s = msg[0] ? msg : !have && live ? "Starting the camera..." : "";
-    dl_text(x, ty + 10, s, strlen(s), S(2), C_DIM, x, ty, x1 - 14, ty + 42);
+    dl_text(x, ty + 10, s, strlen(s), SF(2), C_DIM, x, ty, x1 - 14, ty + 42);
     int ax0 = x0 + 14, ay0 = ty + 54, ax1 = x1 - 14, ay1 = y1 - 14;
     const uint32_t *px = file[0] ? pic : have ? img[0] : 0;
     int pw = file[0] ? FW : W, ph = file[0] ? FH : H;

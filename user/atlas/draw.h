@@ -46,7 +46,11 @@ void dl_shadow(int x0, int y0, int x1, int y1, int r, int k, int hx0, int hy0, i
 #define S(n) ((n) << 16)
 void dl_text(int x, int y, const char *s, int n, int scale, uint32_t c,
              int cx0, int cy0, int cx1, int cy1);                         /* clipped to the box */
-int  text_w(int n, int scale);      /* width in pixels of n characters */
+#define SANS (1 << 30)              /* or-ed into the scale: the proportional font (fontsans.c), for
+                                       titles, labels, buttons; without it the mono one (terminals, code) */
+int  text_w(int n, int scale);      /* width in pixels of n characters (mono) */
+int  text_sw(const char *s, int n, int scale);   /* width in pixels of s's n characters, either font */
+int  text_fit(const char *s, int n, int scale, int w);   /* how many of s's n characters fit in w pixels */
 /* A pixel image: h rows of w characters, each a colour (cols[i] for keys[i];
  * '.' and ' ' leave what is under it), every pixel scale x scale. The rows
  * are not copied: they must stay (static data). */

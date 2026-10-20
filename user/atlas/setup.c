@@ -170,8 +170,8 @@ void setup_draw(void)
         int len = strlen(f[i].buf);
         if (len > (int)sizeof dots - 1) len = sizeof dots - 1;
         memset(dots, '*', len);
-        dl_text(x0 + 290, fy + 14, f[i].hidden ? dots : f[i].buf, len, S(2), C_TXT, 0, 0, x1 - 70, SH);
-        if (fld == i) { int cw = tw(len, 2); dl_rect(x0 + 292 + cw, fy + 12, x0 + 304 + cw, fy + 38, 0, C_ACC); }
+        dl_text(x0 + 290, fy + 14, f[i].hidden ? dots : f[i].buf, len, SF(2), C_TXT, 0, 0, x1 - 70, SH);
+        if (fld == i) { int cw = text_sw(f[i].hidden ? dots : f[i].buf, len, SF(2)); dl_rect(x0 + 292 + cw, fy + 12, x0 + 304 + cw, fy + 38, 0, C_ACC); }
         hitbox(x0 + 270, fy, x1 - 60, fy + 50, H_FIELD, i);
     }
     if (step == 2) {                                      /* the list */
@@ -190,10 +190,10 @@ void setup_draw(void)
 
     int bx = x1 - 60, by = y1 - 80;                       /* buttons, right to left */
     const char *main_s = step == 2 ? "Create accounts" : "Next";
-    bx -= tw(strlen(main_s), 2) + 28;
+    bx -= tws(main_s, 2) + 28;
     pill(bx, by, main_s, 1, H_SETUP, step == 2 ? SB_CREATE : SB_NEXT);
     if (step == 2 && nu < AUTH_SETUP_MAX) {
-        bx -= tw(16, 2) + 28 + 20;
+        bx -= tws("Add another user", 2) + 28 + 20;
         pill(bx, by, "Add another user", 0, H_SETUP, SB_ADD);
     }
     if (step) pill(x0 + 60, by, "Back", 0, H_SETUP, SB_BACK);

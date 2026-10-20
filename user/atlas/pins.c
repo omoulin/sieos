@@ -210,15 +210,15 @@ void pins_draw(int x0, int y0, int x1, int y1, int focused)
     x = button(x, ty, "Loop", loop, 2) + 24;
     char t[64], *p = t + strlcpy(t, "Step ", 8);
     p += num(p, step_ms); strlcpy(p, " ms", 4);
-    label(x, ty + 10, t, 2, C_TXT); x += tw(strlen(t), 2) + 10;
+    label(x, ty + 10, t, 2, C_TXT); x += tws(t, 2) + 10;
     x = button(x, ty, "-", 0, 3) + 6; x = button(x, ty, "+", 0, 4) + 24;
     p = t + strlcpy(t, "Steps ", 8); p[num(p, nsteps)] = 0;
-    label(x, ty + 10, t, 2, C_TXT); x += tw(strlen(t), 2) + 10;
+    label(x, ty + 10, t, 2, C_TXT); x += tws(t, 2) + 10;
     x = button(x, ty, "-", 0, 5) + 6; x = button(x, ty, "+", 0, 6) + 24;
     x = button(x, ty, "+ Track", 0, 7) + 24;
     p = t + strlcpy(t, board, sizeof t);
     if (playing && at >= 0) { p += strlcpy(p, ": step ", 8); p[num(p, at + 1)] = 0; }
-    if (x + tw(strlen(t), 2) < x1 - 20) label(x1 - 20 - tw(strlen(t), 2), ty + 10, t, 2, playing ? C_ACCT : C_DIM);
+    if (x + tws(t, 2) < x1 - 20) label(x1 - 20 - tws(t, 2), ty + 10, t, 2, playing ? C_ACCT : C_DIM);
 
     /* the grid: a ruler, then a row a track */
     int gx0 = x0 + 14 + HEADW, gx1 = x1 - 16, ry = Y0 + BAR;
@@ -245,8 +245,8 @@ void pins_draw(int x0, int y0, int x1, int y1, int focused)
         dl_rect(x0 + 6, y + ROWH - 1, x1 - 6, y + ROWH, 0, C_LINE);
         if (gx0 - hx >= HEADW - 10) {                    /* the header */
             p = t + strlcpy(t, "BCM ", 8); p[num(p, k->pin)] = 0;
-            dl_text(hx, y + 14, t, strlen(t), S(2), busy ? C_DIM : C_TXT, hx, y, hx + 90, y + ROWH);
-            dl_text(hx + 1, y + 14, t, strlen(t), S(2), busy ? C_DIM : C_TXT, hx, y, hx + 90, y + ROWH);
+            dl_text(hx, y + 14, t, strlen(t), SF(2), busy ? C_DIM : C_TXT, hx, y, hx + 90, y + ROWH);
+            dl_text(hx + 1, y + 14, t, strlen(t), SF(2), busy ? C_DIM : C_TXT, hx, y, hx + 90, y + ROWH);
             int bx = button(hx + 84, y + 4, "<", 0, base + 0) + 2;
             bx = button(bx, y + 4, ">", 0, base + 1) + 8;
             if (busy) bx = button(bx, y + 4, "busy", 0, base + 2) + 8;
