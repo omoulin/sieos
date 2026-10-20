@@ -1730,7 +1730,10 @@ static void click(int x, int y)
 
 static void key(int c)
 {
-    if (c == KEY_LOCK) { lock(); return; }
+    if (c == KEY_LOCK) {                                 /* (no session to lock: an l, so a stuck Super never blocks a password) */
+        if (mode == SESSION && !locked) { lock(); return; }
+        c = 'l';
+    }
     if ((focus != W_MAIL && focus < W_CLIENT0) || strip_on || mode != SESSION)  /* (Ctrl+Enter, Ctrl+Shift+letter: Mail's and other programs' only) */
         c = c == KEY_CRET ? '\n' : c >= KEY_CSA ? c - KEY_CSA + 1 : c;
     if (mode == GREETER || locked) {

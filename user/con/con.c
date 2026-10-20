@@ -102,8 +102,8 @@ static void keyboard(uint8_t sc)
         return;
     }
     if (key == 0x3A) { caps = !caps; return; }                 /* Caps Lock */
-    if (super && key == 0x26) { event(EV_KEY, KEY_LOCK, mb, mx, my); return; }   /* Super+L */
-    if (super) return;                                         /* (Super+other keys: nothing yet) */
+    if (super && key == 0x26) { event(EV_KEY, KEY_LOCK, mb, mx, my); return; }   /* Super+L (other keys as they
+                                                                  are: a Super whose release the host kept never blocks typing) */
     if (key >= 0x3B && key <= 0x44) { event(EV_KEY, KEY_F1 + key - 0x3B, mb, mx, my); return; }
     if (key == 0x57 || key == 0x58) { event(EV_KEY, KEY_F1 + 10 + key - 0x57, mb, mx, my); return; }
     if (key == 0x0F && shift) { event(EV_KEY, KEY_BTAB, mb, mx, my); return; }   /* Shift+Tab */
