@@ -70,4 +70,5 @@ web.pkg       file    35.6M       -   pkg/web.pkg
 # -- the base system and its images
 rootfs        tree      4.1M    4.0M
 usb-image     img     14.0M       -   sieos-usb.img
-sdcard-image  img         -   10.2M   sieos-pi4.img
+sdcard-image  img         -    512M   sieos-pi4.img
+sdcard-pi5    img         -    512M   sieos-pi5.img

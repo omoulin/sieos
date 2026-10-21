@@ -552,7 +552,7 @@ sdcard: all $(WIFIFW) .hosttools/bt/BCM4345C0.hcd $(PKGFILES)
 	python3 tools/mksdcard.py $(B)/sieos-pi$(PI).img --pi $(PI) --kernel $(B)/kernel.bin --initrd $(B)/modules.img \
 	    --siefs $(B)/sd-siefs.img $(if $(FIRMWARE),--firmware $(FIRMWARE))
 	rm -f $(B)/sd-siefs.img
-	$(if $(FIRMWARE)$(PKGS)$(filter-out 4,$(PI)),,@$(BUDGET) --only sdcard-image)
+	$(if $(PKGS),,@$(BUDGET) --only $(if $(filter 5,$(PI)),sdcard-pi5,sdcard-image))
 # QEMU's raspi4b: the firmware's part (loading the kernel, the modules and the
 # device tree) is done by QEMU itself; the card holds the two partitions.
 # (QEMU wants a card size that is a power of two; it has no USB or Ethernet

@@ -21,7 +21,7 @@ The check takes well under a second.
 |---|---|---|
 | `elf` | the kernel, the boot modules (init, con, usb, vblk, fs), each program of the base system's `/bin` | text + data: the bytes of the sections that are loaded and stored in the file (`.bss` not counted) |
 | `tree` | `rootfs`: the base system | the bytes of every file in `$(B)/rootfs`, what each new disk, key or card starts with |
-| `img` | `usb-image` (x86-64), `sdcard-image` (arm64, Pi 4) | the real data of the base image (its allocated blocks; the file is sparse), checked by `make usb` and `make sdcard` |
+| `img` | `usb-image` (x86-64), `sdcard-image`, `sdcard-pi5` (arm64, Pi 4 and Pi 5, with the firmware) | the real data of the base image (its allocated blocks; the file is sparse), checked by `make usb` and `make sdcard` |
 
 A program in the base system's `/bin` with no line in the table is an
 error too: a new program comes with its budget. The add-on packages
