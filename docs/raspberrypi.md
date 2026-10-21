@@ -51,32 +51,26 @@ You need: the board, a micro-SD card (1 GB or more; **everything on it is
 erased**), its power supply, an HDMI screen (optional), and a **USB to
 3.3 V serial adapter** (TTL level: never connect RS-232 levels or 5 V).
 
-### 1. Get the Raspberry Pi firmware files
+### 1. Build the card image
 
-SIEOS does not include them (they are the Raspberry Pi's, under their own
-licence). Download them from the official repository,
-https://github.com/raspberrypi/firmware, folder `boot/`:
+```sh
+make ARCH=arm64 PI=4 sdcard     # build-arm64/sieos-pi4.img
+make ARCH=arm64 PI=5 sdcard     # build-arm64/sieos-pi5.img
+```
+
+The Raspberry Pi firmware files go on the card too. SIEOS does not include
+them (they are the Raspberry Pi's, under their own licence): `make sdcard`
+fetches them once from the official repository,
+https://github.com/raspberrypi/firmware (folder `boot/`, at a pinned
+commit), into `.hosttools/rpi/boot/`:
 
 | Board | Files |
 |---|---|
 | Pi 4 | `start4.elf`, `fixup4.dat`, `bcm2711-rpi-4-b.dtb`, `overlays/disable-bt.dtbo` |
 | Pi 5 | `bcm2712-rpi-5-b.dtb` (the Pi 5 keeps the rest of its firmware in its own EEPROM: update it first with the official tools if it is old) |
 
-Put them in a folder, keeping `overlays/` as a sub-folder, for example
-`~/rpi-fw/`. One way, for the Pi 4:
-
-```sh
-mkdir -p ~/rpi-fw/overlays && cd ~/rpi-fw
-B=https://raw.githubusercontent.com/raspberrypi/firmware/master/boot
-for f in start4.elf fixup4.dat bcm2711-rpi-4-b.dtb overlays/disable-bt.dtbo; do curl -fLo $f $B/$f; done
-```
-
-### 2. Build the card image
-
-```sh
-make ARCH=arm64 PI=4 sdcard FIRMWARE=~/rpi-fw     # build-arm64/sieos-pi4.img
-make ARCH=arm64 PI=5 sdcard FIRMWARE=~/rpi-fw     # build-arm64/sieos-pi5.img
-```
+`FIRMWARE=dir` takes them from a folder of your own instead (with
+`overlays/` as a sub-folder).
 
 The image is small, 513 MiB (it was 2.3 GB): the SieFS partition holds
 256 MiB (640 MiB with `PKGS=model`), and SIEOS extends it to the card's end
@@ -92,8 +86,8 @@ sparse). The image holds two partitions (an MBR):
    0x02000000`), the firmware files, and `README.txt`.
 2. **SieFS** (type `0x5E`): SIEOS's disk, made from `rootfs/` and the programs.
 
-Without `FIRMWARE=`, the image is made anyway and lists the missing files:
-copy them onto the card's first partition by hand after writing it.
+If a file is missing from a `FIRMWARE=` folder, the image is made anyway and
+lists it: copy it onto the card's first partition by hand after writing it.
 
 **The Wi-Fi chip's firmware** (for the CYW43455) is fetched once and copied
 onto the card's SieFS partition, into `/lib/firmware/brcm/`
@@ -115,7 +109,7 @@ in `/models` when the PC's default is not there; `PIMODEL=` picks another
 file of `models/`, and *Settings* can point sia at an online model
 instead ([desktop.md](desktop.md#settings)).
 
-### 3. Write it to the card
+### 2. Write it to the card
 
 Find the card's device name with `lsblk` (the whole card, for example
 `/dev/sdX`, not a partition), then:
@@ -126,7 +120,7 @@ sudo dd if=build-arm64/sieos-pi4.img of=/dev/sdX bs=4M conv=fsync status=progres
 
 Check the device name twice: `dd` overwrites whatever it is given.
 
-### 4. Connect the serial console
+### 3. Connect the serial console
 
 | Board | Where | Wiring |
 |---|---|---|
@@ -163,7 +157,7 @@ without sudo. Then `picocom -b 115200 /dev/ttyUSB0` (or
 names the port if it is not `ttyUSB0`. Nothing at all: swap the white and
 green wires (harmless); garbage: check the speed, 115200.
 
-### 5. Boot
+### 4. Boot
 
 Insert the card and power on. On the serial console you should see:
 

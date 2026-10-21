@@ -83,7 +83,7 @@ emulators come from `.hosttools/` if they are not installed.
 make ARCH=arm64 run         # QEMU virt: the desktop (ramfb, virtio keyboard and tablet)
 make ARCH=arm64 run-nox     # the same, this terminal only
 make ARCH=arm64 run-pi4     # QEMU's Raspberry Pi 4 (screen; no USB input yet: serial console)
-make ARCH=arm64 PI=4 sdcard FIRMWARE=dir    # a card image for a real Pi 4 (PI=5: a Pi 5)
+make ARCH=arm64 PI=4 sdcard                 # a card image for a real Pi 4 (PI=5: a Pi 5)
 ```
 
 The processor is emulated on a PC, so it is several times slower.
@@ -218,7 +218,7 @@ about 15 times faster than gcc. It runs on SIEOS too, as `/bin/cc`, with
 | `make` | build everything for `ARCH` (default x86_64) and the disk image |
 | `make run` / `run-nox` | run in QEMU with a window / with this terminal only |
 | `make run-pi4` | (ARCH=arm64) run on QEMU's Raspberry Pi 4 |
-| `make sdcard PI=4\|5 FIRMWARE=dir` | (ARCH=arm64) a card image for a real Pi |
+| `make sdcard PI=4\|5` | (ARCH=arm64) a card image for a real Pi |
 | `make usb` / `run-usb` / `usb-test` | a USB key image for UEFI PCs / it in QEMU (OVMF) / its test |
 | `make model` | copy the assistant's model to the disk (`MODEL=` another file of `models/`) |
 | `make newdisk` | a fresh disk (your files on it are lost) |

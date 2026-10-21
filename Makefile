@@ -513,7 +513,7 @@ distclean:
 .SECONDARY:
 
 # ---- The Raspberry Pis (ARCH=arm64, docs/raspberrypi.md). PI=4 or 5.
-#   make ARCH=arm64 PI=4 sdcard [FIRMWARE=dir] [PKGS=model]   an SD card image, build-arm64/sieos-pi4.img
+#   make ARCH=arm64 PI=4 sdcard [PKGS=model]    an SD card image, build-arm64/sieos-pi4.img
 #                                                (PKGS=model: with the assistant's model, models/$(PIMODEL):
 #                                                smaller than a PC's, for the Pis' speed; sia takes it
 #                                                when the PC's default model is not on the disk)
@@ -521,8 +521,10 @@ distclean:
 #   make ARCH=arm64 pi4-test                     the boot and crash tests on QEMU's raspi4b
 #   make ARCH=arm64 pi4-sdbench / sdhci-bench    SD card speed (raspi4b; virt with a PCI SD controller: DMA)
 # The boards' device trees come from the Raspberry Pi firmware (not part of
-# SIEOS): fetched once into .hosttools/rpi/ for QEMU; on a real card the
-# firmware files are added from FIRMWARE (see docs/raspberrypi.md).
+# SIEOS): fetched once into .hosttools/rpi/ for QEMU. The firmware files a
+# real card needs (the Pi 4's start4.elf, fixup4.dat, device tree and overlay;
+# the Pi 5's device tree) are fetched once too, into .hosttools/rpi/boot/, at a
+# pinned commit of the firmware repository; FIRMWARE=dir takes them from dir.
 PI      ?= 4
 # SDDISK: the SieFS partition's size on the card image: small (256 MiB; 640 MiB
 # with the model package), SIEOS extends it to the card's end on the first start;
@@ -544,13 +546,18 @@ WIFIFW  := .hosttools/rpi/fw/brcmfmac43455-sdio.bin .hosttools/rpi/fw/brcmfmac43
 	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/cypress/cyfmac43455-sdio.clm_blob
 .hosttools/rpi/fw/brcmfmac43455-sdio.txt:
 	mkdir -p $(@D) && curl -sfL -o $@ $(BRCMFW)/brcm/brcmfmac43455-sdio.txt
-sdcard: all $(WIFIFW) .hosttools/bt/BCM4345C0.hcd $(PKGFILES)
+RPIFWURL := https://raw.githubusercontent.com/raspberrypi/firmware/cceff4554e21713dd387b9bf3840e3b967fdbdd9/boot
+RPIFW    := $(addprefix .hosttools/rpi/boot/,start4.elf fixup4.dat bcm2711-rpi-4-b.dtb bcm2712-rpi-5-b.dtb overlays/disable-bt.dtbo)
+FIRMWARE ?= .hosttools/rpi/boot
+.hosttools/rpi/boot/%:
+	mkdir -p $(@D) && curl -sfL -o $@.tmp $(RPIFWURL)/$* && mv $@.tmp $@
+sdcard: all $(WIFIFW) $(if $(filter .hosttools/rpi/boot,$(FIRMWARE)),$(RPIFW)) .hosttools/bt/BCM4345C0.hcd $(PKGFILES)
 	rm -f $(B)/sd-siefs.img && $(B)/host/mkfs.siefs -s $(SDDISK) -L SIEOS -d $(B)/rootfs $(B)/sd-siefs.img
 	$(if $(PKGS),$(PKG) install $(B)/host/siefs $(B)/sd-siefs.img $(PKGFILES))
 	$(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware 2>/dev/null; $(B)/host/siefs $(B)/sd-siefs.img mkdir /lib/firmware/brcm 2>/dev/null; \
 	    for f in $(WIFIFW) .hosttools/bt/BCM4345C0.hcd; do $(B)/host/siefs $(B)/sd-siefs.img put $$f /lib/firmware/brcm/$$(basename $$f); done
 	python3 tools/mksdcard.py $(B)/sieos-pi$(PI).img --pi $(PI) --kernel $(B)/kernel.bin --initrd $(B)/modules.img \
-	    --siefs $(B)/sd-siefs.img $(if $(FIRMWARE),--firmware $(FIRMWARE))
+	    --siefs $(B)/sd-siefs.img --firmware $(FIRMWARE)
 	rm -f $(B)/sd-siefs.img
 	$(if $(PKGS),,@$(BUDGET) --only $(if $(filter 5,$(PI)),sdcard-pi5,sdcard-image))
 # QEMU's raspi4b: the firmware's part (loading the kernel, the modules and the
