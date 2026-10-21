@@ -29,6 +29,13 @@ interface is a new network, so netd forgets its ARP cache and asks DHCP
 again. `NET_FRAMES` and `NET_LINK` carry which interface they are from;
 `nic_info_t` carries each interface's link state.
 
+The desktop starts the network when it starts (atlas looks "net" up, which
+starts netd, which starts the card's driver and asks DHCP), and its strip
+says what the network is: "network" (an address), "network: connecting"
+(a card, no address yet) or "network: off" (no card). It looks again every
+5 s with `NET_INFO` and `w[1] = 1`, a look that is not a use: netd still
+stops after 10 minutes unused, and the label keeps the last state.
+
 ## The driver: vnet
 
 One program serves "nic0" whatever the card: it tries its backends in turn

@@ -317,7 +317,8 @@ enum {
     NET_PING,       /* w[1] = address, w[2] = time to live (0: 64), w[3] = timeout -> round
                        trip in µs; reply w[1] = who answered (with a small TTL: a router
                        on the way, "time exceeded")                               */
-    NET_INFO,       /* rbuf <- net_info_t                                         -> 0 */
+    NET_INFO,       /* rbuf <- net_info_t; w[1] = 1: only looking (the desktop's
+                       label), not a use: netd may still stop when idle        -> 0 */
     NET_FRAMES,     /* (from a network driver) w[1] = its interface (NET_IF_...); sbuf =
                        frames received, each a 16-bit length then the frame                                     -> 0 */
     NET_TICK,       /* (netd's own timer thread)                       -> ns to wait */

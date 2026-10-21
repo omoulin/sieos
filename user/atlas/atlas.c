@@ -47,6 +47,7 @@
 #define ATLAS_TICK  102             /* from the clock thread: a new minute */
 #define ATLAS_ACPI  106             /* from the ACPI thread: battery, AC, lid, a wake-up (acpi_status_t) */
 #define ATLAS_HPD   108             /* from the hot-plug thread: a monitor plugged in or out */
+#define ATLAS_NET   110             /* from the network thread: the strip's label changed */
 
 #define TCMAX 132                   /* a terminal: up to 132 x 60 characters */
 #define TRMAX 60
@@ -226,6 +227,32 @@ static void hpd_thread(void *arg)                        /* the Intel display's 
         was = now;
         msg_t m = { .w = { ATLAS_HPD } };
         ipc_call(port, &m);
+    }
+}
+
+/* The network, for the strip's label. The desktop starts it once (the first
+ * lookup of "net" starts netd, which starts the card's driver and asks DHCP;
+ * the first NET_INFO is held until the address comes, up to 3 s). Then a
+ * look every 5 s while netd runs, which is not a use: netd may still stop
+ * when idle, and the label keeps the last state (the next use starts it). */
+static const char *net_label = "network: off";
+static void net_thread(void *arg)
+{
+    (void)arg;
+    net_info_t in;
+    for (long p = port_lookup("net"), peek = 0;; peek = 1) {
+        msg_t m = { .w = { NET_INFO, peek }, .rbuf = &in, .rlen = sizeof in };
+        if (p > 0 && ipc_call(p, &m) >= 0 && (long)m.w[0] >= 0) {
+            const char *l = !in.up ? "network: off" : in.ip ? "network" : "network: connecting";
+            if (l != net_label) {
+                net_label = l;
+                say("atlas: %s\n", l);
+                msg_t a = { .w = { ATLAS_NET } };
+                ipc_call(port, &a);
+            }
+        }
+        sys_sleep(5000000000);
+        p = port_find("net");
     }
 }
 
@@ -759,7 +786,7 @@ static void draw_strip(void)
     dl_rect(x0 + 6, y0 + 6, x0 + 42 + tws("sia", 2), y1 - 6, (y1 - y0 - 12) / 2, C_ACC);   /* (sia: an amber chip) */
     bold(x0 + 24, y0 + 13, "sia", C_INK, x1);
     int qx = x0 + 24 + tws("sia", 2) + 32;
-    const char *net = port_find("net") > 0 ? "network" : "network: off";
+    const char *net = net_label;
     int nx = x1 - 24 - tws(net, 2);
     if (nx > qx + 400) label(nx, y0 + 13, net, 2, C_GTXT); else nx = x1 - 20;
     if (!query[0] && !strip_on && nx > qx + 700) {        /* the keys, a chip before it */
@@ -2012,6 +2039,7 @@ int main(int argc, char **argv)
     thread_start(input_thread, 0, 16384);
     thread_start(clock_thread, 0, 4096);
     thread_start(acpi_thread, 0, 4096);
+    thread_start(net_thread, 0, 4096);
     if (screen_hpd() >= 0) thread_start(hpd_thread, 0, 4096);
     panel_init(port);
     settings_init(port);
@@ -2092,6 +2120,11 @@ int main(int argc, char **argv)
         if (m.pid == self && m.w[0] == ATLAS_ACPI && m.rlen == sizeof(acpi_status_t)) {
             reply_val(from, 0);
             power_event((const acpi_status_t *)buf);
+            continue;
+        }
+        if (m.pid == self && m.w[0] == ATLAS_NET) {      /* the strip's label */
+            reply_val(from, 0);
+            if (mode == SESSION) redraw_box(M, M, STX1, STY1);
             continue;
         }
         if (m.pid == self && m.w[0] == ATLAS_HPD) {      /* light or turn off monitors (the same picture: nothing to draw) */

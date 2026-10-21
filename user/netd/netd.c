@@ -1342,11 +1342,11 @@ int main(int argc, char **argv)
             reply_val(from, r);
             if (!r) return 0;
         } else if (m.w[0] == NET_INFO && nic_up && dhcp_state != D_BOUND && now() < hold_until && nheld < 8) {
-            asked++;
+            asked += !m.w[1];                    /* (w[1]: only looking, not a use) */
             held[nheld].from = from;             /* answered once the address comes (below) */
             held[nheld++].m = m;
         } else {
-            asked++;
+            asked += m.w[0] != NET_INFO || !m.w[1];
             r = request(from, &m, in, m.rlen);
             if (!deferred) reply_val(from, r);
             deferred = 0;
